@@ -92,15 +92,38 @@ append, so it is a total order in capture order — not two interleaved sequence
 must reconcile. The two streams are independent, so ordering *between* directions means only
 "when the proxy saw it", which is exactly what `observation_point` already says out loud.
 
-### `state_handle` is three-state, and empty in v1
+### `state_handle` is three-state, and C2 fills it
 
-Always `{"status": "absent"}` in v1. C2 will add `{"status": "present", ...}` and
-`{"status": "unrestorable", "cause": ...}`.
+`{"status": "absent"}` is still the default and still means exactly one thing: **no snapshot
+was attempted**. C2 supplies the other two, via `TraceWriter.set_state_handle`:
 
-The slot exists now, unused, on purpose. If it could only express present/absent, C2 would
-have to overload `"absent"` to mean both *"recorded before snapshots existed"* and *"we
-tried to snapshot and failed"*. A replay that cannot tell those two apart is how a false
-PASS gets born.
+```jsonc
+// a snapshot exists and restores — and names what it could NOT preserve
+{"status": "present", "handle": "9f2c…", "backend": "clonefile-apfs",
+ "capabilities": ["acls", "clonefile", "dir-mtimes", "hardlinks", "special-modes"],
+ "fidelity_gaps": ["UNRESTORABLE_ATIME", "UNRESTORABLE_CTIME",
+                   "UNRESTORABLE_BIRTHTIME", "UNRESTORABLE_INODE_IDENTITY"]}
+
+// we tried and could not, with a named cause and the entry that caused it
+{"status": "unrestorable", "cause": "UNRESTORABLE_FIFO", "detail": "…",
+ "source": "lstat", "path": "pipe"}
+```
+
+`present` **declares its own gaps** rather than implying none. atime, ctime, birthtime and
+inode identity are unrestorable by anyone — BTH-1 excludes them and says why — so a bare
+`present` would claim a fidelity the snapshot does not have.
+
+The writer validates the slot but does not interpret it: it enforces that `status` is one of
+the three and that `unrestorable` always names a `cause` (an unnamed refusal is
+indistinguishable downstream from a shrug), while the meaning of each cause stays in
+`belay.snapshot.substrate`. **These are facts, not verdicts.** C4 is what turns
+`unrestorable` into UNVERIFIED; C2 never renders one.
+
+The slot was reserved from the first line of trace ever written, on purpose. If it could only
+express present/absent, C2 would have to overload `"absent"` to mean both *"recorded before
+snapshots existed"* and *"we tried to snapshot and failed"*. A replay that cannot tell those
+two apart is how a false PASS gets born.
+`tests/test_substrate.py::test_absent_is_not_repurposed` holds that distinction open.
 
 ## The `connection_window` record
 
