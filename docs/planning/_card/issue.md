@@ -1,73 +1,76 @@
-# Card: C2 — Sandbox + execution boundaries
+# Card: C3 — Deterministic replay
 
 ## Source
 
-**No GitHub issue.** `gh` is authenticated; `gh issue list` is empty (the tracker has never been
-used). `id` is the slug `sandbox-snapshot-restore`.
+**No GitHub issue.** Tracker is empty. `id` is the slug `deterministic-replay`.
+**The authoritative source is `docs/technical/CAPABILITY_ROADMAP.md` §C3**, quoted verbatim below.
+No inline brief was authored — C3 is fully specified there, and paraphrasing would introduce drift.
 
-**The authoritative source is the repo itself**, not a brief: `docs/technical/CAPABILITY_ROADMAP.md`
-§C2. That entry is quoted verbatim below. No inline brief was authored, and none is needed — C2 is
-fully specified in the roadmap, and inventing a paraphrase would only introduce drift.
+- Branch: `feat/deterministic-replay/aliz`
+- Worktree: `.claude/worktrees/feat-deterministic-replay`
+- Base: `origin/master` @ 521bc0a (C1 + C2 merged, 250 tests green)
 
-- Branch: `feat/sandbox-snapshot-restore/aliz`
-- Worktree: `.claude/worktrees/feat-sandbox-snapshot-restore`
-- Base: `origin/master` @ 3cc48f5 (C1 merged, 79 tests green)
+## C3, verbatim
 
-## C2, verbatim (`docs/technical/CAPABILITY_ROADMAP.md`)
-
-> ## C2. Sandbox + execution boundaries · weeks 1–2
+> ## C3. Deterministic replay · week 2
 >
-> **Why it is moat.** Primitive #1, and the prerequisite for literally every verdict: you cannot
-> re-execute a turn without restoring the state it ran against. Containment and verification are the
-> same machinery here, which is why the sandbox is not "a feature" — it is the engine's floor.
->
-> **⚠️ This is the schedule's critical path.** Snapshot/restore fidelity is the hardest problem in
-> the v0 engine, it lands in week 2, and C3/C4/C5 all block on it. Risk **R2** in the roadmap. Start
-> with the narrowest restorable substrate that carries the demo (a container filesystem overlay +
-> one tool family), and abstract *late*.
+> **Why it is moat.** This is the durable core. A stronger base model writes better checks and
+> cleaner re-derivations, and makes Belay *sharper*; it never makes deterministic replay redundant.
+> A judge's guess gets cheaper to fool every year — a re-executed diff does not. Replay is also what
+> makes the trace *useful* rather than merely recorded, which is precisely the line between us and
+> Langfuse/Phoenix.
 >
 > **What we build:**
-> - A pluggable sandbox seam (`sandbox/` with a `Sandbox` protocol) so containers / gVisor /
->   firejail are swappable. **Ship exactly one** implementation first — the abstraction is earned by
->   the second, not designed for it.
-> - Enforced boundaries: filesystem scope, network policy, and per-tool allow/deny. A denied action
->   is contained and *recorded as denied*, never silently dropped.
-> - **Snapshot / restore**: a per-turn pre-state handle that can be restored byte-identically. This
->   is what C3 replays against.
-> - An explicit, documented **unrestorable** signal. State we cannot restore is not guessed at — it
->   propagates as `UNVERIFIED` all the way to the verdict. This is the first place the honesty
->   contract becomes load-bearing code.
-> - A threat model doc: Belay executes untrusted agent actions, so Belay is itself an attack surface
->   (risk R8). We never claim a boundary we don't enforce.
+> - `belay replay <trace> [--turn N]`: restore the recorded pre-state (C2), re-invoke the exact
+>   recorded `tools/call` against the real MCP server, capture the observed result and the observed
+>   state delta.
+> - Replay is **side-effect-contained by construction** — it runs in the sandbox, against a restored
+>   copy, never against live state.
+> - Nondeterminism is *detected, not hidden*: replaying a turn N times and observing divergent
+>   results marks the tool nondeterministic in the trace. That marking is an input to C4, not an
+>   excuse.
+> - Whole-trajectory replay (`--from`, `--to`) for debugging, regression, and audit.
 >
 > **Acceptance (test-first):**
-> - A turn's pre-state snapshot restores byte-identically; a hash of the restored tree equals the
->   hash of the original.
-> - An escape attempt (write outside scope, disallowed network egress) is contained AND appears in
->   the trace as a denial.
-> - An explicitly unrestorable substrate (e.g. a stateful remote service) yields the `unrestorable`
->   signal, **never** a silent success.
-> - Deterministic, no network, runs in CI.
+> - Replaying a clean recorded run reproduces every result with 100% result-equivalence.
+> - Replaying a turn whose pre-state is unrestorable yields `unverified`, never a result.
+> - A deliberately nondeterministic fake tool (clock/random) is detected as nondeterministic across
+>   repeated replays rather than reported as a divergence.
+> - Replay never mutates the original trace or live state (asserted, not assumed).
+> - Deterministic, no network (fake MCP servers), runs in CI.
 >
-> **Eval data captured:** restore-fidelity rate per tool family, and the taxonomy of unrestorable
-> substrates — which directly predicts the UNVERIFIED rate (risk R7).
+> **Eval data captured:** per-tool determinism classification — a reference distribution that tells
+> us which tools are verifiable at all, and feeds the UNVERIFIED-rate explanation.
 >
-> **Dependencies:** C1 (needs a trace to snapshot against).
+> **Dependencies:** C1, C2.
 
-## What C1 shipped that C2 builds on
+## What C1 + C2 shipped that C3 composes
 
-- `src/belay/proxy.py` — byte-transparent stdio pump; `run(command, observe=None,
-  on_capture_error=None)`; `BoundedPeek`; a defined capture shutdown; never imports `json`.
-- `src/belay/trace.py` — append-only JSONL `TraceWriter`, 0o600 via O_EXCL, extensible record
-  `kind`s, thread-safe monotonic `seq`. **Already carries `state_handle: {"status": "absent"}` —
-  the three-state slot reserved for C2**, deliberately left empty.
-- `src/belay/hashing.py` — sha256 + `belay/jcs-v1` canonical form.
-- `src/belay/index.py`, `annotations.py`, `declared.py`, `connection.py`, `errors.py` — derived
-  indices.
-- `docs/technical/TRACE_FORMAT.md` — the schema + the unknown-kind rule.
-- `README.md` — the honest coverage statement.
+**C1 (PR #1):**
+- `proxy.py` — byte-transparent pump; `run(command, capture, before_frame)`; never imports `json`
+- `trace.py` — append-only JSONL `TraceWriter`, extensible record kinds, `state_handle` per frame
+- `index.py` — `(direction, id)` correlation; `tools/call` as a derived index
+- `annotations.py` / `declared.py` — the four-state declared/not-declared encoding
+- `hashing.py` — sha256 + `belay/jcs-v1` canonical form
+- `errors.py` — protocol-error vs `isError` classification
+- `connection.py` — per-call resolved protocol version / client identity
+
+**C2 (PR #3):**
+- `sandbox/seatbelt.py` — `build_profile`, `run(...)`, `NetworkPolicy.{deny_all,allow_all,allow_ports}`
+- `sandbox/launch.py` — the composition root; spawns the server under `sandbox-exec`
+- `sandbox/gate.py` — the `before_frame` turn gate; snapshots the exact pre-state
+- `sandbox/scope.py` — `default_scope`: write scope (workspace + `$TMPDIR`) vs **snapshot scope
+  (workspace only)**
+- `snapshot/clone.py` — `snapshot(root, dest)`, `restore(snap, dest, repairs=...)` via `clonefile`
+- `snapshot/bth1.py` — `scan_tree`, `hash_tree`, `diff_records` → `FieldDiff(path, field, left, right)`
+- `snapshot/substrate.py` — `take_snapshot`, `guarded_restore`, `guard`, the **18 named causes**
+  (9 raised, 9 deferred, 0 unaccounted), and `absent_handle` / `present_handle` /
+  `unrestorable_handle`
+- `cli.py` — `belay sandbox check`
 
 ## Related PRs
 
-- **#1** C1: MCP proxy trace capture (merged) — the trace C2 snapshots against.
-- **#2** Correct three claims the docs now get wrong (merged) — includes the 2026-07-28 RC note.
+- **#1** C1: MCP proxy trace capture (merged)
+- **#2** Correct three claims the docs now get wrong (merged)
+- **#3** C2: Sandbox + execution boundaries (merged) — **includes `UNRESTORABLE_CONCURRENT_TURN`,
+  which directly bounds what C3 can replay.**
