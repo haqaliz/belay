@@ -1,56 +1,73 @@
-# Card: C1 — MCP proxy trace capture
+# Card: C2 — Sandbox + execution boundaries
 
 ## Source
 
-**No GitHub issue.** `gh` is authenticated and reachable; `gh issue list` and `gh pr list`
-both return empty (the tracker has never been used). The `id` for this unit of work is the
-slug `mcp-proxy-capture`, not an issue number.
+**No GitHub issue.** `gh` is authenticated; `gh issue list` is empty (the tracker has never been
+used). `id` is the slug `sandbox-snapshot-restore`.
 
-**Provenance of the brief below:** it was authored by Claude during a `belay-next` session
-as the recommended handoff, and invoked verbatim by the user as `bbf feat mcp-proxy-capture`.
-It is therefore a *derived* brief grounded in the repo's own roadmap files — not a
-user-authored issue and not an independent requirement source. Every claim in it traces to
-`docs/technical/CAPABILITY_ROADMAP.md` (C1) or `docs/ROADMAP.md`. Where the brief and those
-files disagree, **the files win.**
+**The authoritative source is the repo itself**, not a brief: `docs/technical/CAPABILITY_ROADMAP.md`
+§C2. That entry is quoted verbatim below. No inline brief was authored, and none is needed — C2 is
+fully specified in the roadmap, and inventing a paraphrase would only introduce drift.
 
-- Branch: `feat/mcp-proxy-capture/aliz`
-- Worktree: `.claude/worktrees/feat-mcp-proxy-capture`
-- Base: `origin/master` @ 25f31f9
+- Branch: `feat/sandbox-snapshot-restore/aliz`
+- Worktree: `.claude/worktrees/feat-sandbox-snapshot-restore`
+- Base: `origin/master` @ 3cc48f5 (C1 merged, 79 tests green)
 
-## Brief
+## C2, verbatim (`docs/technical/CAPABILITY_ROADMAP.md`)
 
-Build C1 — MCP proxy trace capture, the first commit of the Belay engine (see
-`docs/technical/CAPABILITY_ROADMAP.md`, C1). A transparent JSON-RPC proxy: the agent
-points at Belay, Belay points at the real MCP servers, and it is behavior-neutral.
-Capture per `tools/call`: server identity, tool name, args, result, `isError`, timing,
-ordering, and the tool's declared annotations (`readOnlyHint`, `destructiveHint`,
-`idempotentHint`, `openWorldHint`) snapshotted from `tools/list` at session start.
-Content-address args, result, and state handles so traces are tamper-evident and
-comparable across runs. Append-only, self-describing trace format with a versioned
-schema on day 1 — it is the interchange format for the whole engine, and C2's
-snapshot/restore needs will shape it, so design the pre/post state handle slot now
-even though C2 fills it. Capture is lossless and opinion-free; C1 makes no judgements.
+> ## C2. Sandbox + execution boundaries · weeks 1–2
+>
+> **Why it is moat.** Primitive #1, and the prerequisite for literally every verdict: you cannot
+> re-execute a turn without restoring the state it ran against. Containment and verification are the
+> same machinery here, which is why the sandbox is not "a feature" — it is the engine's floor.
+>
+> **⚠️ This is the schedule's critical path.** Snapshot/restore fidelity is the hardest problem in
+> the v0 engine, it lands in week 2, and C3/C4/C5 all block on it. Risk **R2** in the roadmap. Start
+> with the narrowest restorable substrate that carries the demo (a container filesystem overlay +
+> one tool family), and abstract *late*.
+>
+> **What we build:**
+> - A pluggable sandbox seam (`sandbox/` with a `Sandbox` protocol) so containers / gVisor /
+>   firejail are swappable. **Ship exactly one** implementation first — the abstraction is earned by
+>   the second, not designed for it.
+> - Enforced boundaries: filesystem scope, network policy, and per-tool allow/deny. A denied action
+>   is contained and *recorded as denied*, never silently dropped.
+> - **Snapshot / restore**: a per-turn pre-state handle that can be restored byte-identically. This
+>   is what C3 replays against.
+> - An explicit, documented **unrestorable** signal. State we cannot restore is not guessed at — it
+>   propagates as `UNVERIFIED` all the way to the verdict. This is the first place the honesty
+>   contract becomes load-bearing code.
+> - A threat model doc: Belay executes untrusted agent actions, so Belay is itself an attack surface
+>   (risk R8). We never claim a boundary we don't enforce.
+>
+> **Acceptance (test-first):**
+> - A turn's pre-state snapshot restores byte-identically; a hash of the restored tree equals the
+>   hash of the original.
+> - An escape attempt (write outside scope, disallowed network egress) is contained AND appears in
+>   the trace as a denial.
+> - An explicitly unrestorable substrate (e.g. a stateful remote service) yields the `unrestorable`
+>   signal, **never** a silent success.
+> - Deterministic, no network, runs in CI.
+>
+> **Eval data captured:** restore-fidelity rate per tool family, and the taxonomy of unrestorable
+> substrates — which directly predicts the UNVERIFIED rate (risk R7).
+>
+> **Dependencies:** C1 (needs a trace to snapshot against).
 
-Repo is test-first: write these as failing tests before any code. (1) A fake MCP
-server plus a scripted client round-trips through the proxy and observes
-byte-identical responses versus a direct connection. (2) Every `tools/call` appears in
-the trace with args, result, and annotations, and hashes are stable across two
-identical runs. (3) A malformed / non-conforming server yields a recorded, honest
-error, never a dropped turn. (4) A trace written by version N is readable by version
-N (schema round-trip). All tests deterministic, no network, runs in CI.
+## What C1 shipped that C2 builds on
 
-Caveat to design around, not discover later: risk R6 (`docs/ROADMAP.md`) — an agent's
-built-in Bash/Edit do not traverse MCP, so fixtures and the eventual corpus must use
-off-the-shelf MCP filesystem + shell servers. C1 cannot retire R6, only make it
-measurable. Branch off `master`.
+- `src/belay/proxy.py` — byte-transparent stdio pump; `run(command, observe=None,
+  on_capture_error=None)`; `BoundedPeek`; a defined capture shutdown; never imports `json`.
+- `src/belay/trace.py` — append-only JSONL `TraceWriter`, 0o600 via O_EXCL, extensible record
+  `kind`s, thread-safe monotonic `seq`. **Already carries `state_handle: {"status": "absent"}` —
+  the three-state slot reserved for C2**, deliberately left empty.
+- `src/belay/hashing.py` — sha256 + `belay/jcs-v1` canonical form.
+- `src/belay/index.py`, `annotations.py`, `declared.py`, `connection.py`, `errors.py` — derived
+  indices.
+- `docs/technical/TRACE_FORMAT.md` — the schema + the unknown-kind rule.
+- `README.md` — the honest coverage statement.
 
-## Authoritative source files (the brief is subordinate to these)
+## Related PRs
 
-- `docs/technical/CAPABILITY_ROADMAP.md` — C1 (lines ~62–96): what we build, acceptance, deps
-- `docs/ROADMAP.md` — Phase 0 milestones, the locked MCP wedge, risk register (R2, R6)
-- `CLAUDE.md` — the wedge, the four primitives, the three verdict axes, the guardrails
-- `VISION.md` — narrative thesis, moat, non-goals
-
-## Related issues / PRs
-
-None. Tracker is empty.
+- **#1** C1: MCP proxy trace capture (merged) — the trace C2 snapshots against.
+- **#2** Correct three claims the docs now get wrong (merged) — includes the 2026-07-28 RC note.
