@@ -88,6 +88,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import stat
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -195,6 +196,11 @@ def default_scope(workspace: Path | str) -> DefaultScope:
     would strand the previous turn's files somewhere the server had already
     recorded a handle to. Owner-only, because the child writes its scratch there
     and it sits in a directory shared with everything else on the machine.
+
+    Idempotent and predictable are one property seen from two sides: what lets the
+    second run find the first run's directory lets anyone else be there first. So
+    an existing one is **adopted only if it is provably ours** — see
+    `_make_private_dir`, which is why this is a `mkdir` and not a `makedirs`.
     """
     root = os.path.realpath(str(workspace))
     if not os.path.isdir(root):
@@ -206,6 +212,70 @@ def default_scope(workspace: Path | str) -> DefaultScope:
 
     digest = hashlib.sha256(root.encode("utf-8")).hexdigest()[:16]
     tmpdir = os.path.join(os.path.realpath(tempfile.gettempdir()), f"{TMPDIR_PREFIX}{digest}")
-    os.makedirs(tmpdir, mode=0o700, exist_ok=True)
+    _make_private_dir(tmpdir)
 
     return DefaultScope(snapshot_root=root, tmpdir=os.path.realpath(tmpdir))
+
+
+def _make_private_dir(path: str) -> None:
+    """Create `path` 0700, or adopt it only if it is provably ours.
+
+    The name above is a pure function of the workspace and is documented as one,
+    so it is **predictable**: anyone who knows where the agent works knows this
+    path. Whatever is here gets `realpath`ed into `write_roots` and becomes
+    `(allow file-write* (subpath ...))` in the profile — which makes this the one
+    path in Belay whose resolution decides what the sandbox grants.
+
+    `os.makedirs(..., mode=0o700, exist_ok=True)` was doing this job and validates
+    nothing about a path that already exists: not that it is a directory rather
+    than a **symlink**, not who owns it, and not the mode — `mode=` is ignored
+    outright on an existing path. A link planted here before the run sends the
+    grant wherever it points (measured: `realpath` follows it and the profile
+    grants the target).
+
+    So: `mkdir` rather than `makedirs`, and on `FileExistsError` an `lstat` — which
+    does not follow a link — must show a real directory, owned by us, at exactly
+    0700. Anything else is refused **loudly**, the same posture `_resolved_scope`
+    takes, because the alternative is a boundary that reads correctly and grants
+    somewhere else.
+
+    Refusing costs a run; adopting costs the boundary. The failure this prevents
+    needs a same-uid attacker on stock macOS (`gettempdir()` is the per-user
+    `/var/folders/.../T`, mode 0700) — but a `TMPDIR` that is unset or points at
+    world-writable `/tmp`, which is CI, containers, launchd and cron, needs no
+    such thing.
+    """
+    try:
+        os.mkdir(path, 0o700)
+    except FileExistsError:
+        pass
+    else:
+        # `mkdir`'s mode is masked by the umask, so a hostile or merely unusual
+        # one could leave the directory we just made failing the check below on
+        # the NEXT run. Said outright rather than inherited.
+        os.chmod(path, 0o700)
+        return
+
+    info = os.lstat(path)  # lstat, never stat: a symlink must be seen as itself
+    if not stat.S_ISDIR(info.st_mode):
+        raise ValueError(
+            f"refusing to adopt {path!r} as the sandbox temp directory: it exists "
+            f"but is not a directory (it is {stat.filemode(info.st_mode)!r}). This "
+            f"path is a pure function of the workspace and so is predictable; a "
+            f"symlink planted here would redirect the profile's write grant to "
+            f"wherever it points. Remove it and re-run."
+        )
+    if info.st_uid != os.geteuid():
+        raise ValueError(
+            f"refusing to adopt {path!r} as the sandbox temp directory: it is "
+            f"owned by uid {info.st_uid}, not by uid {os.geteuid()} which is "
+            f"running Belay. Belay would grant the contained server write access "
+            f"to a directory somebody else created at a path they could predict."
+        )
+    if stat.S_IMODE(info.st_mode) != 0o700:
+        raise ValueError(
+            f"refusing to adopt {path!r} as the sandbox temp directory: its mode "
+            f"is {oct(stat.S_IMODE(info.st_mode))}, not 0o700. The child's scratch "
+            f"— which is the agent's data — would be readable or replaceable by "
+            f"others on this machine. Fix the mode or remove the directory."
+        )

@@ -326,6 +326,31 @@ boundary described in this document.
 This is a real limit, not a temporary gap in the docs. Read a trace and a sandbox verdict
 as *"here is what went over MCP"*, never as *"here is what the agent did"*.
 
+### A turn that overlaps another has no pre-state left to see
+
+Belay sees the call perfectly well. What has stopped existing by then is the thing the
+snapshot is *for*: if a `tools/call` arrives while another is still outstanding, the
+workspace is already a mid-state of the first turn, so there is no pre-state of the second
+to capture. **This is the default behaviour of the clients Belay targets, not an edge
+case** — JSON-RPC ids exist so a client may pipeline, and Claude Code, Cursor and the
+OpenAI agents SDK all batch independent tool calls.
+
+Such a turn is recorded `unrestorable` / `UNRESTORABLE_CONCURRENT_TURN` and **forwarded
+unchanged**; C4 renders UNVERIFIED. What is lost is coverage, and that is the honest thing
+to lose: a `present` handle here would be confident, hashed, self-consistent and wrong — a
+false PASS with a hash on it, which is worse than no snapshot at all.
+
+Belay does **not** serialise turns to make the pre-state capturable. That would make the
+proxy concurrency-altering, i.e. it would change the agent's behaviour — a far larger claim
+than recording honestly, and the one thing this proxy exists not to do.
+
+Measured by `test_a_pipelining_client_is_told_the_truth_end_to_end` (real proxy, real
+sandbox, a server that does real work per call, so the outcome is decided rather than
+raced) and `test_a_batched_write_resolves_each_tools_call_to_its_own_pre_state`. The
+control that keeps the refusal from swallowing everything is
+`test_each_tools_call_frame_resolves_to_its_own_snapshot`: sequential turns still snapshot,
+each frame naming its own tree.
+
 ---
 
 ## Belay's own attack surface (R8)
@@ -334,7 +359,7 @@ as *"here is what went over MCP"*, never as *"here is what the agent did"*.
 |---|---|
 | **Scope → SBPL injection** | Escaped and tested (`test_a_scope_containing_a_quote_cannot_break_out_of_the_profile`). |
 | **Profile temp file** | Written via `mkstemp` (owner-only) and unlinked in a `finally`, on both paths: `seatbelt.run` for the duration of a probe, `launch.contained` for the lifetime of a proxied run. A writable profile path would be a policy rewrite, so the mode is **asserted after writing** rather than assumed from `mkstemp`'s documentation (`test_the_profile_is_owner_only_and_removed`). |
-| **The sandboxed `$TMPDIR`** | Belay creates it `0700` under the machine's temp root, at a name derived from the workspace path. It is **shared across runs** on the same workspace by design (a `TMPDIR` that moved between turns would strand the previous turn's files) and never garbage-collected. It is the child's scratch space and may hold whatever the agent put there. |
+| **The sandboxed `$TMPDIR`** | Belay creates it `0700` under the machine's temp root, at a name derived from the workspace path. It is **shared across runs** on the same workspace by design (a `TMPDIR` that moved between turns would strand the previous turn's files) and never garbage-collected. It is the child's scratch space and may hold whatever the agent put there. **Its name is therefore predictable, and it is the one path whose resolution decides what the profile grants** — it is `realpath`ed into `write_roots` and emitted as `(allow file-write* (subpath …))`. So an existing one is adopted **only if `lstat` proves it is a real directory, owned by this uid, at exactly `0700`**; anything else is refused loudly rather than followed (`test_a_symlink_at_the_predicted_tmpdir_is_refused`, `test_a_file_at_the_predicted_tmpdir_is_refused`, `test_a_widened_tmpdir_is_refused`, with `test_our_own_tmpdir_is_adopted_on_the_next_run` as the control). Bounded on stock macOS, where `gettempdir()` is the per-user `/var/folders/…/T` and an attacker must already share the uid — **not** bounded when `TMPDIR` is unset or points at world-writable `/tmp`: CI, containers, launchd, cron. |
 | **`$PATH` hijack** | **Partial, and read this rather than the headline.** The three binaries *Belay itself* chooses are absolute: `/usr/bin/sandbox-exec`, `/bin/chmod`, `/usr/bin/env`. But the **server command is resolved through `$PATH`** — by `env` in `DefaultScope.wrap`, inside the sandbox. `$PATH` absolutely does decide what runs; it just cannot redirect Belay's own three. That is by design (`npx`, `python` and friends must resolve normally), so **a poisoned `$PATH` runs a different server, sandboxed** — it cannot substitute the sandbox itself, because `sandbox-exec` is named absolutely and sits outside the `env` that resolves the command. The three are pinned by `test_belay_names_its_own_binaries_absolutely`. |
 | **The trace file** | **As sensitive as the agent's most sensitive tool argument.** Verbatim capture, no redaction, `0600`. See [TRACE_FORMAT.md](TRACE_FORMAT.md). |
 | **Snapshot trees** | Clones of the workspace, with the same secrets in them, under `BELAY_SNAPSHOT_DIR`. They inherit the workspace's permissions, not the trace's `0600`. |

@@ -53,10 +53,13 @@ CaptureError = Callable[[BaseException], None]
 # newline, BEFORE any of them are forwarded. Returns nothing.
 #
 # This is the one hook allowed to make the data path wait, and the reason is
-# narrow: a turn's pre-state can only be captured before the request reaches the
-# server. Observation cannot do it — by the time a frame is observed it has been
-# forwarded, the call may already have run, and a "pre-state" captured then is a
-# race whose loser is invisible. So the hook blocks; see `_FrameHold`.
+# narrow: what a turn began from, and whether it has ended, are both facts that
+# stop being observable the instant the bytes reach the peer. A pre-state can only
+# be captured before the request reaches the server; a turn's completion can only
+# be known before the reply reaches the client, because after that the client's
+# next request is already racing it. Observation cannot do either — by the time a
+# frame is observed it has been forwarded — and a fact captured in that race has
+# an invisible loser. So the hook blocks; see `_FrameHold`.
 #
 # It is OPAQUE to this module, and that is structural rather than stylistic. This
 # module does not import `json`, cannot recognise a `tools/call`, and therefore
@@ -450,11 +453,17 @@ def run(
     below. The spawn is therefore the same line either way — there is no sandbox
     branch on this path to take wrongly, and an unsandboxed run pays nothing.
 
-    `before_frame` is installed on **c2s only**. The client-to-server direction is
-    the only one that precedes a tool executing, so it is the only one where
-    blocking buys anything; holding a reply would cost latency for nothing. The
-    direction is still passed to the hook, because a hook that had to assume which
-    stream it was reading would be one refactor away from being wrong quietly.
+    `before_frame` is installed on **both directions**, and they are held for
+    different reasons. A request is held because a turn's pre-state stops existing
+    the moment the server acts on it. A **reply** is held because it is the only
+    evidence a turn has ENDED, and the hook must see it before the client does: the
+    client's next request is a race against its own response otherwise, and the
+    hook would be deciding whether two turns overlap using a fact that arrives
+    after the question. Held on the way out, that race cannot exist.
+
+    The direction is passed because the hook's job differs by stream — a hook that
+    had to assume which one it was reading would be one refactor away from being
+    wrong quietly.
 
     `stderr_capture` observes the server's **stderr**, which is diagnostics rather
     than protocol and so is forwarded but never traced as frames. It exists because
@@ -487,7 +496,13 @@ def run(
         forwarders = [
             threading.Thread(
                 target=_pump,
-                args=(proc.stdout.fileno(), sys.stdout.fileno(), s2c_peek, s2c_error),
+                args=(
+                    proc.stdout.fileno(),
+                    sys.stdout.fileno(),
+                    s2c_peek,
+                    s2c_error,
+                    _forwarder(before_frame, "s2c", s2c_error),
+                ),
             ),
             threading.Thread(
                 target=_pump,

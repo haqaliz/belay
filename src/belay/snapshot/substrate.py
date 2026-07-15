@@ -101,6 +101,9 @@ class UnrestorableCause(str, Enum):
     # --- Backend capability mismatch (S1). -----------------------------------
     UNRESTORABLE_CAPABILITY_MISMATCH = "UNRESTORABLE_CAPABILITY_MISMATCH"
 
+    # --- The turn never had a pre-state to capture. --------------------------
+    UNRESTORABLE_CONCURRENT_TURN = "UNRESTORABLE_CONCURRENT_TURN"
+
     # --- Cross-filesystem impossibility: refuse, never attempt. --------------
     UNRESTORABLE_CASE_COLLISION = "UNRESTORABLE_CASE_COLLISION"
     UNRESTORABLE_INVALID_UTF8_NAME = "UNRESTORABLE_INVALID_UTF8_NAME"
@@ -138,9 +141,15 @@ CAUSES_RAISED_HERE = {
 }
 
 #: Causes that are real, named, and **not raised here** — each mapped to whoever
-#: raises it and why it cannot be raised now. Kept in the enum because C4 must be
-#: able to name them when it renders UNVERIFIED, and a taxonomy that only listed
-#: what today's code detects would quietly shrink the known unknowns.
+#: raises it and why *this module* cannot raise it. Kept in the enum because C4
+#: must be able to name them when it renders UNVERIFIED, and a taxonomy that only
+#: listed what today's code detects would quietly shrink the known unknowns.
+#:
+#: "Not raised here" is not the same as "not raised yet", and one entry proves it:
+#: `UNRESTORABLE_CONCURRENT_TURN` is raised **today**, by `belay.sandbox.gate`.
+#: What every entry shares is that the fact is invisible to an `lstat` of a tree —
+#: the property this module is built on — so the owner is named instead. A member
+#: whose owner is a live module is the healthy case, not an exception to it.
 #:
 #: The first three are **measured impossibilities on this substrate**, not
 #: oversights: APFS refuses to create the very entries that would trigger them
@@ -150,6 +159,15 @@ CAUSES_RAISED_HERE = {
 #: byte-transparent filesystem is restored onto APFS — which is C2's second,
 #: Linux slice.
 RAISED_BY: dict[UnrestorableCause, str] = {
+    UnrestorableCause.UNRESTORABLE_CONCURRENT_TURN: (
+        "C2's turn gate (`belay.sandbox.gate`), when a `tools/call` arrives while "
+        "another is still outstanding. Unreachable here: the tree is fine and an "
+        "lstat of it is silent about the fact — the pre-state stopped existing "
+        "because a *previous* turn is already executing against it, which is a "
+        "property of the request stream, not of any entry. The gate refuses "
+        "rather than clone a tree that is already a mid-state of the turn in "
+        "flight, and `tests/test_turn_gate.py` measures it end to end."
+    ),
     UnrestorableCause.UNRESTORABLE_CASE_COLLISION: (
         "C2's Linux/ext4 slice, on cross-filesystem restore. Unreachable here: "
         "APFS is case-insensitive, so creating `README` and `readme` in one "
