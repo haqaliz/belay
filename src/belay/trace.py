@@ -60,6 +60,11 @@ KINDS = (
     "network_policy",
 )
 
+# The three states the `state_handle` slot may hold, and the reason it is three
+# and not two is in `set_state_handle` and in docs/technical/TRACE_FORMAT.md.
+# "absent" is never a synonym for failure.
+_STATE_HANDLE_STATUSES = frozenset({"absent", "present", "unrestorable"})
+
 Observer = Callable[[bytes, bool], None]
 
 
@@ -117,6 +122,9 @@ class TraceWriter:
         self._lock = threading.Lock()
         self._seq = 0
         self._closed = False
+        # The slot's default, and the only value C1 could ever write. C2 sets
+        # this when it attempts a snapshot; see `set_state_handle`.
+        self._state_handle: dict[str, Any] = {"status": "absent"}
         self._append({"kind": "connection_window", "phase": "open"})
 
     @classmethod
@@ -129,6 +137,40 @@ class TraceWriter:
     @property
     def path(self) -> Path:
         return self._path
+
+    def set_state_handle(self, handle: dict[str, Any]) -> None:
+        """Set what the `state_handle` slot says on subsequent frames.
+
+        The handle is **passed in**, not derived here. The writer deliberately
+        does not know what any cause means, cannot take a snapshot, and cannot
+        tell `UNRESTORABLE_FIFO` from `UNRESTORABLE_SOCKET` — that knowledge is
+        C2's (`belay.snapshot.substrate`), and importing it here would put the
+        trace format at the mercy of the snapshot backend it is supposed to
+        outlive.
+
+        What the writer *does* enforce is that the slot cannot say something the
+        format does not define, and — the load-bearing one — that it can never
+        say `unrestorable` without naming a cause. A refusal that names nothing
+        is indistinguishable downstream from a shrug, and C4 turns this slot
+        into UNVERIFIED by reading exactly this field.
+
+        Set on the writer rather than threaded through `observer`, because the
+        observer signature is the proxy's and a frame's handle is a property of
+        the run's state at that moment, not of the bytes.
+        """
+        status = handle.get("status")
+        if status not in _STATE_HANDLE_STATUSES:
+            raise ValueError(
+                f"state_handle status {status!r} is not one of "
+                f"{sorted(_STATE_HANDLE_STATUSES)}"
+            )
+        if status == "unrestorable" and not handle.get("cause"):
+            raise ValueError(
+                "an unrestorable state_handle must name a cause: an unnamed "
+                "refusal cannot be told from a silence by anything downstream"
+            )
+        with self._lock:
+            self._state_handle = dict(handle)
 
     def observer(self, direction: str) -> Observer:
         def observe(frame: bytes, truncated: bool) -> None:
@@ -155,13 +197,16 @@ class TraceWriter:
                 "hash_canonical": canonical,
                 "canonical_form": CANONICAL_FORM if canonical is not None else None,
                 "truncated": truncated,
-                # Three-state from day one. C2 fills in `present` and
-                # `unrestorable` with a cause. If this slot could only say
+                # Three-state from day one, and filled by C2 via
+                # `set_state_handle`. If this slot could only say
                 # present/absent, C2 would have to overload "absent" to mean
                 # both "recorded before snapshots existed" and "we tried to
                 # snapshot and failed" - and a replay that cannot tell those
-                # apart is how a false PASS gets born.
-                "state_handle": {"status": "absent"},
+                # apart is how a false PASS gets born. It still defaults to
+                # `absent`, which keeps meaning exactly "no snapshot was
+                # attempted": a frame from a run without snapshots must not
+                # start claiming anything else.
+                "state_handle": dict(self._state_handle),
             }
         )
 
