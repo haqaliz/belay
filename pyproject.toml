@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "belay"
+version = "0.0.0"
+description = "The agent harness: sandbox, verify by replay, deterministic trace."
+requires-python = ">=3.10"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "ruff",
+    "mypy",
+    "mcp==1.28.1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/belay"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "sdk: uses the real mcp SDK client (dev-only dep)",
+]
