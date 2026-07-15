@@ -2,12 +2,19 @@
 
 This file orients a coding agent working in this repository. Read it first.
 
-> **Status:** planned, not yet built. The planning session is **done**:
+> **Status: C1 is built and merged** (PR #1). The engine exists: a byte-transparent stdio MCP
+> proxy (`src/belay/proxy.py`) and the versioned append-only trace format
+> (`docs/technical/TRACE_FORMAT.md`) every later capability reads. Zero runtime dependencies.
+> **C1 records; it emits no verdict** — that is C4/C5.
+> **Next: C2 (sandbox + snapshot/restore)** — risk R2, High/High, and the critical path C3/C4/C5
+> all block on.
+>
 > [`docs/ROADMAP.md`](docs/ROADMAP.md) (phased plan + gates) and
 > [`docs/technical/CAPABILITY_ROADMAP.md`](docs/technical/CAPABILITY_ROADMAP.md)
-> (the C1–C9 engine backlog) are now the operative plan. The next step is **C1: the MCP
-> proxy trace capture**. This file and `VISION.md` remain the strategic source of truth;
-> the two roadmaps are authoritative on sequencing. Keep all four in sync.
+> (the C1–C9 engine backlog) are the operative plan. This file and `VISION.md` remain the
+> strategic source of truth; the two roadmaps are authoritative on sequencing. Keep all four in
+> sync. `README.md` states the **honest coverage limits** — read it before making any public
+> claim about what Belay verifies.
 >
 > **Base branch is `master`** (not `main`). Remote: `git@github.com:haqaliz/belay.git`.
 
@@ -112,8 +119,20 @@ single most likely way this project fails quietly.
   calls are in-process Python callables — replaying them means re-entering LangGraph, which
   couples us to one framework and violates constraint #1). One adapter covers Claude Code,
   Cursor, OpenAI agents, and LangGraph itself. Bonus: MCP tool annotations (`readOnlyHint`,
-  `destructiveHint`, `idempotentHint`, `openWorldHint`) are declared contracts, so a
-  `readOnlyHint: true` tool that mutates state is a grounded FAIL with zero LLM involvement.
+  `destructiveHint`, `idempotentHint`, `openWorldHint`) are **self-declared** contracts, so a
+  `readOnlyHint: true` tool that mutates state is a grounded FAIL with zero LLM involvement —
+  **but read the next line before leaning on it.** The spec is explicit that annotations are
+  *hints*: *"not guaranteed to provide a faithful description of tool behavior"*, and clients
+  **MUST** treat them as untrusted from untrusted servers. So the verdict is **contract
+  conformance** — *"the server's self-declared contract does not match observed behavior"* — not
+  *"the tool violated the protocol."* Real, grounded, LLM-free, and zero-config; it catches
+  **honest-but-buggy** servers, which is a large and valuable class. It catches **nothing
+  adversarial**: a malicious server omits the annotation (inheriting fail-safe defaults) or lies
+  in the safe direction. **User-declared invariants remain the load-bearing A1 mechanism;
+  annotations are a free supplement.** Note also the defaults are *not* uniformly false —
+  `destructiveHint` and `openWorldHint` default to **true** — and **a default is never a
+  declaration**: absent must stay distinguishable from declared-false, or a default manufactures
+  a false PASS.
   **Known cost:** an agent's *built-in* tools (Claude Code's `Bash`/`Edit`) do not traverse
   MCP — v0 verifies what crosses the MCP boundary and says so plainly. An
   OpenTelemetry/OpenLLMetry ingestion path (C9) lands so Belay sits beside existing
