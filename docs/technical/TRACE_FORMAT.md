@@ -493,3 +493,79 @@ and the turns either side of it still classify.
 No compression, no rotation, no redaction. No MRTR retry-chain correlation (see `correlation`
 above: `(direction, id)` is a strict superset and survives, but the chain itself is not
 modelled). No `clientCapabilities`. No interpretation of trace context.
+
+---
+
+# Coverage and limits
+
+**What a reader of this format is entitled to conclude, and what it must not.** Everything
+below is a property of the capture, so it belongs next to the format rather than only in the
+README. These are permanent characteristics of C1, not gaps awaiting a patch.
+
+## The trace covers the MCP boundary. That is not the same as the agent.
+
+An agent's **built-in tools do not traverse MCP**. Claude Code's `Bash` and `Edit` are
+in-process calls; they never reach a stdio transport, so nothing on that transport can observe
+them. An agent can read a file, run a command, or rewrite a working tree and leave **no record
+in this trace at all**.
+
+So a trace answers *"what went over MCP?"* and never *"what did the agent do?"*. The
+`connection_window` pair is the only honest denominator available: it bounds the period Belay
+was listening, and says nothing about what happened outside the boundary during it. **A
+consumer that reports trace coverage as agent coverage is making a claim this format does not
+support** — and it is the claim most likely to be made by accident.
+
+## Byte-transparency is proven against a fixture, and corroborated everywhere else
+
+The supported claim, exactly:
+
+> Against a **deterministic fixture**, the proxy is byte-transparent — proven by
+> `tests/test_differential.py`, which is itself proven to fail on a re-serialising proxy by
+> `tests/test_teeth.py`.
+
+**Not** *"no real server is ever perturbed."* A byte-level differential is **unrunnable**
+against a real, nondeterministic server: two runs differ on ids, timestamps and progress
+tokens for reasons unrelated to the proxy, so there is no byte-identity to assert. Runs
+against real servers are **corroborating evidence, not proof**.
+
+This is why `hash_raw` exists on every frame. The differential proves the proxy does not
+perturb the fixture; `hash_raw` is what lets a *later* consumer check any individual frame
+against the bytes recorded, without re-running anything.
+
+A real `mcp` SDK client completing a handshake through the proxy
+(`tests/test_real_client.py`) is a **compatibility** result and carries no byte-level weight:
+its fixture is conforming, so a re-serialising proxy would pass it. The two tests are not
+redundant and neither is a stronger version of the other.
+
+## The trace is as sensitive as the agent's most sensitive tool argument
+
+Restated here because it is a property of the format, not advice: capture is verbatim and
+total, so API keys, tokens, file contents and customer data land in `raw` **fully
+recoverable**. Files are `0600`. There is deliberately **no redaction and no secret scanning**
+— both are opinions, capture is opinion-free, and a redacted trace cannot be replayed, which
+is the only reason the trace exists. Treat the file as the credential it may contain.
+
+## Nothing in this format is a verdict
+
+**C1 records; it does not judge.** No record here — written or derived — says whether anything
+was correct, safe, or permitted. `incoherence`, `index_gap`, `annotation_gap`,
+`classification_gap` and `capture_error` name **facts and their absences**, deliberately
+stopping short of adjudicating them.
+
+The tri-state encoding exists to keep it that way: recording *"the peer said nothing"* as
+`false` would manufacture the licence for a downstream PASS out of a spec default. The value of
+this format to a later verdict is precisely that it took no view.
+
+## The revision this was built against
+
+Developed against MCP revision **`2025-11-25`**.
+
+The **`2026-07-28`** revision removes the `initialize`/`initialized` handshake (SEP-2575),
+protocol-level sessions and `Mcp-Session-Id` (SEP-2567), and server-initiated requests
+(SEP-2322). The capture path forwards bytes and does not model the conversation, so it is not
+expected to be affected, and the format anticipates the change where it had to choose (see
+`connection_context`'s resolution order and `correlation`'s note on MRTR).
+
+**Anticipated is not tested. Belay does not claim support for `2026-07-28`** — no server
+implementing it exists to test against. The design notes above explain why the format should
+survive it; they are not evidence that it does.
