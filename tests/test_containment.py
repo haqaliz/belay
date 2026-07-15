@@ -16,8 +16,10 @@ a recorded denial naming the path.
 from __future__ import annotations
 
 import shlex
+import shutil
 import socket
 import sys
+import tempfile
 import threading
 from pathlib import Path
 
@@ -506,6 +508,136 @@ def test_allow_all_is_not_the_default_and_must_be_asked_for(tmp_path: Path) -> N
     scope, _ = _scope_and_outside(tmp_path)
     assert "(allow network*)" in build_profile(scope=scope, network=NetworkPolicy.allow_all())
     assert "(allow network*)" not in build_profile(scope=scope, network=NetworkPolicy.deny_all())
+
+
+# --- The unix-socket grant: measured in all four directions ------------------
+#
+# `(deny network*)` denies unix sockets too, so without the grant below a server
+# that opens one in its own temp directory dies under `deny-all` — and `deny-all`
+# is what a proxied run gets when nobody says otherwise. The alternative was to
+# default to `allow-all`, which contains nothing on this axis and contradicts
+# `test_allow_all_is_not_the_default_and_must_be_asked_for` above.
+#
+# So the grant is narrow, and these four tests are why anyone may believe that.
+# Each was measured on macOS 26.5.2 / arm64 before the line was written.
+
+
+def _unix_probe(program: str) -> list[str]:
+    return [sys.executable, "-c", program]
+
+
+@pytest.fixture
+def short_dirs():
+    """A realpath'd scope and outside, with paths short enough to bind.
+
+    `tmp_path` is not usable here: an AF_UNIX path is capped near 104 bytes, and
+    pytest's temp paths are long enough that `bind()` fails for **that** reason.
+    A test whose socket could never have been created no matter the profile would
+    report "not created" and read exactly like containment — the vacuous pass this
+    module's docstring exists to forbid.
+    """
+    base = Path(tempfile.mkdtemp(prefix="belay-s-")).resolve()
+    scope, outside = base / "s", base / "o"
+    scope.mkdir()
+    outside.mkdir()
+    try:
+        yield scope, outside
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+def test_a_server_may_open_a_unix_socket_inside_its_scope(short_dirs) -> None:
+    """The reason the grant exists. Under `deny-all`, this is a server that lives."""
+    scope, _ = short_dirs
+    sock = scope / "server.sock"
+
+    result = run(
+        _unix_probe(
+            f"import socket; s=socket.socket(socket.AF_UNIX); s.bind({str(sock)!r}); s.listen(1)"
+        ),
+        scope=scope,
+        network=NetworkPolicy.deny_all(),
+    )
+
+    assert result.rc == 0, result.stderr.decode(errors="replace")
+    assert sock.is_socket()
+
+
+def test_the_unix_socket_grant_does_not_widen_the_filesystem_scope(short_dirs) -> None:
+    """The grant is about sockets; the write scope still decides WHERE one may exist.
+
+    Binding creates a file. If `network-bind` could create it anywhere, the socket
+    grant would be a hole in the filesystem boundary — the one boundary this
+    profile's whole claim rests on.
+    """
+    scope, outside = short_dirs
+    sock = outside / "escaped.sock"
+
+    result = run(
+        _unix_probe(f"import socket; s=socket.socket(socket.AF_UNIX); s.bind({str(sock)!r})"),
+        scope=scope,
+        network=NetworkPolicy.deny_all(),
+    )
+
+    assert result.rc != 0
+    assert not sock.exists(), "a unix socket was created outside the write scope"
+
+
+def test_the_unix_socket_grant_does_not_allow_connecting_to_one(short_dirs) -> None:
+    """`bind`, never `connect`. This is the line between "a server may listen" and
+    "a contained process may talk to the Docker daemon".
+
+    The listener is **live** while the connection is attempted, for the same reason
+    `test_deny_all_denies_the_very_same_loopback_connection` insists on it: against
+    a dead socket, a refusal proves nothing but that nobody was home. `EPERM` is
+    the sandbox; `ECONNREFUSED`/`ENOENT` would be the absence of a server, and the
+    assertion below keys on the former.
+    """
+    scope, outside = short_dirs
+    listening = outside / "listen.sock"
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(str(listening))
+    server.listen(5)
+    try:
+        result = run(
+            _unix_probe(
+                "import socket\n"
+                "c=socket.socket(socket.AF_UNIX)\n"
+                f"c.connect({str(listening)!r})\n"
+                "print('CONNECTED')"
+            ),
+            scope=scope,
+            network=NetworkPolicy.deny_all(),
+        )
+    finally:
+        server.close()
+
+    assert b"CONNECTED" not in result.stdout, (
+        "a contained process connected to a unix socket outside its scope: the "
+        "grant is a hole, not a boundary"
+    )
+    assert b"Operation not permitted" in result.stderr, (
+        f"the refusal must be the sandbox (EPERM), not an absent listener: "
+        f"{result.stderr!r}"
+    )
+
+
+def test_the_unix_socket_grant_does_not_let_ip_traffic_out(tmp_path: Path) -> None:
+    """`deny-all` still means what it said before the grant existed."""
+    scope, _ = _scope_and_outside(tmp_path)
+
+    result = run(
+        _unix_probe(
+            "import socket\n"
+            "socket.create_connection(('1.1.1.1', 80), timeout=5)\n"
+            "print('EGRESS')"
+        ),
+        scope=scope,
+        network=NetworkPolicy.deny_all(),
+    )
+
+    assert b"EGRESS" not in result.stdout
+    assert b"Operation not permitted" in result.stderr
 
 
 def test_unsupported_platform_is_raised_not_silently_degraded(

@@ -170,10 +170,12 @@ def _probe_containment(scope_root: str, probe: Path) -> bool:
 def _report_scope(scope) -> None:
     _emit()
     _emit("scope")
-    _emit(f"  workspace           {scope.root}")
+    _emit(f"  workspace           {scope.snapshot_root}")
+    _emit("    Writable, and the only tree a turn's snapshot captures.")
     _emit(f"  TMPDIR              {scope.tmpdir}")
-    _emit("    Relocated inside the workspace so a server's temp files need no")
-    _emit("    hand-widening. Created for this check; safe to delete.")
+    _emit("    Writable, and NOT snapshotted. Relocated out of the workspace so a")
+    _emit("    server's temp files need no hand-widening and no turn's state diff")
+    _emit("    carries its temp churn. Created here; safe to delete.")
 
 
 def _run_server(scope, command: Sequence[str], seconds: float) -> bool:
@@ -187,7 +189,7 @@ def _run_server(scope, command: Sequence[str], seconds: float) -> bool:
     try:
         result = seatbelt.run(
             scope.wrap(command),
-            scope=scope.root,
+            scope=scope.write_roots,
             network=seatbelt.NetworkPolicy.deny_all(),
             timeout=seconds,
         )
@@ -281,7 +283,7 @@ def _cmd_sandbox_check(args: argparse.Namespace) -> int:
         _emit(f"belay: {exc}")
         return 2
 
-    substrate_ok = _check_substrate(scope.root)
+    substrate_ok = _check_substrate(scope.snapshot_root)
     _report_scope(scope)
 
     server_ok = True

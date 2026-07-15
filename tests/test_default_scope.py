@@ -35,7 +35,7 @@ def _write_to(target: str) -> list[str]:
 def _run(command, scope: DefaultScope, *, wrap: bool = True) -> seatbelt.SandboxResult:
     return seatbelt.run(
         scope.wrap(command) if wrap else list(command),
-        scope=scope.root,
+        scope=scope.write_roots,
         network=seatbelt.NetworkPolicy.deny_all(),
     )
 
@@ -56,17 +56,36 @@ def test_the_workspace_is_realpathed(tmp_path: Path) -> None:
 
     scope = default_scope(link)
 
-    assert scope.root == os.path.realpath(str(real))
-    assert not Path(scope.root).is_symlink()
+    assert scope.snapshot_root == os.path.realpath(str(real))
+    assert not Path(scope.snapshot_root).is_symlink()
 
 
-def test_the_tmpdir_is_realpathed_and_inside_the_scope(tmp_path: Path) -> None:
-    """Both halves matter: outside the scope it is denied, unresolved it is not matched."""
+def test_the_tmpdir_is_realpathed_and_granted_but_never_snapshotted(tmp_path: Path) -> None:
+    """The two scopes are different scopes, and this is where that is stated.
+
+    Three claims, each load-bearing for a different reason. Unresolved, the profile
+    would not match it and the grant would silently be nothing. Outside
+    `write_roots`, the server dies on its first temp file. Inside `snapshot_root`,
+    every turn's state diff carries the server's temp churn and a unix socket in
+    there makes every turn `unrestorable` — which is why it is *outside* the
+    workspace rather than a subtree someone remembers to exclude.
+    """
     scope = default_scope(tmp_path)
 
     assert scope.tmpdir == os.path.realpath(scope.tmpdir)
     assert Path(scope.tmpdir).is_dir()
-    assert Path(scope.root) in Path(scope.tmpdir).parents
+    assert scope.tmpdir in scope.write_roots
+    assert not Path(scope.tmpdir).is_relative_to(scope.snapshot_root), (
+        "the temp dir is inside the tree the gate snapshots"
+    )
+
+
+def test_the_tmpdir_is_owner_only(tmp_path: Path) -> None:
+    """It sits in a directory shared with the whole machine, and the child's
+    scratch — which may be the agent's data — goes in it."""
+    scope = default_scope(tmp_path)
+
+    assert oct(Path(scope.tmpdir).stat().st_mode & 0o777) == "0o700"
 
 
 def test_the_tmpdir_exists_before_the_child_starts(tmp_path: Path) -> None:
@@ -109,10 +128,10 @@ def test_the_sandboxed_tmpdir_is_load_bearing(tmp_path: Path) -> None:
 
     assert result.rc != 0
     assert result.denials, "expected the real TMPDIR to be refused by the profile"
-    assert not Path(result.denials[0].path or "").is_relative_to(scope.root)
+    assert not Path(result.denials[0].path or "").is_relative_to(scope.snapshot_root)
 
 
-def test_python_tempfile_lands_inside_the_scope(tmp_path: Path) -> None:
+def test_python_tempfile_lands_in_the_sandboxed_tmpdir(tmp_path: Path) -> None:
     """The mechanism has to work through the stdlib a real server actually calls.
 
     `tempfile` consults `TMPDIR`, `TEMP` and `TMP` in that order — testing the
@@ -124,7 +143,7 @@ def test_python_tempfile_lands_inside_the_scope(tmp_path: Path) -> None:
     result = _run([sys.executable, "-c", program], scope)
 
     assert result.rc == 0, result.stderr.decode(errors="replace")
-    assert Path(result.stdout.decode().strip()).is_relative_to(scope.root)
+    assert Path(result.stdout.decode().strip()).is_relative_to(scope.tmpdir)
 
 
 def test_the_stock_python3_shim_runs_under_the_default_scope(tmp_path: Path) -> None:
@@ -138,16 +157,16 @@ def test_the_stock_python3_shim_runs_under_the_default_scope(tmp_path: Path) -> 
     result = _run(["/usr/bin/python3", "-c", "import tempfile; print(tempfile.mkdtemp())"], scope)
 
     assert result.rc == 0, result.stderr.decode(errors="replace")
-    assert Path(result.stdout.decode().strip()).is_relative_to(scope.root)
+    assert Path(result.stdout.decode().strip()).is_relative_to(scope.tmpdir)
 
 
 def test_a_child_writes_to_the_workspace_itself(tmp_path: Path) -> None:
     scope = default_scope(tmp_path)
 
-    result = _run(_write_to(f"{scope.root}/file.txt"), scope)
+    result = _run(_write_to(f"{scope.snapshot_root}/file.txt"), scope)
 
     assert result.rc == 0, result.stderr.decode(errors="replace")
-    assert (Path(scope.root) / "file.txt").read_bytes() == b"hi\n"
+    assert (Path(scope.snapshot_root) / "file.txt").read_bytes() == b"hi\n"
 
 
 # --- The default is still a boundary -----------------------------------------
@@ -193,13 +212,20 @@ def test_a_denial_records_the_exact_path(tmp_path: Path) -> None:
 
 def test_the_scope_is_not_widened_by_the_env_wrapper(tmp_path: Path) -> None:
     """`wrap` sets the environment and nothing else. If it could also alter the
-    profile, the two halves of this module could disagree and only one is enforced."""
+    profile, the two halves of this module could disagree and only one is enforced.
+
+    The profile grants exactly the two roots the scope names — the workspace and
+    the temp directory — and nothing the wrapper exports can add a third.
+    """
     scope = default_scope(tmp_path)
 
-    profile = seatbelt.build_profile(scope=scope.root, network=seatbelt.NetworkPolicy.deny_all())
+    profile = seatbelt.build_profile(
+        scope=scope.write_roots, network=seatbelt.NetworkPolicy.deny_all()
+    )
 
-    assert profile.count("file-write*") == 1
-    assert f'(subpath "{scope.root}")' in profile
+    assert profile.count("file-write*") == 2
+    assert f'(subpath "{scope.snapshot_root}")' in profile
+    assert f'(subpath "{scope.tmpdir}")' in profile
 
 
 # --- The wrapper itself ------------------------------------------------------
@@ -267,15 +293,15 @@ def test_a_filesystem_mcp_server_runs_under_the_default_scope(tmp_path: Path) ->
     server = Path(__file__).parent / "fixtures" / "filesystem_server.py"
 
     result = seatbelt.run(
-        scope.wrap([sys.executable, str(server), scope.root]),
-        scope=scope.root,
+        scope.wrap([sys.executable, str(server), scope.snapshot_root]),
+        scope=scope.write_roots,
         network=seatbelt.NetworkPolicy.deny_all(),
         timeout=30.0,
     )
 
     assert result.rc == 0, result.stderr.decode(errors="replace")
     assert result.denials == (), f"the default scope was too tight: {result.denials}"
-    assert (Path(scope.root) / "written.txt").read_bytes() == b"written by the server"
+    assert (Path(scope.snapshot_root) / "written.txt").read_bytes() == b"written by the server"
 
 
 @pytest.mark.sdk
@@ -302,14 +328,14 @@ def test_the_filesystem_server_fixture_would_notice_a_tight_scope(tmp_path: Path
     server = Path(__file__).parent / "fixtures" / "filesystem_server.py"
 
     result = seatbelt.run(
-        [sys.executable, str(server), scope.root],
-        scope=scope.root,
+        [sys.executable, str(server), scope.snapshot_root],
+        scope=scope.write_roots,
         network=seatbelt.NetworkPolicy.deny_all(),
         timeout=30.0,
     )
 
     assert result.rc != 0
-    assert not (Path(scope.root) / "written.txt").exists()
+    assert not (Path(scope.snapshot_root) / "written.txt").exists()
     assert b"No usable temporary directory" in result.stderr
     # The scope killed it, and left no denial record behind to say so.
     assert result.denials == ()

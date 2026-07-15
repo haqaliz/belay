@@ -12,47 +12,43 @@ exists to catch, committed by us.
 
 ---
 
-## Read this first: the sandbox is not yet in the proxy's path
+## Read this first: what a proxied server is and is not contained by
 
 Everything below describes what `belay.sandbox.seatbelt` enforces when a process is run
-under it. **The proxy does not yet run your MCP server under it.**
+under it. **With `BELAY_SANDBOX_SCOPE` set, the proxy now runs your MCP server under it**:
+`belay.sandbox.launch` composes the profile onto the argv, so `proxy.py`'s `Popen` — the
+same one C1 shipped — spawns `sandbox-exec -f <profile> … <server>`. A write outside the
+scope is refused by the kernel and recorded as a `denial`, measured on a real proxy run
+with a positive control and an ablation (`tests/test_proxy_containment.py`).
 
-`proxy.py` spawns the server with a plain `subprocess.Popen`. `BELAY_SANDBOX_SCOPE` names
-the tree the **turn gate snapshots**; it does not contain anything. Today the sandbox is
-reached through `belay sandbox check` and as a library, and it is real — but a server
-started by `python -m belay.proxy` is **not contained by any of the boundaries described
-here**.
+**Without `BELAY_SANDBOX_SCOPE`, nothing here applies.** No scope, no profile, no
+containment: the proxy is C1's byte pump spawning the command you gave it, and it says so
+by doing exactly nothing else (`test_no_scope_means_a_plain_popen`).
 
-Stated at the top because the alternative is a reader who concludes from the rest of this
-document that their proxied server is sandboxed. It is not. Wiring containment into the
-proxy's spawn path is the next step.
+**Two boundaries this does NOT draw, listed here because the word "sandbox" implies both.**
+The scope contains what the server can **change**, not what it can **read** — `file-read*`
+is granted wholesale. And Belay contains **only the process it spawns**: an agent's built-in
+tools never traverse MCP and are never inside anything described here.
 
-**M13 is therefore half-delivered, and saying so is the point of this section.** The default
-scope (`scope.py`) is a real mechanism with its zero-config claim proven end-to-end against
-a real MCP server — but it is reachable only from `belay sandbox check`. **R3 — "nobody
-authors the invariant" — is mitigated for the check and not yet for a real run.**
+**M13/R3: the default scope is now on the real path.** `default_scope()` is called by
+`proxy.main`, not only by `belay sandbox check`, so a real run gets the zero-config
+boundary — workspace plus a relocated `$TMPDIR`, both `realpath`ed. R3 — *"nobody authors
+the invariant"* — is mitigated for a real run, which is the only place it ever mattered: a
+default only the self-test could see mitigated it exactly zero.
 
-**Why the default scope was not simply wired into the proxy now.** Because on its own it
-would make things worse, not better. The TMPDIR relocation only earns its cost when a
-sandbox is denying the real `$TMPDIR`. With no sandbox on the proxy path, the server can
-already write to `/var/folders` unimpeded, so relocating `TMPDIR` would buy **no**
-containment while adding all of its costs: temp files in the user's tree, temp files in
-every turn's snapshot, and the socket/FIFO-in-TMPDIR hazard below turning every turn
-`unrestorable`. The two halves must land together or not at all.
-
-And landing them together is a real unit of work, not a bolt-on:
+The three things this section previously said were missing are the three things
+`belay.sandbox.launch` is:
 
 - **`seatbelt.run` is shaped for a short-lived command** — a blocking `subprocess.run` that
-  unlinks the profile in a `finally` once the child exits. The proxy streams a long-lived
-  server over pipes. Wiring needs a "give me the argv, keep the profile alive" seam that
-  does not exist yet.
-- **Denials are inferred from the child's stderr after it exits.** A long-lived proxied
-  server never reaches that point, so denial capture for a live run needs a different
-  mechanism entirely.
-- **The network policy is an unmade product decision.** `deny-all` breaks any server that
-  legitimately needs the network; `allow-all` contains nothing. There is no env var for it
-  and picking one silently would be Belay authoring the boundary — the exact thing the
-  default scope exists to avoid.
+  unlinks the profile in a `finally` once the child exits. It is still exactly that, and it
+  is still right for `sandbox check`. The proxy needed the *"give me the argv, keep the
+  profile alive"* seam instead, and `launch.contained` is it: a context manager holding an
+  owner-only (`0600`) profile file for the lifetime of the run.
+- **Denials for a child that has not exited.** `launch.DenialCapture` infers them from the
+  server's stderr **as it is forwarded**, through the same `seatbelt.record_denials` writer
+  the batch path uses, so the provenance cannot drift between them. Limits below.
+- **The network policy was an unmade decision. It is now made, and it is `deny-all`.**
+  `BELAY_SANDBOX_NETWORK` widens it deliberately. See [Network](#network).
 
 ---
 
@@ -108,7 +104,28 @@ injection into the sandbox itself.
   (`test_loopback_is_reachable_while_real_egress_is_denied`), and a port outside the list
   is refused while a listener is live on it (`test_a_port_outside_the_allowlist_is_denied`).
 - **`allow-all` is never the default and must be asked for**
-  (`test_allow_all_is_not_the_default_and_must_be_asked_for`).
+  (`test_allow_all_is_not_the_default_and_must_be_asked_for`). A proxied run with no
+  `BELAY_SANDBOX_NETWORK` gets **`deny-all`** (`test_the_default_network_policy_is_deny_all`).
+
+#### UNIX domain sockets: granted for `bind`, and only `bind`
+
+`(deny network*)` denies **unix sockets too**, not just IP — measured, and not what the
+name suggests. Unmitigated, `deny-all` would kill any server that opens a socket in its own
+temp directory, and `deny-all` is what a proxied run gets by default. So the profile carries
+`(allow network-bind (local unix-socket))`, and every edge of that grant is measured
+(`tests/test_containment.py`, the unix-socket group):
+
+| | |
+|---|---|
+| A server may **bind** a socket inside its scope | `test_a_server_may_open_a_unix_socket_inside_its_scope` |
+| It may **not bind one outside** the write scope — the socket grant does not widen the filesystem scope | `test_the_unix_socket_grant_does_not_widen_the_filesystem_scope` |
+| It may **not connect** to a socket it did not create, **with a live listener** proving the refusal is the sandbox and not an absent server | `test_the_unix_socket_grant_does_not_allow_connecting_to_one` |
+| IP egress stays denied | `test_the_unix_socket_grant_does_not_let_ip_traffic_out` |
+
+The third row is the one that matters: `(allow network* (local unix-socket))` was measured
+permitting a contained process to **connect to any unix socket on the machine** —
+`/var/run/docker.sock` among them, which is a full escape. `network-bind` is the narrower
+verb, and it is why the line reads as it does. Do not widen it from memory.
 
 ### Off macOS, the module raises rather than degrades
 
@@ -236,6 +253,16 @@ subscription running before the child starts, so v0 takes the simple path and sa
    is ordinary filesystem permissions, and claiming it would attribute the user's own
    `chmod` to Belay's boundary.
 
+**On a live proxied run, two more.** `launch.DenialCapture` infers from the server's stderr
+**as it is forwarded**, through the same `seatbelt.record_denials` writer, so all three
+costs above apply unchanged — plus:
+
+4. **A last line with no terminating newline is not parsed.** It reaches the operator's
+   terminal verbatim, and the reassembly names the leftover rather than emitting a record
+   from half a line.
+5. **With no `BELAY_TRACE_DIR` there is no denial capture at all**, because there is
+   nowhere to record one. The server is still contained.
+
 **Containment does not depend on any of this.** The boundary is the kernel's and it holds
 whether or not the record is accurate or written at all
 (`test_run_without_a_trace_still_contains`). Inference affects **what we can say about**
@@ -306,38 +333,48 @@ as *"here is what went over MCP"*, never as *"here is what the agent did"*.
 | Surface | Status |
 |---|---|
 | **Scope → SBPL injection** | Escaped and tested (`test_a_scope_containing_a_quote_cannot_break_out_of_the_profile`). |
-| **Profile temp file** | Written via `mkstemp` (owner-only) and unlinked in a `finally`. A writable profile path would be a policy rewrite. |
-| **`$PATH` hijack** | **Partial, and read this rather than the headline.** The three binaries *Belay itself* chooses are absolute: `/usr/bin/sandbox-exec`, `/bin/chmod`, `/usr/bin/env`. But the **server command is resolved through `$PATH`** — by `proxy.py`'s `Popen(argv)` and by `env` in `DefaultScope.wrap`. `$PATH` absolutely does decide what runs; it just cannot redirect Belay's own three. That is by design (`npx`, `python` and friends must resolve normally), so **a poisoned `$PATH` runs a different server, sandboxed** — it cannot substitute the sandbox itself. The three are pinned by `test_belay_names_its_own_binaries_absolutely`. |
+| **Profile temp file** | Written via `mkstemp` (owner-only) and unlinked in a `finally`, on both paths: `seatbelt.run` for the duration of a probe, `launch.contained` for the lifetime of a proxied run. A writable profile path would be a policy rewrite, so the mode is **asserted after writing** rather than assumed from `mkstemp`'s documentation (`test_the_profile_is_owner_only_and_removed`). |
+| **The sandboxed `$TMPDIR`** | Belay creates it `0700` under the machine's temp root, at a name derived from the workspace path. It is **shared across runs** on the same workspace by design (a `TMPDIR` that moved between turns would strand the previous turn's files) and never garbage-collected. It is the child's scratch space and may hold whatever the agent put there. |
+| **`$PATH` hijack** | **Partial, and read this rather than the headline.** The three binaries *Belay itself* chooses are absolute: `/usr/bin/sandbox-exec`, `/bin/chmod`, `/usr/bin/env`. But the **server command is resolved through `$PATH`** — by `env` in `DefaultScope.wrap`, inside the sandbox. `$PATH` absolutely does decide what runs; it just cannot redirect Belay's own three. That is by design (`npx`, `python` and friends must resolve normally), so **a poisoned `$PATH` runs a different server, sandboxed** — it cannot substitute the sandbox itself, because `sandbox-exec` is named absolutely and sits outside the `env` that resolves the command. The three are pinned by `test_belay_names_its_own_binaries_absolutely`. |
 | **The trace file** | **As sensitive as the agent's most sensitive tool argument.** Verbatim capture, no redaction, `0600`. See [TRACE_FORMAT.md](TRACE_FORMAT.md). |
 | **Snapshot trees** | Clones of the workspace, with the same secrets in them, under `BELAY_SNAPSHOT_DIR`. They inherit the workspace's permissions, not the trace's `0600`. |
 | **The gate cannot alter bytes** | Structural: `proxy.py` cannot import `json` (`tests/test_import_guard.py`), and the gate parses a **copy** it throws away (`test_byte_identity_holds_with_the_gate_installed`). |
 | **A broken gate cannot stop the agent** | `test_a_broken_gate_cannot_stop_the_bytes`. A hung proxy is worse than an unsnapshotted turn. |
 
-### The default scope's own consequences
+### The default scope's own consequences, and how the TMPDIR hazard was resolved
 
-The default scope relocates `$TMPDIR` **inside** the workspace so that a server needs no
-hand-tuning (see [`src/belay/sandbox/scope.py`](../../src/belay/sandbox/scope.py)).
+The two halves have met: `default_scope()` is called by `proxy.main`, and the turn gate
+snapshots what it names. This section previously predicted two consequences of that meeting
+and said the second was *"worth re-opening when the two halves are joined"*. It was
+re-opened, and the placement it argued against is gone.
 
-**Neither of the two consequences below exists on any shipped path today**, and saying
-otherwise would contradict the top of this document. `default_scope()` is called **only**
-from `belay sandbox check`, which runs a server once and takes no per-turn snapshots. The
-turn gate — the only thing that snapshots per turn — is handed the raw
-`BELAY_SANDBOX_SCOPE` and never sees a relocated `TMPDIR`. The two mechanisms do not yet
-meet.
+**The write scope and the snapshot scope are now two different scopes**
+(see [`src/belay/sandbox/scope.py`](../../src/belay/sandbox/scope.py)):
 
-They will meet when containment is wired into the proxy, and at that point both of these
-follow. They are recorded now, while the reasoning is in front of us, rather than
-rediscovered then:
+- **write scope** = the workspace **+ a `$TMPDIR` Belay owns**. The server needs temp files
+  or it dies (`test_the_sandboxed_tmpdir_is_load_bearing` is the ablation).
+- **snapshot scope** = the workspace **only**. `$TMPDIR` is **not** in it, and it is placed
+  *outside* the workspace so that this holds **by construction** rather than by a subtree
+  filter someone could forget.
 
-- **Temp files would land inside every turn's snapshot.** The gate snapshots the scope, and
-  `TMPDIR` would be in it. That is *true* rather than tidy — those files really are in the
-  tree — but it is a cost, not an accident.
-- **A socket or FIFO under `$TMPDIR` would make every turn `unrestorable`.**
-  `substrate.guard` refuses a tree containing one, by name (`test_a_socket_in_the_tree_is_detected_and_refused`).
-  A server that opens a unix socket in its temp directory would then snapshot as
-  `unrestorable` on **every** turn. That is the honesty contract working as designed, and
-  it is the strongest argument against this TMPDIR placement — worth re-opening when the
-  two halves are joined.
+What that does to the two predictions:
+
+- **Temp files do not land in any turn's snapshot.** They are writable and unsnapshotted,
+  so no state diff carries the server's temp churn
+  (`test_the_tmpdir_is_writable_but_never_enters_a_snapshot`, on a real proxy run).
+- **A socket under `$TMPDIR` does not make a turn `unrestorable`.** `substrate.guard` still
+  refuses a tree containing one, by name (`test_a_socket_in_the_tree_is_detected_and_refused`)
+  — that contract is untouched. It simply never sees this socket, because the socket is not
+  in the tree being snapshotted. **Resolved by construction, not by luck**, and measured
+  end-to-end with a real server holding a real live socket
+  (`test_a_unix_socket_in_the_tmpdir_does_not_make_the_turn_unrestorable`).
+
+**The cost, stated because it is real.** What Belay contains and what Belay snapshots are
+now deliberately different sets, and the difference is exactly `$TMPDIR`: whatever a server
+does in its temp directory is contained but **invisible to any later state diff**. A FIFO or
+socket the server creates in the **workspace** still makes that turn `unrestorable`, exactly
+as before. And the temp directory is derived from the workspace path, so it persists between
+runs and is never garbage-collected; `belay sandbox check` prints it.
 
 **Nothing widens a scope automatically.** `belay sandbox check` reports denied paths and
 stops there (`test_check_never_widens_the_scope_itself`). A tool that widened the boundary
