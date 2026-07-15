@@ -29,6 +29,49 @@ invariants), *more reproducible* (capture, replay, sandbox), *more useful* (cons
 interop), or *compounds the corpus*. A better base model should make each of these
 stronger, never redundant.
 
+### ⚠️ The protocol we locked to is moving (verified against the normative spec)
+
+This document was written against MCP **2025-11-25** (the current revision) and reads in places as
+though it were permanent. It is not. The **2026-07-28** revision is locked and lands imminently.
+
+**What it changes:**
+- **MCP becomes stateless.** The `initialize`/`initialized` handshake and the protocol-level session
+  + `Mcp-Session-Id` are **removed** (SEP-2575/2567). Protocol version, client info and capabilities
+  ride in `_meta` on **every request** (`io.modelcontextprotocol/protocolVersion` et al., all
+  required). Verbatim: *"an open connection, such as a STDIO process, is **not** a conversation or
+  session."*
+- **Server-initiated requests are removed** (SEP-2322). `sampling/createMessage`, `roots/list`,
+  `elicitation/create` are replaced by **Multi Round-Trip Requests**: the server returns
+  `resultType: "input_required"`, and the client **retries the original request with a NEW request
+  id**. Roots, Sampling **and Logging** are deprecated wholesale (SEP-2577). `ping` and SSE
+  resumability are gone.
+
+**What it does NOT change — and this is the point.** C1's proxy forwards bytes and **never models
+the conversation**, so a revision that deletes an entire message direction does not touch it. A
+proxy built around a request/response state machine would need a rewrite. **The way to survive a
+protocol changing under you is to refuse to model it.** This is now evidence for the raw-bytes
+design, not a hope.
+
+**What it changes for the capabilities below:**
+1. **A1 gains free grounded signals this document doesn't mention:** `-32020 HeaderMismatch`,
+   `-32021 MissingRequiredClientCapability`, `-32022 UnsupportedProtocolVersion`, plus a formal
+   error-code allocation policy. Deterministic, LLM-free, free on the wire.
+2. **C3/C4 need TWO correlation models, not one with a flag.** `(direction, id)` pairing *and* MRTR
+   retry-chains (new id per retry; `requestState` correlates across them). C1 ships `(direction,
+   id)` because it is a strict superset that survives both — but replay must not assume
+   one-request-one-response-forever.
+3. **C9 (OTel interop) got easier AND more urgent, and may deserve to move earlier than week 8.**
+   The RC reserves `traceparent`/`tracestate`/`baggage` in `_meta` as an explicit exception to the
+   prefix rule, citing W3C Trace Context and the **OTel semantic conventions for MCP**. Trace
+   context is becoming **protocol-native**, not a bolt-on — "we complement Langfuse/Phoenix" becomes
+   partly a protocol-level fact. Logging's deprecation points the ecosystem at OTel as its migration
+   path, i.e. straight at C9's surface.
+
+**The wedge still looks right:** MCP is *consolidating, not fragmenting* — stateless core, one
+transport, a formal deprecation policy, an OTel on-ramp. **Belay has not been tested against
+2026-07-28 and claims no support for it**; no such server exists yet. When one does, the claim gets
+made on evidence.
+
 ### The verdict contract (referenced throughout)
 
 Three axes, deliberately unequal. `PASS` / `WARN` / `FAIL` / `UNVERIFIED`, and
@@ -73,8 +116,15 @@ every later capability reads what C1 writes.
   proxy must behave exactly as it does without it.
 - Capture per `tools/call`: server identity, tool name, arguments, result, `isError`,
   timing, ordering, and the tool's declared **annotations** (`readOnlyHint`,
-  `destructiveHint`, `idempotentHint`, `openWorldHint`) snapshotted from `tools/list` at
-  session start.
+  `destructiveHint`, `idempotentHint`, `openWorldHint`) snapshotted from `tools/list` and
+  **re-snapshotted on `notifications/tools/list_changed`** (a single snapshot verifies against a
+  stale contract).
+  > **Superseded as built — "at session start" was wrong.** This line originally said *"at session
+  > start"*. The **2026-07-28** revision removes the `initialize` handshake and the protocol-level
+  > session (SEP-2575/2567), and states that an open stdio process **is not a session**. C1 as
+  > shipped records **per-call resolved connection context** instead, which reconstructs from
+  > either a handshake (≤2025-11-25) or per-request `_meta` (≥2026-07-28). See *"The protocol we
+  > locked to is moving"* above.
 - Content-address everything (hash args, result, and the pre/post state handle from C2) so
   a trace is tamper-evident and comparable across runs.
 - An append-only, self-describing trace format on disk. It is the interchange format for the
@@ -430,7 +480,7 @@ built.
 
 | ID | Capability | Window | Phase | Cuttable? |
 |----|-----------|--------|-------|-----------|
-| C1 | MCP proxy trace capture | Wk 1 | 0 | No — the wedge |
+| C1 | MCP proxy trace capture | Wk 1 | 0 | ✅ **SHIPPED** (PR #1) |
 | C2 | Sandbox + execution boundaries | Wk 1–2 | 0 | No — **critical path** |
 | C3 | Deterministic replay | Wk 2 | 0 | No — the moat |
 | C4 | Replay-verify (A2) | Wk 2–3 | 0 | No |
