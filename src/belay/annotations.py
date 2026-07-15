@@ -30,11 +30,10 @@ left unresolved; no tool is called safe, dangerous, or allowed here.
 
 from __future__ import annotations
 
-import base64
-import json
 from typing import Any, Optional
 
 from belay.declared import DECLARED_TRUE, NOT_DECLARED, declared_state
+from belay.frames import message_of
 from belay.index import classify, derive_correlation
 
 KINDS = ("annotation_snapshot", "annotation_staleness", "annotation_gap")
@@ -82,13 +81,19 @@ def _tool_facts(tool: Any) -> Optional[dict]:
     }
 
 
-def _message(record: dict) -> Optional[Any]:
-    if record.get("truncated"):
-        return None
-    try:
-        return json.loads(base64.b64decode(record["raw"]))
-    except ValueError:
-        return None
+_UNREADABLE_TOOLS = (
+    "tools/list response carried no readable `result.tools` array"
+)
+
+# Distinct from the cause below it on purpose. "We could not read the request" and
+# "the snapshot does not describe this tool" are different findings, and reporting
+# the first as the second would assert the server omitted a tool it may well have
+# declared. A fabricated cause is worse than a blunt one.
+_UNREADABLE_PARAMS = (
+    "the tools/call request's `params` could not be read as an object (JSON-RPC 2.0 "
+    "permits positional params), so the tool name was never observed and no snapshot "
+    "can be matched to this call"
+)
 
 
 def _frames_by_seq(records: list[dict]) -> dict[int, dict]:
@@ -112,15 +117,25 @@ def derive_annotations(records: list[dict]) -> list[dict]:
         if entry["response_seq"] is None:
             continue
         record = frames[entry["response_seq"]]
-        message = _message(record)
-        tools = message.get("result", {}).get("tools") if isinstance(message, dict) else None
+        message, cause = message_of(record)
+        # Each `.get` is guarded on its own: the `{}` default covers an ABSENT
+        # key, never a present-but-wrong-typed one. `"result":"oops"` is legal
+        # JSON, and chaining through it used to raise out of this function
+        # entirely — taking every other tool's snapshot with it.
+        result = message.get("result") if isinstance(message, dict) else None
+        tools = result.get("tools") if isinstance(result, dict) else None
         if not isinstance(tools, list):
             out.append(
                 {
                     "kind": "annotation_gap",
                     "seq": record["seq"],
                     "tool": None,
-                    "cause": "tools/list response carried no readable `result.tools` array",
+                    # `cause` is None on every path that reaches here today: a
+                    # frame only correlates if it already parsed once. Preferring
+                    # it anyway costs nothing and means that if that coupling ever
+                    # changes, this reports the decode failure rather than the
+                    # misleading "carried no readable array".
+                    "cause": cause if cause is not None else _UNREADABLE_TOOLS,
                 }
             )
             continue
@@ -152,7 +167,13 @@ def _staleness(records: list[dict], derived: list[dict]) -> list[dict]:
     for record in records:
         if record.get("kind") != "frame":
             continue
-        message = _message(record)
+        # The cause is deliberately not carried here, and this is the one place
+        # in the module where that is right. A staleness record is a claim that a
+        # `list_changed` WAS observed; a frame we could not read gives us no such
+        # observation, and inventing a staleness from one would be a fabrication.
+        # The unreadable frame is not lost either way: `derive_correlation` names
+        # every one of them with an `index_gap`.
+        message, _unreadable = message_of(record)
         if not isinstance(message, dict) or classify(message) != "notification":
             continue
         if message.get("method") != "notifications/tools/list_changed":
@@ -191,8 +212,23 @@ def _uncovered_calls(
             continue
         if entry["request_seq"] is None:
             continue
-        message = _message(frames[entry["request_seq"]])
-        name = message.get("params", {}).get("name") if isinstance(message, dict) else None
+        message, cause = message_of(frames[entry["request_seq"]])
+        params = message.get("params") if isinstance(message, dict) else None
+        if not isinstance(params, dict):
+            # We failed to read the request. Falling through to `name = None`
+            # would reach the "absent from the most recent snapshot" cause below
+            # and assert something about the server that we did not observe.
+            # As above, `cause` is None on every path that reaches here today.
+            out.append(
+                {
+                    "kind": "annotation_gap",
+                    "seq": entry["request_seq"],
+                    "tool": None,
+                    "cause": cause if cause is not None else _UNREADABLE_PARAMS,
+                }
+            )
+            continue
+        name = params.get("name")
         live = [s for s in snapshots if s["source_seq"] < entry["request_seq"]]
         if not live:
             out.append(

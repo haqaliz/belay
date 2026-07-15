@@ -28,23 +28,14 @@ violation, or a finding. It is a shape on the wire, recorded as such.
 
 from __future__ import annotations
 
-import base64
 import json
-from typing import Any, Optional
+from typing import Any
 
 from belay.declared import declared_state
+from belay.frames import message_of
 from belay.index import classify, derive_correlation
 
 KINDS = ("error_classification", "classification_gap")
-
-
-def _message(record: dict) -> tuple[Optional[Any], Optional[str]]:
-    if record.get("truncated"):
-        return None, "truncated: the observed copy exceeded MAX_FRAME and is incomplete"
-    try:
-        return json.loads(base64.b64decode(record["raw"])), None
-    except ValueError as exc:
-        return None, f"unparseable: {type(exc).__name__}: {exc}"
 
 
 def _protocol_error(message: dict) -> dict:
@@ -129,7 +120,7 @@ def derive_error_classification(records: list[dict]) -> list[dict]:
         if record.get("kind") != "frame":
             continue
 
-        message, cause = _message(record)
+        message, cause = message_of(record)
         if cause is not None:
             out.append({"kind": "classification_gap", "seq": record["seq"], "cause": cause})
             continue

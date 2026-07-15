@@ -55,6 +55,22 @@ KINDS = ("frame", "capture_error", "connection_window")
 Observer = Callable[[bytes, bool], None]
 
 
+class TraceClosed(Exception):
+    """An append arrived after the connection window closed.
+
+    Named, rather than the `OSError: Bad file descriptor` that writing to a
+    closed fd used to raise from deep inside `_append`. The distinction matters:
+    a bad fd is indistinguishable from the disk having broken, so it degrades to
+    a stderr line while the trace keeps its matched open/close pair and reads as
+    a complete capture. This says exactly one thing — the window has closed, and
+    this observation is outside what the trace claims to have seen.
+
+    The proxy's capture gate stops observation before the writer closes, so this
+    should be unreachable through it. It exists so that "unreachable" is a
+    property the writer states rather than one it assumes about its callers.
+    """
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -92,6 +108,7 @@ class TraceWriter:
         self._fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         self._lock = threading.Lock()
         self._seq = 0
+        self._closed = False
         self._append({"kind": "connection_window", "phase": "open"})
 
     @classmethod
@@ -169,23 +186,38 @@ class TraceWriter:
 
     def _append(self, record: dict[str, Any]) -> None:
         with self._lock:
-            seq = self._seq
-            self._seq += 1
-            # Timing is assembled here but never enters either hash: both are
-            # computed over frame content alone. If `t_in` fed a hash, two
-            # identical runs could never agree, and "the replay produced the
-            # same bytes" would stop being expressible at all.
-            line = json.dumps(
-                {
-                    "v": SCHEMA_VERSION,
-                    **record,
-                    "seq": seq,
-                    "t_in": _now(),
-                    "observation_point": "proxy",
-                },
-                ensure_ascii=False,
-            )
-            _write_all(self._fd, line.encode("utf-8") + b"\n")
+            if self._closed:
+                raise TraceClosed(
+                    f"the connection window closed; {record.get('kind')!r} was observed "
+                    f"outside the period this trace claims to have seen"
+                )
+            self._append_locked(record)
+
+    def _append_locked(self, record: dict[str, Any]) -> None:
+        """Allocate `seq` and write, with `self._lock` already held.
+
+        Separate from `_append` so that `close()` can decide it is closing,
+        write the record that says so, and release the fd without ever dropping
+        the lock in between. Any window in there is one in which a frame lands
+        at a higher seq than the close that claims to bracket it.
+        """
+        seq = self._seq
+        self._seq += 1
+        # Timing is assembled here but never enters either hash: both are
+        # computed over frame content alone. If `t_in` fed a hash, two
+        # identical runs could never agree, and "the replay produced the
+        # same bytes" would stop being expressible at all.
+        line = json.dumps(
+            {
+                "v": SCHEMA_VERSION,
+                **record,
+                "seq": seq,
+                "t_in": _now(),
+                "observation_point": "proxy",
+            },
+            ensure_ascii=False,
+        )
+        _write_all(self._fd, line.encode("utf-8") + b"\n")
 
     def close(self) -> None:
         """Record that observation stopped, then stop.
@@ -209,10 +241,19 @@ class TraceWriter:
         A trace with an `open` and no `close` is therefore honest and expected:
         the proxy was killed, and the window's end is genuinely unknown rather
         than "the last frame we happened to see".
+
+        **Closing is one decision, taken once, under one lock.** The check, the
+        close record and the fd all move together: released in between, two
+        callers both pass the check and append two closes to one window, and a
+        frame racing the close lands at a higher seq than the record asserting
+        the window had already shut. The proxy stops observation before calling
+        this (see `_CaptureGate`), so by here the writer is idle — this is what
+        makes that true rather than hoped for.
         """
-        if self._fd >= 0:
-            self._append({"kind": "connection_window", "phase": "close"})
         with self._lock:
-            if self._fd >= 0:
-                os.close(self._fd)
-                self._fd = -1
+            if self._closed:
+                return
+            self._append_locked({"kind": "connection_window", "phase": "close"})
+            self._closed = True
+            os.close(self._fd)
+            self._fd = -1

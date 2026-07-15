@@ -120,6 +120,17 @@ the last. This is **the only statement in the trace about the period Belay was l
 and the frames cannot supply it — the first frame is when the *agent* first spoke, which is
 not when the proxy went live, and the two are different claims.
 
+**`close` means "we observed everything up to here", and that is load-bearing.** The proxy
+stops observation *before* the writer closes, and waits for any observation already in
+flight, so no frame can be observed into a closed trace. Without that, a client still
+writing while the server exits could have a frame land after the fd was gone: it would
+vanish, leaving a matched `open`/`close` pair and **no `capture_error`** — a trace that
+reads as a complete capture and is not. `close` is therefore the last record in the file
+by construction, never merely by luck of timing; no frame may carry a higher `seq`.
+
+Bytes the client sends *after* `close` are forwarded but not recorded, and that is not a
+gap: the window states where observation ended, which is precisely the honest claim.
+
 > ### Why `connection_window` and not `session_window`
 >
 > **Read this before "fixing" the name.** A session is a thing the protocol says does not
@@ -169,6 +180,19 @@ report anything downstream of it in that direction as verified.
 
 If the *writer itself* is what failed, the error is not written twice — it degrades to
 stderr. Forwarding is never affected by any of this.
+
+Three things raise a `capture_error`, and the last two are not observer bugs — they are
+bytes Belay took custody of and could not record:
+
+| `cause` names | What happened |
+|---|---|
+| an observer exception | Observation of that direction died. Forwarding continues. |
+| `OSError` / `BrokenPipeError` | **Forwarding** failed mid-chunk — the peer is gone. The chunk was already out of the source pipe, so it is observed *before* this is recorded: the bytes existed and the trace says so, then says why delivery stopped. |
+| `StreamEndedMidFrame` | The stream ended with an unterminated frame in the reassembly buffer. Those bytes reached the peer; they are **not** recorded as a frame, because a partial frame is not a frame. The cause says how many bytes went unrecorded. |
+
+Mid-stream, an incomplete buffer is not a loss — the rest of the frame is still coming, and
+nothing is recorded until a newline arrives. Only at EOF does the same silence become data
+loss, which is why only EOF names it.
 
 ## `belay/jcs-v1` — the canonical form, and its honest limits
 

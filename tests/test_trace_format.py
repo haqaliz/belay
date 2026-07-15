@@ -20,10 +20,11 @@ import sys
 import threading
 from pathlib import Path
 
+import pytest
 from conftest import CLIENT_LINES, FIXTURE, proxy_cmd, read_trace, run_over_pipes, run_traced
 
 from belay.proxy import BoundedPeek, _pump
-from belay.trace import TraceWriter
+from belay.trace import TraceClosed, TraceWriter
 
 NONUTF8_FIXTURE = Path(__file__).parent / "fixtures" / "nonutf8_server.py"
 
@@ -82,7 +83,15 @@ def test_non_utf8_frame_round_trips_with_no_canonical_hash(tmp_path):
 
 
 def test_every_schema_field_survives_the_round_trip(tmp_path):
-    for record in frames(run_traced(tmp_path, "t")):
+    records = frames(run_traced(tmp_path, "t"))
+
+    # Anti-vacuity: this is the only test that checks the record schema at all,
+    # so zero frames must not read as zero problems. If capture silently stopped,
+    # the failure mode this is the last line of defence against, an unguarded
+    # loop would sail through it.
+    assert records, "no frames captured - this schema check would pass vacuously"
+
+    for record in records:
         assert record["v"] == 1
         assert record["kind"] == "frame"
         assert isinstance(record["seq"], int)
@@ -140,6 +149,37 @@ def test_observer_failure_is_recorded_as_a_named_cause(tmp_path):
     assert record["dir"] == "s2c"
     assert "ValueError" in record["cause"]
     assert "disk on fire" in record["cause"]
+
+
+def test_an_observation_after_close_is_a_defined_refusal_not_a_bad_fd(tmp_path):
+    """The proxy's gate makes this unreachable; the writer must not rely on that.
+
+    Reaching a closed writer used to surface as `OSError: [Errno 9] Bad file
+    descriptor` from deep inside `_append`, which then degraded to a stderr line
+    while the trace kept its matched open/close pair. A named refusal is what
+    lets a caller tell "the window has closed" from "the disk broke".
+    """
+    writer = TraceWriter.in_directory(tmp_path / "trace")
+    writer.close()
+
+    with pytest.raises(TraceClosed):
+        writer.observer("c2s")(b'{"jsonrpc":"2.0","id":1,"method":"x"}', False)
+
+    # And nothing landed after the close record: a window that says it closed
+    # must not be followed by a frame it did not bracket.
+    records = read_trace(tmp_path / "trace")
+    assert [r["kind"] for r in records] == ["connection_window", "connection_window"]
+    assert [r["phase"] for r in records] == ["open", "close"]
+
+
+def test_closing_twice_appends_one_close_record(tmp_path):
+    """M-2: the fd check and the append must be one decision, under one lock."""
+    writer = TraceWriter.in_directory(tmp_path / "trace")
+    writer.close()
+    writer.close()
+
+    records = read_trace(tmp_path / "trace")
+    assert [r["phase"] for r in records if r["kind"] == "connection_window"] == ["open", "close"]
 
 
 def test_concurrent_directions_never_tear_a_line_or_repeat_a_seq(tmp_path):

@@ -44,9 +44,9 @@ classifier that looked for it. `result`/`error` decides.
 
 from __future__ import annotations
 
-import base64
-import json
-from typing import Any, Optional
+from typing import Any
+
+from belay.frames import message_of
 
 # A gap is a fact, so it gets a record rather than an absence. "There is no entry
 # for this frame" and "this frame could not be read" are different, and a reader
@@ -86,19 +86,6 @@ def _opposite(direction: str) -> str:
     return "s2c" if direction == "c2s" else "c2s"
 
 
-def _parse(record: dict) -> tuple[Optional[Any], Optional[str]]:
-    """The frame's message, or None and a named cause."""
-    if record.get("truncated"):
-        # Forwarded whole, observed short. Whatever we parse from this is a
-        # fragment, so we do not parse it: half a message indexed as if it were
-        # the message is worse than an acknowledged gap.
-        return None, "truncated: the observed copy exceeded MAX_FRAME and is incomplete"
-    try:
-        return json.loads(base64.b64decode(record["raw"])), None
-    except ValueError as exc:  # invalid JSON, or bytes that are not UTF-8
-        return None, f"unparseable: {type(exc).__name__}: {exc}"
-
-
 def _gap(record: dict, cause: str) -> dict:
     return {
         "kind": "index_gap",
@@ -123,7 +110,7 @@ def derive_correlation(records: list[dict]) -> list[dict]:
         if record.get("kind") != "frame":
             continue
 
-        message, cause = _parse(record)
+        message, cause = message_of(record)
         if cause is not None:
             out.append(_gap(record, cause))
             continue
