@@ -65,27 +65,107 @@ Ubuntu. **Whether `bwrap` runs on stock `ubuntu-latest` is unknown and decides t
 
 ## 4. Verified findings — snapshot fidelity (APFS)
 
-**`cp -Rc` (APFS clonefile) preserves:** file mode ✅ · file `mtime_ns` ✅ · symlink stays a symlink
-with correct target ✅ · empty dirs ✅.
+> **⚠️ Two corrections to earlier claims in this session (my error, recorded not buried):**
+> 1. The lost symlink mtime was **`cp -Rc`**, *not* clonefile. **`cp -Rc` is measurably WORSE** — it
+>    loses hardlinks, setuid, **and** mtime on symlinks/FIFOs (it recreates non-regular files fresh).
+>    **Do not shell out to `cp -Rc`. Call `clonefile(2)` via ctypes.**
+> 2. **"APFS normalizes" was wrong.** APFS is normalization-**preserving** and
+>    normalization-**insensitive**: NFD bytes round-trip verbatim (unlike HFS+, which normalized on
+>    store). **"Byte-identical" IS an honest claim** — *provided the hash uses raw readdir bytes*.
+>    The trap is not the filesystem; it is a hash built from `str` paths after any normalization
+>    step, which makes the drift invisible.
 
-**🔴 It LOSES the symlink's own mtime.** Measured: `1784131338477367249 → 1784131338482798035`.
-> **This decides the tree hash.** A hash including symlink mtime fails every restore. A hash
-> excluding it is honest **only if we say so**. Silently omitting it while claiming *"byte-identical"*
-> is a false PASS manufactured by our own hash — structurally identical to the annotation-default bug
-> C1 caught.
+**`clonefile(2)` is reachable from stdlib via `ctypes` — zero deps hold, no shelling out.**
+`os.clonefile` does not exist (verified: `[a for a in dir(os) if 'clone' in a] == []`). Via
+`ctypes.CDLL(find_library("c"))` it **clones whole trees recursively in a single call**.
+**`CLONE_ACL` (0x0004) is mandatory** — with flags=0 it **silently drops ACLs** (verified against the
+real SDK header, not memory).
 
-**🔴 APFS is case-INSENSITIVE by default** (verified: `Foo` matches `foo`). A tree containing both
-`Foo` and `foo` **cannot round-trip**.
+**Cost (412MB, 4804 files, measured):**
+| Mechanism | Time | Disk |
+|---|---|---|
+| `clonefile(CLONE_ACL)` | **71ms** (27ms warm) | **3.1MB** (COW verified via `df`, not `du`) |
+| `shutil.copytree` | 813ms | ~412MB |
+| `cp -a` | 1206ms | 422MB |
+| `bsdtar` create+extract | 3566ms | ~412MB |
 
-**🟡 Unicode:** APFS **preserves exact bytes on write** (NFC stored as NFC — no silent
-normalization ✅), **but lookup is normalization-insensitive**: `café` (NFC) and `café` (NFD)
-resolve to the **same file**, so both cannot coexist.
+**Fidelity gaps vs a torture tree (measured):**
+| Mechanism | Loses |
+|---|---|
+| `bsdtar` | **birthtime only** — the fidelity champion; the only mechanism whose tree hash matched exactly |
+| `cp -a` | hardlinks, birthtime |
+| **`clonefile(CLONE_ACL)`** | **hardlinks, setuid, dir-mtime**, birthtime → *all three repairable* |
+| `cp -Rc` | hardlinks, setuid, **symlink/FIFO mtime**, birthtime |
+| stdlib `tarfile` (PAX) | xattrs, `st_flags`, sparseness, **ns-mtime DRIFT** (PAX stores float seconds), birthtime |
+| `shutil.copytree` | **xattrs (⇒ resource forks)**, sparseness, hardlinks, **ABORTS on FIFO**, birthtime |
 
-**Performance (from the sandbox brief, cited not re-run):** 57MB / 300 files → clone 0.03s, restore
-0.03s, vs 0.07s plain copy. **The argument this makes is the important part:** A2 must restore
-pre-state before *every* re-invocation. At 50 turns, 30ms vs `docker commit`-seconds is the
-difference between replay being invisible and replay being why nobody runs Belay. **The sandbox
-substrate and the snapshot substrate want to be the same filesystem** — on macOS, APFS.
+**🔴 `os.listxattr` DOES NOT EXIST ON macOS** — CPython gates it to Linux. Therefore
+`shutil.copystat` **silently drops every xattr on darwin**, and **macOS resource forks *are* the
+`com.apple.ResourceFork` xattr** (verified). Whatever preserves xattrs preserves forks; `copytree`
+preserves neither. Reading xattrs on macOS at all requires ctypes.
+
+**🔴 Hardlink identity is the sharpest trap.** Only `bsdtar`/stdlib-`tarfile` preserve it. clonefile,
+`cp -a`, `cp -Rc`, `copytree` **all** break `nlink=2` into two independent inodes — **content-identical,
+so a content-only hash blesses it**.
+
+**🔴 clonefile strips setuid** (`0o4711 → 0o0711`, security-motivated, silent) and **resets dir
+mtimes**. Both invisible to a content-only hash.
+
+**🟡 APFS is case-preserving, case-INSENSITIVE** — and nastier than expected: writing `casetest`
+over `CaseTest` **keeps the name and silently overwrites the contents**. This does **not** break
+same-filesystem restore (a `README`/`readme` collision cannot exist in the original either). It
+breaks **cross-filesystem** restore (an ext4-captured tree replayed onto APFS) — which must be
+**REFUSED, not attempted**.
+
+**🟡 APFS REJECTS invalid-UTF-8 filenames** (`OSError 92 EILSEQ`, verified). Legal on ext4,
+impossible on APFS. A cross-platform boundary, not a bug.
+
+**Two ambient traps that would silently rot the suite:**
+- **`com.apple.provenance` is injected by macOS on every file it creates.** After `copytree` dropped
+  the real xattr, the file **still had one** — so a naive *"xattrs present?"* check **passes on a tree
+  that lost all real xattrs**. Must be on an explicit ignore list.
+- **`open(fifo,"rb").read()` BLOCKS FOREVER** (verified; it hung the researcher's own suite). A naive
+  tree walker deadlocks. **Gate on `S_ISREG` before opening anything.**
+
+**The argument that decides the substrate:** A2 must restore pre-state before *every* re-invocation.
+At 50 turns, **10ms vs `docker commit`-seconds** is the difference between replay being invisible and
+replay being why nobody runs Belay. **The sandbox substrate and the snapshot substrate want to be the
+same filesystem** — on macOS, APFS.
+
+**Measured acceptance (the roadmap's actual test):**
+```
+pre-state hash    : e467b9b5…
+snapshot          : 10.1 ms   (snapshot hash matches: True)
+agent mutates     : 2380fa6c…  (differs: True)
+restore           :  3.5 ms
+post-restore hash : e467b9b5…
+ACCEPTANCE: hash(restored) == hash(original) -> True
+```
+Backend = **`clonefile(CLONE_ACL)` + a sidecar repair of its three measured gaps** (relink hardlinks;
+re-chmod setuid; restore dir mtimes deepest-first).
+
+## 4b. The tree hash: BTH-1 (concrete, versioned, and it discriminates)
+
+**A content-only hash would have blessed EVERY failure above.**
+
+**IN:** version tag `BTH-1` · **raw readdir PATH BYTES** (never `str`, never normalized) · kind ·
+`S_IMODE` (carries setuid/setgid/sticky) · `mtime_ns` · `st_flags` · uid/gid · size + sha256 content
+(regular files) · symlink target as **raw bytes** · `st_rdev` · sorted `(xattr_name, sha256(value))`
+minus ignore-list · **hardlink GROUP ID = first path in the group** (*not* the inode number).
+
+**OUT, deliberately, and documented:** inode numbers + `st_dev` (unstable across restore) · **atime
+(self-invalidating — hashing the tree reads files and changes it)** · ctime (unsettable) ·
+**birthtime (unsettable by anyone, incl. tar)** · `st_blocks` (sparseness → a separate WARN, not an
+identity diff) · raw `nlink` (implied by group structure).
+
+**Ordering:** records sorted **by raw path bytes** — readdir order is not stable, and sorting by
+`str` would reintroduce the normalization trap. **Structure:** `sha256("BTH-1\n" + concat(sha256(rec)))`
+with `\x00`-joined `key=value` fields **so failures are legible field-by-field** rather than "two hex
+strings differ".
+
+**It is not a tautology** — measured: only `bsdtar` reproduces the tree (`MATCH`); clonefile, `cp -a`,
+stdlib tarfile, and copytree all `DIFFER`. **Negative controls STABLE:** no-op re-extract · atime
+churn · inode-number churn.
 
 ## 5. 🔴 The decision this forces (for the gate)
 
@@ -111,6 +191,19 @@ ABC now against one implementation would encode SBPL's quirks as universal: **bw
 model and SBPL's policy-match model disagree about what "scope" means**, and that is invisible until
 the second exists.
 
+**🔴 The snapshot research makes the macOS-only case STRONGER, and the Linux case worse:**
+**`ext4` has NO reflink**, and **GitHub Actions Linux runners are ext4** — so `clonefile`'s
+copy-on-write trick has **no Linux equivalent in CI**. The Linux fallback is `bsdtar` (**50× slower**
+— 3566ms vs 71ms) or a plain copy (**~412MB of real disk per snapshot instead of 3.1MB**). Also
+`os.listxattr` exists on Linux but **not macOS**, so **stdlib copy fidelity is strictly better on
+Linux** — meaning **a macOS-green test says nothing about Linux, and vice versa.**
+
+> **This forces a design conclusion regardless of which substrate we ship:** a `SnapshotBackend`
+> must expose **`capabilities()`**, the manifest must record **which backend produced it**, and
+> restore must **REFUSE across backends whose capability sets differ**. That is not the premature
+> abstraction the roadmap warns against — it is the honesty contract: a tree captured where xattrs
+> exist cannot be truthfully restored where they don't, and pretending otherwise is a false PASS.
+
 ## 6. 🔴 The insight that changes A2's soundness
 
 **`openWorldHint` should hard-gate replay.** A tool call that touched the network under an allow-all
@@ -130,7 +223,30 @@ validity are directly connected, which neither the roadmap nor C1's PRD noticed.
 | `NONDETERMINISTIC_INPUT` | Clock, `random`/`urandom`, PIDs, hostname, `$TMPDIR` (per-boot on macOS), locale, scheduler interleaving. **Seatbelt virtualizes none of these — it is access control, not a hypervisor.** |
 | `OUTSIDE_BOUNDARY` | Anything pre-sandbox; the proxy's own writes; **and the agent's built-in `Bash`/`Edit`** — which don't traverse MCP, aren't spawned by us, aren't in our sandbox. **The sandbox's limit and the MCP boundary's limit are the SAME limit.** Say it once, loudly. |
 | `POLICY_INEXPRESSIBLE` | The substrate cannot express the requested policy (macOS per-host network). The honest answer is "cannot enforce", not a profile that pretends. |
-| `FIDELITY_GAP` | A property the snapshot cannot preserve (symlink mtime; case-collision; unicode-normalization collision). **Surfaced, never silently dropped.** |
+| `FIDELITY_GAP` | A property the snapshot cannot preserve. **Surfaced, never silently dropped.** |
+
+**Expanded, from measurement (each is a named cause, never a silent skip, never PASS):**
+- **Physically unsettable** → excluded from the hash *and documented*: `UNRESTORABLE_BIRTHTIME`
+  (unsettable by **anyone**, incl. tar; APFS also clamps it to mtime), `UNRESTORABLE_CTIME`,
+  `UNRESTORABLE_ATIME` (**self-invalidating** — hashing reads files and changes it),
+  `UNRESTORABLE_INODE_IDENTITY`.
+- **Privilege-gated:** `UNRESTORABLE_OWNERSHIP` (non-root cannot restore foreign uid/gid),
+  `UNRESTORABLE_DEVICE_NODE` (mknod needs root), `UNRESTORABLE_IMMUTABLE_FLAG`.
+  > Self-inflicted variant hit for real: an ACL of *"everyone deny delete"* made the researcher's own
+  > scratch dir **undeletable**. **Snapshot GC must handle ACL'd/`uchg` trees or it strands disk.**
+- **Out-of-substrate fs objects:** `UNRESTORABLE_SOCKET`, `UNRESTORABLE_FIFO_CONTENTS` (*the node
+  restores; the queued bytes don't*), `UNRESTORABLE_OPEN_FD_STATE`, `UNRESTORABLE_MOUNT`,
+  `UNRESTORABLE_DEV_PROC`.
+- **Cross-filesystem IMPOSSIBILITY — must REFUSE, not attempt:** `UNRESTORABLE_CASE_COLLISION`
+  (`README`+`readme`, ext4→APFS), `UNRESTORABLE_INVALID_UTF8_NAME` (EILSEQ, verified),
+  `UNRESTORABLE_NORMALIZATION_COLLISION` (NFC+NFD coexisting on ext4, colliding on APFS),
+  `UNRESTORABLE_XATTR_UNSUPPORTED`.
+- **Outside the filesystem entirely — say this loudest:** `UNRESTORABLE_EXTERNAL_SERVICE`,
+  `UNRESTORABLE_NETWORK_EFFECT`, `UNRESTORABLE_WALL_CLOCK` (*re-execution happens at a different
+  time; time-dependent calls diverge legitimately*), `UNRESTORABLE_RUNNING_PROCESS`,
+  `UNRESTORABLE_RANDOMNESS`, `UNRESTORABLE_DATABASE_STATE`.
+  **This class is where A2/replay stops being able to say anything. The roadmap must not over-claim
+  past it.**
 
 > **"Never let a timestamp diff render as FAIL — that's how you train users to ignore the verifier."**
 
@@ -149,6 +265,22 @@ validity are directly connected, which neither the roadmap nor C1's PRD noticed.
    the egress test forever. **This is the repo's standing anti-vacuity rule, and it has now caught a
    would-be-vacuous test three times.**
 4. `rc=$?` after a pipe reports the *pipe's* status — a denied write reported rc=0.
+5. **🔴 The mutation suite caught ITSELF passing for the wrong reason.** All 12 corruptions initially
+   reported CAUGHT — but several were caught by the **parent directory's mtime** changing, not by the
+   property under test. *"Symlink retargeted"* was caught by `d`'s mtime. After neutralizing dir
+   mtimes it was **still** confounded by the symlink's own fresh mtime; only
+   `os.utime(..., follow_symlinks=False)` isolated it. **This is the SIGABRT trap in another costume:
+   right verdict, wrong reason — and it rots the moment dir mtimes are restored properly.**
+   > **THE RULE FOR THIS REPO: "the hash changed" is NOT evidence the test works. Assert on WHICH
+   > FIELD changed.** Two mutations (symlink-deref, hardlink-break) are **content-identical by
+   > construction** and exist purely to kill a content-only hash.
+6. **Repair-ablation must be a permanent test.** Disable each repair → the acceptance test MUST fail.
+   Measured: `('hardlinks',)` → FAIL · `('suid',)` → FAIL · `('dirmtimes',)` → FAIL · all three →
+   FAIL · all repairs on → PASS. **Every repair is load-bearing**, and this is the guard that stops
+   someone "simplifying" one away and leaving a green suite.
+7. **Narrowing the substrate is only honest if out-of-substrate entries are DETECTED and REFUSED
+   loudly.** Silently ignoring a FIFO is exactly the *"UNVERIFIED rendered as PASS"* `CLAUDE.md`
+   forbids.
 
 ## 9. Guardrail check
 
