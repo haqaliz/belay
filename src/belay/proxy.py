@@ -59,6 +59,47 @@ class CaptureSink(Protocol):
     def capture_error(self, direction: str, cause: BaseException) -> None: ...
 
 
+class _CaptureGate:
+    """Stops one direction's observation at a defined point.
+
+    The c2s pump must stay a daemon: it can be blocked forever on a read from a
+    quiet client, and joining it would hang the exit. But a daemon still running
+    when the recorder closes is how a frame gets observed into a closed writer —
+    it vanishes, and the trace keeps its matched open/close pair and looks like a
+    complete capture. That is the false-completeness this project exists to
+    catch.
+
+    So the daemon is paired with this instead of a join. `stop()` takes the lock,
+    which means it waits for any observation already in flight and blocks any
+    that has not started. Once it returns, the recorder is provably idle and can
+    close knowing its window means what the format says: everything up to the
+    close was observed.
+
+    One gate per direction, never one shared: the two streams are independent,
+    and a shared gate would put them back to waiting on each other's hashing —
+    the exact contention `TraceWriter._record_frame` is arranged to avoid.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._stopped = False
+
+    def guard(self, fn: Callable) -> Callable:
+        def gated(*args) -> None:
+            with self._lock:
+                if self._stopped:
+                    # Past the window's close. Not a loss to name — the window
+                    # says where observation ended, which is the honest claim.
+                    return
+                fn(*args)
+
+        return gated
+
+    def stop(self) -> None:
+        with self._lock:
+            self._stopped = True
+
+
 class BoundedPeek:
     """Reassembles newline-delimited frames from a *copy* of a stream.
 
@@ -99,11 +140,61 @@ class BoundedPeek:
         if frame:
             self._observe(frame, truncated)
 
+    def close(self) -> int:
+        """End the stream; return the bytes left over from an unfinished frame.
+
+        Mid-stream a partial buffer is correct: the rest of the frame is still
+        coming. At EOF nothing more is coming, so the same bytes are a frame that
+        crossed to the peer and never reached the trace. The residue is reported
+        rather than emitted as a frame — a partial frame is not a frame, and
+        recording it as one would be a worse lie than naming the loss.
+        """
+        residue = len(self._buf)
+        self._buf.clear()
+        self._truncated = False
+        return residue
+
 
 def _write_all(fd: int, data: bytes) -> None:
     view = memoryview(data)
     while view:
         view = view[os.write(fd, view) :]
+
+
+class StreamEndedMidFrame(Exception):
+    """EOF arrived with an unterminated frame in the reassembly buffer."""
+
+
+def _name(on_capture_error: Optional[CaptureError], cause: BaseException) -> None:
+    """Say why capture lost something. Never at the expense of forwarding."""
+    if on_capture_error is None:
+        return
+    try:
+        on_capture_error(cause)
+    except Exception:
+        # The recorder failed while recording that the recorder failed. It has
+        # already degraded to stderr; forwarding must survive even this.
+        pass
+
+
+def _observe(
+    peek: Optional[BoundedPeek],
+    chunk: bytes,
+    on_capture_error: Optional[CaptureError],
+) -> Optional[BoundedPeek]:
+    """Feed the observed copy. Returns the peek, or None once it has died."""
+    if peek is None:
+        return None
+    try:
+        peek.feed(chunk)
+    except Exception as exc:
+        # Observation is best-effort; forwarding is not. But dropping `peek`
+        # silently would leave the trace ending early while looking complete,
+        # which is a false-completeness claim and the exact thing this project
+        # exists to catch. Stop observing this direction, and say why.
+        _name(on_capture_error, exc)
+        return None
+    return peek
 
 
 def _pump(
@@ -112,36 +203,49 @@ def _pump(
     peek: Optional[BoundedPeek] = None,
     on_capture_error: Optional[CaptureError] = None,
 ) -> None:
-    """Stream src_fd to dst_fd verbatim until either end closes."""
-    while True:
-        try:
-            chunk = os.read(src_fd, _CHUNK)
-        except OSError:
-            return
-        if not chunk:
-            return
-        try:
-            _write_all(dst_fd, chunk)
-        except OSError:
-            return
-        if peek is not None:
+    """Stream src_fd to dst_fd verbatim until either end closes.
+
+    Every exit from this loop is a stream ending, so every exit runs the peek's
+    close: bytes this proxy took custody of must reach the trace or leave a named
+    cause, and "the stream stopped" is not an excuse for neither.
+    """
+    try:
+        while True:
             try:
-                peek.feed(chunk)
-            except Exception as exc:
-                # Observation is best-effort; forwarding is not. But dropping
-                # `peek` silently would leave the trace ending early while
-                # looking complete, which is a false-completeness claim and the
-                # exact thing this project exists to catch. Stop observing this
-                # direction, and say why.
-                peek = None
-                if on_capture_error is not None:
-                    try:
-                        on_capture_error(exc)
-                    except Exception:
-                        # The recorder failed while recording that the recorder
-                        # failed. It has already degraded to stderr; forwarding
-                        # must survive even this.
-                        pass
+                chunk = os.read(src_fd, _CHUNK)
+            except OSError:
+                # Nothing was consumed, so nothing was lost on the way in: the
+                # source is simply gone. Any residue is named by close() below.
+                return
+            if not chunk:
+                return
+            try:
+                _write_all(dst_fd, chunk)
+            except OSError as exc:
+                # The chunk is already out of the source pipe — Belay has taken
+                # custody of bytes it can no longer deliver. Returning here would
+                # drop them with no record and no cause, which is the same silent
+                # loss this module exists to prevent. So: observe what existed,
+                # then name why forwarding stopped.
+                peek = _observe(peek, chunk, on_capture_error)
+                _name(on_capture_error, exc)
+                return
+            # Deliberately after the forward, and it stays there: forwarding must
+            # never wait on the recorder. Only the failure path above observes
+            # first, and only because there is no forward left to delay.
+            peek = _observe(peek, chunk, on_capture_error)
+    finally:
+        if peek is not None:
+            residue = peek.close()
+            if residue:
+                _name(
+                    on_capture_error,
+                    StreamEndedMidFrame(
+                        f"stream ended mid-frame; {residue} bytes were forwarded to the "
+                        f"peer and observed without a terminating newline, so they are "
+                        f"not recorded as a frame"
+                    ),
+                )
 
 
 def _pump_client_stdin(
@@ -171,18 +275,24 @@ def _reap(proc: subprocess.Popen) -> int:
 
 def _capture_for(
     capture: Optional[CaptureSink], direction: str
-) -> tuple[Optional[BoundedPeek], Optional[CaptureError]]:
-    """Build one direction's independent observation branch.
+) -> tuple[Optional[BoundedPeek], Optional[CaptureError], _CaptureGate]:
+    """Build one direction's independent observation branch, and its off switch.
 
     Each direction gets its own BoundedPeek: the two streams are unrelated, and
     a shared reassembly buffer would splice one direction's partial frame onto
     the other's.
+
+    Both ways of reaching the recorder — the observer and the capture_error — go
+    through the gate. Either one arriving after the recorder closed is the same
+    bug; gating only the first would leave the second writing into a closed fd.
     """
+    gate = _CaptureGate()
     if capture is None:
-        return None, None
+        return None, None, gate
     return (
-        BoundedPeek(capture.observer(direction)),
-        lambda exc: capture.capture_error(direction, exc),
+        BoundedPeek(gate.guard(capture.observer(direction))),
+        gate.guard(lambda exc: capture.capture_error(direction, exc)),
+        gate,
     )
 
 
@@ -195,31 +305,40 @@ def run(command: list[str], capture: Optional[CaptureSink] = None) -> int:
     )
     assert proc.stdout is not None and proc.stderr is not None
 
-    c2s_peek, c2s_error = _capture_for(capture, "c2s")
-    s2c_peek, s2c_error = _capture_for(capture, "s2c")
+    c2s_peek, c2s_error, c2s_gate = _capture_for(capture, "c2s")
+    s2c_peek, s2c_error, s2c_gate = _capture_for(capture, "s2c")
 
-    # Daemon: if the server dies while the client is quiet, this pump is still
-    # blocked on a read that will never return, and must not hold up our exit.
-    threading.Thread(
-        target=_pump_client_stdin,
-        args=(proc, c2s_peek, c2s_error),
-        daemon=True,
-    ).start()
-
-    forwarders = [
+    try:
+        # Daemon: if the server dies while the client is quiet, this pump is still
+        # blocked on a read that will never return, and must not hold up our exit.
         threading.Thread(
-            target=_pump,
-            args=(proc.stdout.fileno(), sys.stdout.fileno(), s2c_peek, s2c_error),
-        ),
-        threading.Thread(target=_pump, args=(proc.stderr.fileno(), sys.stderr.fileno())),
-    ]
-    for thread in forwarders:
-        thread.start()
-    for thread in forwarders:
-        thread.join()
+            target=_pump_client_stdin,
+            args=(proc, c2s_peek, c2s_error),
+            daemon=True,
+        ).start()
 
-    status = _reap(proc)
-    return 128 - status if status < 0 else status
+        forwarders = [
+            threading.Thread(
+                target=_pump,
+                args=(proc.stdout.fileno(), sys.stdout.fileno(), s2c_peek, s2c_error),
+            ),
+            threading.Thread(target=_pump, args=(proc.stderr.fileno(), sys.stderr.fileno())),
+        ]
+        for thread in forwarders:
+            thread.start()
+        for thread in forwarders:
+            thread.join()
+
+        status = _reap(proc)
+        return 128 - status if status < 0 else status
+    finally:
+        # Observation ends here, before the caller closes the recorder. The c2s
+        # daemon may still be blocked on a client read and may still wake with
+        # bytes; after this it forwards them and records nothing, which the
+        # connection window already states. What it can no longer do is observe
+        # into a closed writer and disappear.
+        c2s_gate.stop()
+        s2c_gate.stop()
 
 
 def main(argv: list[str]) -> int:

@@ -29,6 +29,7 @@ from fixtures.annotation_frames import (
 )
 
 from belay.annotations import ANNOTATIONS, derive_annotations
+from belay.index import derive_correlation
 
 LISTING = [("c2s", TOOLS_LIST_REQUEST), ("s2c", TOOLS_LIST_RESPONSE)]
 
@@ -106,7 +107,16 @@ def test_incoherent_annotations_are_recorded_as_a_fact_not_resolved(tmp_path):
 
 
 def test_a_coherent_tool_records_no_incoherence(tmp_path):
+    """M-1: `read_file` is the case that carries this test.
+
+    `write_file` and `mystery` both leave via `_incoherence`'s early return —
+    neither declares `readOnlyHint: true`, so neither ever reaches the rule. They
+    would stay green if the rule were inverted or deleted. `read_file` declares
+    `readOnlyHint: true` and nothing else, which is the only input that reaches
+    the comprehension and must still come back empty.
+    """
     (snapshot,) = snapshots(trace_of(tmp_path, LISTING))
+    assert tool(snapshot, "read_file")["incoherence"] == []
     assert tool(snapshot, "write_file")["incoherence"] == []
     assert tool(snapshot, "mystery")["incoherence"] == []
 
@@ -167,6 +177,90 @@ def test_a_call_with_no_snapshot_at_all_is_a_named_cause_not_a_default(tmp_path)
     (gap,) = [r for r in derive_annotations(records) if r["kind"] == "annotation_gap"]
     assert gap["tool"] == "rm"
     assert "tools/list" in gap["cause"]
+
+
+def test_a_result_that_is_not_an_object_is_a_named_gap_not_a_crash(tmp_path):
+    """C-3: `"result":"oops"` is legal JSON a non-conforming server can send.
+
+    `.get("result", {})` defaults only an ABSENT key, so a present-but-wrong-typed
+    one used to raise straight out of the derivation.
+    """
+    records = trace_of(
+        tmp_path,
+        [
+            ("c2s", TOOLS_LIST_REQUEST),
+            ("s2c", b'{"jsonrpc":"2.0","id":2,"result":"oops"}'),
+        ],
+    )
+
+    (gap,) = [r for r in derive_annotations(records) if r["kind"] == "annotation_gap"]
+    assert gap["tool"] is None
+    assert "result" in gap["cause"]
+
+
+def test_positional_params_on_a_tools_call_are_a_named_gap_not_a_crash(tmp_path):
+    """C-3: JSON-RPC 2.0 explicitly permits `params` as an array.
+
+    The cause must say we could not READ the request. Falling through to
+    `name = None` would emit "the tool is absent from the most recent tools/list
+    snapshot" — a fabrication. The tool is not absent; we never learned its name.
+    """
+    records = trace_of(
+        tmp_path,
+        LISTING + [("c2s", b'{"jsonrpc":"2.0","id":7,"method":"tools/call","params":["echo"]}')],
+    )
+
+    (gap,) = [r for r in derive_annotations(records) if r["kind"] == "annotation_gap"]
+    assert gap["tool"] is None
+    assert "params" in gap["cause"]
+    assert "absent from the most recent" not in gap["cause"], (
+        "an unreadable request must not be reported as a tool the snapshot lacked"
+    )
+
+
+def test_one_non_conforming_frame_does_not_take_down_the_other_snapshots(tmp_path):
+    """The blast radius is the point: a crash lost EVERY tool's annotations.
+
+    A malformed frame yields a recorded, honest error, never a dropped turn —
+    and the turns either side of it still derive.
+    """
+    records = trace_of(
+        tmp_path,
+        [
+            ("c2s", b'{"jsonrpc":"2.0","id":9,"method":"tools/list"}'),
+            ("s2c", b'{"jsonrpc":"2.0","id":9,"result":"oops"}'),
+        ]
+        + LISTING,
+    )
+    derived = derive_annotations(records)
+
+    (snapshot,) = [r for r in derived if r["kind"] == "annotation_snapshot"]
+    assert tool(snapshot, "read_file")["annotations"]["readOnlyHint"]["state"] == "declared-true"
+    assert [r for r in derived if r["kind"] == "annotation_gap"], "the bad frame lost its cause"
+
+
+def test_an_unparseable_tools_list_response_invents_no_snapshot_and_is_named(tmp_path):
+    """An unreadable response must not become a snapshot, and must not go quiet.
+
+    This layer does not gap it, and that is deliberate rather than a hole: a
+    frame that could not be parsed never correlates, so no `tools/list` response
+    reaches this module to gap. The naming happens once, upstream, where the
+    decode failed — duplicating it here would report one lost frame as two.
+    """
+    records = trace_of(
+        tmp_path,
+        [("c2s", TOOLS_LIST_REQUEST), ("s2c", b'{"jsonrpc":"2.0","id":2,"result":{oops}')],
+    )
+
+    assert derive_annotations(records) == []
+
+    # The frame is not lost: the index names the decode failure, and the request
+    # it answered stays visibly unanswered rather than silently satisfied.
+    index = derive_correlation(records)
+    (gap,) = [r for r in index if r["kind"] == "index_gap"]
+    assert "unparseable" in gap["cause"]
+    (correlation,) = [r for r in index if r["kind"] == "correlation"]
+    assert correlation["status"] == "unanswered"
 
 
 def test_the_real_fixture_declares_nothing_end_to_end(tmp_path):

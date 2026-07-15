@@ -45,10 +45,9 @@ a client that appears to have declared nothing.
 
 from __future__ import annotations
 
-import base64
-import json
 from typing import Any, Optional
 
+from belay.frames import message_of
 from belay.index import classify, derive_correlation
 
 KINDS = ("connection_context", "trace_context")
@@ -74,12 +73,17 @@ _NO_HANDSHAKE = (
 
 
 def _message(record: dict) -> Optional[Any]:
-    if record.get("truncated"):
-        return None
-    try:
-        return json.loads(base64.b64decode(record["raw"]))
-    except ValueError:
-        return None
+    """The message alone, for the callers that have nowhere to put a cause.
+
+    `_Handshake.observe` and `_trace_context` both read a frame only to see
+    whether something is in it. Neither emits a record, so neither can name a
+    gap — and an unreadable frame is already named twice over: by
+    `derive_correlation`'s `index_gap`, and by `resolve` below, which turns the
+    cause into the `unknown` on this very frame's `connection_context`. The
+    discard is explicit here so it stays a decision rather than a habit.
+    """
+    message, _unreadable = message_of(record)
+    return message
 
 
 def _unknown(cause: str) -> dict:
@@ -232,7 +236,7 @@ def derive_connection_context(records: list[dict]) -> list[dict]:
         if from_handshake is not None:
             return from_handshake
 
-        message = _message(record)
+        message, unreadable = message_of(record)
         meta = _meta_of(message)
         if meta is not None:
             from_meta = _from_meta(meta, keys)
@@ -251,10 +255,13 @@ def derive_connection_context(records: list[dict]) -> list[dict]:
         pending = handshake.pending_cause(seq, declared_seq)
         if pending is not None:
             return _unknown(pending)
-        if record.get("truncated"):
+        if unreadable is not None:
+            # The decoder's own cause, verbatim: truncated, or unparseable. Both
+            # mean the same thing here — whatever context this frame carried, we
+            # did not see it — and neither may be reported as "declared nothing".
             return _unknown(
-                "the observed copy of this frame exceeded MAX_FRAME and is incomplete, "
-                "so any connection context it carried was not observed"
+                f"this frame could not be read ({unreadable}), so any connection "
+                f"context it carried was not observed"
             )
         return _unknown(_meta_cause(meta))
 
