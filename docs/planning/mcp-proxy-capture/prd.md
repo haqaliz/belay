@@ -99,9 +99,21 @@ subprocess and presents its own stdin/stdout. stdio only.
 output.**
 
 **M3 · Full-duplex pump.** Two independent, message-type-agnostic async pumps. **Not** a
-request/response state machine — MCP servers originate requests (`sampling/createMessage`,
-`roots/list`, `elicitation/create`, `ping`), and a request/response loop deadlocks or drops the
-moment one arrives.
+request/response state machine — under **2025-11-25 (current)** MCP servers originate requests
+(`sampling/createMessage`, `roots/list`, `elicitation/create`, `ping`), and a request/response loop
+deadlocks or drops the moment one arrives.
+
+> **⚠️ This rationale expires in 13 days — and the design survives anyway. That is the point.**
+> The **2026-07-28 RC removes server-initiated requests entirely** (SEP-2322), replacing them with
+> **Multi Round-Trip Requests**: the server returns `resultType: "input_required"` with
+> `inputRequests`, and the **client retries the original request — with a NEW request id** — carrying
+> `inputResponses`. Roots, Sampling **and Logging** are deprecated wholesale (SEP-2577); `ping` and
+> SSE resumability are removed (SEP-2575).
+>
+> **A proxy built around a request/response state machine would need a rewrite. Ours needs nothing**,
+> because it does not model the conversation — it forwards bytes and never interprets. The RC
+> *vindicates* the design rather than threatening it. This is the strongest available evidence for
+> M2/M13: **the way to survive a protocol changing under you is to refuse to model it.**
 
 **M4 · Correlate on `(direction, id)`.** Client- and server-originated ids are **separate namespaces
 and may both start at 1**. Bare-id correlation cross-wires them. Responses carry no `method`, so
@@ -140,8 +152,20 @@ appended**, never overwritten.
 > list mid-session; a single snapshot verifies against a **stale contract**, and C4/C5 would inherit
 > the staleness.
 
-**M9 · Per-call resolved session context.** Each frame records the **resolved** protocol version and
-client identity, rather than pointing at a session-header record.
+**M9 · Per-call resolved connection context.** Each frame records the **resolved** protocol version
+and client identity, rather than pointing at a session-header record.
+> **Not "session" — the word is now wrong.** The RC states verbatim: *"an open connection, such as a
+> STDIO process, is **not** a conversation or session: clients may interleave unrelated requests on
+> the same transport, and a server must not treat connection or process identity as a proxy for
+> conversation or session continuity."* MCP becomes **a stateless protocol**: *"no state should be
+> inferred from previous requests, even those on the same connection or stream."* Naming our T0→T1
+> fact a "session" would encode a falsehood the spec explicitly forbids. It is a **connection
+> window**.
+>
+> **Normative `_meta` keys (verified, citable):** `io.modelcontextprotocol/protocolVersion`
+> (example value literally `"2026-07-28"`), `io.modelcontextprotocol/clientInfo`,
+> `io.modelcontextprotocol/clientCapabilities` — **all REQUIRED on every client request**; a request
+> missing any is malformed and the server **MUST** reject it `-32602`.
 > **Why now.** The **2026-07-28** revision (locked 2026-05-21, **ships 2026-07-28**) removes the
 > `initialize`/`initialized` handshake (SEP-2575) and the protocol-level session + `Mcp-Session-Id`
 > (SEP-2567); version/clientInfo/capabilities move into `_meta` **on every request**. "Session start"
@@ -380,6 +404,31 @@ agent for you" wrapper is the drift to watch). No LLM judge (zero model calls). 
 | **R-C1-6** | Naming: **mitmproxy distinguishes *client-replay* (re-send to live server — *this is A2*) from *server-replay* (serve recorded responses — a **mock**, can never produce a verdict). Every MCP tool surveyed ships server-replay and calls it "replay."** | Med | Name A2 distinctly from day 1 or be read as another mock server. |
 | **R-C1-7** | **The trace is a plaintext secret store.** Lossless capture records tokens, keys, and customer data verbatim. R8 arrives in week 1, and the obvious mitigation (redaction) is **lossy** and therefore forbidden at capture. | **High** | **M15.** Lossless capture + owner-only file modes + prominent documentation; redaction deferred to an opt-in **view/export** concern, never a capture-time filter. |
 | **R-C1-8** | **The neutrality proof is narrower than the roadmap's wording.** A differential is unrunnable against a nondeterministic real server, so we prove transparency **against deterministic fixtures only**. | **Med (trust)** | State the narrow claim in the PRD, README, and launch material. The Phase-0 corpus is **corroborating evidence, not proof**. Guardrail 7 applies to us, not just to the product. |
+| **R-C1-9** | **Two correlation models, not one.** The RC's MRTR (SEP-2322) correlates by **retry-chain with a NEW request id per retry**, not by `(direction, id)` pairing. `requestState` is how a server correlates an elicitation across retries. A trace schema assuming one-request-one-response-forever cannot express an MRTR chain. | **Med** | `(direction, id)` is a **strict superset** and survives both (the RC removes server-originated ids entirely), so C1 keeps it. **Do not build MRTR; do not foreclose it.** **Escalate to `CAPABILITY_ROADMAP.md`: this is a real design fork for C3/C4 and should be named there before replay is built.** |
+
+### 📌 Escalations to `docs/technical/CAPABILITY_ROADMAP.md` (outside C1's code scope)
+
+Verified against the normative RC text; the roadmap describes the **outgoing** protocol as though it
+were stable. Worth a pass before C1 merges:
+
+1. **C1's "snapshot annotations at session start"** (`:76`) — "session" ceases to exist (SEP-2575).
+   Superseded by M9 here (per-call resolved connection context).
+2. **The A1 axis gains free, grounded, LLM-free failure signals** the roadmap doesn't mention:
+   `-32020 HeaderMismatch`, `-32021 MissingRequiredClientCapability`, `-32022
+   UnsupportedProtocolVersion`, plus a formal error-code allocation policy (`-32020`–`-32099`
+   reserved for the spec). These arrive **free on the wire** with zero LLM involvement — exactly the
+   kind of grounding A1 wants.
+3. **C9 (OTel interop) got easier AND more strategically urgent.** The RC reserves
+   `traceparent`/`tracestate`/`baggage` in `_meta` as an explicit exception to the prefix rule,
+   citing W3C Trace Context and the **OTel semantic conventions for MCP**. Trace context is becoming
+   **protocol-native**, not a bolt-on — "we sit beside Langfuse/Phoenix" becomes partly a
+   protocol-level story. **Logging's deprecation (SEP-2577) points the ecosystem at OTel as its
+   migration path**, i.e. straight at C9's surface. C9 may deserve to move earlier than week 8.
+4. **The MRTR correlation fork** (R-C1-9) — C3/C4 need two models, not one with a flag.
+5. **The wedge still looks right.** MCP is *consolidating, not fragmenting* (stateless core, one
+   transport, formal deprecation policy, OTel on-ramp). But **the thing we locked to is changing
+   under us in under two weeks**, and the roadmap should say so rather than read as though
+   2025-11-25 were permanent.
 
 **Open questions (not blocking C1's first test):**
 1. **Canonical form** — JCS (RFC 8785) or a Belay-defined form? Must be documented + versioned either
