@@ -3,9 +3,16 @@
 Sits between an MCP client and its server:
 
     client stdin  --[stream chunks verbatim]-->  server stdin
+                            |
+                            +--> [bounded copy] --> trace writer (c2s)
     server stdout --[stream chunks verbatim]-->  client stdout
                             |
-                            +--> [bounded copy] --> (future: trace writer)
+                            +--> [bounded copy] --> trace writer (s2c)
+
+Both directions are observed; each has its own reassembly buffer, because they
+are independent streams. Set `BELAY_TRACE_DIR` to record; with it unset the
+proxy runs with no observer at all and writes nothing. The server's stderr is
+forwarded but not traced: it is diagnostics, not protocol.
 
 Bytes are forwarded verbatim and ordering is preserved; observation is
 best-effort and never blocks or alters the data path. The forwarding path
@@ -25,7 +32,7 @@ import os
 import subprocess
 import sys
 import threading
-from typing import Callable, Optional
+from typing import Callable, Optional, Protocol
 
 # Caps only the observed copy. The data path stays unbounded so a pathological
 # frame can never be truncated or dropped on its way through.
@@ -37,6 +44,19 @@ _EXIT_GRACE = 5.0
 # (frame, truncated) — `truncated` is true when the frame exceeded MAX_FRAME and
 # the observed copy is therefore incomplete. The forwarded bytes never are.
 Observer = Callable[[bytes, bool], None]
+
+# Called when observation of a direction dies. Forwarding continues; the cause
+# gets a name rather than a silence.
+CaptureError = Callable[[BaseException], None]
+
+
+class CaptureSink(Protocol):
+    """Where observed frames go. Structural on purpose: this module knows the
+    shape of a recorder and nothing about any particular one."""
+
+    def observer(self, direction: str) -> Observer: ...
+
+    def capture_error(self, direction: str, cause: BaseException) -> None: ...
 
 
 class BoundedPeek:
@@ -86,7 +106,12 @@ def _write_all(fd: int, data: bytes) -> None:
         view = view[os.write(fd, view) :]
 
 
-def _pump(src_fd: int, dst_fd: int, peek: Optional[BoundedPeek] = None) -> None:
+def _pump(
+    src_fd: int,
+    dst_fd: int,
+    peek: Optional[BoundedPeek] = None,
+    on_capture_error: Optional[CaptureError] = None,
+) -> None:
     """Stream src_fd to dst_fd verbatim until either end closes."""
     while True:
         try:
@@ -102,14 +127,31 @@ def _pump(src_fd: int, dst_fd: int, peek: Optional[BoundedPeek] = None) -> None:
         if peek is not None:
             try:
                 peek.feed(chunk)
-            except Exception:  # observation is best-effort, forwarding is not
+            except Exception as exc:
+                # Observation is best-effort; forwarding is not. But dropping
+                # `peek` silently would leave the trace ending early while
+                # looking complete, which is a false-completeness claim and the
+                # exact thing this project exists to catch. Stop observing this
+                # direction, and say why.
                 peek = None
+                if on_capture_error is not None:
+                    try:
+                        on_capture_error(exc)
+                    except Exception:
+                        # The recorder failed while recording that the recorder
+                        # failed. It has already degraded to stderr; forwarding
+                        # must survive even this.
+                        pass
 
 
-def _pump_client_stdin(proc: subprocess.Popen) -> None:
+def _pump_client_stdin(
+    proc: subprocess.Popen,
+    peek: Optional[BoundedPeek] = None,
+    on_capture_error: Optional[CaptureError] = None,
+) -> None:
     assert proc.stdin is not None
     try:
-        _pump(sys.stdin.fileno(), proc.stdin.fileno())
+        _pump(sys.stdin.fileno(), proc.stdin.fileno(), peek, on_capture_error)
     finally:
         # Client hung up: let the server see EOF so it can exit on its own terms.
         try:
@@ -127,7 +169,24 @@ def _reap(proc: subprocess.Popen) -> int:
     return proc.wait()
 
 
-def run(command: list[str], observe: Optional[Observer] = None) -> int:
+def _capture_for(
+    capture: Optional[CaptureSink], direction: str
+) -> tuple[Optional[BoundedPeek], Optional[CaptureError]]:
+    """Build one direction's independent observation branch.
+
+    Each direction gets its own BoundedPeek: the two streams are unrelated, and
+    a shared reassembly buffer would splice one direction's partial frame onto
+    the other's.
+    """
+    if capture is None:
+        return None, None
+    return (
+        BoundedPeek(capture.observer(direction)),
+        lambda exc: capture.capture_error(direction, exc),
+    )
+
+
+def run(command: list[str], capture: Optional[CaptureSink] = None) -> int:
     proc = subprocess.Popen(
         command,
         stdin=subprocess.PIPE,
@@ -136,13 +195,22 @@ def run(command: list[str], observe: Optional[Observer] = None) -> int:
     )
     assert proc.stdout is not None and proc.stderr is not None
 
+    c2s_peek, c2s_error = _capture_for(capture, "c2s")
+    s2c_peek, s2c_error = _capture_for(capture, "s2c")
+
     # Daemon: if the server dies while the client is quiet, this pump is still
     # blocked on a read that will never return, and must not hold up our exit.
-    threading.Thread(target=_pump_client_stdin, args=(proc,), daemon=True).start()
+    threading.Thread(
+        target=_pump_client_stdin,
+        args=(proc, c2s_peek, c2s_error),
+        daemon=True,
+    ).start()
 
-    peek = BoundedPeek(observe) if observe is not None else None
     forwarders = [
-        threading.Thread(target=_pump, args=(proc.stdout.fileno(), sys.stdout.fileno(), peek)),
+        threading.Thread(
+            target=_pump,
+            args=(proc.stdout.fileno(), sys.stdout.fileno(), s2c_peek, s2c_error),
+        ),
         threading.Thread(target=_pump, args=(proc.stderr.fileno(), sys.stderr.fileno())),
     ]
     for thread in forwarders:
@@ -158,7 +226,22 @@ def main(argv: list[str]) -> int:
     if not argv:
         print("usage: python -m belay.proxy <server-command> [args...]", file=sys.stderr)
         return 2
-    return run(argv)
+
+    trace_dir = os.environ.get("BELAY_TRACE_DIR")
+    if not trace_dir:
+        return run(argv)
+
+    # Imported here, not at module scope, so that everything above stays unable
+    # to reach a serialiser even by accident: the forwarding path has no name
+    # for `json` in scope. main() is the composition root and the only place
+    # that knows a recorder exists.
+    from belay.trace import TraceWriter
+
+    writer = TraceWriter.in_directory(trace_dir)
+    try:
+        return run(argv, capture=writer)
+    finally:
+        writer.close()
 
 
 if __name__ == "__main__":
