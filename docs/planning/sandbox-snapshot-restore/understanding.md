@@ -1,5 +1,41 @@
 # C2 — Sandbox + execution boundaries: Understanding note (Phase 2)
 
+> ## 🛑 BLOCKED — decisions taken, work paused
+>
+> **Substrate: DOCKER** (founder's decision, 2026-07-15). Chosen over the researched
+> recommendation (Seatbelt) because it is the only option covering **both** macOS dev and Linux
+> CI/production, and `docker run` self-hosting is already `CLAUDE.md`'s stated distribution plan.
+> The Seatbelt case is preserved in §5 and remains the fallback if Docker cannot be revived.
+>
+> **BLOCKER: Docker is wedged on this machine.** Docker Desktop's process is alive (PID 52219) and
+> the socket exists, but the daemon behind it is dead — **every command hangs >25s**, including
+> `docker version`, `docker info`, `docker ps`, and `docker run --rm alpine:3 echo ok`. Not a
+> startup window; re-tested with real timeouts.
+>
+> **C2 cannot be built or tested until this is fixed**, and shipping an untestable sandbox is the
+> one option `CLAUDE.md` rules out outright (*"a sandbox we can't test is not useful"*). C2 is the
+> critical path (**R2, High/High**); C3/C4/C5 all block on it, so this blocker blocks the engine.
+>
+> **To unblock — founder action:**
+> 1. Restart Docker Desktop.
+> 2. If still wedged: *Troubleshoot → Reset to factory defaults*. **This destroys containers, images
+>    and volumes** — deliberately left to the founder, not done by an agent.
+> 3. Verify: `docker run --rm alpine:3 echo ok` → must print `ok`.
+>
+> **STILL UNDECIDED, and required before planning can start:** the snapshot mechanism under Docker
+> (`docker commit` per turn vs overlay upper-dir diff). **The clonefile + 3-repairs design is
+> INCOMPATIBLE with Docker** — clonefile is an APFS mechanism; it survives only if the substrate
+> reverts to Seatbelt. See §5b.
+
+### Decisions taken (founder, 2026-07-15)
+
+| # | Decision | Status |
+|---|---|---|
+| Substrate | **Docker** — both platforms; overrides the Seatbelt recommendation | 🛑 blocked on revival |
+| Fidelity | clonefile(CLONE_ACL) + 3 sidecar repairs + refuse out-of-substrate | ⚠️ **void under Docker** — APFS-only |
+| `openWorldHint` gate | **C2 records the network policy as a fact; C4 decides the verdict** — keeps capture/sandbox opinion-free | ✅ holds under any substrate |
+| Loopback | **Spike it before designing the test suite** — the network positive control depends on it | ✅ holds (Seatbelt-specific; moot under Docker) |
+
 **Status:** pre-PRD. Every load-bearing claim below was **run on this machine** and its output
 recorded. Claims I could not verify are marked UNVERIFIED and must not be cited as fact.
 
