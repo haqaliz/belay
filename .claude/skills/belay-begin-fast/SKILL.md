@@ -38,7 +38,7 @@ Run phases in order. **Do not skip the review gate.** Every phase runs through t
 - Branch name: `<type>/<id>/aliz` (e.g. `bug/12/aliz`, `feat/mcp-proxy-capture/aliz`).
 - Worktree dir: `.claude/worktrees/<type>-<id>` (e.g. `.claude/worktrees/bug-12`).
 - Create from `origin/master` — Belay's base branch is **`master`**, never `main`. Belay has no `.worktreeinclude` files to copy today.
-- **Greenfield:** `origin/master` may not exist yet (no commits pushed), and there is no `pyproject.toml`, so `uv sync` will fail. `belay-worktrees` covers both fallbacks — read it rather than improvising. Run `uv sync` in the worktree only once the Python core is scaffolded.
+- **Greenfield:** `origin/master` exists (planning docs are pushed), but there is still no `pyproject.toml`, so `uv sync` will fail. Run `uv sync` in the worktree only once the Python core is scaffolded — if your work *is* the scaffolding, the failing test comes first. See `belay-worktrees`.
 - All subsequent work (context dump, PRD, plan) happens **inside this worktree.**
 
 ### Phase 1 — Gather context (`gh`, or inline brief)

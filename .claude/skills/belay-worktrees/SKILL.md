@@ -43,12 +43,7 @@ Worktree dir name drops the slashes: `<type>-<id>` (e.g. `bug-12`, `feat-mcp-pro
 
 Belay's base branch is **`master`**, not `main`. Every branch-from, rebase target, and PR base is `master`. Never assume `main` exists.
 
-⚠️ **Greenfield caveat:** the repo currently has **no commits and no `origin/master`** (`git ls-remote --heads origin` returns nothing). Until the first push to `master` lands, `git worktree add ... origin/master` will fail with `invalid reference`. Two options:
-
-- **Preferred:** make the initial commit on `master` and push it (`git push -u origin master`), then use the normal flow below.
-- **Fallback:** branch from local `master` instead: `git worktree add -b feat/mcp-proxy-capture/aliz .claude/worktrees/feat-mcp-proxy-capture master`.
-
-Once `origin/master` exists, always branch from it (it's the shared truth, the local ref may be stale).
+`origin/master` **exists** (the planning docs + skills are pushed), so the normal flow below works. Always branch from `origin/master` rather than local `master` — it's the shared truth, and the local ref may be stale.
 
 ## Creating a worktree
 
@@ -80,7 +75,9 @@ A `.worktreeinclude` at the repo root lists gitignored files that should follow 
 cp .env .claude/worktrees/feat-mcp-proxy-capture/
 ```
 
-`.venv/`, `node_modules/`, and any local trace/run store are intentionally **not** copied — they are large/regenerable. Recreate the venv per worktree (below). Never copy captured traces between worktrees: they're run state, and Belay's replay guarantees depend on knowing which run produced them.
+`.venv/`, `node_modules/`, and the engine's artifact dirs (`/traces/`, `/runs/`, `/_sandbox/`, `/corpus/local/` — all already in `.gitignore`) are intentionally **not** copied. The first two are large and regenerable; recreate the venv per worktree (below). The rest are the user's own run data and never leave the box, per the no-raw-data-egress guardrail in `CLAUDE.md`.
+
+**Never copy captured traces or corpus cases between worktrees.** They're run state tied to the run that produced them, and Belay's replay guarantees depend on that provenance: a trace replayed against a pre-state it didn't record is not a verified run, it's a fabricated one. If a worktree needs run data, point at it by absolute path rather than duplicating it.
 
 ## Per-worktree setup (Python core engine — uv)
 
@@ -133,7 +130,7 @@ git -C /Users/aliz/dev/at/belay branch -d feat/mcp-proxy-capture/aliz
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `git worktree add` fails: `invalid reference: origin/master` | No commits pushed yet — `origin/master` doesn't exist | Push the initial `master`, or branch from local `master` |
+| `git worktree add` fails: `invalid reference: origin/master` | Stale local refs | `git fetch origin master` first — `origin/master` exists |
 | Branching from `origin/main` | Belay's base branch is `master` | `main` does not exist — always use `master` |
 | Worktree contents appear as untracked in primary | `.claude/worktrees/` not ignored | Already in `.gitignore`; verify with `git check-ignore -v '.claude/worktrees/'` (trailing slash) |
 | `uv sync` fails: no `pyproject.toml` | Python core not scaffolded yet (greenfield) | Expected — scaffold it (test-first) or skip for docs-only work |
