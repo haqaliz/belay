@@ -17,7 +17,8 @@ rather than asserted.
 
 ## What the default grants, and the one non-obvious part
 
-The scope is **the workspace**, plus a **`$TMPDIR` relocated inside it**.
+The scope is **the workspace**, plus a **`$TMPDIR` relocated into a directory
+Belay owns**.
 
 The temp directory is the part that matters. A filesystem or shell MCP server
 writes temp files, lockfiles and caches constantly — the stdlib does it without
@@ -25,8 +26,29 @@ being asked, `tempfile.mkstemp()` being the common case — and on macOS `$TMPDI
 is a per-boot directory under `/var/folders/...`, nowhere near any workspace.
 Granting `/var/folders` would be a hole big enough to drive the agent through.
 Denying it kills the server. So the third option: give the child a temp directory
-that is *already inside* the scope, and tell it where that is. Nothing is widened
+of its own, grant that one subpath, and tell it where that is. Nothing is widened
 and nothing is denied that should not be.
+
+## The write scope and the snapshot scope are NOT the same thing
+
+This is the distinction the whole module now turns on, and conflating the two is
+the mistake that looks tidiest:
+
+- **write scope** — what Seatbelt permits: the workspace **and** the temp
+  directory (`write_roots`). The server needs temp files or it dies.
+- **snapshot scope** — what the turn gate clones: the workspace **only**
+  (`snapshot_root`). The temp directory is not in it.
+
+So the temp directory lives **beside** the workspace rather than inside it, and
+that placement is what buys both halves at once. Temp files stay writable and stay
+out of every turn's snapshot, so temp churn cannot pollute a state diff — and, the
+one that matters more, **a unix socket in the server's temp directory cannot
+poison a turn**. `substrate.guard` refuses a tree containing a socket, by name and
+on purpose; with `$TMPDIR` inside the snapshotted tree, a server that opens one
+would report `unrestorable` on *every* turn. That is the honesty contract working
+as designed, and it would make Belay useless for that server. Excluded by
+construction, `guard` never sees it. `tests/test_proxy_containment.py` measures
+both halves on a real proxy run.
 
 `test_the_sandboxed_tmpdir_is_load_bearing` is the ablation — the same child,
 without the redirect, refused — so this stays a mechanism with evidence rather
@@ -46,41 +68,41 @@ Every path this module returns is `realpath`ed, and that is load-bearing twice:
 
 ## The costs, stated because they are real
 
-**Temp files are inside the snapshot.** The turn gate snapshots the scope, and the
-scope contains `TMPDIR` — so a turn's recorded pre-state includes whatever the
-server left in it. That is *true* rather than *tidy*: those files were in the tree.
-It cannot be avoided without either widening the scope or excluding a subtree from
-the snapshot, and both are worse.
+**Temp files survive the run.** The temp directory is created here and never
+removed: it is derived from the workspace so that two turns agree on where it is,
+which means nothing in a single run knows it is the last one. It is named after
+Belay and reported by `belay sandbox check`, so it is findable and safe to delete.
 
-**A socket or FIFO in TMPDIR makes the turn unrestorable.** `substrate.guard`
-refuses a tree containing one, by name and on purpose. A server that opens a unix
-socket under `$TMPDIR` will therefore snapshot as `unrestorable`, every turn. That
-is the honesty contract working, not a bug — but it is a real consequence of
-putting TMPDIR inside the snapshotted tree, and it is written down here rather
-than discovered later.
+**A temp file is invisible to a state diff.** That is the point — it is not
+snapshotted — but it is also a limit: whatever the server does under `$TMPDIR` is
+outside what any later verdict can see. What Belay contains and what Belay
+snapshots are two different questions, and this module answers them differently on
+purpose.
 
-**This module sets an environment, and only an environment.** It cannot alter the
-profile — `seatbelt.build_profile` is the single writer of that — so the two halves
-cannot drift into disagreeing about what is granted.
+**This module sets an environment and names paths; it does not author policy.** It
+cannot alter the profile — `seatbelt.build_profile` is the single writer of that —
+so the two halves cannot drift into disagreeing about what is granted.
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
 
 __all__ = [
-    "DEFAULT_TMPDIR_NAME",
+    "TMPDIR_PREFIX",
     "TMPDIR_VARS",
     "DefaultScope",
     "default_scope",
 ]
 
-#: The temp directory's name inside the workspace. Dotted so it stays out of the
-#: way, and named so that anyone reading a snapshot knows who put it there.
-DEFAULT_TMPDIR_NAME = ".belay-tmp"
+#: The temp directory's name, minus the digest that ties it to one workspace.
+#: Named after Belay so that anyone who finds one knows who put it there.
+TMPDIR_PREFIX = "belay-tmp-"
 
 #: Every variable the stdlib consults, in `tempfile`'s own order. Setting only
 #: `TMPDIR` would leave a child that reads `TMP` writing to `/tmp` — outside the
@@ -92,18 +114,33 @@ _ENV = "/usr/bin/env"
 
 @dataclass(frozen=True)
 class DefaultScope:
-    """A workspace and the temp directory inside it, both as the kernel sees them.
+    """A workspace and the temp directory beside it, both as the kernel sees them.
+
+    The two fields are named for the two questions they answer, because one path
+    used for both is exactly the conflation this module exists to prevent.
 
     Frozen, and both fields are already resolved: a `DefaultScope` that could be
     built holding an unresolved path would be a policy that reads correctly and
     grants nothing.
     """
 
-    #: The `realpath`ed workspace. Hand this to `seatbelt.run(scope=...)`.
-    root: str
+    #: The `realpath`ed workspace: what the agent works in, and the ONLY thing the
+    #: turn gate clones. Hand this to `TurnGate(scope=...)`.
+    snapshot_root: str
 
-    #: The `realpath`ed temp directory, inside `root`. Exported to the child.
+    #: The `realpath`ed temp directory, OUTSIDE `snapshot_root`. Writable by the
+    #: child, exported to it, and never snapshotted.
     tmpdir: str
+
+    @property
+    def write_roots(self) -> tuple[str, ...]:
+        """Every subpath the profile grants writes to. Hand this to `seatbelt`.
+
+        Deliberately wider than `snapshot_root` and deliberately not interchangeable
+        with it: the server needs a temp directory to live, and a state diff needs
+        one it never sees.
+        """
+        return (self.snapshot_root, self.tmpdir)
 
     def env(self, base: Mapping[str, str] | None = None) -> dict[str, str]:
         """`base` (default: this process's environment) with the temp vars redirected."""
@@ -143,16 +180,21 @@ class DefaultScope:
 
 
 def default_scope(workspace: Path | str) -> DefaultScope:
-    """The zero-config scope for `workspace`: the tree itself, plus a temp dir in it.
+    """The zero-config scope for `workspace`: the tree itself, plus a temp dir beside it.
 
     The temp directory is **created here**, before the profile is built and before
     any child runs. Both halves need it to already exist: `realpath` resolves only
     components that are there, and a child handed a `TMPDIR` that does not exist
     fails in a way that reads exactly like a denial while being the opposite of one.
 
-    Idempotent — called twice on one workspace it returns the same paths, because
-    a `TMPDIR` that moved between turns would strand the previous turn's files
-    somewhere the server had already recorded a handle to.
+    It is placed under the machine's own temp root — never inside the workspace —
+    so that `snapshot_root` excludes it *by construction* rather than by a subtree
+    filter someone could forget to apply. Its name carries a digest of the
+    workspace, which is what makes this **idempotent**: called twice on one
+    workspace it returns the same paths, and a `TMPDIR` that moved between turns
+    would strand the previous turn's files somewhere the server had already
+    recorded a handle to. Owner-only, because the child writes its scratch there
+    and it sits in a directory shared with everything else on the machine.
     """
     root = os.path.realpath(str(workspace))
     if not os.path.isdir(root):
@@ -162,7 +204,8 @@ def default_scope(workspace: Path | str) -> DefaultScope:
             f"profile silently grants nothing."
         )
 
-    tmpdir = os.path.join(root, DEFAULT_TMPDIR_NAME)
-    os.makedirs(tmpdir, exist_ok=True)
+    digest = hashlib.sha256(root.encode("utf-8")).hexdigest()[:16]
+    tmpdir = os.path.join(os.path.realpath(tempfile.gettempdir()), f"{TMPDIR_PREFIX}{digest}")
+    os.makedirs(tmpdir, mode=0o700, exist_ok=True)
 
-    return DefaultScope(root=root, tmpdir=os.path.realpath(tmpdir))
+    return DefaultScope(snapshot_root=root, tmpdir=os.path.realpath(tmpdir))

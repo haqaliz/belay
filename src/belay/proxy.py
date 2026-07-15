@@ -440,14 +440,28 @@ def run(
     command: list[str],
     capture: Optional[CaptureSink] = None,
     before_frame: Optional[BeforeFrame] = None,
+    stderr_capture: Optional[CaptureSink] = None,
 ) -> int:
     """Proxy `command`'s stdio, optionally observing it and gating its requests.
+
+    `command` is spawned exactly as C1 spawned it, and this module has no idea
+    whether it is contained: a sandboxed run is one whose argv already begins with
+    `sandbox-exec`, composed by `belay.sandbox.launch` at the composition root
+    below. The spawn is therefore the same line either way — there is no sandbox
+    branch on this path to take wrongly, and an unsandboxed run pays nothing.
 
     `before_frame` is installed on **c2s only**. The client-to-server direction is
     the only one that precedes a tool executing, so it is the only one where
     blocking buys anything; holding a reply would cost latency for nothing. The
     direction is still passed to the hook, because a hook that had to assume which
     stream it was reading would be one refactor away from being wrong quietly.
+
+    `stderr_capture` observes the server's **stderr**, which is diagnostics rather
+    than protocol and so is forwarded but never traced as frames. It exists because
+    a live child's refusals are only visible in what it prints
+    (`belay.sandbox.launch.DenialCapture`), and it is a separate sink from `capture`
+    for exactly that reason: same machinery, different question, and one of them
+    must not start recording the other's records.
     """
     proc = subprocess.Popen(
         command,
@@ -459,6 +473,7 @@ def run(
 
     c2s_peek, c2s_error, c2s_gate = _capture_for(capture, "c2s")
     s2c_peek, s2c_error, s2c_gate = _capture_for(capture, "s2c")
+    err_peek, err_error, err_gate = _capture_for(stderr_capture, "stderr")
 
     try:
         # Daemon: if the server dies while the client is quiet, this pump is still
@@ -474,7 +489,10 @@ def run(
                 target=_pump,
                 args=(proc.stdout.fileno(), sys.stdout.fileno(), s2c_peek, s2c_error),
             ),
-            threading.Thread(target=_pump, args=(proc.stderr.fileno(), sys.stderr.fileno())),
+            threading.Thread(
+                target=_pump,
+                args=(proc.stderr.fileno(), sys.stderr.fileno(), err_peek, err_error),
+            ),
         ]
         for thread in forwarders:
             thread.start()
@@ -491,6 +509,7 @@ def run(
         # into a closed writer and disappear.
         c2s_gate.stop()
         s2c_gate.stop()
+        err_gate.stop()
 
 
 def main(argv: list[str]) -> int:
@@ -532,26 +551,67 @@ def main(argv: list[str]) -> int:
         writer = TraceWriter.in_directory(trace_dir)
 
     try:
-        before_frame = None
-        if scope:
-            from belay.sandbox.gate import TurnGate
-
-            try:
-                before_frame = TurnGate(
-                    scope=scope,
-                    snapshot_root=snapshot_dir,
-                    trace=writer,
-                ).before_frame
-            except ValueError as exc:
-                # A misconfigured sandbox, refused before the first byte moves.
-                # The gate only rejects what would silently record a false
-                # pre-state, and there is no honest way to run past that.
-                print(f"belay: {exc}", file=sys.stderr)
-                return 2
-        return run(argv, capture=writer, before_frame=before_frame)
+        if not scope:
+            return run(argv, capture=writer)
+        return _contained_run(argv, scope, snapshot_dir, writer)
     finally:
         if writer is not None:
             writer.close()
+
+
+def _contained_run(
+    argv: list[str], scope: str, snapshot_dir: str, writer
+) -> int:
+    """Spawn the server INSIDE the sandbox, gating and snapshotting each turn.
+
+    The two halves of C2 meet here and nowhere else. `launch.contained` composes
+    the profile onto the argv, so `run` above spawns a contained server with the
+    same `Popen` it always used; the gate snapshots the scope's **snapshot_root**,
+    which is the workspace and deliberately NOT everything the profile grants —
+    the server's `$TMPDIR` is writable and is not in any snapshot
+    (`belay.sandbox.scope` explains why both halves of that are load-bearing).
+
+    The zero-config scope is built here rather than only in `belay sandbox check`:
+    a default boundary that only the self-test could see would leave every real run
+    with a hand-authored one, which is the risk the default exists to retire.
+    """
+    from contextlib import ExitStack
+
+    from belay.sandbox.gate import TurnGate
+    from belay.sandbox.launch import DenialCapture, contained, network_policy
+    from belay.snapshot.bth1 import UnsupportedPlatform
+
+    # The stack, rather than a `with` around everything, so that the refusal below
+    # covers SETUP ONLY. A `ValueError` escaping the run itself is not a
+    # misconfiguration, and reporting it as one would print a confident `belay:`
+    # diagnosis of the wrong thing — while the profile it names was already applied.
+    with ExitStack() as stack:
+        try:
+            policy = network_policy(os.environ.get("BELAY_SANDBOX_NETWORK"))
+            spawn = stack.enter_context(contained(argv, workspace=scope, network=policy))
+            gate = TurnGate(
+                scope=spawn.scope.snapshot_root,
+                snapshot_root=snapshot_dir,
+                trace=writer,
+            )
+        except (ValueError, UnsupportedPlatform) as exc:
+            # A misconfigured or unsupported sandbox, refused before the first byte
+            # moves. Every case here would otherwise mean running on past a
+            # boundary the operator asked for and Belay did not apply, or recording
+            # a pre-state that was never real. Neither has an honest degraded mode.
+            print(f"belay: {exc}", file=sys.stderr)
+            return 2
+
+        if writer is not None:
+            # A fact recorded before the child runs: what was applied. Not whether
+            # it was enough — C2 records, C4 renders.
+            writer.record("network_policy", policy=policy.mode, ports=list(policy.ports))
+        return run(
+            spawn.argv,
+            capture=writer,
+            before_frame=gate.before_frame,
+            stderr_capture=DenialCapture(writer) if writer is not None else None,
+        )
 
 
 if __name__ == "__main__":

@@ -116,13 +116,20 @@ def test_check_passes_with_no_server_to_run(tmp_path: Path, capsys) -> None:
 
 
 def test_check_reports_the_scope_it_would_use(tmp_path: Path, capsys) -> None:
-    """Including the temp dir: it is the surprising half of the default, and the
-    thing a user will otherwise find in their tree and not recognise."""
+    """Both paths, and the fact that they are not the same path.
+
+    The temp dir is the surprising half of the default — it is writable, it is
+    *not* in any snapshot, and it is somewhere the user did not put it. A check
+    that reported only the workspace would leave them to discover the rest.
+    """
+    from belay.sandbox.scope import default_scope
+
     rc, out = _check(["sandbox", "check", "--scope", str(tmp_path)], capsys)
 
-    scope_root = str(Path(tmp_path).resolve())
-    assert scope_root in out
-    assert ".belay-tmp" in out
+    scope = default_scope(tmp_path)
+    assert scope.snapshot_root in out
+    assert scope.tmpdir in out
+    assert "NOT snapshotted" in out
 
 
 # --- Question 2: is the scope too tight for THIS server? ---------------------

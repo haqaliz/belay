@@ -57,10 +57,12 @@ from belay.trace import TraceWriter
 
 __all__ = [
     "NETWORK_MODES",
+    "Denial",
     "NetworkPolicy",
     "SandboxResult",
     "UnsupportedPlatform",
     "build_profile",
+    "record_denials",
     "run",
 ]
 
@@ -201,7 +203,36 @@ def _resolved_scope(scope: Path | str) -> str:
     return resolved
 
 
-def build_profile(*, scope: Path | str, network: NetworkPolicy) -> str:
+def _write_scopes(scope: Path | str | Sequence[Path | str]) -> list[str]:
+    """Resolve `scope` to the subpaths the profile will grant, in the order given.
+
+    One path or several. Several, because the write scope is genuinely plural: a
+    server needs its workspace *and* a temp directory, and those are two trees in
+    two places (`belay.sandbox.scope`). Duplicates are dropped rather than emitted
+    twice — a profile listing one subpath twice grants exactly what it granted
+    once, and reads like a mistake.
+    """
+    paths: Sequence[Path | str]
+    if isinstance(scope, (str, Path)):
+        paths = [scope]
+    else:
+        paths = list(scope)
+        if not paths:
+            raise ValueError(
+                "a profile with no write scope grants nothing writable at all; "
+                "pass the tree the child may change"
+            )
+    resolved: list[str] = []
+    for path in paths:
+        real = _resolved_scope(path)
+        if real not in resolved:
+            resolved.append(real)
+    return resolved
+
+
+def build_profile(
+    *, scope: Path | str | Sequence[Path | str], network: NetworkPolicy
+) -> str:
     """The VERIFIED profile shape. Do not substitute lines from memory."""
     lines = [
         "(version 1)",
@@ -211,8 +242,29 @@ def build_profile(*, scope: Path | str, network: NetworkPolicy) -> str:
         # Required. Without it a real interpreter never reaches its own code.
         "(allow mach-lookup)",
         "(allow file-read*)",
-        f'(allow file-write* (subpath "{_quote(_resolved_scope(scope))}"))',
+        *(
+            f'(allow file-write* (subpath "{_quote(root)}"))'
+            for root in _write_scopes(scope)
+        ),
         "(deny network*)",
+        # `network*` covers UNIX domain sockets, not just IP — measured, and the
+        # reason this line exists. Without it `deny-all` kills any server that
+        # opens a socket in its own temp directory, and `deny-all` is what a
+        # proxied run gets when nobody asks for anything else.
+        #
+        # Narrow, and every edge of it is measured
+        # (`tests/test_containment.py`, the unix-socket group):
+        #   - `network-bind`, never `network-outbound`: a contained process may
+        #     LISTEN. It may not connect to a socket it did not create, which is
+        #     the line between "a server may serve" and "a contained process may
+        #     talk to the Docker daemon". `(allow network* (local unix-socket))`
+        #     was measured permitting exactly that connect, and is why this says
+        #     `network-bind`.
+        #   - It does not widen the filesystem scope: binding creates a file, and
+        #     WHERE one may be created is still `file-write*`'s decision. A bind
+        #     outside the scope is refused.
+        #   - IP egress stays denied.
+        "(allow network-bind (local unix-socket))",
         # Last-match-wins: any narrower grant must follow the deny above.
         *network.rules(),
     ]
@@ -260,10 +312,31 @@ def _denials_from_stderr(stderr: bytes) -> tuple[Denial, ...]:
     return tuple(denials)
 
 
+def record_denials(trace: TraceWriter, denials: Iterable[Denial]) -> None:
+    """Append one `denial` record per refusal the child reported.
+
+    One writer for this record, shared by the run-to-completion path and the live
+    proxy path, because the field that matters most is the provenance: every record
+    says `inferred: true, source: "child-stderr"`. Two emitters would be two chances
+    for one of them to drop that and let a *"the child said so"* read as *"the
+    kernel said so"*. See `_denials_from_stderr` for why that distinction is the
+    whole point of the record.
+    """
+    for denial in denials:
+        trace.record(
+            "denial",
+            op=denial.op,
+            path=denial.path,
+            inferred=True,
+            source="child-stderr",
+            detail=denial.detail,
+        )
+
+
 def run(
     command: Sequence[str],
     *,
-    scope: Path | str,
+    scope: Path | str | Sequence[Path | str],
     network: NetworkPolicy,
     trace: TraceWriter | None = None,
     cwd: Path | str | None = None,
@@ -277,9 +350,15 @@ def run(
     policy was applied, `denial` says the child reported a refusal. Neither is
     verdict-shaped: C2 does not decide replayability, C4 does.
 
-    The scope grants writes. Reads are NOT scoped (`file-read*` is allowed
+    The scope grants writes — one tree or several, since a real child needs its
+    workspace *and* a temp directory. Reads are NOT scoped (`file-read*` is allowed
     wholesale), which is a real limit of what this profile claims: it contains
     what the child can *change*, not what it can *see*.
+
+    **This function is run-to-completion.** It blocks until the child exits and
+    unlinks the profile on the way out, which is right for a probe and wrong for a
+    proxied server: that one is long-lived and streams over live pipes. That case
+    composes the same profile onto an argv instead — see `belay.sandbox.launch`.
     """
     if sys.platform != "darwin":
         raise UnsupportedPlatform(
@@ -317,18 +396,7 @@ def run(
     denials = _denials_from_stderr(completed.stderr)
 
     if trace is not None:
-        for denial in denials:
-            trace.record(
-                "denial",
-                op=denial.op,
-                path=denial.path,
-                # The record states its own provenance. See
-                # `_denials_from_stderr`: this is the child reporting a
-                # permission error, not the kernel reporting a denial.
-                inferred=True,
-                source="child-stderr",
-                detail=denial.detail,
-            )
+        record_denials(trace, denials)
 
     return SandboxResult(
         rc=completed.returncode,

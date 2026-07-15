@@ -4,24 +4,29 @@ Belay is an **agent harness**: it sits between an AI agent and the tools it call
 exactly what crossed, and is built so that a run can later be **replayed against real state**
 and checked by re-execution rather than by asking a model whether it thinks it did well.
 
-**What exists today is capture (C1) and the containment machinery (C2), and only those.**
-Belay is a transparent stdio proxy in front of your MCP servers: it forwards bytes verbatim,
-writes an append-only trace of every frame, and snapshots each turn's pre-state before the
-call reaches the server. **It records. It does not judge.** There is no verdict, no
-PASS/FAIL and no scoring in this codebase yet — that is C4/C5.
+**What exists today is capture (C1) and containment (C2), and only those.** Belay is a
+transparent stdio proxy in front of your MCP servers: it forwards bytes verbatim, writes an
+append-only trace of every frame, runs the server **inside a sandbox**, and snapshots each
+turn's pre-state before the call reaches the server. **It records. It does not judge.**
+There is no verdict, no PASS/FAIL and no scoring in this codebase yet — that is C4/C5.
 
-> ### The proxy does not sandbox your server yet
+> ### What `BELAY_SANDBOX_SCOPE` gets you, stated exactly
 >
-> Read this before assuming otherwise. The Seatbelt sandbox is **built, tested and real** —
-> five escape vectors contained, network policy enforced — and it is reachable today
-> through `belay sandbox check` and as a library. **It is not yet wired into the proxy's
-> spawn path.** `python -m belay.proxy <server>` starts your server with a plain
-> `subprocess.Popen`, unsandboxed, exactly as C1 did.
+> With it set, `python -m belay.proxy <server>` spawns your server under
+> `sandbox-exec`: a write **outside the scope is refused by the kernel** and recorded as a
+> `denial` naming the path. Measured on a real proxy run, against a real refusal, with a
+> positive control that legitimate work inside the scope still succeeds, and an ablation
+> that the same write lands when the scope is unset
+> (`tests/test_proxy_containment.py`).
 >
-> `BELAY_SANDBOX_SCOPE` is, despite its name, the scope of the **snapshot** — it tells the
-> turn gate which tree to capture. It does not contain the server. Wiring containment into
-> the proxy is the next step, and until it lands, **nothing you run through the proxy is
-> contained.**
+> **The network is denied by default.** `BELAY_SANDBOX_NETWORK` widens it when your server
+> needs one — `allow-all`, or `allow-ports:8080,9000` for outbound loopback. A server that
+> needs the network fails loudly and you widen it deliberately; the alternative default
+> contains nothing on that axis and tells no one.
+>
+> **What it does not get you.** The scope contains what the server can **change**, not what
+> it can **read** — `file-read*` is granted wholesale. And it contains **only the server
+> Belay spawns** — see [coverage](#coverage-belay-sees-what-crosses-the-mcp-boundary-and-nothing-else).
 
 Zero runtime dependencies. Stdlib only. It runs on your machine and sends nothing anywhere.
 **macOS only** — see [below](#the-sandbox-is-macos-only-and-linux-is-unverified).
@@ -52,7 +57,7 @@ in its config:
 With `BELAY_TRACE_DIR` unset the proxy still forwards; it attaches no observer and writes no
 file. The format is documented in [`docs/technical/TRACE_FORMAT.md`](docs/technical/TRACE_FORMAT.md).
 
-### Snapshot each turn's pre-state
+### Contain the server, and snapshot each turn's pre-state
 
 Set a scope and somewhere to put the snapshots:
 
@@ -63,13 +68,35 @@ BELAY_SNAPSHOT_DIR=/path/to/snapshots \
 python -m belay.proxy <server-command> [args...]
 ```
 
-Each `tools/call` is held while the workspace is snapshotted, and the turn's frames carry a
-handle naming that pre-state. `BELAY_SNAPSHOT_DIR` must be **outside** the scope, or every
-turn would snapshot the previous turns' snapshots; the proxy refuses at startup rather than
-recording a pre-state the agent never had. Setting a scope without a snapshot dir is
-likewise refused.
+The server now runs under a Seatbelt profile that grants writes to the workspace and
+nothing else it did not need. Each `tools/call` is held while the workspace is snapshotted,
+and the turn's frames carry a handle naming that pre-state. `BELAY_SNAPSHOT_DIR` must be
+**outside** the scope, or every turn would snapshot the previous turns' snapshots; the
+proxy refuses at startup rather than recording a pre-state the agent never had. Setting a
+scope without a snapshot dir is likewise refused, and so is setting one on a platform where
+Belay cannot contain anything — a run that quietly dropped the boundary would report
+exactly like a contained one.
 
-This snapshots. **It does not sandbox** — see the note at the top.
+#### The write scope and the snapshot scope are not the same scope
+
+Belay grants your server a **temp directory of its own** (`belay-tmp-<digest>` under the
+machine's temp root) and points `$TMPDIR`/`TMP`/`TEMP` at it. Servers write temp files
+constantly — `tempfile.mkstemp()` is the common case — and the real `$TMPDIR` is under
+`/var/folders`, which no workspace scope should ever grant.
+
+That temp directory is **writable and never snapshotted**, and it sits outside your
+workspace so that this is true by construction rather than by a filter:
+
+- **the snapshot scope** (what each turn clones) is the workspace **only**, so temp churn
+  cannot pollute a state diff, and
+- a **unix socket in the server's temp dir cannot poison a turn.** Belay refuses to
+  snapshot a tree containing a socket — a copied socket is an empty file where a live
+  endpoint was — so with `$TMPDIR` inside the snapshotted tree, a server that opens one
+  would report `unrestorable` on *every* turn. Both halves are measured on a real run
+  (`tests/test_proxy_containment.py`).
+
+`belay sandbox check` prints both paths. The temp directory is derived from the workspace
+path, so it is the same one every run; it is not cleaned up, and it is safe to delete.
 
 ### Check the sandbox before you trust it
 
@@ -184,8 +211,9 @@ the period Belay was listening at all, which is the honest denominator for that 
 
 **The sandbox's limit and the MCP boundary's limit are the same limit.** Belay contains the
 processes it spawns — the MCP servers it proxies. `Bash` and `Edit` are never spawned by
-our proxy and are therefore **never in our sandbox**. Adding the sandbox did not widen what
-Belay can see by one byte; it changed what happens to what Belay could already see.
+our proxy and are therefore **never in our sandbox**. Wiring the sandbox into the proxy did
+not widen what Belay can see by one byte; it changed what happens to what Belay could
+already see.
 
 ## A trace is as sensitive as the agent's most sensitive tool argument
 
