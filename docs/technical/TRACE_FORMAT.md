@@ -92,15 +92,59 @@ append, so it is a total order in capture order — not two interleaved sequence
 must reconcile. The two streams are independent, so ordering *between* directions means only
 "when the proxy saw it", which is exactly what `observation_point` already says out loud.
 
-### `state_handle` is three-state, and empty in v1
+### `state_handle` is three-state, and C2 fills it
 
-Always `{"status": "absent"}` in v1. C2 will add `{"status": "present", ...}` and
-`{"status": "unrestorable", "cause": ...}`.
+`{"status": "absent"}` is still the default and still means exactly one thing: **no snapshot
+was attempted**. C2 supplies the other two, via `TraceWriter.set_state_handle`:
 
-The slot exists now, unused, on purpose. If it could only express present/absent, C2 would
-have to overload `"absent"` to mean both *"recorded before snapshots existed"* and *"we
-tried to snapshot and failed"*. A replay that cannot tell those two apart is how a false
-PASS gets born.
+```jsonc
+// a snapshot exists and restores — and names what it could NOT preserve
+{"status": "present", "handle": "9f2c…", "backend": "clonefile-apfs",
+ "capabilities": ["acls", "clonefile", "dir-mtimes", "hardlinks", "special-modes"],
+ "fidelity_gaps": ["UNRESTORABLE_ATIME", "UNRESTORABLE_CTIME",
+                   "UNRESTORABLE_BIRTHTIME", "UNRESTORABLE_INODE_IDENTITY"]}
+
+// we tried and could not, with a named cause and the entry that caused it
+{"status": "unrestorable", "cause": "UNRESTORABLE_FIFO", "detail": "…",
+ "source": "lstat", "path": "pipe"}
+```
+
+`present` **declares its own gaps** rather than implying none. atime, ctime, birthtime and
+inode identity are unrestorable by anyone — BTH-1 excludes them and says why — so a bare
+`present` would claim a fidelity the snapshot does not have.
+
+The writer validates the slot but does not interpret it: it enforces that `status` is one of
+the three and that `unrestorable` always names a `cause` (an unnamed refusal is
+indistinguishable downstream from a shrug), while the meaning of each cause stays in
+`belay.snapshot.substrate`. **These are facts, not verdicts.** C4 is what turns
+`unrestorable` into UNVERIFIED; C2 never renders one.
+
+The slot was reserved from the first line of trace ever written, on purpose. If it could only
+express present/absent, C2 would have to overload `"absent"` to mean both *"recorded before
+snapshots existed"* and *"we tried to snapshot and failed"*. A replay that cannot tell those
+two apart is how a false PASS gets born.
+`tests/test_substrate.py::test_absent_is_not_repurposed` holds that distinction open.
+
+#### Whose handle is it — read this before grounding anything on the slot
+
+The guarantee is **per direction and per frame kind**, and the difference is load-bearing:
+
+- On a **`tools/call` frame (`dir: "c2s"`)** the handle is **that turn's own**, pinned to
+  those exact bytes when the turn was gated. This is the one C4 reads and the only one that
+  means *"the state this call was about to execute against"*. It is pinned by content hash
+  rather than by arrival order, because the pump forwards a whole chunk before observing any
+  of it: when one chunk carries two gated frames, both handles are set before either frame is
+  recorded, and an order-based match would silently shift every handle by one.
+  (`test_a_batched_write_resolves_each_tools_call_to_its_own_pre_state`.)
+- On **any other frame** the handle is whichever was current when the frame was recorded. On a
+  batched write that can be a *later* frame's. It means *"this was current when the frame was
+  recorded"*, never *"this frame crossed after it"*. Do not ground a verdict on it.
+
+A `tools/call` that ran **concurrently with another** carries
+`{"status": "unrestorable", "cause": "UNRESTORABLE_CONCURRENT_TURN", "source": "turn-gate"}`.
+That is not a snapshot failure — nothing broke. It says the turn overlapped another, so no
+pre-state of it ever existed to capture. It is the common case for a batching client, and
+C4 must render it UNVERIFIED rather than treat it as a missing file.
 
 ## The `connection_window` record
 
