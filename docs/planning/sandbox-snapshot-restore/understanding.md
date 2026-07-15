@@ -1,40 +1,38 @@
 # C2 — Sandbox + execution boundaries: Understanding note (Phase 2)
 
-> ## 🛑 BLOCKED — decisions taken, work paused
+> ## ✅ DECIDED — Seatbelt + clonefile, macOS-only. Unblocked.
 >
-> **Substrate: DOCKER** (founder's decision, 2026-07-15). Chosen over the researched
-> recommendation (Seatbelt) because it is the only option covering **both** macOS dev and Linux
-> CI/production, and `docker run` self-hosting is already `CLAUDE.md`'s stated distribution plan.
-> The Seatbelt case is preserved in §5 and remains the fallback if Docker cannot be revived.
+> **Docker was chosen first, then reversed** (founder, 2026-07-15). Recorded rather than tidied
+> away, because the reasoning is the useful part:
 >
-> **BLOCKER: Docker is wedged on this machine.** Docker Desktop's process is alive (PID 52219) and
-> the socket exists, but the daemon behind it is dead — **every command hangs >25s**, including
-> `docker version`, `docker info`, `docker ps`, and `docker run --rm alpine:3 echo ok`. Not a
-> startup window; re-tested with real timeouts.
+> - **Docker is wedged on this machine** — the Desktop process is alive (PID 52219) and the socket
+>   exists, but the daemon behind it is dead: **every command hangs >25s**, incl. `docker version`.
+>   Re-tested with real timeouts; not a startup window. Reviving it may require a factory reset,
+>   which destroys the founder's containers/images/volumes.
+> - **`docker run` self-hosting is a *Phase 1* deliverable** (`ROADMAP.md`, Phase 1 packaging row).
+>   **Phase 0 explicitly ships no packaging:** *"There is no dashboard, no packaging, and no launch
+>   in this phase... Optimize for learning whether to continue."* Choosing Docker meant solving a
+>   **Phase 1 portability problem during Phase 0**, while blocking Phase 0 on a dead daemon and
+>   paying ~100× on the operation that runs before **every** replay.
+> - **The Phase 0 corpus runs on this laptop** — ≥50 SWE-bench-lite runs (`ROADMAP.md:103`), on
+>   macOS, where Seatbelt is verified and Docker is dead.
+> - **The roadmap says ship exactly one and abstract late.** Seatbelt *is* that one. Docker/Linux
+>   becomes C2's **second** slice when Phase 1 packaging actually needs it — earning the abstraction
+>   rather than guessing it, which matters because SBPL and containers genuinely disagree about what
+>   "scope" means.
 >
-> **C2 cannot be built or tested until this is fixed**, and shipping an untestable sandbox is the
-> one option `CLAUDE.md` rules out outright (*"a sandbox we can't test is not useful"*). C2 is the
-> critical path (**R2, High/High**); C3/C4/C5 all block on it, so this blocker blocks the engine.
->
-> **To unblock — founder action:**
-> 1. Restart Docker Desktop.
-> 2. If still wedged: *Troubleshoot → Reset to factory defaults*. **This destroys containers, images
->    and volumes** — deliberately left to the founder, not done by an agent.
-> 3. Verify: `docker run --rm alpine:3 echo ok` → must print `ok`.
->
-> **STILL UNDECIDED, and required before planning can start:** the snapshot mechanism under Docker
-> (`docker commit` per turn vs overlay upper-dir diff). **The clonefile + 3-repairs design is
-> INCOMPATIBLE with Docker** — clonefile is an APFS mechanism; it survives only if the substrate
-> reverts to Seatbelt. See §5b.
+> **The cost, stated so it is not a surprise later: C2 is macOS-only, CI moves to macOS runners, and
+> the README must say so plainly.**
 
 ### Decisions taken (founder, 2026-07-15)
 
 | # | Decision | Status |
 |---|---|---|
-| Substrate | **Docker** — both platforms; overrides the Seatbelt recommendation | 🛑 blocked on revival |
-| Fidelity | clonefile(CLONE_ACL) + 3 sidecar repairs + refuse out-of-substrate | ⚠️ **void under Docker** — APFS-only |
-| `openWorldHint` gate | **C2 records the network policy as a fact; C4 decides the verdict** — keeps capture/sandbox opinion-free | ✅ holds under any substrate |
-| Loopback | **Spike it before designing the test suite** — the network positive control depends on it | ✅ holds (Seatbelt-specific; moot under Docker) |
+| **Substrate** | **Seatbelt (`sandbox-exec`) + `clonefile(2)` via ctypes — macOS-only** | ✅ verified working; C2 proceeds |
+| **Fidelity** | `clonefile(CLONE_ACL)` + 3 sidecar repairs (hardlinks, setuid, dir-mtimes) + **detect and REFUSE out-of-substrate loudly** | ✅ valid again — matches the substrate |
+| **`openWorldHint` gate** | **C2 records the network policy in force as a fact; C4 decides the verdict.** Capture/sandbox stay opinion-free | ✅ |
+| **Loopback** | **Spike before designing the test suite** — the network positive control depends on it | ✅ |
+| ~~Docker~~ | Reversed. Becomes C2's second slice at Phase 1 packaging | ⏸️ deferred |
 
 **Status:** pre-PRD. Every load-bearing claim below was **run on this machine** and its output
 recorded. Claims I could not verify are marked UNVERIFIED and must not be cited as fact.
