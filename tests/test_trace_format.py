@@ -14,39 +14,18 @@ byte-transparency and stays the only thing that proves it.
 from __future__ import annotations
 
 import base64
-import json
 import os
 import stat
 import sys
 import threading
 from pathlib import Path
 
-from conftest import CLIENT_LINES, FIXTURE, run_over_pipes
+from conftest import CLIENT_LINES, FIXTURE, proxy_cmd, read_trace, run_over_pipes, run_traced
 
 from belay.proxy import BoundedPeek, _pump
 from belay.trace import TraceWriter
 
 NONUTF8_FIXTURE = Path(__file__).parent / "fixtures" / "nonutf8_server.py"
-
-
-def proxy_cmd(server: Path) -> list[str]:
-    return [sys.executable, "-m", "belay.proxy", sys.executable, str(server)]
-
-
-def run_traced(tmp_path: Path, name: str, server: Path = FIXTURE) -> list[dict]:
-    """Run the scripted client through the proxy and return the trace records."""
-    trace_dir = tmp_path / name
-    env = os.environ.copy()
-    env["BELAY_TRACE_DIR"] = str(trace_dir)
-    run_over_pipes(proxy_cmd(server), env=env)
-    return read_trace(trace_dir)
-
-
-def read_trace(trace_dir: Path) -> list[dict]:
-    traces = sorted(trace_dir.glob("*.jsonl"))
-    assert len(traces) == 1, f"expected exactly one trace file, found {traces!r}"
-    lines = traces[0].read_bytes().split(b"\n")
-    return [json.loads(line) for line in lines if line]
 
 
 def frames(records: list[dict], direction: str | None = None) -> list[dict]:
@@ -156,7 +135,7 @@ def test_observer_failure_is_recorded_as_a_named_cause(tmp_path):
     finally:
         writer.close()
 
-    (record,) = read_trace(tmp_path / "trace")
+    (record,) = [r for r in read_trace(tmp_path / "trace") if r["kind"] == "capture_error"]
     assert record["kind"] == "capture_error"
     assert record["dir"] == "s2c"
     assert "ValueError" in record["cause"]
@@ -189,8 +168,38 @@ def test_concurrent_directions_never_tear_a_line_or_repeat_a_seq(tmp_path):
     writer.close()
 
     records = read_trace(tmp_path / "trace")  # parses every line: catches tearing
-    assert len(records) == 2 * per_direction
-    assert sorted(r["seq"] for r in records) == list(range(2 * per_direction))
+    assert len(frames(records)) == 2 * per_direction
+    # Every record, frames and both connection_window bookends, in one gapless
+    # sequence: seq is allocated across kinds, not per kind.
+    assert sorted(r["seq"] for r in records) == list(range(len(records)))
+
+
+def test_the_connection_window_brackets_the_run(tmp_path):
+    """When the proxy went live and when it stopped: facts only the proxy has.
+
+    The frames cannot supply them. The first frame is when the agent first
+    spoke, which is not when Belay started listening — and the difference is
+    exactly the interval in which the agent may have done things that never
+    crossed this boundary.
+    """
+    records = run_traced(tmp_path, "t")
+    window = [r for r in records if r["kind"] == "connection_window"]
+
+    assert [r["phase"] for r in window] == ["open", "close"]
+    assert window[0]["seq"] < min(f["seq"] for f in frames(records))
+    assert window[-1]["seq"] > max(f["seq"] for f in frames(records))
+    assert window[0]["t_in"] <= window[-1]["t_in"]
+
+
+def test_an_unclosed_trace_has_an_open_window_and_no_close(tmp_path):
+    """A killed proxy: the window's end is unknown, and unknown is not "the last frame"."""
+    writer = TraceWriter.in_directory(tmp_path / "trace")
+    writer.observer("c2s")(b'{"jsonrpc":"2.0","id":1,"method":"x"}', False)
+    # No close(): the process died here.
+
+    records = read_trace(tmp_path / "trace")
+    phases = [r["phase"] for r in records if r["kind"] == "connection_window"]
+    assert phases == ["open"]
 
 
 def test_forwarding_survives_an_observer_that_raises_and_the_cause_is_named():
