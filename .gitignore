@@ -1,0 +1,25 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+*.egg-info/
+dist/
+.mypy_cache/
+.ruff_cache/
+
+# Claude Code worktrees (belay-worktrees skill)
+.claude/worktrees/
+
+# SDD subagent scratch (briefs, reports, ledger)
+.superpowers/
+
+# Engine artifacts — traces, restored state, and corpus cases are the user's own
+# data and never belong in the repo (see CLAUDE.md: no raw-data egress).
+/traces/
+/runs/
+/_sandbox/
+/corpus/local/
+
+# Dashboard
+node_modules/
+.next/
