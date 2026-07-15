@@ -41,9 +41,11 @@ from conftest import CLIENT_LINES, FIXTURE, read_trace, run_over_pipes
 
 from belay import proxy
 from belay.snapshot.bth1 import hash_tree
-from belay.snapshot.substrate import guarded_restore
+from belay.snapshot.substrate import UnrestorableCause, guarded_restore
+from belay.trace import TraceWriter
 
 MUTATING = Path(__file__).parent / "fixtures" / "mutating_server.py"
+PIPELINING = Path(__file__).parent / "fixtures" / "pipelining_server.py"
 
 # CLIENT_LINES[3] is the scripted client's `tools/call`. Taken from the shared rig
 # rather than hand-written here: the gate must recognise the same adversarial
@@ -51,6 +53,15 @@ MUTATING = Path(__file__).parent / "fixtures" / "mutating_server.py"
 # tidied-up rewrite of it that only this test would ever produce.
 TOOLS_CALL = CLIENT_LINES[3]
 NOT_A_TOOLS_CALL = CLIENT_LINES[2]
+
+# Two calls a client may legally have outstanding at once, and the reply to the
+# first. Ids are what the in-flight ledger is keyed on, so they are distinct and
+# they are what the pipelining fixture echoes back.
+CALL_ONE = b'{"params":{"name":"touch","arguments":{"name":"alpha.txt"}},"method":"tools/call","id":1,"jsonrpc":"2.0"}'
+CALL_TWO = b'{"params":{"name":"touch","arguments":{"name":"beta.txt"}},"method":"tools/call","id":2,"jsonrpc":"2.0"}'
+REPLY_ONE = b'{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"alpha.txt"}]}}'
+
+CONCURRENT = UnrestorableCause.UNRESTORABLE_CONCURRENT_TURN.value
 
 PRE_STATE = b"pre-state"
 MUTATED = b"MUTATED"
@@ -106,6 +117,75 @@ def proxied(server: Path) -> list[str]:
 
 def frames_of(records: list[dict], direction: str) -> list[dict]:
     return [r for r in records if r["kind"] == "frame" and r["dir"] == direction]
+
+
+class Rig:
+    """The real pump, the real gate and the real writer, in one process.
+
+    Two things this buys that a subprocess run cannot, and both are load-bearing
+    for the attribution tests:
+
+    **Chunk boundaries the test decides.** Each `chunk()` writes its whole payload
+    into the pipe *before* the pump reads, so it arrives as exactly one read. What
+    shares a chunk with what is then a property of the test rather than of the
+    scheduler — which matters, because sharing a chunk is precisely the condition
+    under which a handle used to be attributed to the wrong frame.
+
+    **A handle that can be resolved.** `state_handle` names a snapshot by id, and
+    nothing in the trace maps that id to a directory — resolving one in a later
+    process is C3's problem and deliberately not a promise C2 makes. In here,
+    `gate.snapshots` is that map, so "the frame carries its OWN turn's pre-state"
+    becomes a claim about a tree on disk instead of a claim about a hex string.
+
+    Everything on the path is production code. The rig picks the boundaries; it
+    does not reimplement the pump.
+    """
+
+    def __init__(self, tmp_path: Path, scope: Path) -> None:
+        from belay.sandbox.gate import TurnGate
+
+        self.trace_dir = tmp_path / "trace"
+        self.writer = TraceWriter.in_directory(self.trace_dir)
+        self.gate = TurnGate(
+            scope=scope, snapshot_root=tmp_path / "snaps", trace=self.writer
+        )
+        self._peek = proxy.BoundedPeek(self.writer.observer("c2s"))
+        self._forward = proxy._forwarder(self.gate.before_frame, "c2s")
+        self._dst = os.open(tmp_path / "forwarded.bin", os.O_WRONLY | os.O_CREAT, 0o600)
+
+    def chunk(self, *frames: bytes) -> None:
+        """Deliver `frames` to the server as ONE chunk, through the real pump."""
+        src_r, src_w = os.pipe()
+        proxy._write_all(src_w, b"".join(frame + b"\n" for frame in frames))
+        os.close(src_w)
+        try:
+            proxy._pump(src_r, self._dst, self._peek, None, self._forward)
+        finally:
+            os.close(src_r)
+
+    def reply(self, frame: bytes) -> None:
+        """A response reaching the gate where the s2c hold reaches it: before the
+        client can see it, and so before the client can send what comes next."""
+        self.gate.before_frame(frame, "s2c")
+
+    def handles(self) -> dict[bytes, dict]:
+        """Every c2s frame the trace recorded, by its exact bytes."""
+        self.writer.close()
+        os.close(self._dst)
+        return {
+            base64.b64decode(f["raw"]): f["state_handle"]
+            for f in frames_of(read_trace(self.trace_dir), "c2s")
+        }
+
+    def resolve(self, handle: dict) -> Path:
+        """The tree a `present` handle names, or fail saying it names nothing."""
+        assert handle["status"] == "present", f"not a present handle: {handle!r}"
+        snap = self.gate.snapshots.get(handle["handle"])
+        assert snap is not None, (
+            f"handle {handle['handle']!r} resolves to no snapshot this gate took: "
+            f"it names {sorted(self.gate.snapshots)}"
+        )
+        return snap.snapshot.path
 
 
 # --- Ordering ---------------------------------------------------------------
@@ -257,39 +337,227 @@ def test_frames_that_crossed_before_the_turn_do_not_claim_its_snapshot(tmp_path)
     assert handles["tools/call"]["status"] == "present"
 
 
-def test_a_batched_write_puts_the_turns_handle_on_its_whole_chunk(tmp_path):
-    """A KNOWN LIMIT, pinned so it is a decision rather than a discovery.
+def test_a_batched_write_resolves_each_tools_call_to_its_own_pre_state(tmp_path):
+    """The load-bearing claim, on the chunk shape that used to break it.
 
-    When a client packs several frames into ONE write, every frame in that chunk
-    carries the turn's handle — including ones that crossed before the snapshot.
+    A client that packs several frames into ONE write is the common case, not the
+    corner: JSON-RPC ids exist so a client may pipeline, and Claude Code, Cursor
+    and the OpenAI agents SDK all batch independent tool calls by default. So this
+    chunk carries a notification and TWO `tools/call` frames, and every frame in it
+    is gated before any of them is recorded.
 
-    This is C1's shape, not a gate bug, and it is not fixable from here. The pump
-    forwards a whole chunk and observes it afterwards, on purpose: *"Deliberately
-    after the forward, and it stays there: forwarding must never wait on the
-    recorder."* The hook runs per frame (the gate needs that), but observation is
-    still per chunk, so a `tools/call` sharing a chunk with earlier frames has
-    already snapshotted by the time any of them are recorded. Interleaving
-    observation per-frame would put the recorder's hashing on the data path and
-    trade C1's guarantee for C2's convenience.
+    **What is asserted strictly:** each `tools/call` frame's handle *resolves to
+    its own turn's pre-state* — the tree on disk is checked, not just the status.
+    The previous version of this test asserted only
+    `all(h["status"] == "present")`, which passed while every handle in the trace
+    named the WRONG snapshot, and reassured in its docstring that the load-bearing
+    claim was unaffected. It was not: both frames reported one handle, and the
+    second frame claimed a pre-state its turn never ran against.
 
-    **What it costs:** on a batched write, `present` on a non-`tools/call` frame
-    means "a snapshot was current when this frame was recorded", not "this frame
-    crossed after it". The load-bearing claim — the `tools/call` frame carries its
-    OWN turn's pre-state — is unaffected, and that is the one C4 reads.
-    C2 records; C4 renders. This is on the list of what it must know.
+    **What is a KNOWN LIMIT, pinned here so it stays a decision:** a frame that is
+    not a `tools/call` carries whatever handle was current when the chunk was
+    recorded, which on a batched write can be a later frame's. That is C1's shape
+    and not fixable from here — the pump forwards a whole chunk and observes it
+    afterwards on purpose (*"forwarding must never wait on the recorder"*). On such
+    a frame the handle means "this was current when the frame was recorded", never
+    "this frame crossed after it". C2 records; C4 renders; this is on the list of
+    what C4 must know.
     """
     scope = make_scope(tmp_path)
-    trace_dir = tmp_path / "trace"
-    run_over_pipes(  # communicate(): all four lines in a single write
-        proxied(MUTATING),
-        env=gated_env(scope, tmp_path / "snaps", trace_dir=trace_dir),
+    rig = Rig(tmp_path, scope)
+
+    rig.chunk(NOT_A_TOOLS_CALL, CALL_ONE, CALL_TWO)
+    handles = rig.handles()
+    assert len(handles) == 3, "the chunk's frames did not all reach the trace"
+
+    # Turn 1 began with nothing outstanding, so its pre-state is real and its
+    # frame must name the tree that holds it.
+    assert rig.resolve(handles[CALL_ONE]).joinpath("marker.txt").read_bytes() == PRE_STATE
+
+    # Turn 2 was gated while turn 1 was still outstanding. There is no pre-state to
+    # claim: the tree it would clone is already whatever turn 1 has done to it so
+    # far. A `present` here is the false PASS this gate exists to refuse.
+    assert handles[CALL_TWO] == {
+        "status": "unrestorable",
+        "cause": CONCURRENT,
+        "detail": handles[CALL_TWO].get("detail", ""),
+        "source": "turn-gate",
+    }, f"a turn gated behind an outstanding call claimed a pre-state: {handles[CALL_TWO]!r}"
+    assert handles[CALL_TWO]["detail"], "an unrestorable that explains nothing"
+
+    # Exactly one clone: the refusal must be a refusal, not a snapshot nobody names.
+    assert len(rig.gate.snapshots) == 1, (
+        f"a turn with a call outstanding was snapshotted anyway: "
+        f"{sorted(rig.gate.snapshots)}"
     )
-    handles = [f["state_handle"] for f in frames_of(read_trace(trace_dir), "c2s")]
-    assert len(handles) == 4
-    assert all(h["status"] == "present" for h in handles), (
+
+    # The limit, stated as an assertion so that fixing it is a visible change.
+    assert handles[NOT_A_TOOLS_CALL] == handles[CALL_TWO], (
         "the batched-chunk limit changed shape - if observation is now per-frame, "
-        "this test should become the strict assertion instead of being relaxed"
+        "this becomes the strict assertion instead of being relaxed"
     )
+
+
+def test_each_tools_call_frame_resolves_to_its_own_snapshot(tmp_path):
+    """Two sequential turns, two snapshots, and each frame names the right one.
+
+    The positive control for the in-flight ledger, and it is not a formality: the
+    honest answer to a pipelined turn is `unrestorable`, and a gate that simply
+    said that always would pass the pipelining tests while snapshotting nothing
+    ever again. This is the test that fails if the ledger never clears — which is
+    what a response reaching the gate is for.
+
+    Resolution is by CONTENT, deliberately. Two handles that merely differ prove
+    nothing about which tree either names; the marker file is what makes "its own"
+    mean something. Turn 1 must resolve to the tree before the mutation, turn 2 to
+    the tree after it.
+    """
+    scope = make_scope(tmp_path)
+    rig = Rig(tmp_path, scope)
+
+    rig.chunk(CALL_ONE)
+    rig.reply(REPLY_ONE)  # turn 1 is over: the ledger is empty again
+    scope.joinpath("marker.txt").write_bytes(MUTATED)  # what turn 1 did
+    rig.chunk(CALL_TWO)
+
+    handles = rig.handles()
+    assert len(rig.gate.snapshots) == 2, (
+        "a turn whose predecessor had already replied was refused a snapshot: the "
+        "ledger never cleared, and the gate now refuses every turn after the first"
+    )
+    assert handles[CALL_ONE]["handle"] != handles[CALL_TWO]["handle"], (
+        "two turns, two snapshots, one handle: at least one frame names a tree "
+        "that is not its own pre-state"
+    )
+    assert rig.resolve(handles[CALL_ONE]).joinpath("marker.txt").read_bytes() == PRE_STATE
+    assert rig.resolve(handles[CALL_TWO]).joinpath("marker.txt").read_bytes() == MUTATED
+
+
+def test_a_pipelining_client_is_told_the_truth_end_to_end(tmp_path):
+    """The whole composition, against a real server doing real work per call.
+
+    The in-process tests decide the ordering; this one proves the wiring reaches a
+    live server through a real sandbox — and that the gate learns of a response
+    from the s2c path, which in-process tests hand it directly.
+
+    The fixture sleeps before it acts, so while turn 2 is being gated turn 1 is
+    provably still executing. That is what makes the outcome decided rather than
+    raced: with an instant server the reply could legitimately beat the second
+    call to the gate, and turn 2 would then have begun with nothing outstanding —
+    an honest `present`, and a test whose verdict the scheduler picks.
+    """
+    scope = make_scope(tmp_path)
+    snaps = tmp_path / "snaps"
+    trace_dir = tmp_path / "trace"
+    env = gated_env(scope, snaps, trace_dir=trace_dir)
+    env["BELAY_TEST_TOUCH_DIR"] = str(scope)
+
+    proc = subprocess.Popen(
+        proxied(PIPELINING), stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=env
+    )
+    stdout, _ = proc.communicate(CALL_ONE + b"\n" + CALL_TWO + b"\n", timeout=30)
+    assert proc.returncode == 0, "the proxied server did not exit cleanly"
+
+    # Anti-vacuity, and it is the whole point of the fixture: turn 2 really ran,
+    # and it really ran against a tree that already contained turn 1's file.
+    assert stdout.count(b"\n") == 2, f"both calls must have been answered: {stdout!r}"
+    assert scope.joinpath("alpha.txt").exists(), "turn 1 never ran - vacuous test"
+    assert scope.joinpath("beta.txt").exists(), "turn 2 never ran - vacuous test"
+
+    handles = {
+        json.loads(base64.b64decode(f["raw"]))["id"]: f["state_handle"]
+        for f in frames_of(read_trace(trace_dir), "c2s")
+    }
+    assert handles[1]["status"] == "present"
+    assert handles[2]["status"] == "unrestorable", (
+        f"turn 2 ran against a tree containing alpha.txt and was told it had a "
+        f"pre-state without it: {handles[2]!r}"
+    )
+    assert handles[2]["cause"] == CONCURRENT
+
+    turns = sorted(snaps.iterdir())
+    assert len(turns) == 1, f"one turn was snapshottable; found {turns!r}"
+    assert not turns[0].joinpath("alpha.txt").exists(), (
+        "the one snapshot is not turn 1's pre-state"
+    )
+
+
+def test_a_batch_of_tools_calls_in_one_frame_is_refused(tmp_path):
+    """Several turns, one frame, one handle slot: no honest per-turn answer.
+
+    The 2025-03-26 revision allowed a JSON-RPC batch and 2025-06-18 removed it
+    again, so a client on the older revision can legally open two turns in a single
+    frame. They begin together: only the first has this tree as its pre-state, and
+    a frame carries exactly one handle. Snapshotting once and stamping it on the
+    frame would say something true about the first call and false about the rest.
+    """
+    scope = make_scope(tmp_path)
+    rig = Rig(tmp_path, scope)
+    batch = b"[" + CALL_ONE + b"," + CALL_TWO + b"]"
+
+    rig.chunk(batch)
+
+    handle = rig.handles()[batch]
+    assert handle["status"] == "unrestorable", f"a batch claimed one pre-state: {handle!r}"
+    assert handle["cause"] == CONCURRENT
+    assert rig.gate.snapshots == {}
+
+
+def test_a_tools_call_with_no_id_poisons_every_later_turn(tmp_path):
+    """Unanswerable, so its end is never observable — and that is not ignorable.
+
+    A `tools/call` with no id is not a legal request, but it is legal JSON and it
+    still *executes*. No response can ever name it, so the gate can never learn it
+    finished, so every later turn might be running against a tree it is in the
+    middle of changing. Refusing all of them is severe and it is the honest
+    reading: the alternative is to guess, and a guess here is a `present` handle on
+    a tree that may never have existed.
+
+    Its OWN pre-state is real — nothing was outstanding when it began — so it is
+    snapshotted. Both halves are the point.
+    """
+    scope = make_scope(tmp_path)
+    rig = Rig(tmp_path, scope)
+    no_id = b'{"jsonrpc":"2.0","method":"tools/call","params":{"name":"echo","arguments":{}}}'
+
+    rig.chunk(no_id)
+    rig.reply(REPLY_ONE)  # answers nothing: there is no id here to answer
+    rig.chunk(CALL_ONE)
+
+    handles = rig.handles()
+    assert handles[no_id]["status"] == "present", (
+        "the first turn began with nothing outstanding; its pre-state is real"
+    )
+    assert handles[CALL_ONE]["status"] == "unrestorable", (
+        "a turn was snapshotted while a call the gate can never see the end of was "
+        "still outstanding"
+    )
+    assert handles[CALL_ONE]["cause"] == CONCURRENT
+
+
+def test_a_server_request_does_not_retire_the_turn_it_interrupts(tmp_path):
+    """`sampling/createMessage` is not a reply, however much it looks like one.
+
+    A server-originated request travels s2c and carries an id from the **server's**
+    id space — which may be any number, including one a client is currently using.
+    Retiring a turn on it would mean a server could clear the ledger, by accident
+    or on purpose, and buy itself a `present` handle on a tree it was already
+    mutating. A response is what carries a `result` or `error` and no method.
+    """
+    scope = make_scope(tmp_path)
+    rig = Rig(tmp_path, scope)
+    sampling = b'{"jsonrpc":"2.0","id":1,"method":"sampling/createMessage","params":{}}'
+
+    rig.chunk(CALL_ONE)
+    rig.reply(sampling)  # id 1, s2c, and answers nothing
+    rig.chunk(CALL_TWO)
+
+    handles = rig.handles()
+    assert handles[CALL_ONE]["status"] == "present"
+    assert handles[CALL_TWO]["status"] == "unrestorable", (
+        "a server request retired the turn it interrupted: turn 1 is still running"
+    )
+    assert handles[CALL_TWO]["cause"] == CONCURRENT
 
 
 def test_the_snapshot_restores_the_pre_state(tmp_path):
@@ -398,7 +666,11 @@ def test_a_failing_snapshot_still_forwards_and_names_a_cause(tmp_path):
         def __init__(self) -> None:
             self.handles: list[dict] = []
 
-        def set_state_handle(self, handle: dict) -> None:
+        def set_state_handle(self, handle: dict, *, frame: bytes) -> None:
+            # `frame` is required, matching `StateSink`: the gate must name the
+            # frame each handle belongs to, and a stub that accepted less would
+            # let the gate stop passing it without a test noticing.
+            assert frame == TOOLS_CALL
             self.handles.append(handle)
 
     sink = Sink()

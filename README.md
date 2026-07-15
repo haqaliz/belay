@@ -69,8 +69,12 @@ python -m belay.proxy <server-command> [args...]
 ```
 
 The server now runs under a Seatbelt profile that grants writes to the workspace and
-nothing else it did not need. Each `tools/call` is held while the workspace is snapshotted,
-and the turn's frames carry a handle naming that pre-state. `BELAY_SNAPSHOT_DIR` must be
+nothing else it did not need. Each `tools/call` that arrives with **no other call
+outstanding** is held while the workspace is snapshotted, and that frame carries a handle
+naming its own pre-state. A call that arrives while another is still in flight is **not**
+snapshotted — there is no pre-state left to capture, so it is recorded `unrestorable` and
+forwarded unchanged ([why](#parallel-tool-calls-are-recorded-unrestorable-not-snapshotted)).
+`BELAY_SNAPSHOT_DIR` must be
 **outside** the scope, or every turn would snapshot the previous turns' snapshots; the
 proxy refuses at startup rather than recording a pre-state the agent never had. Setting a
 scope without a snapshot dir is likewise refused, and so is setting one on a platform where
@@ -164,10 +168,54 @@ per turn** (4.9 / 5.0 / 5.1 / 5.5 / 4.9 ms) — **on a 400-file tree**, which is
 suite measures. The gate walks and clones the scope, so the cost scales with the tree: that
 number is a measurement, not a constant, and a large workspace will pay more.
 
+**Replies are held too**, and for much less: a `json.loads` of a copy, to see which turn just
+ended. Belay has to learn that from the reply *before the client does* — otherwise the
+client's next call races its own response, and a perfectly sequential turn gets recorded
+`unrestorable` for a concurrency it never had.
+
 C1's neutrality claim was written to assert **bytes, never timing**, and this is what that
-narrowness was for. The bytes the client sent are the bytes the server receives, gate or no
-gate — but the turn waits. A snapshot must complete *before* the call reaches the server,
-or it is not a pre-state; it is a race against whatever the server has already done.
+narrowness was for. The bytes the client sent are the bytes the server receives, and the
+bytes the server sent are the bytes the client receives, gate or no gate — but the turn
+waits. A snapshot must complete *before* the call reaches the server, or it is not a
+pre-state; it is a race against whatever the server has already done.
+
+## Parallel tool calls are recorded `unrestorable`, not snapshotted
+
+**This is the coverage limit that bites the headline capability, on the most common client
+behaviour there is.** Read it before you read a trace.
+
+A turn's pre-state is only capturable while nothing else is running. "The frame was
+forwarded" and "the turn started executing" are the same instant only if at most one call is
+ever in flight — and JSON-RPC ids exist precisely so a client may **pipeline**. Claude Code
+is instructed to batch independent tool calls into one block; Cursor and the OpenAI agents
+SDK do the same. So this is the default, not an edge case.
+
+When a `tools/call` arrives while another is outstanding, the workspace is no longer the
+second turn's pre-state — it is already a mid-state of the first. Belay does **not** clone it
+and call it a pre-state. It records:
+
+```json
+"state_handle": {"status": "unrestorable", "cause": "UNRESTORABLE_CONCURRENT_TURN", ...}
+```
+
+and forwards the call unchanged. C4 renders that UNVERIFIED. **What you lose is coverage —
+a batched turn is not verifiable by replay.** What you do not lose is honesty: a `present`
+handle here would be confident, hashed, self-consistent and wrong, which is worse than no
+snapshot at all.
+
+Belay does **not** serialise turns to make the pre-state capturable. Holding call N+1 until
+N replies would change the proxy from content-neutral to **concurrency-altering** — it would
+change how your agent behaves, which is the one thing this proxy exists not to do.
+
+Two consequences worth stating plainly:
+
+- **A batch of `tools/call` in one frame** is refused for the same reason: they begin
+  together, one frame carries one handle, and only the first ran against that tree.
+- **A `tools/call` with no id** is unanswerable, so Belay can never see it end. Its own
+  pre-state is snapshotted, and every later turn in that run is recorded `unrestorable`.
+
+Measured end-to-end in `tests/test_turn_gate.py` against a server that does real work per
+call — the case where the answer is decided rather than raced.
 
 ## What a restore does and does not bring back
 

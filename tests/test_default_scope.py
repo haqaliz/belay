@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -98,6 +99,121 @@ def test_the_tmpdir_exists_before_the_child_starts(tmp_path: Path) -> None:
 def test_a_workspace_that_does_not_exist_is_refused(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="does not exist"):
         default_scope(tmp_path / "nope")
+
+
+# --- The tmpdir is a predictable path, so adopting one is a decision ----------
+#
+# The name is `belay-tmp-<sha256(realpath(workspace))[:16]>`: a pure, documented
+# function of the workspace, and therefore knowable by anyone who knows where the
+# agent works. Whatever is at that path is `realpath`ed into `write_roots` and
+# lands in the profile as `(allow file-write* (subpath ...))`. That makes this the
+# one path in Belay whose resolution decides what the sandbox grants — so it is
+# adopted only when it is provably ours, and refused loudly otherwise.
+#
+# `launch.py` already asserts the *profile's* mode is exactly 0o600 for this
+# reasoning. These are the same rigour one call earlier, on the input that decides
+# what the profile says.
+#
+# Bounded, and stated precisely: on stock macOS `gettempdir()` is the per-user
+# `/var/folders/.../T` (mode 0700), so an attacker must already share the uid. It
+# is NOT bounded when `TMPDIR` is unset or points at world-writable `/tmp` — CI,
+# containers, cron, launchd. The contained server cannot mount this itself (it can
+# only write inside its own grant), so it is a local same-user / misconfigured
+# TMPDIR issue rather than an agent escape.
+
+
+def _squattable_tmpdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A private temp root, and the exact path `default_scope` will pick in it.
+
+    The path is learned by *calling* `default_scope`, never by recomputing the
+    digest here: a test that reimplemented the naming rule would keep passing if
+    production stopped following it, and would be proving its own arithmetic. That
+    the first call's answer is still the second call's answer IS the predictability
+    the attack needs — so the rig demonstrates it rather than asserting it.
+    """
+    tmproot = tmp_path / "tmproot"
+    tmproot.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(tmproot))
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    predicted = Path(default_scope(workspace).tmpdir)
+    os.rmdir(predicted)  # the attacker gets there first, next run
+    return predicted
+
+
+def test_a_symlink_at_the_predicted_tmpdir_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The squat: plant a link at the known name and the profile follows it.
+
+    Without the check this is not a near miss — `os.makedirs(..., exist_ok=True)`
+    validates nothing about a path that already exists (`mode=` is ignored
+    outright), `realpath` then dutifully resolves the link, and the sandbox grants
+    the contained server write access to a directory the attacker chose.
+    """
+    predicted = _squattable_tmpdir(tmp_path, monkeypatch)
+    elsewhere = tmp_path / "attacker-chosen"
+    elsewhere.mkdir(mode=0o700)
+    predicted.symlink_to(elsewhere)
+
+    with pytest.raises(ValueError, match="refusing to adopt"):
+        default_scope(tmp_path / "ws")
+
+
+def test_a_file_at_the_predicted_tmpdir_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Not every squat is a link, and a plain file must not be mistaken for one:
+    it is refused for what it is, so the diagnostic names the real obstacle."""
+    predicted = _squattable_tmpdir(tmp_path, monkeypatch)
+    predicted.write_bytes(b"not a directory")
+
+    with pytest.raises(ValueError, match="refusing to adopt"):
+        default_scope(tmp_path / "ws")
+
+
+def test_a_widened_tmpdir_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real directory, ours, but group/world writable.
+
+    `os.makedirs(..., mode=0o700, exist_ok=True)` silently ignores `mode` on a
+    path that exists, so this is what "adopted with a mode we never checked" looks
+    like: everything the child writes to its scratch — which is the agent's data —
+    readable and replaceable by anyone on the box.
+    """
+    predicted = _squattable_tmpdir(tmp_path, monkeypatch)
+    predicted.mkdir(mode=0o777)
+    os.chmod(predicted, 0o777)  # defeat any umask: the point is the mode on disk
+
+    with pytest.raises(ValueError, match="refusing to adopt"):
+        default_scope(tmp_path / "ws")
+
+
+def test_our_own_tmpdir_is_adopted_on_the_next_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The positive control, and it is not a formality.
+
+    Idempotence is why the name is a digest in the first place: a `TMPDIR` that
+    moved between turns would strand the previous turn's files somewhere the
+    server had already been told about. A refusal that fired on Belay's own
+    directory would break every second run — so "refuse what is not ours" must
+    mean exactly that, and no more.
+    """
+    tmproot = tmp_path / "tmproot"
+    tmproot.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(tmproot))
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    first = default_scope(workspace)
+    Path(first.tmpdir, "scratch").write_bytes(b"the previous turn's file")
+    second = default_scope(workspace)
+
+    assert second.tmpdir == first.tmpdir
+    assert Path(second.tmpdir, "scratch").read_bytes() == b"the previous turn's file"
 
 
 # --- The zero-config claim ---------------------------------------------------

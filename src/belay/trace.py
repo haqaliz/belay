@@ -65,6 +65,11 @@ KINDS = (
 # "absent" is never a synonym for failure.
 _STATE_HANDLE_STATUSES = frozenset({"absent", "present", "unrestorable"})
 
+# The direction a request travels, and the only one a `state_handle` can be
+# pinned to a frame on. Named here rather than imported from `belay.sandbox.gate`:
+# the writer must not depend on the snapshot backend it is meant to outlive.
+_CLIENT_TO_SERVER = "c2s"
+
 Observer = Callable[[bytes, bool], None]
 
 
@@ -125,6 +130,15 @@ class TraceWriter:
         # The slot's default, and the only value C1 could ever write. C2 sets
         # this when it attempts a snapshot; see `set_state_handle`.
         self._state_handle: dict[str, Any] = {"status": "absent"}
+        # Handles pinned to the exact frame they describe, by content hash. Each
+        # is claimed by the frame that earned it and then gone. Two things can
+        # leave one unclaimed, and neither is silent: a frame gated but never
+        # observed (the trace says so — `capture_error`, or a closed window), and
+        # a frame over MAX_FRAME, whose observed copy is truncated and therefore
+        # hashes differently than the whole frame the gate saw. The second falls
+        # back to the sticky handle and is already marked `truncated: true`, which
+        # is the flag that says do not ground anything on this record.
+        self._pinned: dict[str, list[dict[str, Any]]] = {}
         self._append({"kind": "connection_window", "phase": "open"})
 
     @classmethod
@@ -138,8 +152,8 @@ class TraceWriter:
     def path(self) -> Path:
         return self._path
 
-    def set_state_handle(self, handle: dict[str, Any]) -> None:
-        """Set what the `state_handle` slot says on subsequent frames.
+    def set_state_handle(self, handle: dict[str, Any], *, frame: bytes | None = None) -> None:
+        """Set what the `state_handle` slot says, for `frame` and for what follows.
 
         The handle is **passed in**, not derived here. The writer deliberately
         does not know what any cause means, cannot take a snapshot, and cannot
@@ -157,6 +171,21 @@ class TraceWriter:
         Set on the writer rather than threaded through `observer`, because the
         observer signature is the proxy's and a frame's handle is a property of
         the run's state at that moment, not of the bytes.
+
+        **`frame` is what makes the answer per-frame rather than per-chunk.** The
+        sticky slot alone describes "whatever is recorded next", and the pump
+        forwards a whole chunk before observing any of it — so when one chunk
+        carries two gated frames, both are set before either is recorded and both
+        read the last value. At least one then names a state handle that is not
+        its own. Passing the frame registers this handle *for those exact bytes*,
+        claimed once, when they are recorded.
+
+        Frames are matched by content hash, not by arrival order: order would put
+        the trace's correctness at the mercy of two modules agreeing forever about
+        which frames they each skip, and a drift would silently shift every handle
+        by one. Identical bytes gated twice queue up and are claimed in order,
+        which is the only reading that can be right when the bytes cannot tell the
+        two apart.
         """
         status = handle.get("status")
         if status not in _STATE_HANDLE_STATUSES:
@@ -171,6 +200,25 @@ class TraceWriter:
             )
         with self._lock:
             self._state_handle = dict(handle)
+            if frame is not None:
+                self._pinned.setdefault(hash_bytes(frame), []).append(dict(handle))
+
+    def _handle_for(self, direction: str, digest: str) -> dict[str, Any]:
+        """This frame's own handle if one was pinned for it, else the sticky one.
+
+        c2s only: a handle describes the state a *request* was about to execute
+        against, and nothing on the way back is a turn. Consulting the pin from
+        both directions would let a reply that happened to be byte-identical to a
+        pending request claim that request's snapshot.
+        """
+        with self._lock:
+            pinned = self._pinned.get(digest) if direction == _CLIENT_TO_SERVER else None
+            if not pinned:
+                return dict(self._state_handle)
+            handle = pinned.pop(0)
+            if not pinned:
+                del self._pinned[digest]
+            return handle
 
     def observer(self, direction: str) -> Observer:
         def observe(frame: bytes, truncated: bool) -> None:
@@ -185,6 +233,7 @@ class TraceWriter:
         raw = base64.b64encode(frame).decode("ascii")
         digest = hash_bytes(frame)
         canonical = canonical_hash(frame)
+        handle = self._handle_for(direction, digest)
         self._append(
             {
                 "kind": "frame",
@@ -206,7 +255,7 @@ class TraceWriter:
                 # `absent`, which keeps meaning exactly "no snapshot was
                 # attempted": a frame from a run without snapshots must not
                 # start claiming anything else.
-                "state_handle": dict(self._state_handle),
+                "state_handle": handle,
             }
         )
 
