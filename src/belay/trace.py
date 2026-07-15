@@ -50,7 +50,15 @@ SCHEMA_VERSION = 1
 # understands, must be SKIPPED and the skip recorded. Never dropped silently
 # (that is a false-completeness claim), never fatal (an old reader must survive
 # a new writer). C2 appends `denial`; C3 appends `nondeterminism`.
-KINDS = ("frame", "capture_error", "connection_window")
+KINDS = (
+    "frame",
+    "capture_error",
+    "connection_window",
+    # C2's sandbox. Both are FACTS about what was applied and what the child
+    # reported — neither is verdict-shaped. C2 does not decide replayability.
+    "denial",
+    "network_policy",
+)
 
 Observer = Callable[[bytes, bool], None]
 
@@ -156,6 +164,18 @@ class TraceWriter:
                 "state_handle": {"status": "absent"},
             }
         )
+
+    def record(self, kind: str, **fields: Any) -> None:
+        """Append one record of `kind`. The extension point the format was built for.
+
+        `kind` is extensible by design (see `KINDS`), so a later capability adds
+        a record type without a schema break — the reader's contract already says
+        an unknown `kind` is skipped and the skip recorded. This exists so those
+        capabilities append through the writer's own envelope (`v`, `seq`, `t_in`,
+        `observation_point`) rather than reaching past it into `_append`, which
+        would put the format's guarantees at the mercy of every caller.
+        """
+        self._append({"kind": kind, **fields})
 
     def capture_error(self, direction: str, cause: BaseException) -> None:
         """Record that observation of `direction` stopped, and why.
