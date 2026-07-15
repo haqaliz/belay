@@ -50,7 +50,7 @@ SCHEMA_VERSION = 1
 # understands, must be SKIPPED and the skip recorded. Never dropped silently
 # (that is a false-completeness claim), never fatal (an old reader must survive
 # a new writer). C2 appends `denial`; C3 appends `nondeterminism`.
-KINDS = ("frame", "capture_error")
+KINDS = ("frame", "capture_error", "connection_window")
 
 Observer = Callable[[bytes, bool], None]
 
@@ -92,6 +92,7 @@ class TraceWriter:
         self._fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         self._lock = threading.Lock()
         self._seq = 0
+        self._append({"kind": "connection_window", "phase": "open"})
 
     @classmethod
     def in_directory(cls, directory: str | Path) -> "TraceWriter":
@@ -187,6 +188,30 @@ class TraceWriter:
             _write_all(self._fd, line.encode("utf-8") + b"\n")
 
     def close(self) -> None:
+        """Record that observation stopped, then stop.
+
+        The pair of `connection_window` records is the only statement in the
+        trace about the period the proxy was *live* — which is the denominator
+        for "how much of what the agent did crossed the MCP boundary at all". The
+        frames alone cannot say it: the first frame is when the agent first
+        spoke, not when Belay started listening, and the two are not the same
+        claim.
+
+        **Connection, not session, and the reason outlives the label:** the
+        2026-07-28 revision says "an open connection, such as a STDIO process, is
+        not a conversation or session: clients may interleave unrelated requests
+        on the same transport, and a server must not treat connection or process
+        identity as a proxy for conversation or session continuity." What the two
+        records below bracket is one open pipe to one server process. Calling
+        that a session would claim a continuity the protocol explicitly refuses
+        to grant.
+
+        A trace with an `open` and no `close` is therefore honest and expected:
+        the proxy was killed, and the window's end is genuinely unknown rather
+        than "the last frame we happened to see".
+        """
+        if self._fd >= 0:
+            self._append({"kind": "connection_window", "phase": "close"})
         with self._lock:
             if self._fd >= 0:
                 os.close(self._fd)
