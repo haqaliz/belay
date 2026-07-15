@@ -11,6 +11,7 @@ broken fixture, or a timeout.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -26,13 +27,16 @@ CLIENT_LINES = [
 ]
 
 
-def run_over_pipes(cmd: list[str], timeout: float = 5.0) -> list[bytes]:
+def run_over_pipes(
+    cmd: list[str], timeout: float = 5.0, env: dict[str, str] | None = None
+) -> list[bytes]:
     """Spawn `cmd` over real stdio pipes, feed it CLIENT_LINES, return stdout lines as bytes."""
     proc = subprocess.Popen(
         cmd,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        env=env,
     )
     payload = b"\n".join(CLIENT_LINES) + b"\n"
     stdout, stderr = proc.communicate(payload, timeout=timeout)
@@ -47,29 +51,33 @@ def run_over_pipes(cmd: list[str], timeout: float = 5.0) -> list[bytes]:
 def test_proxy_is_byte_identical_to_direct_connection(tmp_path):
     direct_lines = run_over_pipes([sys.executable, str(FIXTURE)])
 
+    # Anti-vacuity guard: if the fixture ever emits nothing (e.g. it breaks
+    # silently), an empty direct run would compare equal to an empty proxied
+    # run and this test would PASS while proving nothing about the proxy at
+    # all. This happened to a prototype of this exact test: a syntax error in
+    # the fake server made both sides emit empty output, and `[] != []` is
+    # False. Fail loudly instead of passing vacuously.
+    assert direct_lines, (
+        "fixture emitted nothing - the differential would pass vacuously "
+        "(both sides would compare empty-to-empty, proving nothing about the proxy)"
+    )
+    assert len(direct_lines) == 4, (
+        f"fixture emitted {len(direct_lines)} lines, expected exactly 4 (replies to "
+        "ids 1/2/3, plus the notifications/tools/list_changed notification "
+        "interleaved before the id=3 reply) - the fixture's shape changed and this "
+        "test's line-count assumptions are stale"
+    )
+
     env_trace_dir = tmp_path / "trace"
     env_trace_dir.mkdir()
-    import os
 
     proxied_env = os.environ.copy()
     proxied_env["BELAY_TRACE_DIR"] = str(env_trace_dir)
 
-    proc = subprocess.Popen(
+    proxied_lines = run_over_pipes(
         [sys.executable, "-m", "belay.proxy", sys.executable, str(FIXTURE)],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
         env=proxied_env,
     )
-    payload = b"\n".join(CLIENT_LINES) + b"\n"
-    stdout, stderr = proc.communicate(payload, timeout=5.0)
-    returncode = proc.wait(timeout=5.0)
-    if returncode != 0:
-        raise RuntimeError(
-            "proxy command exited "
-            f"{returncode}\nstderr:\n{stderr.decode(errors='replace')}"
-        )
-    proxied_lines = [line for line in stdout.split(b"\n") if line]
 
     if direct_lines != proxied_lines:
         first_diff = None
