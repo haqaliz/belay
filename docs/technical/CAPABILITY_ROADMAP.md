@@ -123,7 +123,8 @@ every later capability reads what C1 writes.
   > start"*. The **2026-07-28** revision removes the `initialize` handshake and the protocol-level
   > session (SEP-2575/2567), and states that an open stdio process **is not a session**. C1 as
   > shipped records **per-call resolved connection context** instead, which reconstructs from
-  > either a handshake (≤2025-11-25) or per-request `_meta` (≥2026-07-28). See the RC note below.
+  > either a handshake (≤2025-11-25) or per-request `_meta` (≥2026-07-28). See *"The protocol we
+  > locked to is moving"* above.
 - Content-address everything (hash args, result, and the pre/post state handle from C2) so
   a trace is tamper-evident and comparable across runs.
 - An append-only, self-describing trace format on disk. It is the interchange format for the
