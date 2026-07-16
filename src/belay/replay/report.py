@@ -53,6 +53,7 @@ from belay.replay.determinism import classify_determinism
 from belay.replay.engine import (
     NOT_VERIFIABLE,
     REPLAYED,
+    UNANSWERED_TARGET,
     UNVERIFIED,
     TurnReplay,
     replay_turn,
@@ -74,6 +75,11 @@ _SNAPSHOT_FAILED = "UNRESTORABLE_SNAPSHOT_FAILED"
 #: is longer and per-handle; this is the label the rate breaks down by.
 MANIFEST_NOT_FOUND = "manifest not found"
 
+#: The named cause a `present` turn that WAS re-invoked but whose server never answered
+#: the target frame is filed under. The engine's verbatim string carries the raw reason
+#: (server-exited / timed-out / …); this is the stable bucket the rate breaks down by.
+REPLAY_DID_NOT_ANSWER = "replay did not answer target"
+
 #: A last-resort label so a causeless unverified turn is impossible: an `unrestorable`
 #: handle that somehow carried no cause string is still filed under a NAME, never
 #: dropped from the breakdown. "Unverified for no stated reason" is the one thing the
@@ -85,6 +91,7 @@ _NO_RECORDED_CAUSE = "unrestorable (no recorded cause)"
 #: engine's wording.
 _PREFIX_LABELS: tuple[tuple[str, str], ...] = (
     ("no persisted snapshot manifest", MANIFEST_NOT_FOUND),
+    (UNANSWERED_TARGET, REPLAY_DID_NOT_ANSWER),
     ("the tools/call has no recorded request frame", "no request frame to re-invoke"),
     ("the tools/call frame could not be read", "unreadable target frame"),
     ("unrecognised state_handle status", "unrecognised state handle"),
@@ -317,6 +324,7 @@ def replay_trace(
 
 __all__ = [
     "MANIFEST_NOT_FOUND",
+    "REPLAY_DID_NOT_ANSWER",
     "TraceReport",
     "TurnReport",
     "canonical_cause",
