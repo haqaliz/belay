@@ -114,6 +114,7 @@ import time
 from pathlib import Path
 from typing import Any, Optional, Protocol
 
+from belay.replay.persist import persist_snapshot
 from belay.snapshot.clone import TreeRoot
 from belay.snapshot.substrate import (
     GuardedSnapshot,
@@ -315,10 +316,18 @@ class TurnGate:
 
         #: Live snapshots by handle — the same id the trace's `present` handle
         #: carries, so a reader holding a trace record can resolve it to the tree
-        #: it names. In-process only: the sidecar `clone.restore` needs lives in
-        #: memory, so restoring in a *later* process is C3's problem, not a
-        #: promise made here.
+        #: it names. Kept for the in-process fast path; a later process resolves
+        #: the same handle through the persisted manifest below instead.
         self.snapshots: dict[str, GuardedSnapshot] = {}
+
+        #: Where each turn's manifest is persisted, one `<handle>.json` per turn,
+        #: joining the trace's handle to the tree and the sidecar `clone.restore`
+        #: needs. This is what lets `belay replay` restore in a *later* process —
+        #: the in-memory `snapshots` map above does not survive one. Kept OUT of
+        #: `snapshot_root` on purpose: that directory holds one entry per turn and
+        #: is enumerated as such, so the manifests live in a sibling directory
+        #: rather than as extra entries beside the `turn-NNNN` trees.
+        self.manifest_root = self._snapshot_root.parent / f"{self._snapshot_root.name}.manifests"
 
         #: What each gated turn cost, in milliseconds. Measured rather than
         #: estimated: the gate is the first thing ever allowed to delay the data
@@ -413,6 +422,11 @@ class TurnGate:
         try:
             self._snapshot_root.mkdir(parents=True, exist_ok=True)
             snap = take_snapshot(self._scope, dest)
+            # Persist inside the try, before the handle is emitted: a snapshot that
+            # cannot be written to disk is not resolvable in a later process, so it
+            # must be reported as a failure rather than as a `present` handle that
+            # promises a restore no later process could perform.
+            persist_snapshot(snap, self.manifest_root / f"{snap.manifest.handle}.json")
         except Unrestorable as exc:
             # Task 6 refused by name — a FIFO, a socket, a capability gap. The
             # refusal is the useful fact, and it is already named.
