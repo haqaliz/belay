@@ -123,6 +123,28 @@ few seconds has proven that it started, not that its scope is sufficient. The co
 so in its own output, and it never widens a scope for you: it prints the path and the
 decision stays yours.
 
+### Replay a trace, and read the UNVERIFIED rate
+
+```bash
+belay replay ./traces/<trace>.jsonl --manifest-dir ./sn.manifests --server <server-command> [args...]
+# or, without installing the console script:
+python -m belay.cli replay ./traces/<trace>.jsonl --manifest-dir ./sn.manifests --server <server-command> [args...]
+```
+
+It replays every recorded `tools/call` against its restored pre-state and reports, per turn
+and in aggregate, what **replayed**, what was **unverified** (with a named cause), and what
+was **not-verifiable** — plus the headline: the **UNVERIFIED rate, broken down by cause,
+with every instance named**. A turn that is unverified for no stated reason is a bug, not a
+shrug. This **observes coverage; it emits no PASS/FAIL** — that is a later capability.
+
+**Where `--manifest-dir` points.** The trace records the snapshot *handle*, not where its
+manifest lives. The proxy writes each turn's manifest to a **sibling** of the snapshot dir:
+`BELAY_SNAPSHOT_DIR=./sn` → `./sn.manifests/`. Point `--manifest-dir` there. A `present` turn
+whose manifest is not found under that dir is an **honest UNVERIFIED** ("manifest not found")
+— never a fabricated result and never a silent skip. A high UNVERIFIED rate is a signal to
+read, not a number to bury: it says how much of a run this replay could speak to, and why it
+could not speak to the rest.
+
 ## What the capture proves, and what it does not
 
 **The neutrality claim is narrow, and it is the only one supported.**

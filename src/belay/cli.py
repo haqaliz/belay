@@ -310,6 +310,110 @@ def _cmd_sandbox_check(args: argparse.Namespace) -> int:
     return 0
 
 
+def _pct(fraction: float) -> str:
+    """A percentage with no false precision — the rate is a coverage fact, not a grade."""
+    return f"{round(fraction * 100)}%"
+
+
+def _cmd_replay(args: argparse.Namespace) -> int:
+    """`belay replay <trace>` — replay a trace and report the UNVERIFIED rate.
+
+    Reads the trace back, replays each recorded `tools/call` against its restored
+    pre-state, and prints per-turn observations plus the aggregate: the UNVERIFIED
+    rate with every instance filed under a named cause. It states
+    replayed/unverified/not-verifiable — never PASS/FAIL, which is C4's. The rate is
+    an observation about coverage, not a verdict.
+    """
+    from belay.replay.reader import TraceCorrupt, read_trace
+    from belay.replay.report import replay_trace
+
+    if not args.server:
+        _emit("belay: a server command is required, after --server. Nothing to replay against.")
+        return 2
+
+    trace_path = Path(args.trace)
+    if not trace_path.exists():
+        _emit(f"belay: trace not found: {trace_path}")
+        return 2
+
+    try:
+        read = read_trace(trace_path)
+    except TraceCorrupt as exc:
+        _emit(f"belay: {exc}")
+        return 2
+
+    manifest_dir = Path(args.manifest_dir)
+    try:
+        report = replay_trace(
+            read.records,
+            server_command=args.server,
+            manifest_dir=manifest_dir,
+            replays=args.replays,
+            only=args.turn,
+        )
+    except ValueError as exc:
+        _emit(f"belay: {exc}")
+        return 2
+
+    turns = report.turns
+
+    _emit(f"belay replay {trace_path}")
+    _emit()
+    _emit(f"  {len(report.turns)} tool-call turn(s), replayed against restored pre-state.")
+    _emit(f"  manifests             {manifest_dir}")
+    _emit("    A turn's snapshot manifest is written by the gate to a SIBLING of the")
+    _emit("    snapshot dir: BELAY_SNAPSHOT_DIR=./sn -> ./sn.manifests/. Point")
+    _emit("    --manifest-dir there. A present turn whose manifest is not found is an")
+    _emit("    honest UNVERIFIED (manifest not found), never a fabricated result.")
+
+    _emit()
+    _emit("turns")
+    for turn in turns:
+        _emit_turn(turn)
+
+    _emit()
+    _emit("coverage")
+    _emit(f"  turns total           {report.total}")
+    _emit(f"  replayed              {report.replayed}")
+    _emit(f"  unverified            {report.unverified}")
+    _emit(f"  not-verifiable        {report.not_verifiable}")
+    _emit()
+    _emit(
+        f"  UNVERIFIED RATE       {report.unverified} / {report.total} "
+        f"({_pct(report.unverified_rate)})"
+    )
+    if report.by_cause:
+        _emit("    by cause")
+        for cause, count in sorted(report.by_cause.items(), key=lambda kv: (-kv[1], kv[0])):
+            _emit(f"      {cause:<44}{count}")
+    if report.unverified == 0:
+        _emit("    no turn was unverified in this run.")
+
+    _emit()
+    _emit("  Every unverified turn is named above. This is an observation about")
+    _emit("  coverage, not a verdict — C3 reports what replayed and what did not;")
+    _emit("  it does NOT emit PASS/FAIL. That is C4.")
+    return 0
+
+
+def _emit_turn(turn) -> None:
+    from belay.replay.report import REPLAYED
+
+    tool = turn.tool or "?"
+    head = f"  turn {turn.turn_index:<3} {tool:<16}{turn.status:<16}"
+    if turn.status == REPLAYED:
+        tail = f"result {turn.result_equivalence or 'n/a'}; {turn.delta_summary or 'no delta'}"
+        if turn.determinism is not None:
+            tail += f"; {turn.determinism}"
+        _emit(head + tail)
+    else:
+        # UNVERIFIED / NOT_VERIFIABLE: the named cause, and — when the engine gave a
+        # longer verbatim reason — that too, so the bucket never hides the specifics.
+        _emit(head + (turn.cause or "?"))
+        if turn.raw_cause and turn.raw_cause != turn.cause:
+            _emit(f"      {turn.raw_cause}")
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="belay", description="The agent harness.")
     subcommands = parser.add_subparsers(dest="group", required=True)
@@ -340,13 +444,61 @@ def _parser() -> argparse.ArgumentParser:
         help="the server to sample, after a bare --",
     )
     check.set_defaults(func=_cmd_sandbox_check)
+
+    replay = subcommands.add_parser(
+        "replay",
+        help="replay a trace and report the UNVERIFIED rate, every instance named",
+        description=(
+            "Replay each recorded tools/call against its restored pre-state and "
+            "report, per turn and in aggregate, what replayed, what was unverified "
+            "(with a named cause) and what was not verifiable — plus the UNVERIFIED "
+            "rate broken down by cause. This OBSERVES coverage; it emits no PASS/FAIL. "
+            "\n\n"
+            "Manifests: a turn's snapshot manifest is written by the gate to a SIBLING "
+            "of the snapshot dir, e.g. BELAY_SNAPSHOT_DIR=./sn -> ./sn.manifests/. "
+            "Point --manifest-dir there; a present turn whose manifest is not found is "
+            "an honest UNVERIFIED (manifest not found), never a fabricated result."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    replay.add_argument("trace", help="the trace file (.jsonl) to replay")
+    replay.add_argument(
+        "--manifest-dir",
+        required=True,
+        help="where the gate persisted this run's snapshot manifests (the .manifests sibling)",
+    )
+    replay.add_argument(
+        "--turn",
+        type=int,
+        default=None,
+        help="replay only this tools/call turn (0-based); default is the whole trace",
+    )
+    replay.add_argument(
+        "--replays",
+        type=int,
+        default=1,
+        help="replay each turn this many times to classify determinism (>=2 to enable)",
+    )
+    replay.add_argument(
+        "--server",
+        nargs=argparse.REMAINDER,
+        default=[],
+        metavar="cmd ...",
+        help="the MCP server to replay against; everything after --server is its command",
+    )
+    replay.set_defaults(func=_cmd_replay)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(sys.argv[1:] if argv is None else argv)
-    if args.command and args.command[0] == "--":
-        args.command = args.command[1:]
+    command = getattr(args, "command", None)
+    if command and command[0] == "--":
+        args.command = command[1:]
+    # `--server` also captures a leading bare `--` when a user writes `--server -- cmd`.
+    server = getattr(args, "server", None)
+    if server and server[0] == "--":
+        args.server = server[1:]
     return args.func(args)
 
 
