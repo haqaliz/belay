@@ -38,9 +38,11 @@ from belay.trace import TraceWriter
 FIXTURES = Path(__file__).parent / "fixtures"
 CONFORMING = FIXTURES / "conforming_server.py"
 MUTATING = FIXTURES / "mutating_server.py"
+DIES_MIDWAY = FIXTURES / "dies_midway_server.py"
 
 CONFORMING_CMD = [sys.executable, str(CONFORMING)]
 MUTATING_CMD = [sys.executable, str(MUTATING)]
+DIES_MIDWAY_CMD = [sys.executable, str(DIES_MIDWAY)]
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "darwin", reason="replay re-invokes inside the macOS Seatbelt sandbox"
@@ -344,3 +346,67 @@ def test_version_drift_is_a_finding_not_an_error(tmp_path):
     assert out.recorded_version == "2099-01-01"
     assert out.replayed_version == "2025-11-25"
     assert out.version_drift is True
+
+
+# --- 7. A replay that never answers the target is UNVERIFIED, not REPLAYED ----
+
+
+def test_replay_that_does_not_answer_target_is_unverified_not_replayed(tmp_path):
+    """A `present` turn whose re-invoked server dies before the target frame is
+    UNVERIFIED with a named cause — never a clean `replayed` with a null reply.
+
+    `dies_midway_server` answers the first frame (the `initialize` handshake) then
+    exits, so the `tools/call` target is never answered on replay. The old engine
+    read only `outcomes[target_index].reply` (None here) and reported REPLAYED,
+    reinvoked=True, result_equivalence=None — identical to a benign "nothing to
+    compare" turn. That is a false-clean reading of exactly the shape C3 exists to
+    catch: the server WAS spawned (reinvoked stays True, honestly), but it produced
+    no result for the target, so the honest status is UNVERIFIED, keyed on the REPLAY
+    outcome's status, and the cause names it.
+    """
+    manifest_dir, handle = _snapshot(tmp_path, "noans", {"keep.txt": "x"})
+    call = _echo_call(2, "hi")
+    records = _trace(
+        tmp_path,
+        "noans",
+        [
+            ("c2s", _initialize("2025-11-25"), None),
+            ("s2c", _initialize_reply("2025-11-25"), None),
+            ("c2s", INITIALIZED, None),
+            ("c2s", call, handle),
+            ("s2c", _echo_reply(2, "hi"), None),
+        ],
+    )
+
+    out = replay_turn(records, 0, server_command=DIES_MIDWAY_CMD, manifest_dir=manifest_dir, timeout=15.0)
+
+    assert out.status == UNVERIFIED, out
+    assert out.status != REPLAYED
+    assert out.reinvoked is True, "the server WAS spawned — stay honest about that"
+    assert out.replayed_reply is None
+    assert out.cause is not None
+    assert "did not answer the target frame" in out.cause, out.cause
+
+
+def test_recording_had_no_reply_but_replay_answers_stays_replayed(tmp_path):
+    """The benign converse of the bug: the RECORDING has no reply, but the REPLAY
+    answers -> still REPLAYED. The flip must key on the REPLAY outcome, not the record.
+
+    Here the trace holds only the `tools/call` — no recorded `s2c` reply. On replay a
+    fresh `conforming_server` genuinely answers the target, so the turn stays REPLAYED
+    with a real `replayed_reply`; `result_equivalence` is None only because there is
+    nothing recorded to compare against. If the fix had keyed on the recorded side, it
+    would have wrongly flipped this good turn to UNVERIFIED.
+    """
+    manifest_dir, handle = _snapshot(tmp_path, "recnone", {"keep.txt": "x"})
+    call = _echo_call(2, "hi", meta={"io.modelcontextprotocol/protocolVersion": "2026-07-28"})
+    records = _trace(tmp_path, "recnone", [("c2s", call, handle)])
+
+    out = replay_turn(records, 0, server_command=CONFORMING_CMD, manifest_dir=manifest_dir, timeout=15.0)
+
+    assert out.status == REPLAYED, out
+    assert out.reinvoked is True
+    assert out.replayed_reply is not None, "the replay genuinely answered the target"
+    assert json.loads(out.replayed_reply)["id"] == 2
+    assert out.recorded_reply is None
+    assert out.result_equivalence is None, "nothing recorded to compare — honest None, not a flip"

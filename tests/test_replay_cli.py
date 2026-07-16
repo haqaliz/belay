@@ -44,6 +44,8 @@ from belay.trace import TraceWriter
 FIXTURES = Path(__file__).parent / "fixtures"
 CONFORMING = FIXTURES / "conforming_server.py"
 CONFORMING_CMD = [sys.executable, str(CONFORMING)]
+DIES_MIDWAY = FIXTURES / "dies_midway_server.py"
+DIES_MIDWAY_CMD = [sys.executable, str(DIES_MIDWAY)]
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "darwin",
@@ -120,6 +122,30 @@ def _echo_reply(msg_id: int, text: str) -> bytes:
 
 def _unrestorable(cause: UnrestorableCause) -> dict:
     return {"status": "unrestorable", "cause": cause.value}
+
+
+def _initialize(version: str) -> bytes:
+    return json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {"protocolVersion": version, "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}},
+        }
+    ).encode()
+
+
+def _initialize_reply(version: str) -> bytes:
+    return json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {"protocolVersion": version, "capabilities": {}, "serverInfo": {"name": "x", "version": "1"}},
+        }
+    ).encode()
+
+
+_INITIALIZED = b'{"jsonrpc":"2.0","method":"notifications/initialized"}'
 
 
 # --- 1. The headline: the UNVERIFIED rate, every instance under a named cause -
@@ -326,6 +352,59 @@ def test_turn_selector_reports_only_that_turn(tmp_path):
     assert report.turns[0].turn_index == 1
     assert report.turns[0].status == UNVERIFIED
     assert report.unverified_rate == 1.0
+
+
+# --- 4c. A replay that never answers the target lands in the UNVERIFIED rate --
+
+
+def test_unanswered_target_turn_is_unverified_under_a_named_cause(tmp_path, capsys):
+    """A `present` turn whose re-invoked server dies before the target lands in the
+    UNVERIFIED rate under a named cause — not counted as `replayed`.
+
+    `dies_midway_server` answers the `initialize` handshake then exits, so the target
+    `tools/call` is never answered on replay. The old engine scored this `replayed`
+    with a null reply, understating the honest headline (a turn that answered nothing
+    was hidden from the rate). Now it is UNVERIFIED, filed under its own named bucket,
+    and visible in the CLI breakdown like every other unverified turn.
+    """
+    manifest_dir = tmp_path / "manifests"
+    replayable, present_a = _snapshot(tmp_path, "ok")
+    _persist(replayable, manifest_dir)
+
+    trace_path, records = _trace(
+        tmp_path,
+        "dies",
+        [
+            ("c2s", _initialize("2025-11-25"), None),
+            ("s2c", _initialize_reply("2025-11-25"), None),
+            ("c2s", _INITIALIZED, None),
+            ("c2s", _echo_call(2, "hi"), present_a),
+            ("s2c", _echo_reply(2, "hi"), None),
+        ],
+    )
+
+    report = replay_trace(
+        records, server_command=DIES_MIDWAY_CMD, manifest_dir=manifest_dir, timeout=15.0
+    )
+
+    assert report.total == 1, report
+    assert report.replayed == 0, "a turn that answered nothing must NOT count as replayed"
+    assert report.unverified == 1, report
+    assert report.unverified_rate == 1.0, report
+    turn = report.turns[0]
+    assert turn.status == UNVERIFIED, turn
+    assert turn.cause, "the unverified turn must carry a named cause"
+    assert sum(report.by_cause.values()) == report.unverified
+    label = turn.cause
+
+    rc = cli.main(
+        ["replay", str(trace_path), "--manifest-dir", str(manifest_dir), "--server", *DIES_MIDWAY_CMD]
+    )
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "UNVERIFIED RATE" in out
+    assert "1 / 1" in out
+    assert label in out, f"the named cause {label!r} must appear in the CLI breakdown:\n{out}"
 
 
 # --- 5. --help documents where manifests live -------------------------------

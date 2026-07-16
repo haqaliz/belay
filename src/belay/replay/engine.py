@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import base64
 import json
+import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -60,7 +61,7 @@ from typing import Any, Optional, Sequence
 from belay.connection import derive_connection_context
 from belay.frames import message_of
 from belay.index import derive_correlation, tool_calls
-from belay.replay.client import DEFAULT_TIMEOUT, FrameOutcome
+from belay.replay.client import ANSWERED, DEFAULT_TIMEOUT, FrameOutcome
 from belay.replay.client import replay_turn as _client_replay_turn
 from belay.replay.persist import load_snapshot
 from belay.snapshot.bth1 import FieldDiff, diff_records, scan_tree
@@ -76,6 +77,14 @@ UNVERIFIED = "unverified"
 #: the turn is simply un-snapshotted — distinct from `unverified`, which names a
 #: restore that was attempted and failed.
 NOT_VERIFIABLE = "not-verifiable"
+
+#: The prefix on the cause of a `present` turn that WAS re-invoked but whose server
+#: never answered the target frame (it exited, timed out, or the frame had no usable
+#: id). Such a turn produced no result to compare, so it is UNVERIFIED — keyed on the
+#: REPLAY outcome's status, never the recorded side — and this is the stable label the
+#: report buckets it under, carried verbatim like the gate's SNAPSHOT_FAILED string
+#: rather than round-tripped through any enum.
+UNANSWERED_TARGET = "the re-invoked server did not answer the target frame"
 
 #: The replayed reply and the recorded reply are the same message.
 EQUAL = "equal"
@@ -299,12 +308,36 @@ def replay_turn(
     )
     after = scan_tree(result.workspace) if result.workspace is not None else before
     delta = diff_records(before, after)
+    # The internal baseline restore is ours alone (the client's scratch is the
+    # post-state the caller owns; this pre_dir is not). Drop it now that `before` is
+    # captured — otherwise a whole-trace, N-replay run leaks a temp dir per replay.
+    shutil.rmtree(pre_dir, ignore_errors=True)
 
-    replayed_reply = (
-        result.outcomes[target_index].reply
+    # Key the status on the REPLAY outcome, never the recorded side. A `present` turn
+    # whose re-invoked server never ANSWERED the target — it exited, timed out, or the
+    # frame had no usable id — produced no result to compare and must not read as a
+    # clean `replayed` with a null reply (that is the false-clean shape C3 exists to
+    # catch). It is UNVERIFIED with a named cause, and stays honest that a server WAS
+    # spawned. The benign converse — the RECORDING had no reply but the replay DID
+    # answer — keeps `ANSWERED` here and stays `replayed`.
+    target_outcome = (
+        result.outcomes[target_index]
         if 0 <= target_index < len(result.outcomes)
         else None
     )
+    if target_outcome is None or target_outcome.status != ANSWERED:
+        reason = target_outcome.status if target_outcome is not None else "target frame not reached"
+        return TurnReplay(
+            turn_index=n,
+            status=UNVERIFIED,
+            reinvoked=True,
+            cause=f"{UNANSWERED_TARGET}: {reason}",
+            delta=delta,
+            workspace=result.workspace,
+            outcomes=result.outcomes,
+        )
+
+    replayed_reply = target_outcome.reply
     response_seq = target_entry.get("response_seq")
     recorded_record = by_seq.get(response_seq) if response_seq is not None else None
     recorded_reply = (
@@ -370,6 +403,7 @@ __all__ = [
     "EQUAL",
     "NOT_VERIFIABLE",
     "REPLAYED",
+    "UNANSWERED_TARGET",
     "UNVERIFIED",
     "TurnReplay",
     "replay_turn",

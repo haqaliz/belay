@@ -38,6 +38,7 @@ from belay.replay import determinism
 from belay.replay.determinism import (
     DETERMINISTIC,
     NONDETERMINISTIC,
+    NOT_REPLAYABLE,
     classify_determinism,
     detect_axis,
 )
@@ -55,9 +56,11 @@ from belay.trace import TraceWriter
 FIXTURES = Path(__file__).parent / "fixtures"
 CONFORMING = FIXTURES / "conforming_server.py"
 NONDET = FIXTURES / "nondeterministic_server.py"
+DIES_MIDWAY = FIXTURES / "dies_midway_server.py"
 
 CONFORMING_CMD = [sys.executable, str(CONFORMING)]
 NONDET_CMD = [sys.executable, str(NONDET)]
+DIES_MIDWAY_CMD = [sys.executable, str(DIES_MIDWAY)]
 
 darwin_only = pytest.mark.skipif(
     sys.platform != "darwin",
@@ -338,3 +341,67 @@ def test_c3_axes_are_actually_produced():
         UnrestorableCause.UNRESTORABLE_RANDOMNESS,
         UnrestorableCause.UNRESTORABLE_RUNNING_PROCESS,
     }
+
+
+# --- 7. A turn whose replay never answers the target is NOT_REPLAYABLE --------
+
+
+def _initialize(version: str) -> bytes:
+    return json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {"protocolVersion": version, "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}},
+        }
+    ).encode()
+
+
+def _initialize_reply(version: str) -> bytes:
+    return json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {"protocolVersion": version, "capabilities": {}, "serverInfo": {"name": "x", "version": "1"}},
+        }
+    ).encode()
+
+
+_INITIALIZED = b'{"jsonrpc":"2.0","method":"notifications/initialized"}'
+
+
+@darwin_only
+def test_replay_that_never_answers_target_is_not_replayable_never_deterministic(tmp_path):
+    """A turn whose re-invoked server never answers the target classifies
+    NOT_REPLAYABLE — never DETERMINISTIC on a set of `None` replies.
+
+    `dies_midway_server` answers the `initialize` handshake then exits, so the
+    `tools/call` target is answered by no run. Before the fix each run's signature was
+    `(None, delta)`, all N matched, and the turn was called DETERMINISTIC — the
+    module's most reassuring label ("replayable, and A2 can speak to it") for a turn
+    that answered nothing N times, a false-PASS-shaped observation fed to C4. The
+    engine now returns UNVERIFIED for such a turn, so the classifier sees a non-REPLAYED
+    status on the first run and honestly reports NOT_REPLAYABLE, carrying the cause.
+    """
+    manifest_dir, handle = _snapshot(tmp_path, "noans", {"keep.txt": "x"})
+    _path, records = _trace(
+        tmp_path,
+        "noans",
+        [
+            ("c2s", _initialize("2025-11-25"), None),
+            ("s2c", _initialize_reply("2025-11-25"), None),
+            ("c2s", _INITIALIZED, None),
+            ("c2s", _call(2, "tick"), handle),
+            ("s2c", _reply(2, "hi"), None),
+        ],
+    )
+
+    out = classify_determinism(
+        records, 0, server_command=DIES_MIDWAY_CMD, manifest_dir=manifest_dir, timeout=15.0
+    )
+
+    assert out.classification == NOT_REPLAYABLE, out
+    assert out.classification != DETERMINISTIC
+    assert out.replay_status is not None
+    assert out.cause is not None and "did not answer the target frame" in out.cause, out.cause
+    assert out.replies is None, "a NOT_REPLAYABLE turn claims no reply set, least of all [None, None, None]"
