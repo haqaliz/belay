@@ -213,7 +213,12 @@ def test_verify_states_its_honest_coverage(tmp_path, capsys):
     assert rc == 0, out
     assert "reproduc" in out, "must say a PASS means the trace reproduces"
     assert "did the right thing" in out or "was correct" in out or "was right" in out, out
-    assert "cheat" in out, "must say a cheating agent is NOT caught here"
+    # A2 alone does not catch a cheater — but the A1 invariant now does, and is on by
+    # default. The coverage must explain the cheat AND say the invariant catches it, and
+    # must NOT still claim A1/C5 is unbuilt.
+    assert "cheat" in out, "must explain a cheating agent and that A2 alone misses it"
+    assert "invariant" in out, "must say the A1 invariant catches the corrupt success"
+    assert "not built yet" not in out, "A1/C5 is built and on by default — coverage must not deny it"
     assert "no model" in out or "no llm" in out, "must say the verdict consults no model"
     # The network dimension is honestly UNVERIFIED — the coverage must not let a reader
     # believe openWorldHint / egress was checked.
@@ -224,8 +229,8 @@ def test_help_states_the_coverage_and_zero_llm():
     """`belay verify --help` carries the same honest coverage the run does.
 
     A user reading --help before pointing this at a trace must learn the same limits:
-    a PASS is a reproduction, not a correctness certificate; cheating is out of scope
-    (A1/C5's job); and no model is consulted.
+    a PASS is a reproduction, not a correctness certificate; A2 alone does not catch a
+    cheater but the A1 invariant (on by default) does; and no model is consulted.
     """
     completed = subprocess.run(
         [sys.executable, "-m", "belay.cli", "verify", "--help"],
@@ -238,5 +243,7 @@ def test_help_states_the_coverage_and_zero_llm():
     assert "--manifest-dir" in out
     assert "reproduc" in out
     assert "cheat" in out
+    assert "invariant" in out, "help must say the A1 invariant catches the corrupt success"
+    assert "not built yet" not in out, "A1/C5 is built and on by default — help must not deny it"
     assert "no model" in out or "no llm" in out
     assert "openworldhint" in out and "egress" in out

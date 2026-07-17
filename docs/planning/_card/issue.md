@@ -1,80 +1,85 @@
-# Card: C4 — Replay-verify (axis A2)
+# Card: C5 — Invariant verdict (axis A1)
 
 ## Source
 
-**No GitHub issue.** Tracker empty. `id` is the slug `replay-verify-a2`.
-Authoritative source: `docs/technical/CAPABILITY_ROADMAP.md` §C4, quoted verbatim below. No inline
-brief — C4 is fully specified there; paraphrasing would introduce drift.
+**No GitHub issue.** Tracker empty. `id` is the slug `invariant-verdict-a1`.
+Authoritative source: `docs/technical/CAPABILITY_ROADMAP.md` §C5, quoted verbatim below. No inline
+brief — C5 is fully specified there; paraphrasing would introduce drift.
 
-- Branch: `feat/replay-verify-a2/aliz` · Worktree: `.claude/worktrees/feat-replay-verify-a2`
-- Base: `origin/master` @ 48dcf6e (C1+C2+C3 merged, 290 tests green)
+- Branch: `feat/invariant-verdict-a1/aliz` · Worktree: `.claude/worktrees/feat-invariant-verdict-a1`
+- Base: `origin/master` @ ddfed4b (C1+C2+C3+C4 merged, 348 tests green)
+- **This is the FINAL capability of the C1–C5 Phase-0 gate.**
 
-## C4, verbatim
+## C5, verbatim
 
-> ## C4. Replay-verify — axis A2 · weeks 2–3
+> ## C5. Invariant verdict — axis A1 · week 3
 >
-> **Why it is moat.** The first grounded verdict, and the answer to the question no incumbent
-> answers. Langfuse/Phoenix/LangSmith/Braintrust record and (optionally) LLM-judge score; none
-> re-execute a tool call in a sandbox to check real state. There is no LLM anywhere in this
-> capability — that is the point.
+> **Why it is moat.** **This is the capability that earns the 27–78% statistic**, and the one most
+> likely to be under-built because A2 *looks* like it already covers verification. It does not. A
+> cheating agent's trace is faithful; only a declared invariant catches it, and it catches it
+> deterministically, at an exact turn, with no LLM. No incumbent has this axis at all.
 >
-> **What we build.** Two deterministic checks per turn:
-> - **Result equivalence.** Restore pre-state, re-invoke, diff observed result vs recorded result.
->   Divergence = the trace does not reproduce = **FAIL** with a concrete diff (`kind="replay"`). A
->   tool classified nondeterministic by C3 yields **UNVERIFIED**, never PASS and never a false FAIL.
-> - **Effect conformance.** Snapshot state before/after the replayed call, compute the real delta
->   (files touched, network egress, exit codes), and check it against the tool's **declared MCP
->   annotations** plus the sandbox policy. A tool declaring `readOnlyHint: true` that mutates the
->   filesystem is a **grounded FAIL** with zero LLM involvement — a verdict axis that exists only
->   because we chose the MCP wedge. A tool that declares *no* annotations yields `unverified` for
->   this check (an absent contract is not a permissive one).
-> - A `Verdict` model (axis, kind, status, observed, expected, message) and the reduction rule
->   (worst-status-wins across A1/A2).
+> This capability also reframes primitive #1: **the sandbox is not just containment, it is a verdict
+> axis.** The boundary that contains an action is the same machinery that judges it.
+>
+> **What we build:**
+> - An invariant declaration format: scoped, declarative, versioned with the trace (e.g. *"`tests/`
+>   is read-only for this task"*, *"no network egress to non-allowlisted hosts"*, *"no tool declaring
+>   `destructiveHint` outside `build/`"*).
+> - Evaluation of invariants against the **observed effects of replay** (from C4), not against the
+>   agent's prose and not against a static lint of the trace. Grounded by construction.
+> - **Annotation-inferred invariants** — the zero-friction default. Every MCP tool's declared
+>   annotations *are* an invariant we get for free, with no user authoring. This is the first
+>   mitigation of risk **R3** (nobody authors the invariant) and it must ship inside C5, not after it.
+> - A violation yields FAIL (`kind="invariant"`) naming the invariant, the turn, and the exact
+>   observed effect that broke it.
+> - An invariant that cannot be evaluated (effects unobservable for that substrate) yields
+>   `unverified` — never a silent pass.
 >
 > **Acceptance (test-first):**
-> - A fake server injected with a fabricated result yields **FAIL** with the exact recorded-vs-
->   observed diff in the message.
-> - A clean turn yields **PASS**.
-> - A nondeterministic tool yields **UNVERIFIED**, not FAIL and not PASS.
-> - A `readOnlyHint: true` tool that writes a file yields **FAIL** naming the annotation and the
->   observed write.
-> - An un-annotated tool yields **UNVERIFIED** for effect-conformance while result-equivalence still
->   decides independently.
-> - A turn with an unrestorable pre-state yields **UNVERIFIED** — asserted explicitly, because this
->   is the "never a false pass" contract in code.
+> - **The launch demo, as a test.** A recorded trace in which the agent weakens a test file and
+>   reports success yields **FAIL at the exact turn**, naming the `tests/` read-only invariant and
+>   showing the diff — while A2 independently returns PASS on that same turn (asserting the axes are
+>   genuinely non-redundant, which is the whole thesis).
+> - A clean run yields PASS on A1.
+> - An annotation-inferred invariant fires with **zero user-authored config**.
+> - An unevaluable invariant yields **UNVERIFIED**, never PASS.
 > - Deterministic, no network.
 >
-> **Eval data captured:** every divergence is a labeled **trace-infidelity** case in the corpus,
-> with its pre-state, recorded result, and observed result — a replayable regression forever.
+> **Eval data captured:** every violation is a labeled **corrupt-success** case — the highest-value
+> cases in the corpus, and the ones the Phase-0 number is made of.
 >
-> **Dependencies:** C1, C2, C3.
+> **Dependencies:** C1, C2, C3, C4.
 
-## 🔴 The load-bearing warning C4 must NOT violate (CLAUDE.md)
+## 🔴 THE NON-REDUNDANCY — the whole point, and the easiest thing to get wrong (CLAUDE.md)
 
-> **A2 catches trace infidelity — fabricated/tampered/nondeterministic results. A2 CANNOT catch a
-> cheating agent, because a cheater's trace is faithful.** Replay restores the recorded pre-state
-> (already containing the weakened test), re-invokes, observes the same result, and returns **PASS —
-> correctly**. Only a declared invariant (A1/C5) catches corrupt success. **Building A2 and
-> expecting it to catch cheating is the single most likely way this project fails quietly.**
+> **A2 catches trace infidelity. A2 CANNOT catch a cheating agent, because a cheater's trace is
+> faithful.** The agent really did weaken the test; replay restores the recorded pre-state (already
+> weakened), re-invokes, observes the same result, returns **PASS — correctly.** Only a declared
+> invariant (A1) catches corrupt success. **Building A2 and expecting it to catch cheating is the
+> single most likely way this project fails quietly. Building A1 as a duplicate of A2's
+> effect-conformance is the second.**
 
-C4's PASS means "the trace reproduces", NEVER "the agent did the right thing". The docs/verdict
-messages must say exactly that and no more.
+C4's effect-conformance is PER-TOOL, PER-TURN: "did THIS tool conform to ITS OWN declared annotation?"
+C5's A1 invariant is TASK-SCOPED, TOOL-INDEPENDENT: "was the TASK policy (`tests/` read-only) violated,
+regardless of which tool did it or what that tool declared?" The launch demo turns on this: the agent
+weakens `tests/` using a tool that is honestly destructive/un-annotated — C4 says PASS/UNVERIFIED (the
+tool conformed / had no contract), but C5's declared `tests/`-read-only invariant FAILs the exact turn.
+**If C5's A1 verdict equals C4's effect-conformance on the demo, C5 is built wrong.**
 
-## What C3 (+C1/C2) hands C4 — to compose, not rebuild
+## Reduction: A1 slots into C4's ALREADY-axis-agnostic reduce()
 
-**C3 replay engine (`src/belay/replay/`):**
-- `engine.replay_turn(records, n, *, server_command, manifest_dir, ...)` -> outcome with
-  `status` (replayed/unverified/not-verifiable), `cause`, `result_equivalence` (equal/diverged/None),
-  `recorded_reply`, `replayed_reply`, `delta` (list[FieldDiff]), version fields.
-- `determinism.classify_determinism(...)` -> DETERMINISTIC / NONDETERMINISTIC / NOT_REPLAYABLE + axis.
-- `reader.read_trace`, `persist.load_snapshot`, `report` (the UNVERIFIED-rate reporter).
+C4's `reduce()` (verify/verdict.py) is worst-status-wins across axes, verified: `A1 FAIL + A2 PASS ->
+FAIL`. So the demo (A2 PASS, A1 FAIL) reduces to FAIL. A1 is a new Verdict(axis="A1", kind="invariant").
 
-**C1/C2:**
-- `annotations` / `declared` — the **tri-state** annotation snapshot (declared-true / declared-false /
-  not-declared) that effect-conformance checks against. **Absent ≠ false.**
-- `bth1.diff_records` -> `FieldDiff(path, field, left, right)` — the state delta primitive.
-- `sandbox` — the network policy fact recorded per turn (C2's `network_policy` record); DenialCapture.
-- `substrate` — the 18-cause taxonomy; `unrestorable` pre-state must propagate to UNVERIFIED.
+## What C1–C4 hand C5 — to compose, not rebuild
+
+- **C4 (`src/belay/verify/`):** `Verdict(axis, kind, status, observed, expected, message)`, `Status`,
+  `reduce()` (axis-agnostic), `verify_turn` (the composition A1 joins), the delta from `engine.replay_turn`.
+- **C1:** `annotations`/`declared` (tri-state; the annotation-inferred invariant source), `bth1.FieldDiff`
+  (the observed effect — a path + field), the trace records.
+- **C2:** the `network_policy` record + `denial` records (sandbox policy as an invariant axis); `substrate`.
+- **C3:** replay observations (the observed effects A1 evaluates against).
 
 ## Related PRs
-- #1 C1, #2 docs, #3 C2, #4 C3 — all merged.
+- #1 C1, #2 docs, #3 C2, #4 C3, #5 C4 — all merged.

@@ -414,7 +414,7 @@ def _emit_turn(turn) -> None:
             _emit(f"      {turn.raw_cause}")
 
 
-# --- belay verify: the whole-trace A2 verdict -----------------------------------------
+# --- belay verify: the whole-trace verdict (A2 replay + A1 invariants) ----------------
 
 #: The honest coverage statement, in the user's words. It appears BOTH here (printed
 #: under every run) and in the `verify --help` description, because a user who never
@@ -426,10 +426,14 @@ _VERIFY_COVERAGE = (
     "  its restored pre-state, produced the same result and its filesystem effect\n"
     "  matched its declared readOnlyHint.\n"
     "  It does NOT mean the agent did the right thing.\n"
-    "  It does NOT catch a cheating agent. A cheater's trace is faithful — replay\n"
-    "  reproduces it and PASSes, correctly — because the tampering is in the pre-state\n"
-    "  A2 was handed. Only a declared invariant (A1, capability C5, not built yet)\n"
-    "  catches corrupt success.\n"
+    "  A2 ALONE does not catch a cheating agent: a cheater's trace is faithful — replay\n"
+    "  reproduces it and A2 PASSes, correctly — because the tampering is in the pre-state\n"
+    "  A2 was handed. That corrupt success is caught by a declared invariant (A1): the\n"
+    "  tests/ read-only default is composed into every turn (disable with\n"
+    "  --no-default-invariants, or add your own with --invariants FILE), and an A1 FAIL\n"
+    "  drives the turn to FAIL even when A2 PASSes. A1 grounds in the SAME observed delta —\n"
+    "  it FAILs a turn whose replay wrote under a read-only scope, and is UNVERIFIED (never\n"
+    "  a false PASS) when no post-state was observed or the rule cannot be grounded.\n"
     "  Verified: filesystem effects (the delta), result-equivalence, protocol/tool\n"
     "  errors. NOT verified: network egress, so openWorldHint conformance is UNVERIFIED,\n"
     "  never a network PASS. Belay observes no outbound bytes — successful egress under\n"
@@ -439,11 +443,13 @@ _VERIFY_COVERAGE = (
 
 _VERIFY_DESCRIPTION = (
     "Verify a whole trace by RE-EXECUTION. For each recorded tools/call, replay it "
-    "against its restored pre-state and render the A2 verdict: result-equivalence "
-    "(did the reply reproduce?) and effect-conformance (did the filesystem effect "
-    "match the declared readOnlyHint?), reduced worst-status-wins to one "
-    "PASS/FAIL/UNVERIFIED per turn, with both sub-verdicts shown so a FAIL is "
-    "explainable.\n\n" + _VERIFY_COVERAGE + "\n\n"
+    "against its restored pre-state and render its verdict: the A2 axis — "
+    "result-equivalence (did the reply reproduce?) and effect-conformance (did the "
+    "filesystem effect match the declared readOnlyHint?) — plus the A1 axis, the "
+    "task-scoped invariants this run enforces (default: tests/ read-only, on unless "
+    "--no-default-invariants; add more with --invariants FILE). All sub-verdicts are "
+    "reduced worst-status-wins to one PASS/FAIL/UNVERIFIED per turn, each shown so a "
+    "FAIL is explainable.\n\n" + _VERIFY_COVERAGE + "\n\n"
     "Manifests: a turn's snapshot manifest is written by the gate to a SIBLING of the "
     "snapshot dir, e.g. BELAY_SNAPSHOT_DIR=./sn -> ./sn.manifests/. Point "
     "--manifest-dir there; a present turn whose manifest is not found is an honest "
@@ -452,10 +458,11 @@ _VERIFY_DESCRIPTION = (
 
 
 def _cmd_verify(args: argparse.Namespace) -> int:
-    """`belay verify <trace>` — replay every tools/call and render its A2 verdict.
+    """`belay verify <trace>` — replay every tools/call and render its verdict.
 
     Whole-trace by default; `--turn N` narrows to one. Each turn is composed by
-    `verify_turn` (one replay, both A2 checks, reduced), and printed with its reduced
+    `verify_turn` (one replay, both A2 checks, plus any A1 invariants, reduced), and
+    printed with its reduced
     status AND both sub-verdicts so "why did this turn FAIL?" is answerable. The
     aggregate reports the PASS/FAIL/UNVERIFIED counts, the FAIL list with its concrete
     grounding, and the UNVERIFIED list with each named cause — never a hidden or
@@ -464,6 +471,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     """
     from belay.index import derive_correlation, tool_calls
     from belay.replay.reader import TraceCorrupt, read_trace
+    from belay.verify.invariants import default_invariants, load_invariants
     from belay.verify.turn import verify_turn
     from belay.verify.verdict import Status
 
@@ -475,6 +483,18 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     if not trace_path.exists():
         _emit(f"belay: trace not found: {trace_path}")
         return 2
+
+    # The A1 policy this run enforces: the defaults (unless dropped) plus any operator file.
+    # A file that will not parse is a fail-closed error — verifying against a silently dropped
+    # policy would report the run against LESS than the operator declared, the exact false PASS
+    # A1 exists to refuse. So a bad file exits 2 rather than proceeding.
+    invariants = [] if args.no_default_invariants else default_invariants()
+    if args.invariants is not None:
+        try:
+            invariants = invariants + load_invariants(Path(args.invariants))
+        except ValueError as exc:
+            _emit(f"belay: {exc}")
+            return 2
 
     try:
         read = read_trace(trace_path)
@@ -508,6 +528,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         verdict = verify_turn(
             records, n,
             server_command=args.server, manifest_dir=manifest_dir, replays=args.replays,
+            invariants=invariants,
         )
         verdicts.append(verdict)
         _emit_verdict(verdict)
@@ -705,7 +726,7 @@ def _parser() -> argparse.ArgumentParser:
 
     verify = subcommands.add_parser(
         "verify",
-        help="verify a whole trace by re-execution: per-turn A2 verdict + aggregate",
+        help="verify a whole trace by re-execution: per-turn A2 replay + A1 invariant verdict + aggregate",
         description=_VERIFY_DESCRIPTION,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -726,6 +747,20 @@ def _parser() -> argparse.ArgumentParser:
         type=_verify_replays,
         default=3,
         help="on a DIVERGED reply, re-invoke this many times to classify determinism (default: 3, minimum: 3)",
+    )
+    verify.add_argument(
+        "--invariants",
+        default=None,
+        metavar="path",
+        help=(
+            "an operator-declared invariant file (JSON) to enforce as A1, on top of the "
+            "defaults; a malformed file is a fail-closed error, never a silent skip"
+        ),
+    )
+    verify.add_argument(
+        "--no-default-invariants",
+        action="store_true",
+        help="do not apply the built-in default invariants (tests/ is read-only)",
     )
     verify.add_argument(
         "--server",
