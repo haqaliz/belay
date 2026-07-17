@@ -83,6 +83,11 @@ from belay.verify.verdict import Status, Verdict
 _AXIS = "A2"
 _KIND = "effect"
 
+#: The kind stamped on the NETWORK-dimension sub-verdict. Distinct from `_KIND` so a reader
+#: (and the "never a network PASS" test) can tell the network dimension apart from the
+#: filesystem one at a glance — the two are composed side by side in a turn, never merged.
+_KIND_NETWORK = "effect:network"
+
 #: The annotation the FILESYSTEM dimension grounds on. `readOnlyHint` is the declared
 #: contract a filesystem delta can confirm or refute.
 _HINT = "readOnlyHint"
@@ -250,21 +255,17 @@ _NETWORK_UNOBSERVABLE = (
 )
 
 
-def render_openworld_verdict(records: Sequence[dict], n: int) -> Verdict:
-    """The A2 network-dimension verdict for the Nth turn's `openWorldHint` — always UNVERIFIED.
+def _openworld_verdict(ann: TurnAnnotation) -> Verdict:
+    """The network-dimension Verdict for one turn's `openWorldHint` — ALWAYS UNVERIFIED.
 
-    This is the honest fallback for the network dimension. It NEVER emits PASS (we verified
-    nothing about the network) and NEVER a fabricated FAIL (we observed no violation): a
-    grounded network FAIL would require reliably identifying an egress denial, and the child's
-    stderr does not distinguish one from a filesystem denial. So whatever the tool declared —
-    `openWorldHint` false, true, non-boolean, or absent — the network dimension is UNVERIFIED,
-    with a message that names the declared state and why it is unobservable.
-
-    Kept a SEPARATE verdict (not folded into every turn) precisely because it is always
-    UNVERIFIED: folding it unconditionally would drag every turn to UNVERIFIED. The effect
-    verdict folds it only where a network RESTRICTION was declared — see `render_effect_verdict`.
+    It NEVER emits PASS (we verified nothing about the network) and NEVER a fabricated FAIL
+    (we observed no violation): a grounded network FAIL would require reliably identifying an
+    egress denial, and the child's stderr does not distinguish one from a filesystem denial.
+    So whatever the tool declared — `openWorldHint` false, true, non-boolean, or absent — the
+    verdict is UNVERIFIED, with a message that names the declared state and why it is
+    unobservable. `kind` is `_KIND_NETWORK` so it reads as the network dimension, apart from
+    the filesystem `effect` verdict it is composed beside.
     """
-    ann = annotation_for_turn(records, n)
     state = ann.openworld["state"]
     contract = {"openWorldHint": ann.openworld}
 
@@ -287,7 +288,7 @@ def render_openworld_verdict(records: Sequence[dict], n: int) -> Verdict:
         detail = f"tool {ann.tool!r} did not declare openWorldHint"
 
     return Verdict(
-        _AXIS, _KIND, Status.UNVERIFIED,
+        _AXIS, _KIND_NETWORK, Status.UNVERIFIED,
         observed=None, expected=contract,
         message=(
             f"openWorldHint conformance UNVERIFIED: {detail}. {_NETWORK_UNOBSERVABLE} — "
@@ -296,88 +297,58 @@ def render_openworld_verdict(records: Sequence[dict], n: int) -> Verdict:
     )
 
 
-def _network_restriction_note(openworld: dict) -> Optional[str]:
-    """A trailing clause when a network RESTRICTION was declared but cannot be verified.
+def render_openworld_verdict(records: Sequence[dict], n: int) -> Verdict:
+    """The Nth turn's network-dimension verdict — always UNVERIFIED. See `_openworld_verdict`.
 
-    Returns a note (folded into the effect verdict, downgrading a PASS to UNVERIFIED) only
-    for `openWorldHint` **declared-false** (a closed posture) or **declared-non-boolean** (an
-    unreadable posture) — the cases where the tool asserted something about the network that
-    Belay cannot confirm. `not-declared` (no claim) and `declared-true` (the permissive
-    posture, nothing to violate) declare no restriction, so they return `None` and leave the
-    filesystem-grounded verdict untouched.
+    The standalone surface: it returns a Verdict for EVERY `openWorldHint` state (including
+    not-declared), which is the crisp "we never emit a network PASS" guarantee. It is NOT what
+    a turn folds in unconditionally — that is `network_subverdict`, which stays silent unless a
+    network RESTRICTION was actually declared, so an un-annotated turn is not dragged down.
     """
-    state = openworld["state"]
-    if state == DECLARED_FALSE:
-        return (
-            " — the network dimension is UNVERIFIED: the tool declared openWorldHint: false "
-            "(no external interaction), a claim that cannot be confirmed"
-        )
-    if state == DECLARED_NON_BOOLEAN:
-        return (
-            " — the network dimension is UNVERIFIED: the tool declared openWorldHint as a "
-            "non-boolean, so no network contract can be read off it"
-        )
+    return _openworld_verdict(annotation_for_turn(records, n))
+
+
+def network_subverdict(records: Sequence[dict], n: int) -> Optional[Verdict]:
+    """The network sub-verdict to compose into the Nth turn's reduction, or `None`.
+
+    Returns the UNVERIFIED network verdict ONLY where the tool declared a network RESTRICTION
+    that Belay cannot verify — `openWorldHint` **declared-false** (a closed posture) or
+    **declared-non-boolean** (an unreadable one). For **not-declared** (no network claim at
+    all) and the permissive **declared-true** (it may egress — nothing to violate, the mirror
+    of `readOnlyHint: false`) it returns `None`, leaving the turn's status to the filesystem
+    and result checks. This asymmetry is load-bearing: folding an always-UNVERIFIED verdict
+    into EVERY turn would drag every un-annotated turn (the common case) to UNVERIFIED. A
+    turn is downgraded only when the tool made a network promise we genuinely could not check.
+    """
+    ann = annotation_for_turn(records, n)
+    if ann.openworld["state"] in (DECLARED_FALSE, DECLARED_NON_BOOLEAN):
+        return _openworld_verdict(ann)
     return None
 
 
 def render_effect_verdict(
     records: Sequence[dict], n: int, delta: Optional[list[FieldDiff]]
 ) -> Verdict:
-    """Turn the Nth turn's declared annotations and observed `delta` into an A2 verdict.
+    """Turn the Nth turn's declared `readOnlyHint` and observed `delta` into an A2 verdict.
 
     Pure: it re-runs nothing and consults no model. `delta` is the BTH-1 tree diff from
     replay — a non-empty list means the tool touched the filesystem, an empty list means
     it did not, and `None` means no effect was observed at all (nothing to ground a PASS
-    on). The verdict grounds on TWO dimensions:
+    on). The verdict's `expected` carries the declared contract (the readOnlyHint state
+    and any incoherence); `observed` carries the effect that was seen.
 
-    - **filesystem** (`readOnlyHint` vs `delta`) — the grounded dimension, decided by
-      `_readonly_verdict`.
-    - **network** (`openWorldHint`) — the UNOBSERVABLE dimension. Belay has no whole-network
-      snapshot, so it cannot confirm `openWorldHint: false`. When the tool declared a network
-      RESTRICTION it cannot verify (`openWorldHint` false or non-boolean), that dimension is
-      UNVERIFIED and, by worst-status-wins, DOWNGRADES a filesystem PASS to UNVERIFIED — the
-      tool is not silently PASSed on a claim we did not check. It never promotes and never
-      fabricates a FAIL (`_network_restriction_note` returns `None` for the permissive
-      `openWorldHint: true` and for `not-declared`, leaving the filesystem verdict untouched).
-
-    `expected` always carries the full declared contract, including `openWorldHint`, so the
-    network claim is surfaced as a fact even when it does not move the status.
+    This is the FILESYSTEM dimension ONLY — purely `readOnlyHint` vs the delta, so the PASS
+    message and the PASS status always agree. The NETWORK dimension (`openWorldHint`) is a
+    SEPARATE sub-verdict (`render_openworld_verdict` / `network_subverdict`), composed
+    BESIDE this one in `verify.turn` rather than folded in here: overlaying it made a
+    PASS-message verdict carry an UNVERIFIED status, which is exactly the kind of
+    self-contradiction the sub-verdict breakdown exists to prevent.
     """
     ann = annotation_for_turn(records, n)
-    contract = {
-        "readOnlyHint": ann.readonly,
-        "openWorldHint": ann.openworld,
-        "incoherence": ann.incoherence,
-    }
-    base = _readonly_verdict(ann, delta, contract)
-
-    net_note = _network_restriction_note(ann.openworld)
-    if net_note is None:
-        return base
-    # A declared network restriction we cannot verify. Worst-status-wins with an UNVERIFIED
-    # network dimension: it only ever lowers a PASS to UNVERIFIED, never touches a FAIL or an
-    # already-UNVERIFIED status, and never promotes. The note is appended either way so the
-    # verdict says WHY the network dimension is unverified.
-    status = Status.UNVERIFIED if base.status is Status.PASS else base.status
-    return Verdict(
-        base.axis, base.kind, status,
-        observed=base.observed, expected=base.expected,
-        message=base.message + net_note,
-    )
-
-
-def _readonly_verdict(
-    ann: TurnAnnotation, delta: Optional[list[FieldDiff]], contract: dict
-) -> Verdict:
-    """The FILESYSTEM dimension: `readOnlyHint` vs the observed `delta`. The grounded half.
-
-    Unchanged from the original single-dimension check — an empty tree delta PROVES no
-    mutation (the snapshot is the whole tree), so a declared read-only tool that honoured it
-    is a genuine PASS. `render_effect_verdict` folds the network dimension on top.
-    """
     state = ann.readonly["state"]
     tool = ann.tool
     incoherence = ann.incoherence
+    contract = {"readOnlyHint": ann.readonly, "incoherence": incoherence}
     note = _incoherence_note(incoherence)
 
     if state == DECLARED_TRUE:
@@ -472,6 +443,7 @@ def verify_effect(
 __all__ = [
     "TurnAnnotation",
     "annotation_for_turn",
+    "network_subverdict",
     "render_effect_verdict",
     "render_openworld_verdict",
     "verify_effect",

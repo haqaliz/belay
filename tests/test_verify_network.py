@@ -1,4 +1,4 @@
-"""A2 openWorldHint conformance: the network dimension of effect-conformance.
+"""A2 openWorldHint conformance: the network dimension, as its OWN sub-verdict.
 
 This is the ONE place in C4 where over-claiming is easiest, and the whole project's
 credibility rests on not doing it. The honest bound is asymmetric with the filesystem:
@@ -9,18 +9,16 @@ credibility rests on not doing it. The honest bound is asymmetric with the files
   bytes/hosts anywhere, and — as the Phase-6 probe established — a denied egress attempt
   and a denied filesystem write BOTH surface to the child as the identical EPERM string
   "Operation not permitted", so a denial cannot be reliably attributed to the network.
-  Absence of a denial therefore proves nothing (under allow-all a tool egresses freely and
-  we see nothing), and a denial cannot be pinned to the network without guessing.
+  Absence of a denial proves nothing either. So the network dimension is an HONEST
+  UNVERIFIED: never a network PASS, never a fabricated network FAIL.
 
-So the network dimension is an HONEST UNVERIFIED: `openWorldHint` conformance is NEVER a
-network PASS, and NEVER a fabricated network FAIL. These tests pin that. The build path
-(a grounded FAIL from a deny-all egress denial) was NOT taken — see task-6-report.md for
-the empirical reason — so the tests here are the fallback's: they assert we do not claim
-egress coverage we do not have.
+The network dimension is a SEPARATE sub-verdict (`kind="effect:network"`), composed BESIDE
+the filesystem `effect` verdict — never folded into it. Folding made a PASS-message verdict
+carry an UNVERIFIED status; the separate sub-verdict keeps every message agreeing with its
+status and lets a reader see exactly which dimension was and was not verified.
 
-macOS-only end-to-end sandbox tests are marked skipif elsewhere; nothing here spawns a
-sandbox — the network dimension is decided from the recorded contract, exactly like the
-filesystem dimension is decided from the recorded delta.
+Nothing here spawns a sandbox — the network dimension is decided from the recorded contract,
+exactly like the filesystem dimension is decided from the recorded delta.
 """
 
 from __future__ import annotations
@@ -29,12 +27,18 @@ import json
 
 from conftest import trace_of
 
+from belay.replay.engine import EQUAL, REPLAYED, TurnReplay
+from belay.verify import turn as turn_module
 from belay.verify.effect import (
     annotation_for_turn,
+    network_subverdict,
     render_effect_verdict,
     render_openworld_verdict,
 )
-from belay.verify.verdict import Status
+from belay.verify.turn import verify_turn
+from belay.verify.verdict import Status, reduce
+
+_NETWORK_KIND = "effect:network"
 
 
 def _listing(*tools_json: str) -> list[tuple]:
@@ -57,6 +61,16 @@ def _call(msg_id: int, name: str) -> bytes:
     ).encode()
 
 
+def _reply(msg_id: int, text: str) -> bytes:
+    return json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": msg_id,
+            "result": {"content": [{"type": "text", "text": text}], "isError": False},
+        }
+    ).encode()
+
+
 # The tool shapes the network dimension turns on:
 _CLOSED = '{"name":"phone_home","annotations":{"openWorldHint":false}}'      # declared-false
 _OPEN = '{"name":"searcher","annotations":{"openWorldHint":true}}'          # declared-true
@@ -64,18 +78,18 @@ _SLOPPY = '{"name":"sloppy_net","annotations":{"openWorldHint":"maybe"}}'   # no
 _BARE = '{"name":"bare"}'                                                   # not-declared
 
 
-# --- 1. The core guarantee: openWorldHint conformance is NEVER a network PASS ---
+# --- 1. The core guarantee: the network sub-verdict is NEVER a PASS -------------
 
 
 def test_openworld_conformance_is_never_a_network_pass_and_never_a_fabricated_fail(tmp_path):
-    """For EVERY openWorldHint state, the standalone network verdict is UNVERIFIED.
+    """For EVERY openWorldHint state, the standalone network verdict is UNVERIFIED, and its
+    message agrees with its status.
 
-    Belay does not observe network egress: successful egress under allow-all is uncaptured,
-    and a deny-all denial cannot be reliably attributed to the network (an egress denial and
-    a filesystem-write denial are the same EPERM line). So the only honest verdict for the
-    network dimension is UNVERIFIED — never PASS (we verified nothing), never a fabricated
-    FAIL (we observed no violation). This is the "never claim coverage we do not have" line,
-    asserted directly.
+    Belay does not observe network egress, so the only honest verdict for the network
+    dimension is UNVERIFIED — never PASS (we verified nothing), never a fabricated FAIL (we
+    observed no violation). This is the "never claim coverage we do not have" line, asserted
+    directly, and it is stamped with the distinct network kind so it can be told apart from
+    the filesystem verdict.
     """
     for tool, name, state in [
         (_CLOSED, "phone_home", "declared-false"),
@@ -90,75 +104,110 @@ def test_openworld_conformance_is_never_a_network_pass_and_never_a_fabricated_fa
         assert verdict.status is Status.UNVERIFIED, (name, state, verdict)
         assert verdict.status is not Status.PASS, (name, state, verdict)
         assert verdict.status is not Status.FAIL, (name, state, verdict)
-        assert verdict.axis == "A2" and verdict.kind == "effect", verdict
+        assert verdict.axis == "A2" and verdict.kind == _NETWORK_KIND, verdict
+        # message and status agree — no PASS-worded verdict carrying an UNVERIFIED status.
+        assert "UNVERIFIED" in verdict.message, verdict.message
         assert "openWorldHint" in verdict.message, verdict.message
 
 
-# --- 2. A tool that egresses is UNVERIFIED for openWorldHint, not silently PASSed ---
+# --- 2. The filesystem verdict is PURELY readOnlyHint; message and status agree -
 
 
-def test_egressing_closed_tool_downgrades_the_effect_verdict_to_unverified(tmp_path):
-    """`phone_home` declared `openWorldHint: false` (a closed posture) AND
-    `readOnlyHint: true`, and replay observed an EMPTY filesystem delta.
+def test_openworld_false_leaves_the_filesystem_verdict_a_clean_pass(tmp_path):
+    """`phone_home` declared `readOnlyHint: true` AND `openWorldHint: false`, empty delta.
 
-    The filesystem dimension alone would be a grounded PASS (read-only honoured). But the
-    tool ALSO declared it would not touch the open world — a claim Belay cannot verify,
-    because egress is unobservable. Rendering the turn PASS would silently pass an unverified
-    network claim. The honest reduction across the two dimensions is UNVERIFIED, and the
-    openWorldHint state is surfaced on the verdict as a fact.
+    The FILESYSTEM verdict is a clean PASS whose message says PASS — no network claim mutates
+    it. The network dimension is a SEPARATE UNVERIFIED sub-verdict. This is the fix for the
+    self-contradiction the overlay produced (status UNVERIFIED, message "…PASS…").
     """
     tool = '{"name":"phone_home","annotations":{"readOnlyHint":true,"openWorldHint":false}}'
     records = trace_of(tmp_path, _listing(tool) + [("c2s", _call(3, "phone_home"))])
 
-    verdict = render_effect_verdict(records, 0, [])  # empty delta = filesystem PASS
+    fs = render_effect_verdict(records, 0, [])
+    assert fs.status is Status.PASS, fs
+    assert fs.kind == "effect"
+    assert "PASS" in fs.message, fs.message  # message agrees with the status
+    assert "openWorldHint" not in fs.expected  # the fs verdict speaks only for readOnlyHint
 
+    net = network_subverdict(records, 0)
+    assert net is not None and net.status is Status.UNVERIFIED, net
+    assert net.kind == _NETWORK_KIND, net
+
+
+def test_turn_composes_three_sub_verdicts_and_reduces_to_unverified(tmp_path, monkeypatch):
+    """The whole point of the separate sub-verdict: a REPLAYED turn for an `openWorldHint:
+    false` tool carries THREE sub-verdicts — result PASS, effect(fs) PASS, network
+    UNVERIFIED — and `reduce` lowers the turn to UNVERIFIED. A reader sees exactly what was
+    and was not verified, and no sub-verdict's message contradicts its status."""
+    tool = '{"name":"phone_home","annotations":{"readOnlyHint":true,"openWorldHint":false}}'
+    records = trace_of(tmp_path, _listing(tool) + [("c2s", _call(3, "phone_home"))])
+
+    replayed = TurnReplay(
+        turn_index=0,
+        status=REPLAYED,
+        reinvoked=True,
+        delta=[],  # empty delta -> filesystem PASS for readOnlyHint:true
+        result_equivalence=EQUAL,
+        replayed_reply=_reply(3, "ok"),
+    )
+    monkeypatch.setattr(turn_module, "replay_turn", lambda *a, **k: replayed)
+
+    verdict = verify_turn(records, 0, server_command=["unused"], manifest_dir="/nonexistent")
+
+    kinds = {sub.kind: sub.status for sub in verdict.sub_verdicts}
+    assert len(verdict.sub_verdicts) == 3, verdict.sub_verdicts
+    assert kinds.get("effect") is Status.PASS, kinds            # filesystem verified
+    assert kinds.get(_NETWORK_KIND) is Status.UNVERIFIED, kinds  # network unverifiable
     assert verdict.status is Status.UNVERIFIED, verdict
-    assert verdict.status is not Status.PASS
-    assert "openWorldHint" in verdict.message, verdict.message
-    assert verdict.expected["openWorldHint"]["state"] == "declared-false", verdict.expected
+    # Never a network PASS, anywhere in the composition.
+    assert not any(
+        sub.kind == _NETWORK_KIND and sub.status is Status.PASS for sub in verdict.sub_verdicts
+    )
 
 
-def test_a_readonly_fail_is_not_softened_by_the_network_dimension(tmp_path):
-    """The network overlay only ever DOWNGRADES a PASS; it never promotes. A
-    `readOnlyHint: true` tool that mutated is a FAIL, and declaring `openWorldHint: false`
-    (an UNVERIFIED network dimension) must not soften that FAIL to UNVERIFIED."""
+def test_the_network_dimension_never_softens_a_readonly_fail(tmp_path):
+    """The network sub-verdict is UNVERIFIED and reduce is worst-status-wins, so it can only
+    lower a PASS — never a FAIL. A `readOnlyHint: true` tool that mutated is a FAIL, and the
+    turn stays FAIL even with the openWorldHint:false network dimension beside it."""
     from belay.snapshot.bth1 import FieldDiff
 
     tool = '{"name":"phone_home","annotations":{"readOnlyHint":true,"openWorldHint":false}}'
     records = trace_of(tmp_path, _listing(tool) + [("c2s", _call(3, "phone_home"))])
-    delta = [FieldDiff(path=b"written.txt", field=None, left=None, right=b"x")]
 
-    verdict = render_effect_verdict(records, 0, delta)
+    fs = render_effect_verdict(
+        records, 0, [FieldDiff(path=b"x.txt", field=None, left=None, right=b"y")]
+    )
+    net = network_subverdict(records, 0)
+    assert fs.status is Status.FAIL, fs
+    assert net is not None and net.status is Status.UNVERIFIED
+    assert reduce([fs, net]) is Status.FAIL
 
-    assert verdict.status is Status.FAIL, verdict
+
+# --- 3. The regression guard: no network sub-verdict where no restriction was declared -
 
 
-# --- 3. The regression guard: not-declared openWorldHint changes nothing ---------
-
-
-def test_not_declared_openworld_leaves_the_readonly_verdict_untouched(tmp_path):
-    """A tool that declared `readOnlyHint: true` and said NOTHING about the open world is
-    still a PASS on an empty delta. openWorldHint being not-declared raises no
-    network-conformance question, so it must not drag the verdict to UNVERIFIED — otherwise
-    every un-annotated turn (the common case) would be dragged down and the deterministic
+def test_not_declared_openworld_adds_no_network_sub_verdict(tmp_path):
+    """A tool that said NOTHING about the open world raises no network-conformance question,
+    so `network_subverdict` is None and the filesystem PASS stands. Without this, every
+    un-annotated turn (the common case) would be dragged to UNVERIFIED and the deterministic
     core would regress."""
     tool = '{"name":"plain_reader","annotations":{"readOnlyHint":true}}'
     records = trace_of(tmp_path, _listing(tool) + [("c2s", _call(3, "plain_reader"))])
 
-    verdict = render_effect_verdict(records, 0, [])
+    assert render_effect_verdict(records, 0, []).status is Status.PASS
+    assert network_subverdict(records, 0) is None
 
-    assert verdict.status is Status.PASS, verdict
 
-
-def test_declared_true_openworld_permits_egress_so_the_filesystem_pass_stands(tmp_path):
-    """`openWorldHint: true` is the PERMISSIVE posture — the tool declared it MAY reach the
-    open world, so there is no restriction to violate (mirror of `readOnlyHint: false`). The
-    filesystem-grounded PASS stands; the PASS is a filesystem PASS, never a network PASS. And
-    the standalone network verdict is still UNVERIFIED — we never observed the network."""
+def test_declared_true_openworld_adds_no_network_sub_verdict(tmp_path):
+    """`openWorldHint: true` is the PERMISSIVE posture (mirror of `readOnlyHint: false`) —
+    the tool declared it MAY reach the open world, so there is no restriction to verify.
+    `network_subverdict` is None (the turn is not dragged down), yet the standalone
+    `render_openworld_verdict` is still UNVERIFIED — never a network PASS."""
     tool = '{"name":"searcher","annotations":{"readOnlyHint":true,"openWorldHint":true}}'
     records = trace_of(tmp_path, _listing(tool) + [("c2s", _call(3, "searcher"))])
 
     assert render_effect_verdict(records, 0, []).status is Status.PASS
+    assert network_subverdict(records, 0) is None
     assert render_openworld_verdict(records, 0).status is Status.UNVERIFIED
 
 

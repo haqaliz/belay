@@ -58,7 +58,7 @@ from belay.replay.client import DEFAULT_TIMEOUT
 from belay.replay.determinism import DeterminismResult, classify_determinism
 from belay.replay.engine import DIVERGED, REPLAYED, TurnReplay, replay_turn
 from belay.replay.report import canonical_cause
-from belay.verify.effect import render_effect_verdict
+from belay.verify.effect import network_subverdict, render_effect_verdict
 from belay.verify.result import render_result_verdict
 from belay.verify.verdict import Status, Verdict, reduce
 
@@ -184,6 +184,15 @@ def verify_turn(
     result_verdict = render_result_verdict(reply, determinism)
     effect_verdict = render_effect_verdict(records, n, reply.delta)
     sub_verdicts = [result_verdict, effect_verdict]
+    # The NETWORK dimension is a THIRD, separate sub-verdict — never folded into the
+    # filesystem `effect_verdict` (that made a PASS message carry an UNVERIFIED status).
+    # It is present only when the tool declared a network RESTRICTION Belay cannot verify
+    # (`openWorldHint` false / non-boolean); `reduce` then lowers the turn to UNVERIFIED
+    # by worst-status-wins, and the reader sees exactly which dimension was unverified. An
+    # un-annotated turn gets no network sub-verdict, so its status is unchanged.
+    net_verdict = network_subverdict(records, n)
+    if net_verdict is not None:
+        sub_verdicts.append(net_verdict)
 
     return TurnVerdict(
         turn_index=n,
