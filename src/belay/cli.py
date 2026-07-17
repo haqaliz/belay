@@ -605,6 +605,30 @@ def _worst(verdicts, Status):
     return max((v.status for v in verdicts), key=lambda s: rank[s])
 
 
+#: The floor `belay verify` enforces on `--replays`. The determinism classifier itself
+#: only requires 2 (determinism.py), but its own docstring names 3 as the real floor: with
+#: N=2 a genuinely nondeterministic tool whose two classification replays coincidentally
+#: match (a coarse clock, both runs inside one second) is misread as DETERMINISTIC, which
+#: on a DIVERGED reply becomes a FALSE FAIL. The verify surface refuses that. Below 3 also
+#: covers N=1, which would otherwise reach the classifier and raise an uncaught ValueError
+#: (a raw traceback instead of a clean error). One floor closes both.
+_VERIFY_REPLAYS_FLOOR = 3
+
+
+def _verify_replays(value: str) -> int:
+    """An `--replays` value for `verify`, enforced `>= 3` with a clean argparse error."""
+    try:
+        n = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{value!r} is not an integer")
+    if n < _VERIFY_REPLAYS_FLOOR:
+        raise argparse.ArgumentTypeError(
+            f"must be at least {_VERIFY_REPLAYS_FLOOR} (got {n}): with fewer replays a "
+            f"nondeterministic tool can be misclassified as deterministic and FAILed falsely"
+        )
+    return n
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="belay", description="The agent harness.")
     subcommands = parser.add_subparsers(dest="group", required=True)
@@ -699,9 +723,9 @@ def _parser() -> argparse.ArgumentParser:
     )
     verify.add_argument(
         "--replays",
-        type=int,
+        type=_verify_replays,
         default=3,
-        help="on a DIVERGED reply, re-invoke this many times to classify determinism (default: 3)",
+        help="on a DIVERGED reply, re-invoke this many times to classify determinism (default: 3, minimum: 3)",
     )
     verify.add_argument(
         "--server",

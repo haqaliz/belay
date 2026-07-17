@@ -22,6 +22,8 @@ from pathlib import Path
 
 import pytest
 
+from belay.replay import engine
+from belay.replay.client import ANSWERED, FrameOutcome, ReplayResult
 from belay.replay.engine import (
     DIVERGED,
     EQUAL,
@@ -34,6 +36,8 @@ from belay.replay.persist import persist_snapshot
 from belay.snapshot.substrate import UnrestorableCause, present_handle, take_snapshot
 from belay.sandbox.gate import SNAPSHOT_FAILED
 from belay.trace import TraceWriter
+from belay.verify.effect import render_effect_verdict
+from belay.verify.verdict import Status
 
 FIXTURES = Path(__file__).parent / "fixtures"
 CONFORMING = FIXTURES / "conforming_server.py"
@@ -410,3 +414,68 @@ def test_recording_had_no_reply_but_replay_answers_stays_replayed(tmp_path):
     assert json.loads(out.replayed_reply)["id"] == 2
     assert out.recorded_reply is None
     assert out.result_equivalence is None, "nothing recorded to compare — honest None, not a flip"
+
+
+# --- 8. M3: no observed post-state -> delta None (never []), effect UNVERIFIED ----
+
+
+def _tools_list_readonly() -> list[tuple]:
+    """A `tools/list` request+response declaring `echo` as readOnlyHint:true."""
+    req = b'{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+    resp = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {"tools": [{"name": "echo", "annotations": {"readOnlyHint": True}}]},
+        }
+    ).encode()
+    return [("c2s", req, None), ("s2c", resp, None)]
+
+
+def test_no_observed_post_state_yields_none_delta_not_empty(tmp_path, monkeypatch):
+    """A replay with NO post-state to scan must produce `delta=None`, never `[]`.
+
+    This closes the latent false-PASS seam: if a REPLAYED turn's `workspace` is `None`
+    (no post-state was ever observed), the delta must NOT be manufactured from
+    `diff_records(before, before)` = `[]`. An empty delta means "scanned the post-state
+    and saw no mutation" and lets a readOnlyHint:true tool render effect PASS — so an
+    empty delta that never observed the post-state would be a FALSE PASS on a mutation
+    that could not be ruled out. The invariant is made structural: no observed post-state
+    -> `delta is None` -> effect UNVERIFIED, never PASS.
+
+    The client replay is stubbed to return `workspace=None` with the target ANSWERED, the
+    one shape the real client never produces today (client.py always resolves a workspace)
+    but which C4's one grounded PASS silently depends on. Against the old `else before` this
+    assertion fails: delta would be `[]` and the effect verdict PASS.
+    """
+    manifest_dir, handle = _snapshot(tmp_path, "nows", {"keep.txt": "x"})
+    call = _echo_call(2, "hi")
+    records = _trace(
+        tmp_path,
+        "nows",
+        _tools_list_readonly() + [("c2s", call, handle), ("s2c", _echo_reply(2, "hi"), None)],
+    )
+
+    def _stub_client_replay(server_command, *, snapshot_manifest, frames, network, timeout):
+        # A post-state that was never observed: workspace is None, yet the target answered.
+        return ReplayResult(
+            outcomes=[
+                FrameOutcome(index=i, frame=f, status=ANSWERED, reply=_echo_reply(2, "hi"))
+                for i, f in enumerate(frames)
+            ],
+            workspace=None,
+        )
+
+    monkeypatch.setattr(engine, "_client_replay_turn", _stub_client_replay)
+
+    out = replay_turn(records, 0, server_command=CONFORMING_CMD, manifest_dir=manifest_dir, timeout=15.0)
+
+    assert out.status == REPLAYED, out
+    assert out.delta is None, (
+        f"a replay with no observed post-state must yield delta=None, not {out.delta!r}"
+    )
+    # And the downstream effect verdict on a readOnlyHint:true tool is UNVERIFIED — never a
+    # PASS manufactured from an empty delta that never saw the post-state.
+    effect = render_effect_verdict(records, 0, out.delta)
+    assert effect.status is Status.UNVERIFIED, effect.message
+    assert effect.status is not Status.PASS

@@ -306,8 +306,22 @@ def replay_turn(
         network=network,
         timeout=timeout,
     )
-    after = scan_tree(result.workspace) if result.workspace is not None else before
-    delta = diff_records(before, after)
+    # The delta is a real before/after diff ONLY when the replay produced a post-state to
+    # scan. A missing workspace means no post-state was ever observed, so there is nothing
+    # to diff — `delta` is `None` (-> effect UNVERIFIED), NEVER `[]`. An empty delta must
+    # mean "scanned the post-state and saw no mutation"; manufacturing one from
+    # `diff_records(before, before)` would let a readOnlyHint:true tool read as effect PASS
+    # on a post-state that was never observed — the exact false PASS this project refuses.
+    # The delta is a real before/after diff ONLY when the replay produced a post-state to
+    # scan. A missing workspace means no post-state was ever observed, so there is nothing
+    # to diff — `delta` is `None` (-> effect UNVERIFIED), NEVER `[]`. An empty delta must
+    # mean "scanned the post-state and saw no mutation"; manufacturing one from
+    # `diff_records(before, before)` would let a readOnlyHint:true tool read as effect PASS
+    # on a post-state that was never observed — the exact false PASS this project refuses.
+    if result.workspace is not None:
+        delta = diff_records(before, scan_tree(result.workspace))
+    else:
+        delta = None
     # The internal baseline restore is ours alone (the client's scratch is the
     # post-state the caller owns; this pre_dir is not). Drop it now that `before` is
     # captured — otherwise a whole-trace, N-replay run leaks a temp dir per replay.

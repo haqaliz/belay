@@ -25,14 +25,19 @@ from pathlib import Path
 import pytest
 
 from fixtures.cheat_test_runner_server import REAL_ASSERTION
+from fixtures.readonly_liar_server import SIDE_EFFECT_PATH
 
 from belay import cli
+from belay.replay.reader import read_trace
 from belay.replay.persist import persist_snapshot
 from belay.snapshot.substrate import UnrestorableCause, present_handle, take_snapshot
 from belay.trace import TraceWriter
+from belay.verify.turn import verify_turn
+from belay.verify.verdict import Status
 
 FIXTURES = Path(__file__).parent / "fixtures"
 CHEAT_CMD = [sys.executable, str(FIXTURES / "cheat_test_runner_server.py")]
+LIAR_CMD = [sys.executable, str(FIXTURES / "readonly_liar_server.py")]
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "darwin",
@@ -129,17 +134,61 @@ def test_verify_reports_pass_fail_unverified_with_both_subverdicts(tmp_path, cap
     out = capsys.readouterr().out
 
     assert rc == 1, out  # a trace with a FAIL exits non-zero
-    # Per-turn: each status appears, attributed to run_tests.
-    assert "PASS" in out and "FAIL" in out and "UNVERIFIED" in out, out
-    assert "run_tests" in out
+    # Per-turn: turn 0 is PINNED to PASS by name — the specific reproduction. A regression
+    # flipping it (e.g. an effect-check break rendering it UNVERIFIED) breaks THIS line, not
+    # a vacuous "PASS" substring that the always-printed labels and banner satisfy anyway.
+    assert "turn 0   run_tests         PASS" in out, out
     # Both A2 sub-verdicts are visible so the reduction is explainable.
     assert "result" in out and "effect" in out, out
     # The FAIL's grounding is shown — the observed value the replay produced.
     assert "1 failed" in out, out
     # The UNVERIFIED turn carries its named cause, never spun as PASS.
     assert UnrestorableCause.UNRESTORABLE_CONCURRENT_TURN.value in out, out
-    # Aggregate counts.
-    assert "PASS" in out and "1" in out
+    # Aggregate COUNTS — the one-of-each the docstring claims, asserted on the exact lines
+    # `_emit_aggregate` prints. Without these the test passes for the wrong reason: the four
+    # labels and the coverage banner print "PASS"/"UNVERIFIED" on every run regardless of any
+    # turn's status, so a `"PASS" in out` assertion never fails. The counts have teeth.
+    assert "PASS                  1" in out, out
+    assert "WARN                  0" in out, out
+    assert "FAIL                  1" in out, out
+    assert "UNVERIFIED            1" in out, out
+
+
+def test_verify_drives_a_real_mutation_into_an_effect_fail(tmp_path):
+    """A readOnlyHint:true server that ACTUALLY writes -> a real delta -> effect FAIL.
+
+    The real-mutation mirror of the PASS-on-cheat test. That test proves empty-delta ->
+    effect PASS end-to-end against a real sandboxed server; this proves the inverse against
+    a real server too, so effect-conformance is not leaning on a synthetic delta or a
+    monkeypatched replay for its FAIL. The trace declares run_tests readOnlyHint:true; the
+    live server declares the same and breaks it by writing a file on the call. The replay
+    must produce a NON-EMPTY BTH-1 delta and the effect sub-verdict must FAIL, naming the
+    written path — never PASS on a mutation the tool declared it would not make. (If a C3
+    regression silently dropped the delta, this is the C4 test that catches it.)
+    """
+    manifest_dir = tmp_path / "manifests"
+    manifest_dir.mkdir()
+    handle = _snapshot(tmp_path, "work", WEAKENED_TEST, manifest_dir)
+    trace_path = _trace(
+        tmp_path,
+        _tools_list() + [("c2s", _call(3), handle), ("s2c", _reply(3, "1 passed"), None)],
+    )
+    verdict = verify_turn(
+        list(read_trace(trace_path).records), 0,
+        server_command=LIAR_CMD, manifest_dir=manifest_dir,
+    )
+
+    assert verdict.status is Status.FAIL, verdict
+    effect = next(s for s in verdict.sub_verdicts if s.kind == "effect")
+    assert effect.status is Status.FAIL, effect.message
+    # The delta was real and non-empty: the FAIL names the exact path the server wrote.
+    assert SIDE_EFFECT_PATH in effect.message, effect.message
+    assert "readOnlyHint" in effect.message
+    # Result-equivalence is independently clean (the reply reproduced), so the FAIL is the
+    # filesystem effect alone — a mutation the declared contract forbade. (The result axis's
+    # kind is "replay".)
+    result = next(s for s in verdict.sub_verdicts if s.kind == "replay")
+    assert result.status is Status.PASS, result.message
 
 
 def test_verify_states_its_honest_coverage(tmp_path, capsys):
