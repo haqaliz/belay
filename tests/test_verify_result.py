@@ -207,14 +207,17 @@ def test_a3_clock_tool_divergence_is_unverified_not_fail(tmp_path, monkeypatch):
 # --- 4. Malformed replayed reply: distinct grounding, distinct message --------
 
 
-def test_malformed_replayed_reply_message_differs_from_a_value_mismatch():
-    """An unparseable replayed reply is a DISTINCT grounding from a value mismatch.
+def test_unparseable_replayed_reply_is_unverified_not_a_fail():
+    """An unparseable replayed reply is UNVERIFIED — a distinct grounding, distinct status.
 
     C3's `_equivalence` returns DIVERGED both for a genuinely different value and for a
-    replayed reply that fails to parse. The FAIL message must say WHICH. Rendered from a
+    replayed reply that fails to parse. But FAIL is the STRONG claim ("the trace did not
+    reproduce, values differ determinably"); when one side cannot be parsed we cannot
+    compare values, so we cannot honestly assert that. The honest status is UNVERIFIED —
+    "replay produced something we could not read" — carrying a message that still names
+    the parse failure plainly and reads DIFFERENTLY from a value mismatch. Rendered from a
     constructed observation (the live client only surfaces parseable, id-matched replies,
-    so this branch is defensive but load-bearing): the malformed message names the parse
-    failure plainly and must NOT read as a value diff.
+    so this branch is defensive but load-bearing).
     """
     det = DeterminismResult(turn_index=0, classification=DETERMINISTIC, replays=3, tool="brk")
 
@@ -239,8 +242,9 @@ def test_malformed_replayed_reply_message_differs_from_a_value_mismatch():
         det,
     )
 
-    assert value_mismatch.status is Status.FAIL
-    assert malformed.status is Status.FAIL
+    assert value_mismatch.status is Status.FAIL, "a determinable value divergence is still a FAIL"
+    assert malformed.status is Status.UNVERIFIED, "an unparseable reply cannot ground a FAIL"
+    assert malformed.status is not Status.FAIL
     assert malformed.message != value_mismatch.message
     assert "pars" in malformed.message.lower(), malformed.message
     assert "REAL-OUTPUT" in value_mismatch.message

@@ -15,10 +15,16 @@ result is never a verdict until `determinism.classify_determinism` has decided w
 tool reproduces at all:
 
     EQUAL                       -> PASS         (one replay; the classifier is NOT run)
-    DIVERGED + DETERMINISTIC    -> FAIL         (+ the recorded-vs-observed diff)
+    DIVERGED + DETERMINISTIC    -> FAIL         (+ the recorded-vs-observed value diff)
     DIVERGED + NONDETERMINISTIC -> UNVERIFIED   (carry the axis; NEVER FAIL)
     DIVERGED + NOT_REPLAYABLE   -> UNVERIFIED   (could not be re-run enough to decide)
     None (nothing to compare)   -> UNVERIFIED
+
+FAIL requires a *determinable value* divergence. An unparseable replayed reply — one of the
+two shapes C3 folds into DIVERGED — cannot be compared as a value, so even on a
+deterministic tool it is **UNVERIFIED, not FAIL**: the honest claim is "replay produced
+something we could not read", never "the values differ". It carries a distinct message
+naming the parse failure, so it never reads as a value mismatch.
 
 **Cost discipline.** The classifier is consulted ONLY on a divergence. An EQUAL turn is a
 reproduction at one replay — classifying it buys nothing and triples the replay cost — and
@@ -125,7 +131,7 @@ def _diverged_verdict(reply: TurnReplay, determinism: DeterminismResult) -> Verd
     classification = determinism.classification
 
     if classification == DETERMINISTIC:
-        return _deterministic_divergence_is_fail(reply, determinism)
+        return _deterministic_divergence_verdict(reply, determinism)
 
     if classification == NONDETERMINISTIC:
         # Legitimate divergence — a clock/random/pid tool does not reproduce, and that
@@ -161,14 +167,19 @@ def _diverged_verdict(reply: TurnReplay, determinism: DeterminismResult) -> Verd
     raise ValueError(f"unrecognised determinism classification {classification!r}")
 
 
-def _deterministic_divergence_is_fail(
+def _deterministic_divergence_verdict(
     reply: TurnReplay, determinism: DeterminismResult
 ) -> Verdict:
-    """A DETERMINISTIC tool that diverges is trace infidelity -> FAIL.
+    """A DETERMINISTIC tool that diverges — a FAIL only when the values are comparable.
 
-    The message distinguishes the two shapes of divergence C3 folds into DIVERGED:
-    a genuine value mismatch (show recorded vs observed) and an unparseable replayed
-    reply (say so plainly — a distinct grounding, not a value diff).
+    The two shapes C3 folds into DIVERGED get different verdicts, because FAIL is the
+    strong claim and only one shape earns it:
+
+    - a genuine value mismatch (both replies parse) is a determinable divergence -> FAIL,
+      showing recorded vs observed.
+    - an unparseable replayed reply cannot be compared as a value, so it does not clear
+      the bar for a FAIL -> UNVERIFIED, with a message that names the parse failure
+      plainly (a distinct grounding, never read as a value diff).
     """
     tool = determinism.tool
     _rec_ok, rec = _decode(reply.recorded_reply)
@@ -176,12 +187,13 @@ def _deterministic_divergence_is_fail(
 
     if not rep_ok:
         return Verdict(
-            _AXIS, _KIND, Status.FAIL,
+            _AXIS, _KIND, Status.UNVERIFIED,
             observed=reply.replayed_reply, expected=rec,
             message=(
-                f"result-equivalence FAIL on deterministic tool {tool!r}: the replayed "
-                f"reply could not be parsed as JSON ({reply.replayed_reply!r}); the "
-                f"recorded reply was {rec!r}"
+                f"result-equivalence UNVERIFIED on deterministic tool {tool!r}: the "
+                f"replayed reply could not be parsed as JSON ({reply.replayed_reply!r}), "
+                f"so it cannot be compared against the recorded reply {rec!r}; replay "
+                f"produced something unreadable, which is not a determinable value divergence"
             ),
         )
 
