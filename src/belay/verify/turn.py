@@ -59,6 +59,7 @@ from belay.replay.determinism import DeterminismResult, classify_determinism
 from belay.replay.engine import DIVERGED, REPLAYED, TurnReplay, replay_turn
 from belay.replay.report import canonical_cause
 from belay.verify.effect import network_subverdict, render_effect_verdict
+from belay.verify.invariants import Invariant, evaluate_invariant
 from belay.verify.result import render_result_verdict
 from belay.verify.verdict import Status, Verdict, reduce
 
@@ -145,6 +146,7 @@ def verify_turn(
     network: Any = None,
     timeout: float = DEFAULT_TIMEOUT,
     replays: int = 3,
+    invariants: Sequence[Invariant] = (),
 ) -> TurnVerdict:
     """Compose the Nth `tools/call`'s per-turn verdict — replay once, both A2 checks, reduce.
 
@@ -193,6 +195,19 @@ def verify_turn(
     net_verdict = network_subverdict(records, n)
     if net_verdict is not None:
         sub_verdicts.append(net_verdict)
+
+    # A1 (C5) is the THIRD axis, folded in ADDITIVELY exactly like the network dimension
+    # above: one A1 sub-verdict per operator-declared invariant, each evaluated against the
+    # SAME replay's observed `delta`. `reduce` is axis-agnostic worst-status-wins, so an A1
+    # FAIL lowers an all-A2-PASS turn to FAIL — the divergence that catches a cheating agent
+    # A2 cannot (a declared-false tool that writes a task-read-only `tests/` is a C4 effect
+    # PASS but an A1 FAIL). A1 is added ONLY on this REPLAYED path: `evaluate_invariant`
+    # grounds in an OBSERVED delta, and the non-REPLAYED early return has none — with no
+    # delta A1 could only ever be UNVERIFIED, and that turn is ALREADY UNVERIFIED, so an A1
+    # sub-verdict there changes no status and adds only noise. With `invariants=()` (the
+    # default) this loop runs zero times and the turn is byte-for-byte C4's.
+    for inv in invariants:
+        sub_verdicts.append(evaluate_invariant(inv, reply.delta, n))
 
     return TurnVerdict(
         turn_index=n,
