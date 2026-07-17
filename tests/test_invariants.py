@@ -73,20 +73,32 @@ def test_no_invariant_is_ever_sourced_from_a_trace(tmp_path: Path) -> None:
         and getattr(obj, "__module__", None) == invariants.__name__
     }
 
-    # The ONE public loader is load_invariants. A provenance surface is a callable that
-    # PRODUCES policy — one that RETURNS an Invariant (or a list of them). Keying on the
-    # return type, not the name, is what makes this precise: a new trace->policy loader
-    # still returns Invariants and so still trips this, while a legitimate CONSUMER of an
-    # already-loaded Invariant (`evaluate_invariant`, which takes an `inv` and returns a
-    # Verdict) is not a second source and is correctly excluded.
+    # A provenance surface is a callable that PRODUCES policy — one that RETURNS an Invariant
+    # (or a list of them). Keying on the return type, not the name, is what makes this
+    # precise: a new trace->policy loader still returns Invariants and so still trips this,
+    # while a legitimate CONSUMER of an already-loaded Invariant (`evaluate_invariant`, which
+    # takes an `inv` and returns a Verdict) is not a second source and is correctly excluded.
     producers = {
         name
         for name, obj in public.items()
         if "Invariant" in str(inspect.signature(obj).return_annotation)
     }
-    assert producers == {"load_invariants"}, (
-        f"a second invariant-producing callable appeared: {producers - {'load_invariants'}}. "
-        "Policy must be sourced only from load_invariants(operator_file)."
+    # Exactly two producers, and BOTH are provenance-safe by construction: `load_invariants`
+    # reads an OPERATOR FILE (a path the operator controls, asserted below to take only a
+    # path), and `default_invariants` reads NOTHING — it returns a hardcoded constant and
+    # takes no arguments at all, so it cannot source policy from a trace. Neither is a
+    # trace->policy path. A THIRD producer, or one of these growing a records/trace
+    # parameter, still trips this.
+    assert producers == {"load_invariants", "default_invariants"}, (
+        "an unexpected invariant-producing callable appeared: "
+        f"{producers - {'load_invariants', 'default_invariants'}}. Policy must be sourced "
+        "only from load_invariants(operator_file) or the argument-free default_invariants()."
+    )
+    # The default reads nothing: its provenance safety is that it takes no input at all, so
+    # there is no argument through which a trace could ever reach it.
+    assert list(inspect.signature(invariants.default_invariants).parameters) == [], (
+        "default_invariants must take no arguments — a records/trace parameter would turn "
+        "the zero-config default into a trace-to-policy path."
     )
 
     # It takes a file path, not records. A loader that accepted a trace/records argument

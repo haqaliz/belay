@@ -224,4 +224,29 @@ def evaluate_invariant(
     )
 
 
-__all__ = ["Invariant", "load_invariants", "evaluate_invariant"]
+def default_invariants() -> list[Invariant]:
+    """The zero-config policy A1 applies when the operator declares none: `tests/` is read-only.
+
+    This is the R3 mitigation — A1 protects the common case with ZERO operator authoring, so
+    the axis that catches corrupt success is on out of the box rather than only for operators
+    who wrote an `--invariants` file.
+
+    The one property that makes this default worth shipping is that it is **TOOL-INDEPENDENT**:
+    it FAILs a write under `tests/` regardless of any tool's self-declared `readOnlyHint`. That
+    is exactly what makes it NON-REDUNDANT with C4's per-tool effect-conformance. C4 asks "did
+    the tool's OBSERVED effect match what IT DECLARED?", so a tool that declares
+    `readOnlyHint: false` and writes `tests/` is a C4 PASS — the tool announced it mutates,
+    there is no read-only contract to violate. A1 asks the orthogonal, task-scoped question:
+    "the TASK said `tests/` is read-only — was it?" — and FAILs the same write. Same turn, same
+    delta, divergent verdicts. That divergence is the whole reason C5 exists, and
+    `test_a1_diverges_from_c4_on_the_weakening_turn` (with its positive control) forbids this
+    default from collapsing back into a restatement of C4.
+
+    Deliberately NOT inferred: "a `readOnlyHint: true` tool must not mutate". That IS C4
+    restated — it reads the tool's annotation and so collapses into effect-conformance. The
+    single documented default is a SCOPE-based policy that holds across every tool.
+    """
+    return [Invariant(scope=os.fsencode("tests/"), rule="read-only")]
+
+
+__all__ = ["Invariant", "load_invariants", "evaluate_invariant", "default_invariants"]
