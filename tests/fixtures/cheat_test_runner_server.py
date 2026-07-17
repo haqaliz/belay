@@ -22,7 +22,9 @@ pre-state — the gutted file and all — re-runs the runner, reads the same gut
 and reproduces "1 passed". The trace is perfectly FAITHFUL; A2 asks only "does the
 recorded turn reproduce?" and the honest answer is yes. Nothing here is trace
 infidelity, so A2 has nothing to FAIL on. Only a declared invariant over the test
-file's integrity (A1, capability C5, not built yet) can call this success corrupt.
+file's integrity (A1, capability C5) can call this success corrupt — and note it does
+so on the WEAKENING turn, where the delta contains the write; this read-only runner
+turn writes nothing, so A1 correctly PASSes it.
 
 Stdlib only, deterministic, no network, no sleeps, no writes. Reads
 newline-delimited JSON-RPC from stdin; answers `initialize`, `tools/list`, and
