@@ -121,6 +121,36 @@ def test_a1_diverges_from_c4_on_the_weakening_turn(tmp_path):
     )
 
 
+# --- the positive control: prove the collapse guard's divergence assertion can fail ----
+
+
+def test_the_collapse_guard_has_teeth(tmp_path):
+    """Positive control for `test_a1_diverges_from_c4_on_the_weakening_turn`.
+
+    The collapse guard's load-bearing line is `c4.status is not a1.status`. That assertion
+    is only meaningful if it CAN fail — i.e. if A1 collapsing into C4 would actually be
+    caught. Here we stand a second C4 effect-conformance call in for A1 (the exact collapse
+    C5 must never ship) and show the two statuses are then IDENTICAL — so the guard's
+    `is not` would be False and the guard would fail. This locks the teeth in permanently:
+    if a future refactor ever made `evaluate_invariant` alias C4's effect-conformance, the
+    collapse guard would flip red instead of silently passing.
+    """
+    records = trace_of(tmp_path, LISTING + [("c2s", _call(3, "write_file"))])
+    delta = _tests_write()
+
+    c4 = render_effect_verdict(records, 0, delta)
+    collapsed_a1 = render_effect_verdict(records, 0, delta)  # A1 == C4 stand-in (the collapse)
+
+    # Both PASS -> identical -> the guard's `c4.status is not a1.status` would be False and
+    # the collapse guard would fail. That is exactly the teeth: the collapse is detectable.
+    assert c4.status is collapsed_a1.status, (
+        "the collapse stand-in must render the SAME status as C4 (both PASS) — that is what "
+        "the collapse guard's `is not` assertion catches; if they differed here the guard "
+        "would be vacuous"
+    )
+    assert c4.status is Status.PASS, c4
+
+
 # --- A5b: the default's FAIL is tool-independent — it never reads the annotation -------
 
 
