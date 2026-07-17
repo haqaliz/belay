@@ -4,11 +4,15 @@ Belay is an **agent harness**: it sits between an AI agent and the tools it call
 exactly what crossed, and is built so that a run can later be **replayed against real state**
 and checked by re-execution rather than by asking a model whether it thinks it did well.
 
-**What exists today is capture (C1) and containment (C2), and only those.** Belay is a
-transparent stdio proxy in front of your MCP servers: it forwards bytes verbatim, writes an
-append-only trace of every frame, runs the server **inside a sandbox**, and snapshots each
-turn's pre-state before the call reaches the server. **It records. It does not judge.**
-There is no verdict, no PASS/FAIL and no scoring in this codebase yet — that is C4/C5.
+**What exists today is capture (C1), containment (C2), deterministic replay (C3), and the
+first grounded per-turn verdict — A2, by re-execution (C4).** Belay is a transparent stdio
+proxy in front of your MCP servers: it forwards bytes verbatim, writes an append-only trace
+of every frame, runs the server **inside a sandbox**, and snapshots each turn's pre-state
+before the call reaches the server. `belay verify` then replays each recorded tool call
+against its restored pre-state and renders a PASS/FAIL/UNVERIFIED **grounded in
+re-execution, with no model consulted** — see [the coverage of that verdict, stated
+exactly](#what-belay-verify-proves-and-what-it-does-not). The **A1 invariant axis** that
+would catch a *cheating* agent (corrupt success) is **not built yet** — that is C5.
 
 > ### What `BELAY_SANDBOX_SCOPE` gets you, stated exactly
 >
@@ -144,6 +148,53 @@ whose manifest is not found under that dir is an **honest UNVERIFIED** ("manifes
 — never a fabricated result and never a silent skip. A high UNVERIFIED rate is a signal to
 read, not a number to bury: it says how much of a run this replay could speak to, and why it
 could not speak to the rest.
+
+### Verify a trace: the first grounded verdict
+
+```bash
+belay verify ./traces/<trace>.jsonl --manifest-dir ./sn.manifests --server <server-command> [args...]
+# or, without installing the console script:
+python -m belay.cli verify ./traces/<trace>.jsonl --manifest-dir ./sn.manifests --server <server-command> [args...]
+```
+
+For each recorded `tools/call` it replays the call against its restored pre-state and
+renders the **A2 verdict**, reduced worst-status-wins to one `PASS` / `FAIL` / `UNVERIFIED`
+per turn, showing **both** sub-verdicts so a `FAIL` is explainable:
+
+- **result-equivalence** — did the replayed reply reproduce the recorded one? (a
+  deterministic divergence is a `FAIL`; a nondeterministic one is `UNVERIFIED`, never a
+  false `FAIL`).
+- **effect-conformance** — did the filesystem effect match the tool's declared
+  `readOnlyHint`? (a `readOnlyHint: true` tool that mutates is a grounded `FAIL`; an
+  un-annotated tool is `UNVERIFIED`, never a default `PASS`).
+
+The aggregate reports the `PASS` / `FAIL` / `UNVERIFIED` counts, the **FAIL list with its
+concrete grounding** (the recorded-vs-observed diff, or the mutated path), and every
+`UNVERIFIED` turn under a **named cause** — never hidden, never spun as `PASS`. The process
+exits non-zero if any turn is not `PASS`. `--manifest-dir` points where the gate persisted
+this run's manifests (the `.manifests` sibling of the snapshot dir), exactly as for
+`belay replay`.
+
+#### What `belay verify` proves, and what it does not
+
+> **An A2 `PASS` means THE TRACE REPRODUCES.** The recorded tool call, re-executed against
+> its restored pre-state, produced the same result and its filesystem effect matched its
+> declared `readOnlyHint`. **It does NOT mean the agent did the right thing.**
+
+- **It does not catch a cheating agent.** A cheater's trace is *faithful*: it really did
+  weaken the test, and replay restores that already-weakened pre-state, re-runs, reproduces
+  the same "tests pass", and returns `PASS` — **correctly**. The tampering is in the ground
+  truth A2 was handed. Only a declared **invariant** (A1, capability C5, **not built yet**)
+  catches corrupt success. This is not a gap in the implementation; it is the deliberate
+  division of labour between the axes, and `tests/test_verify_pass_on_cheat.py` pins it.
+- **What is verified:** filesystem effects (the BTH-1 delta), result-equivalence, and
+  protocol/tool errors.
+- **What is not verified:** successful network egress under an `allow-all` policy is not
+  observed — a tool that phoned home leaves no filesystem trace for the delta to catch.
+- **No model is consulted.** The verdict is re-execution and diffing — no LLM, ever. This is
+  the whole answer to "isn't this an LLM judge with extra steps?", and it is enforced
+  structurally by `tests/test_verify_zero_llm.py`, which fails if any module in the verify
+  layer so much as imports an inference client.
 
 ## What the capture proves, and what it does not
 
