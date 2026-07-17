@@ -39,6 +39,11 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from belay.snapshot.bth1 import FieldDiff
+    from belay.verify.verdict import Verdict
 
 #: The rules v0 understands. Only `read-only` is enforced today; the reserved names are
 #: listed nowhere here on purpose — an unimplemented rule must be REJECTED, not quietly
@@ -128,4 +133,95 @@ def _parse_invariant(item: object, *, index: int, source: Path) -> Invariant:
     return Invariant(scope=os.fsencode(scope), rule=rule)
 
 
-__all__ = ["Invariant", "load_invariants"]
+#: The rules A1 can GROUND in a filesystem delta. `read-only` is the only one: a BTH-1 tree
+#: diff is exactly the observation that confirms or refutes "this subtree was not written".
+#: Any other rule — a future `no-egress` needs to observe network egress, which Belay does
+#: NOT capture (the same EPERM gap C4 hit on `openWorldHint`: an egress denial and a
+#: filesystem-write denial are the identical "Operation not permitted") — is UNVERIFIED, not
+#: a fabricated PASS or FAIL. The loader only emits `read-only` today, but the evaluator
+#: fail-closes on anything else so a future rule cannot be silently reported as satisfied.
+_DELTA_GROUNDED_RULES = frozenset({"read-only"})
+
+
+def evaluate_invariant(
+    inv: Invariant, delta: Optional[list["FieldDiff"]], turn_index: int
+) -> "Verdict":
+    """One operator-declared invariant + the observed replay delta -> an A1 `Verdict`.
+
+    A1 judges the OBSERVED EFFECT, never the agent's prose. `delta` is the BTH-1 tree diff
+    from replaying the turn: a non-empty list means the tool touched the filesystem, `[]`
+    means it ran and touched nothing, and `None` means no post-state was observed at all.
+
+    For `read-only`, a path is "under scope" by a RAW BYTE-PREFIX match against `inv.scope`.
+    The operator's scope carries its own trailing slash (`b"tests/"`), which makes it a
+    directory prefix: `b"tests/"` covers `b"tests/test_auth.py"` but NOT `b"testsuite/x"`.
+    Matching on `str` (or stripping the slash) would reintroduce the exact traps BTH-1
+    avoids — so the match runs on the same raw path bytes BTH-1 and `effect._paths` use.
+
+    Two honesty rules, mirroring C4's effect check:
+
+    - `delta is None` -> UNVERIFIED, never PASS. An unobserved effect cannot satisfy an
+      invariant, and reporting it PASS is the false pass this axis exists to refuse.
+    - a rule A1 cannot ground in the delta (see `_DELTA_GROUNDED_RULES`) -> UNVERIFIED with
+      an honest cause, never a fabricated PASS or FAIL.
+    """
+    # Import lazily: `effect` pulls the replay stack, and `verdict` is a light sibling; both
+    # live under `src/belay` (no runtime deps, no `mcp`), so this only defers, never adds.
+    from belay.verify.effect import _paths
+    from belay.verify.verdict import Status, Verdict
+
+    scope_str = os.fsdecode(inv.scope)
+    expected = {"rule": inv.rule, "scope": scope_str, "turn": turn_index}
+
+    # A rule A1 cannot ground in a filesystem delta is UNVERIFIED — never PASS, never FAIL.
+    if inv.rule not in _DELTA_GROUNDED_RULES:
+        return Verdict(
+            "A1", "invariant", Status.UNVERIFIED,
+            observed=None, expected=expected,
+            message=(
+                f"invariant {inv.rule!r} scoped to {scope_str!r} is UNVERIFIED for turn "
+                f"{turn_index}: A1 cannot ground it in the observed filesystem delta "
+                f"(only read-only rules are grounded by a BTH-1 tree diff; a network rule "
+                f"would require observing egress, which Belay does not capture) — never PASS"
+            ),
+        )
+
+    # read-only: an unobserved post-state cannot satisfy the invariant -> UNVERIFIED.
+    if delta is None:
+        return Verdict(
+            "A1", "invariant", Status.UNVERIFIED,
+            observed=None, expected=expected,
+            message=(
+                f"read-only invariant on {scope_str!r} is UNVERIFIED for turn {turn_index}: "
+                f"replay observed no filesystem post-state, and an unobserved effect cannot "
+                f"be shown to respect the scope — never PASS"
+            ),
+        )
+
+    # Raw byte-prefix match: the scope's own trailing slash makes it a directory prefix, so
+    # `b"tests/"` matches `b"tests/test_auth.py"` but not `b"testsuite/x"`.
+    violating = [fd for fd in delta if fd.path.startswith(inv.scope)]
+    if violating:
+        paths = _paths(violating)  # reuse effect's decode; do not reimplement it
+        return Verdict(
+            "A1", "invariant", Status.FAIL,
+            observed=paths, expected=expected,
+            message=(
+                f"read-only invariant on {scope_str!r} FAILED at turn {turn_index}: replay "
+                f"observed a filesystem mutation under the read-only scope at {paths}"
+            ),
+        )
+
+    # A non-empty delta wholly outside scope, or an empty delta (an observed no-op), both
+    # respect the scope -> PASS. This is distinct from `delta is None` above.
+    return Verdict(
+        "A1", "invariant", Status.PASS,
+        observed=_paths(delta), expected=expected,
+        message=(
+            f"read-only invariant on {scope_str!r} PASSED at turn {turn_index}: replay "
+            f"observed no mutation under the read-only scope"
+        ),
+    )
+
+
+__all__ = ["Invariant", "load_invariants", "evaluate_invariant"]

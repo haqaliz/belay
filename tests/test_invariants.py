@@ -73,13 +73,19 @@ def test_no_invariant_is_ever_sourced_from_a_trace(tmp_path: Path) -> None:
         and getattr(obj, "__module__", None) == invariants.__name__
     }
 
-    # The ONE public loader is load_invariants. A new callable whose name speaks of
-    # invariants (a second loader) is a new provenance surface and must fail this.
-    loaders = {
-        name for name in public if "invariant" in name.lower() and name != "Invariant"
+    # The ONE public loader is load_invariants. A provenance surface is a callable that
+    # PRODUCES policy — one that RETURNS an Invariant (or a list of them). Keying on the
+    # return type, not the name, is what makes this precise: a new trace->policy loader
+    # still returns Invariants and so still trips this, while a legitimate CONSUMER of an
+    # already-loaded Invariant (`evaluate_invariant`, which takes an `inv` and returns a
+    # Verdict) is not a second source and is correctly excluded.
+    producers = {
+        name
+        for name, obj in public.items()
+        if "Invariant" in str(inspect.signature(obj).return_annotation)
     }
-    assert loaders == {"load_invariants"}, (
-        f"a second invariant-producing callable appeared: {loaders - {'load_invariants'}}. "
+    assert producers == {"load_invariants"}, (
+        f"a second invariant-producing callable appeared: {producers - {'load_invariants'}}. "
         "Policy must be sourced only from load_invariants(operator_file)."
     )
 
