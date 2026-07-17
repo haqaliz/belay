@@ -414,6 +414,221 @@ def _emit_turn(turn) -> None:
             _emit(f"      {turn.raw_cause}")
 
 
+# --- belay verify: the whole-trace A2 verdict -----------------------------------------
+
+#: The honest coverage statement, in the user's words. It appears BOTH here (printed
+#: under every run) and in the `verify --help` description, because a user who never
+#: reads --help still must not misread a PASS. Every clause is load-bearing and is
+#: pinned by `tests/test_verify_cli.py`; do not soften one without changing the test.
+_VERIFY_COVERAGE = (
+    "what a verdict here means, exactly\n"
+    "  A2 PASS means THE TRACE REPRODUCES: the recorded tool call, re-executed against\n"
+    "  its restored pre-state, produced the same result and its filesystem effect\n"
+    "  matched its declared readOnlyHint.\n"
+    "  It does NOT mean the agent did the right thing.\n"
+    "  It does NOT catch a cheating agent. A cheater's trace is faithful — replay\n"
+    "  reproduces it and PASSes, correctly — because the tampering is in the pre-state\n"
+    "  A2 was handed. Only a declared invariant (A1, capability C5, not built yet)\n"
+    "  catches corrupt success.\n"
+    "  Verified: filesystem effects (the delta), result-equivalence, protocol/tool\n"
+    "  errors. NOT verified: network egress, so openWorldHint conformance is UNVERIFIED,\n"
+    "  never a network PASS. Belay observes no outbound bytes — successful egress under\n"
+    "  allow-all is uncaptured, and a deny-all denial cannot be told from a filesystem one.\n"
+    "  No model is consulted. The verdict is re-execution and diffing — no LLM."
+)
+
+_VERIFY_DESCRIPTION = (
+    "Verify a whole trace by RE-EXECUTION. For each recorded tools/call, replay it "
+    "against its restored pre-state and render the A2 verdict: result-equivalence "
+    "(did the reply reproduce?) and effect-conformance (did the filesystem effect "
+    "match the declared readOnlyHint?), reduced worst-status-wins to one "
+    "PASS/FAIL/UNVERIFIED per turn, with both sub-verdicts shown so a FAIL is "
+    "explainable.\n\n" + _VERIFY_COVERAGE + "\n\n"
+    "Manifests: a turn's snapshot manifest is written by the gate to a SIBLING of the "
+    "snapshot dir, e.g. BELAY_SNAPSHOT_DIR=./sn -> ./sn.manifests/. Point "
+    "--manifest-dir there; a present turn whose manifest is not found is an honest "
+    "UNVERIFIED, never a fabricated PASS."
+)
+
+
+def _cmd_verify(args: argparse.Namespace) -> int:
+    """`belay verify <trace>` — replay every tools/call and render its A2 verdict.
+
+    Whole-trace by default; `--turn N` narrows to one. Each turn is composed by
+    `verify_turn` (one replay, both A2 checks, reduced), and printed with its reduced
+    status AND both sub-verdicts so "why did this turn FAIL?" is answerable. The
+    aggregate reports the PASS/FAIL/UNVERIFIED counts, the FAIL list with its concrete
+    grounding, and the UNVERIFIED list with each named cause — never a hidden or
+    spun-as-PASS unverified. Exit is non-zero if any turn is FAIL or UNVERIFIED: a run
+    Belay could not fully stand behind must not read as success to a shell.
+    """
+    from belay.index import derive_correlation, tool_calls
+    from belay.replay.reader import TraceCorrupt, read_trace
+    from belay.verify.turn import verify_turn
+    from belay.verify.verdict import Status
+
+    if not args.server:
+        _emit("belay: a server command is required, after --server. Nothing to replay against.")
+        return 2
+
+    trace_path = Path(args.trace)
+    if not trace_path.exists():
+        _emit(f"belay: trace not found: {trace_path}")
+        return 2
+
+    try:
+        read = read_trace(trace_path)
+    except TraceCorrupt as exc:
+        _emit(f"belay: {exc}")
+        return 2
+
+    records = list(read.records)
+    calls = tool_calls(derive_correlation(records))
+    total = len(calls)
+
+    if args.turn is not None:
+        if not (0 <= args.turn < total):
+            _emit(f"belay: --turn {args.turn} out of range; the trace holds {total} tool call(s)")
+            return 2
+        indices = [args.turn]
+    else:
+        indices = list(range(total))
+
+    manifest_dir = Path(args.manifest_dir)
+
+    _emit(f"belay verify {trace_path}")
+    _emit()
+    _emit(f"  {total} tool-call turn(s); verifying {len(indices)} by re-execution.")
+    _emit(f"  manifests             {manifest_dir}")
+    _emit()
+
+    verdicts = []
+    _emit("turns")
+    for n in indices:
+        verdict = verify_turn(
+            records, n,
+            server_command=args.server, manifest_dir=manifest_dir, replays=args.replays,
+        )
+        verdicts.append(verdict)
+        _emit_verdict(verdict)
+
+    _emit_aggregate(verdicts, Status)
+
+    _emit()
+    for line in _VERIFY_COVERAGE.splitlines():
+        _emit(line)
+
+    worst = _worst(verdicts, Status)
+    return 0 if worst is Status.PASS else 1
+
+
+def _emit_verdict(verdict) -> None:
+    """One turn: its reduced status, tool, then each sub-verdict grouped by axis.
+
+    The sub-verdicts are printed per AXIS (A1 / A2 / A3), not hard-coded to A2, so when
+    A1 (C5) and A3 (C8) begin contributing sub-verdicts they render in the same shape
+    without a rewrite here. Today only A2 speaks, and the loop shows exactly that.
+    """
+    tool = verdict.tool_name or "?"
+    _emit(f"  turn {verdict.turn_index:<3} {tool:<18}{verdict.status.value}")
+    for axis in _axes_in_order(verdict.sub_verdicts):
+        for sub in (s for s in verdict.sub_verdicts if s.axis == axis):
+            _emit(f"      {sub.axis} {sub.kind:<10}{sub.status.value:<12}{sub.message}")
+    if verdict.cause is not None:
+        _emit(f"      cause: {verdict.cause}")
+
+
+def _axes_in_order(sub_verdicts) -> list[str]:
+    """The distinct axes present, in first-seen order — A1, then A2, then A3 as built."""
+    seen: list[str] = []
+    for sub in sub_verdicts:
+        if sub.axis not in seen:
+            seen.append(sub.axis)
+    return seen
+
+
+def _emit_aggregate(verdicts, Status) -> None:
+    counts = {status: 0 for status in Status}
+    for verdict in verdicts:
+        counts[verdict.status] += 1
+
+    _emit()
+    _emit("aggregate")
+    _emit(f"  turns verified        {len(verdicts)}")
+    _emit(f"  PASS                  {counts[Status.PASS]}")
+    _emit(f"  WARN                  {counts[Status.WARN]}")
+    _emit(f"  FAIL                  {counts[Status.FAIL]}")
+    _emit(f"  UNVERIFIED            {counts[Status.UNVERIFIED]}")
+
+    fails = [v for v in verdicts if v.status is Status.FAIL]
+    if fails:
+        _emit()
+        _emit("  FAILs (with grounding)")
+        for verdict in fails:
+            for sub in verdict.sub_verdicts:
+                if sub.status is Status.FAIL:
+                    tool = verdict.tool_name or "?"
+                    _emit(f"    turn {verdict.turn_index:<3} {tool:<18}{sub.axis} {sub.kind}: {sub.message}")
+
+    unverified = [v for v in verdicts if v.status is Status.UNVERIFIED]
+    if unverified:
+        _emit()
+        _emit("  UNVERIFIED (each with a named cause — never spun as PASS)")
+        for verdict in unverified:
+            tool = verdict.tool_name or "?"
+            cause = verdict.cause or _first_unverified_message(verdict, Status)
+            _emit(f"    turn {verdict.turn_index:<3} {tool:<18}{cause}")
+
+
+def _first_unverified_message(verdict, Status) -> str:
+    """The message of a REPLAYED-but-UNVERIFIED turn's driving sub-verdict.
+
+    A turn that WAS replayed can still reduce to UNVERIFIED (an un-annotated tool, a
+    nondeterministic divergence) with `cause is None` — its explanation lives in the
+    sub-verdict, not a bucket. Surface it so no UNVERIFIED turn is causeless in the list.
+    """
+    for sub in verdict.sub_verdicts:
+        if sub.status is Status.UNVERIFIED:
+            return sub.message
+    return "unverified"
+
+
+def _worst(verdicts, Status):
+    """The worst status across the turns, worst-status-wins. Empty -> UNVERIFIED.
+
+    Mirrors `verdict.reduce`'s ordering (FAIL > UNVERIFIED > WARN > PASS) so the exit
+    code agrees with the honesty contract: an all-UNVERIFIED run is not a success.
+    """
+    rank = {Status.PASS: 0, Status.WARN: 1, Status.UNVERIFIED: 2, Status.FAIL: 3}
+    if not verdicts:
+        return Status.UNVERIFIED
+    return max((v.status for v in verdicts), key=lambda s: rank[s])
+
+
+#: The floor `belay verify` enforces on `--replays`. The determinism classifier itself
+#: only requires 2 (determinism.py), but its own docstring names 3 as the real floor: with
+#: N=2 a genuinely nondeterministic tool whose two classification replays coincidentally
+#: match (a coarse clock, both runs inside one second) is misread as DETERMINISTIC, which
+#: on a DIVERGED reply becomes a FALSE FAIL. The verify surface refuses that. Below 3 also
+#: covers N=1, which would otherwise reach the classifier and raise an uncaught ValueError
+#: (a raw traceback instead of a clean error). One floor closes both.
+_VERIFY_REPLAYS_FLOOR = 3
+
+
+def _verify_replays(value: str) -> int:
+    """An `--replays` value for `verify`, enforced `>= 3` with a clean argparse error."""
+    try:
+        n = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{value!r} is not an integer")
+    if n < _VERIFY_REPLAYS_FLOOR:
+        raise argparse.ArgumentTypeError(
+            f"must be at least {_VERIFY_REPLAYS_FLOOR} (got {n}): with fewer replays a "
+            f"nondeterministic tool can be misclassified as deterministic and FAILed falsely"
+        )
+    return n
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="belay", description="The agent harness.")
     subcommands = parser.add_subparsers(dest="group", required=True)
@@ -487,6 +702,39 @@ def _parser() -> argparse.ArgumentParser:
         help="the MCP server to replay against; everything after --server is its command",
     )
     replay.set_defaults(func=_cmd_replay)
+
+    verify = subcommands.add_parser(
+        "verify",
+        help="verify a whole trace by re-execution: per-turn A2 verdict + aggregate",
+        description=_VERIFY_DESCRIPTION,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    verify.add_argument("trace", help="the trace file (.jsonl) to verify")
+    verify.add_argument(
+        "--manifest-dir",
+        required=True,
+        help="where the gate persisted this run's snapshot manifests (the .manifests sibling)",
+    )
+    verify.add_argument(
+        "--turn",
+        type=int,
+        default=None,
+        help="verify only this tools/call turn (0-based); default is the whole trace",
+    )
+    verify.add_argument(
+        "--replays",
+        type=_verify_replays,
+        default=3,
+        help="on a DIVERGED reply, re-invoke this many times to classify determinism (default: 3, minimum: 3)",
+    )
+    verify.add_argument(
+        "--server",
+        nargs=argparse.REMAINDER,
+        default=[],
+        metavar="cmd ...",
+        help="the MCP server to replay against; everything after --server is its command",
+    )
+    verify.set_defaults(func=_cmd_verify)
     return parser
 
 
