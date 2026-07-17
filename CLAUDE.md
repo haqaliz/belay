@@ -2,12 +2,16 @@
 
 This file orients a coding agent working in this repository. Read it first.
 
-> **Status: C1 is built and merged** (PR #1). The engine exists: a byte-transparent stdio MCP
-> proxy (`src/belay/proxy.py`) and the versioned append-only trace format
-> (`docs/technical/TRACE_FORMAT.md`) every later capability reads. Zero runtime dependencies.
-> **C1 records; it emits no verdict** — that is C4/C5.
-> **Next: C2 (sandbox + snapshot/restore)** — risk R2, High/High, and the critical path C3/C4/C5
-> all block on.
+> **Status: C1–C5 are built and merged — the C1–C5 Phase-0 gate is reached** (377 tests, zero
+> runtime dependencies). The full record → sandbox → snapshot/restore → replay → verdict spine
+> exists: the byte-transparent stdio MCP proxy + trace format (C1), the Seatbelt sandbox with
+> snapshot/restore (C2), deterministic replay with a real before/after delta (C3), and the
+> grounded verdict — **A2** result-equivalence + effect-conformance (C4) and **A1** task-scoped
+> invariants (C5, `src/belay/verify/invariants.py`). A1 is the axis that catches a *cheating*
+> agent A2 structurally cannot: `belay verify --invariants` (the `tests/` read-only default is on
+> unless `--no-default-invariants`), grounded on the observed delta, zero LLM, UNVERIFIED-never-PASS.
+> **Next: run the Phase-0 corpus and publish the violation-rate number**, then C6 (failure corpus).
+> C7 (live console); C8 (A3 claim re-derivation) and C9 (observability interop) are cuttable, last.
 >
 > [`docs/ROADMAP.md`](docs/ROADMAP.md) (phased plan + gates) and
 > [`docs/technical/CAPABILITY_ROADMAP.md`](docs/technical/CAPABILITY_ROADMAP.md)
