@@ -43,6 +43,7 @@ from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from belay.snapshot.bth1 import FieldDiff
+    from belay.verify.turn import TurnVerdict
     from belay.verify.verdict import Verdict
 
 #: The rules v0 understands. Only `read-only` is enforced today; the reserved names are
@@ -249,4 +250,50 @@ def default_invariants() -> list[Invariant]:
     return [Invariant(scope=os.fsencode("tests/"), rule="read-only")]
 
 
-__all__ = ["Invariant", "load_invariants", "evaluate_invariant", "default_invariants"]
+def corrupt_success_case(verdict: "TurnVerdict") -> Optional[dict]:
+    """An A1-FAIL turn shaped as an ingestable case for the future failure corpus (C6).
+
+    A1 catches corrupt success; the failure corpus (moat #2) is where each catch becomes a
+    labeled datum that sharpens detection over time. This is the seam between them, and
+    DELIBERATELY only the seam: a PURE function that shapes the case dict from a
+    `TurnVerdict` whose A1 invariant sub-verdict is FAIL. It has NO persistence — C6 owns
+    storage — and invents NO format beyond the fields the A1 sub-verdict already grounds
+    (its `expected` rule/scope, its `observed` violating paths, its message) plus the turn's
+    index and tool name.
+
+    Returns None when no A1 sub-verdict is a FAIL — a clean turn, or one A1 never judged, has
+    no corrupt success to record. So a caller can map it over every turn's verdict and keep
+    exactly the corrupt-success cases.
+    """
+    from belay.verify.verdict import Status
+
+    a1 = next(
+        (
+            s for s in verdict.sub_verdicts
+            if s.axis == "A1" and s.kind == "invariant" and s.status is Status.FAIL
+        ),
+        None,
+    )
+    if a1 is None:
+        return None
+
+    expected = a1.expected if isinstance(a1.expected, dict) else {}
+    return {
+        "kind": "corrupt-success",
+        "axis": "A1",
+        "rule": expected.get("rule"),
+        "scope": expected.get("scope"),
+        "turn_index": verdict.turn_index,
+        "tool_name": verdict.tool_name,
+        "violating_paths": a1.observed,
+        "message": a1.message,
+    }
+
+
+__all__ = [
+    "Invariant",
+    "load_invariants",
+    "evaluate_invariant",
+    "default_invariants",
+    "corrupt_success_case",
+]

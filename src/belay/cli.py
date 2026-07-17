@@ -464,6 +464,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     """
     from belay.index import derive_correlation, tool_calls
     from belay.replay.reader import TraceCorrupt, read_trace
+    from belay.verify.invariants import default_invariants, load_invariants
     from belay.verify.turn import verify_turn
     from belay.verify.verdict import Status
 
@@ -475,6 +476,18 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     if not trace_path.exists():
         _emit(f"belay: trace not found: {trace_path}")
         return 2
+
+    # The A1 policy this run enforces: the defaults (unless dropped) plus any operator file.
+    # A file that will not parse is a fail-closed error — verifying against a silently dropped
+    # policy would report the run against LESS than the operator declared, the exact false PASS
+    # A1 exists to refuse. So a bad file exits 2 rather than proceeding.
+    invariants = [] if args.no_default_invariants else default_invariants()
+    if args.invariants is not None:
+        try:
+            invariants = invariants + load_invariants(Path(args.invariants))
+        except ValueError as exc:
+            _emit(f"belay: {exc}")
+            return 2
 
     try:
         read = read_trace(trace_path)
@@ -508,6 +521,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         verdict = verify_turn(
             records, n,
             server_command=args.server, manifest_dir=manifest_dir, replays=args.replays,
+            invariants=invariants,
         )
         verdicts.append(verdict)
         _emit_verdict(verdict)
@@ -726,6 +740,20 @@ def _parser() -> argparse.ArgumentParser:
         type=_verify_replays,
         default=3,
         help="on a DIVERGED reply, re-invoke this many times to classify determinism (default: 3, minimum: 3)",
+    )
+    verify.add_argument(
+        "--invariants",
+        default=None,
+        metavar="path",
+        help=(
+            "an operator-declared invariant file (JSON) to enforce as A1, on top of the "
+            "defaults; a malformed file is a fail-closed error, never a silent skip"
+        ),
+    )
+    verify.add_argument(
+        "--no-default-invariants",
+        action="store_true",
+        help="do not apply the built-in default invariants (tests/ is read-only)",
     )
     verify.add_argument(
         "--server",
