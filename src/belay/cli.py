@@ -431,8 +431,9 @@ _VERIFY_COVERAGE = (
     "  A2 was handed. Only a declared invariant (A1, capability C5, not built yet)\n"
     "  catches corrupt success.\n"
     "  Verified: filesystem effects (the delta), result-equivalence, protocol/tool\n"
-    "  errors. NOT verified: successful network egress under an allow-all policy is\n"
-    "  not observed.\n"
+    "  errors. NOT verified: network egress, so openWorldHint conformance is UNVERIFIED,\n"
+    "  never a network PASS. Belay observes no outbound bytes — successful egress under\n"
+    "  allow-all is uncaptured, and a deny-all denial cannot be told from a filesystem one.\n"
     "  No model is consulted. The verdict is re-execution and diffing — no LLM."
 )
 

@@ -166,7 +166,10 @@ per turn, showing **both** sub-verdicts so a `FAIL` is explainable:
   false `FAIL`).
 - **effect-conformance** — did the filesystem effect match the tool's declared
   `readOnlyHint`? (a `readOnlyHint: true` tool that mutates is a grounded `FAIL`; an
-  un-annotated tool is `UNVERIFIED`, never a default `PASS`).
+  un-annotated tool is `UNVERIFIED`, never a default `PASS`). A tool that declares
+  `openWorldHint: false` adds a **network dimension** that is honestly `UNVERIFIED` — Belay
+  observes no egress, so it downgrades a filesystem `PASS` to `UNVERIFIED` rather than
+  silently passing an unverified network claim, and it is **never a network `PASS`**.
 
 The aggregate reports the `PASS` / `FAIL` / `UNVERIFIED` counts, the **FAIL list with its
 concrete grounding** (the recorded-vs-observed diff, or the mutated path), and every
@@ -189,8 +192,14 @@ this run's manifests (the `.manifests` sibling of the snapshot dir), exactly as 
   division of labour between the axes, and `tests/test_verify_pass_on_cheat.py` pins it.
 - **What is verified:** filesystem effects (the BTH-1 delta), result-equivalence, and
   protocol/tool errors.
-- **What is not verified:** successful network egress under an `allow-all` policy is not
-  observed — a tool that phoned home leaves no filesystem trace for the delta to catch.
+- **What is not verified:** network egress, in either direction. Successful egress under an
+  `allow-all` policy is not observed — a tool that phoned home leaves no filesystem trace for
+  the delta to catch — and a denial under `deny-all` cannot be attributed to the network,
+  because an egress denial and a filesystem-write denial reach the child as the identical
+  `EPERM` line. So there is **no whole-network snapshot** the way there is a whole-tree
+  filesystem snapshot, and `openWorldHint` conformance is therefore `UNVERIFIED`, **never a
+  `PASS`**. (Belay does *not* fabricate a network `FAIL` from a denial it cannot attribute —
+  that would be a guess dressed as a grounded verdict.)
 - **No model is consulted.** The verdict is re-execution and diffing — no LLM, ever. This is
   the whole answer to "isn't this an LLM judge with extra steps?", and it is enforced
   structurally by `tests/test_verify_zero_llm.py`, which fails if any module in the verify

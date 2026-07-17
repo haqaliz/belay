@@ -166,6 +166,9 @@ def test_verify_states_its_honest_coverage(tmp_path, capsys):
     assert "did the right thing" in out or "was correct" in out or "was right" in out, out
     assert "cheat" in out, "must say a cheating agent is NOT caught here"
     assert "no model" in out or "no llm" in out, "must say the verdict consults no model"
+    # The network dimension is honestly UNVERIFIED — the coverage must not let a reader
+    # believe openWorldHint / egress was checked.
+    assert "openworldhint" in out and "egress" in out, "must name the unverified network dimension"
 
 
 def test_help_states_the_coverage_and_zero_llm():
@@ -187,3 +190,4 @@ def test_help_states_the_coverage_and_zero_llm():
     assert "reproduc" in out
     assert "cheat" in out
     assert "no model" in out or "no llm" in out
+    assert "openworldhint" in out and "egress" in out
