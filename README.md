@@ -103,6 +103,15 @@ belay corpus score                                      # precision · recall ·
 
 Cases are self-contained (they bundle their own pre-state) and live under the gitignored `corpus/local/` — nothing leaves your machine.
 
+### 4 · Measure at scale — the violation rate
+
+```bash
+belay phase0 run ./traces --ledger runs/phase0.json --corpus-dir corpus/local --server -- my-mcp-server
+belay phase0 report runs/phase0.json --corpus-dir corpus/local   # re-render the number, no replay
+```
+
+`belay phase0 run` verifies a whole directory of captured runs, ingests every flagged (FAIL) turn into the corpus, and writes a ledger + report: the **per-instance violation rate with its denominator**, the per-turn FAIL rate, the `UNVERIFIED` rate by named cause, and the false-positive rate. It is a **measurement, not a gate** — it exits `0` even when it finds violations. A batch that captured ~no verifiable turns is reported as **`INSTRUMENT SUSPECT`**, never a clean `0%` — so a broken capture can't masquerade as a passing run. See [the runbook](docs/planning/phase0-corpus-run/RUNBOOK.md) to reproduce the number end-to-end.
+
 ---
 
 ## How it works
