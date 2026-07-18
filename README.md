@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/belay-logo.svg" alt="Belay" width="104" />
+<img src="assets/belay-logo.png" alt="Belay" width="120" />
 
 # Belay
 

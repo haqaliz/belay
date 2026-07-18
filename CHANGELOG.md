@@ -9,7 +9,14 @@ All notable changes to Belay are documented here. The format follows
 
 _Nothing yet._
 
-## [0.1.0] — unreleased
+## [0.1.1] — 2026-07-18
+
+### Changed
+
+- New project logo (a figure-eight "belay knot" mark) and README header image. Repo/presentation
+  only — the published package is functionally identical to 0.1.0 (assets are not shipped in the wheel).
+
+## [0.1.0] — 2026-07-18
 
 The first public release: the full **record → sandbox → replay → verdict** engine plus the
 **failure corpus** (capabilities C1–C6). Python 3.10+, **zero runtime dependencies**, macOS only.
@@ -51,5 +58,6 @@ The first public release: the full **record → sandbox → replay → verdict**
 - **The A3 claim-re-derivation axis** (C8) is not built; the live console (C7) and observability interop
   (C9) are ahead on the roadmap.
 
-[Unreleased]: https://github.com/haqaliz/belay/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/haqaliz/belay/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/haqaliz/belay/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/haqaliz/belay/releases/tag/v0.1.0
