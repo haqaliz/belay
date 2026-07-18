@@ -2,7 +2,7 @@
 
 This file orients a coding agent working in this repository. Read it first.
 
-> **Status: C1–C6 are built and merged** (431 tests, 1 platform-skip; zero runtime dependencies).
+> **Status: C1–C6 are built and merged; the Phase-0 corpus runner is built** (463 tests, 1 platform-skip; zero runtime dependencies).
 > The full record → sandbox → snapshot/restore → replay → verdict spine exists: the byte-transparent
 > stdio MCP proxy + trace format (C1), the Seatbelt sandbox with snapshot/restore (C2), deterministic
 > replay with a real before/after delta (C3), and the grounded verdict — **A2** result-equivalence +
@@ -13,8 +13,15 @@ This file orients a coding agent working in this repository. Read it first.
 > add/run/score` stores each caught failure as a self-contained, replayable, human-labeled case; the
 > corpus is the regression suite, and precision/recall/coverage measures detection against human labels
 > (UNVERIFIED excluded, the engine never labels its own cases). Cases live under gitignored `corpus/local/`.
-> **Next: run the Phase-0 corpus and publish the violation-rate number**, then C7 (live console — first
-> UI). C8 (A3 claim re-derivation) and C9 (observability interop) are cuttable, last.
+> **The Phase-0 corpus runner is built** (`src/belay/phase0/`, `belay phase0 run/report`): it verifies a
+> whole directory of captured runs, ingests every flagged turn into the corpus, and emits *the number* —
+> the per-instance violation rate with its denominator, plus per-turn FAIL, UNVERIFIED-by-cause, and
+> false-positive rates. It is a measurement, not a gate (exits 0 with violations present), and a mint that
+> captured ~no verifiable turns reads as `INSTRUMENT SUSPECT`, never a clean 0% (the R6 false-zero defense).
+> **Next: run the live Phase-0 mint and publish the number** — drive ≥50 SWE-bench-lite instances through
+> the proxy (needs the `minting-driver`, spec'd but not built: `docs/planning/phase0-corpus-run/`), audit,
+> and fill `docs/technical/PHASE0_RESULTS.md`; then C7 (live console — first UI). C8 (A3 claim
+> re-derivation) and C9 (observability interop) are cuttable, last.
 >
 > [`docs/ROADMAP.md`](docs/ROADMAP.md) (phased plan + gates) and
 > [`docs/technical/CAPABILITY_ROADMAP.md`](docs/technical/CAPABILITY_ROADMAP.md)

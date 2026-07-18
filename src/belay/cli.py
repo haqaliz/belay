@@ -45,6 +45,7 @@ stopped".
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 import tempfile
@@ -966,6 +967,143 @@ def _cmd_corpus_show(args: argparse.Namespace) -> int:
     return 0
 
 
+# --- belay phase0: run the failure corpus at scale, publish the violation rate --------
+
+
+def _load_scored_cases(corpus_dir: Path):
+    """Load+score every `corpus_dir/*/case.json`, fail-closed; an absent dir scores empty.
+
+    Mirrors `_cmd_corpus_score`'s loop exactly, including its fail-closed discipline: a
+    case dir that will not load is a named error, never a silently dropped row that would
+    quietly change what `score()` is computed over. A `corpus_dir` that does not exist yet
+    (a `phase0 run` on a fresh corpus) is not an error -- it scores an empty list, which
+    `belay.corpus.metrics.score` renders as an all-n/a `Metrics`.
+
+    Returns either `(cases, None)` or `(None, error_line)` -- the caller emits the error
+    line and exits 2 rather than proceeding on a corpus that could not be trusted.
+    """
+    from belay.corpus.case import CASE_FILENAME, load_case
+
+    if not corpus_dir.is_dir():
+        return [], None
+
+    cases = []
+    for case_dir in sorted(p.parent for p in corpus_dir.glob(f"*/{CASE_FILENAME}")):
+        try:
+            cases.append(load_case(case_dir))
+        except ValueError as exc:
+            return None, f"belay: {exc}"
+    return cases, None
+
+
+def _cmd_phase0_run(args: argparse.Namespace) -> int:
+    """`belay phase0 run <trace-dir> --ledger OUT.json` — verify a whole corpus, once.
+
+    Drives `run_batch` (Task 3) over every `trace-*.jsonl` in `trace-dir`: each turn is
+    verified by RE-EXECUTION (the same `verify_turn` `verify`/`corpus add` run), every
+    FAILing turn is ingested into the corpus as a 'pending' case, and the outcome is folded
+    into a `RunLedger` -- written to `--ledger` as JSON -- then the Phase-0 report (violation
+    rate, instrument-suspect guard, per-turn FAIL rate, UNVERIFIED-by-cause, labeled-corpus
+    FP-rate) is printed.
+
+    This is a MEASUREMENT, not a gate: the exit code reflects only a HARD error -- a missing
+    `trace-dir`, a malformed `--invariants` file -- never "violations were found". A ledger
+    full of VERIFIED_FLAGGED instances still exits 0; only `belay verify`/`belay corpus run`
+    are the pass/fail gates.
+    """
+    from datetime import datetime, timezone
+
+    from belay.corpus.metrics import score
+    from belay.phase0 import runner as phase0_runner
+    from belay.phase0.ledger import to_json
+    from belay.phase0.report import render_report
+    from belay.verify.invariants import default_invariants, load_invariants
+
+    trace_dir = Path(args.trace_dir)
+    if not trace_dir.is_dir():
+        _emit(f"belay: trace directory not found: {trace_dir}")
+        return 2
+
+    # The A1 policy this run enforces -- identical fail-closed shape to verify/corpus add:
+    # a malformed operator file must never silently verify against a dropped policy.
+    invariants = [] if args.no_default_invariants else default_invariants()
+    if args.invariants is not None:
+        try:
+            invariants = invariants + load_invariants(Path(args.invariants))
+        except ValueError as exc:
+            _emit(f"belay: {exc}")
+            return 2
+
+    # The ONLY clock read in this command; run_batch and everything it calls read no clock.
+    captured_at = datetime.now(timezone.utc).isoformat()
+
+    corpus_dir = Path(args.corpus_dir)
+    ledger = phase0_runner.run_batch(
+        trace_dir,
+        corpus_dir=corpus_dir,
+        server_command=list(args.server),
+        invariants=invariants,
+        captured_at=captured_at,
+        replays=args.replays,
+        timeout=args.timeout,
+        # Looked up off the module at call time (not bound as this function's own default)
+        # so a test can monkeypatch `belay.phase0.runner.verify_turn`/`.add_case` and have
+        # it take effect here -- exactly the seam `run_batch` itself documents.
+        verifier=phase0_runner.verify_turn,
+        ingester=phase0_runner.add_case,
+    )
+
+    Path(args.ledger).write_text(json.dumps(to_json(ledger), indent=2), encoding="utf-8")
+
+    cases, error = _load_scored_cases(corpus_dir)
+    if error is not None:
+        _emit(error)
+        return 2
+    metrics = score(cases)
+
+    _emit(render_report(ledger, metrics))
+    return 0
+
+
+def _cmd_phase0_report(args: argparse.Namespace) -> int:
+    """`belay phase0 report <ledger.json>` — re-render the Phase-0 report. No replay.
+
+    Loads a ledger written by `phase0 run --ledger`, re-scores the corpus, and prints the
+    same report `render_report` would produce for that ledger -- a pure re-render: no
+    replay, no re-verification, no clock read. A missing or corrupt ledger file is
+    fail-closed (exit 2), never a silently empty report.
+    """
+    from belay.corpus.metrics import score
+    from belay.phase0.ledger import from_json
+    from belay.phase0.report import render_report
+
+    ledger_path = Path(args.ledger)
+    if not ledger_path.is_file():
+        _emit(f"belay: ledger file not found: {ledger_path}")
+        return 2
+
+    try:
+        data = json.loads(ledger_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        _emit(f"belay: could not read ledger {ledger_path}: {exc}")
+        return 2
+
+    try:
+        ledger = from_json(data)
+    except ValueError as exc:
+        _emit(f"belay: {exc}")
+        return 2
+
+    cases, error = _load_scored_cases(Path(args.corpus_dir))
+    if error is not None:
+        _emit(error)
+        return 2
+    metrics = score(cases)
+
+    _emit(render_report(ledger, metrics))
+    return 0
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="belay", description="The agent harness.")
     subcommands = parser.add_subparsers(dest="group", required=True)
@@ -1285,6 +1423,97 @@ def _parser() -> argparse.ArgumentParser:
         help="the corpus directory the case lives under (default: ./corpus/local, which is gitignored so cases never get committed)",
     )
     corpus_show.set_defaults(func=_cmd_corpus_show)
+
+    phase0 = subcommands.add_parser(
+        "phase0", help="run the failure corpus at scale and publish the violation-rate number"
+    ).add_subparsers(dest="action", required=True)
+
+    phase0_run = phase0.add_parser(
+        "run",
+        help="verify every trace in a directory, ingest FAILs into the corpus, and report",
+        description=(
+            "Verify every trace-*.jsonl in TRACE-DIR by RE-EXECUTION (the same verify_turn "
+            "`verify`/`corpus add` run), ingest each FAILing turn into the corpus as a "
+            "'pending' case, write the run ledger to --ledger, and print the Phase-0 report: "
+            "the violation rate with its disciplined denominator, the instrument-suspect "
+            "guard, the per-turn FAIL rate, the UNVERIFIED rate by named cause, and the "
+            "labeled-corpus FP-rate.\n\n"
+            "This is a MEASUREMENT, not a gate: the exit code reflects only a HARD error -- "
+            "a missing trace-dir, a malformed --invariants file -- never 'violations were "
+            "found'. A ledger full of flagged instances still exits 0."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    phase0_run.add_argument("trace_dir", help="directory of trace-*.jsonl files to verify")
+    phase0_run.add_argument(
+        "--ledger", required=True, metavar="path", help="path to write the run ledger as JSON"
+    )
+    phase0_run.add_argument(
+        "--corpus-dir",
+        default="corpus/local",
+        help=(
+            "the corpus directory FAILing turns are ingested into and scored from "
+            "(default: ./corpus/local, which is gitignored so cases never get committed)"
+        ),
+    )
+    phase0_run.add_argument(
+        "--invariants",
+        default=None,
+        metavar="path",
+        help=(
+            "an operator-declared invariant file (JSON) to enforce as A1, on top of the "
+            "defaults; a malformed file is a fail-closed error, never a silent skip"
+        ),
+    )
+    phase0_run.add_argument(
+        "--no-default-invariants",
+        action="store_true",
+        help="do not apply the built-in default invariants (tests/ is read-only)",
+    )
+    phase0_run.add_argument(
+        "--replays",
+        type=_verify_replays,
+        default=3,
+        help="on a DIVERGED reply, re-invoke this many times to classify determinism (default: 3, minimum: 3)",
+    )
+    phase0_run.add_argument(
+        "--timeout",
+        type=float,
+        default=DEFAULT_TIMEOUT,
+        help=f"per-replay timeout in seconds (default: {DEFAULT_TIMEOUT:g})",
+    )
+    phase0_run.add_argument(
+        "--server",
+        nargs=argparse.REMAINDER,
+        default=[],
+        metavar="cmd ...",
+        help="the MCP server to replay against; everything after --server is its command",
+    )
+    phase0_run.set_defaults(func=_cmd_phase0_run)
+
+    phase0_report = phase0.add_parser(
+        "report",
+        help="re-render the Phase-0 report from a saved ledger -- no replay, no re-run",
+        description=(
+            "Load a run ledger written by `phase0 run --ledger` and re-render the same "
+            "Phase-0 report for it: a pure re-render, no replay, no re-verification, no "
+            "clock read. A missing or corrupt ledger file is a fail-closed error."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    phase0_report.add_argument(
+        "ledger", help="the ledger JSON file to re-render (written by `phase0 run --ledger`)"
+    )
+    phase0_report.add_argument(
+        "--corpus-dir",
+        default="corpus/local",
+        help=(
+            "the corpus directory to score against (default: ./corpus/local, which is "
+            "gitignored so cases never get committed)"
+        ),
+    )
+    phase0_report.set_defaults(func=_cmd_phase0_report)
+
     return parser
 
 
