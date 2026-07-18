@@ -2,16 +2,19 @@
 
 This file orients a coding agent working in this repository. Read it first.
 
-> **Status: C1–C5 are built and merged — the C1–C5 Phase-0 gate is reached** (377 tests, zero
-> runtime dependencies). The full record → sandbox → snapshot/restore → replay → verdict spine
-> exists: the byte-transparent stdio MCP proxy + trace format (C1), the Seatbelt sandbox with
-> snapshot/restore (C2), deterministic replay with a real before/after delta (C3), and the
-> grounded verdict — **A2** result-equivalence + effect-conformance (C4) and **A1** task-scoped
-> invariants (C5, `src/belay/verify/invariants.py`). A1 is the axis that catches a *cheating*
-> agent A2 structurally cannot: `belay verify --invariants` (the `tests/` read-only default is on
-> unless `--no-default-invariants`), grounded on the observed delta, zero LLM, UNVERIFIED-never-PASS.
-> **Next: run the Phase-0 corpus and publish the violation-rate number**, then C6 (failure corpus).
-> C7 (live console); C8 (A3 claim re-derivation) and C9 (observability interop) are cuttable, last.
+> **Status: C1–C6 are built and merged** (431 tests, 1 platform-skip; zero runtime dependencies).
+> The full record → sandbox → snapshot/restore → replay → verdict spine exists: the byte-transparent
+> stdio MCP proxy + trace format (C1), the Seatbelt sandbox with snapshot/restore (C2), deterministic
+> replay with a real before/after delta (C3), and the grounded verdict — **A2** result-equivalence +
+> effect-conformance (C4) and **A1** task-scoped invariants (C5, `src/belay/verify/invariants.py`).
+> A1 catches a *cheating* agent A2 structurally cannot: `belay verify --invariants` (the `tests/`
+> read-only default is on unless `--no-default-invariants`), grounded on the observed delta, zero LLM,
+> UNVERIFIED-never-PASS. **C6 — the failure corpus** (`src/belay/corpus/`, moat #2): `belay corpus
+> add/run/score` stores each caught failure as a self-contained, replayable, human-labeled case; the
+> corpus is the regression suite, and precision/recall/coverage measures detection against human labels
+> (UNVERIFIED excluded, the engine never labels its own cases). Cases live under gitignored `corpus/local/`.
+> **Next: run the Phase-0 corpus and publish the violation-rate number**, then C7 (live console — first
+> UI). C8 (A3 claim re-derivation) and C9 (observability interop) are cuttable, last.
 >
 > [`docs/ROADMAP.md`](docs/ROADMAP.md) (phased plan + gates) and
 > [`docs/technical/CAPABILITY_ROADMAP.md`](docs/technical/CAPABILITY_ROADMAP.md)
