@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/belay-logo.png" alt="Belay" width="104" />
+<img src="https://raw.githubusercontent.com/haqaliz/belay/master/assets/belay-logo.png" alt="Belay" width="104" />
 
 # Belay
 
@@ -123,15 +123,15 @@ The engine is built in capability layers (see [the roadmap](docs/technical/CAPAB
 
 **Is the boundary real, and is it actually enforcing?** `belay sandbox check` probes the substrate by *using* it — snapshot, restore, and a write outside the scope that must be refused. The result is a fact, not a claim.
 
-<p align="center"><img src="assets/belay-sandbox.svg" alt="belay sandbox check output: substrate section shows sandbox-exec ok, apfs-clonefile snapshot backend ok, capabilities clone/gc/restore/snapshot, and containment ok because a write outside the scope was refused; scope section shows the writable snapshotted workspace and the non-snapshotted TMPDIR; the server ran and exited cleanly with no denials; final line reads belay: substrate ok." width="760" /></p>
+<p align="center"><img src="https://raw.githubusercontent.com/haqaliz/belay/master/assets/belay-sandbox.png" alt="belay sandbox check output: substrate section shows sandbox-exec ok, apfs-clonefile snapshot backend ok, capabilities clone/gc/restore/snapshot, and containment ok because a write outside the scope was refused; scope section shows the writable snapshotted workspace and the non-snapshotted TMPDIR; the server ran and exited cleanly with no denials; final line reads belay: substrate ok." width="760" /></p>
 
 **Coverage, not a verdict.** `belay replay` reports what re-executed and what could not — the `UNVERIFIED` rate with every instance filed under a named cause. It never spins an unverified turn as a `PASS`.
 
-<p align="center"><img src="assets/belay-replay.svg" alt="belay replay output: five turns, three REPLAYED as result-equivalent and two UNVERIFIED (manifest not found; replay did not answer target); a coverage block totals 9 turns, 7 replayed, 2 unverified; the UNVERIFIED RATE is 2 of 9 or 22 percent, broken down by cause. It emits no PASS or FAIL." width="760" /></p>
+<p align="center"><img src="https://raw.githubusercontent.com/haqaliz/belay/master/assets/belay-replay.png" alt="belay replay output: five turns, three REPLAYED as result-equivalent and two UNVERIFIED (manifest not found; replay did not answer target); a coverage block totals 9 turns, 7 replayed, 2 unverified; the UNVERIFIED RATE is 2 of 9 or 22 percent, broken down by cause. It emits no PASS or FAIL." width="760" /></p>
 
 **Every caught failure compounds.** `belay corpus score` grades the engine's own detection against *human* labels — precision and recall reported only ever beside coverage, with `UNVERIFIED` verdicts and unadjudicated cases excluded, never folded in as a PASS.
 
-<p align="center"><img src="assets/belay-corpus.svg" alt="belay corpus score output: 13 cases scored against human labels; a confusion matrix of TP 7, FP 0, FN 1, TN 5; metrics precision 1.00, recall 0.88, coverage 0.92; an excluded block lists one UNVERIFIED verdict and zero pending labels that are never counted as a PASS." width="760" /></p>
+<p align="center"><img src="https://raw.githubusercontent.com/haqaliz/belay/master/assets/belay-corpus.png" alt="belay corpus score output: 13 cases scored against human labels; a confusion matrix of TP 7, FP 0, FN 1, TN 5; metrics precision 1.00, recall 0.88, coverage 0.92; an excluded block lists one UNVERIFIED verdict and zero pending labels that are never counted as a PASS." width="760" /></p>
 
 ### The verdict: three axes, deliberately unequal
 
