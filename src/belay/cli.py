@@ -740,6 +740,73 @@ def _cmd_corpus_add(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_corpus_run(args: argparse.Namespace) -> int:
+    """`belay corpus run [corpus_dir]` — re-verify every case; exit non-zero IFF a REGRESSION.
+
+    Re-verifies every stored case against the live engine (the corpus IS the regression
+    suite) and prints each case's outcome plus an aggregate. A REGRESSION shows its diverging
+    axis/kind (expected -> got); a SKIP shows why the case could not be evaluated on this box.
+    The exit is non-zero IFF at least one case REGRESSED — a run that is all MATCH/SKIP exits
+    0, because a pure SKIP is partial coverage (a non-darwin box, an unavailable server), not
+    a CI failure. The SKIP count is stated plainly so partial coverage is never mistaken for
+    a clean full pass.
+    """
+    from belay.corpus.run import MATCH, REGRESSION, SKIP, run_corpus
+
+    corpus_dir = Path(args.corpus_dir)
+    if not corpus_dir.is_dir():
+        _emit(f"belay: corpus directory not found: {corpus_dir}")
+        return 2
+
+    try:
+        run = run_corpus(corpus_dir)
+    except ValueError as exc:
+        # A corrupt/unreadable case dir is fail-closed — never a silent skip.
+        _emit(f"belay: {exc}")
+        return 2
+
+    _emit(f"belay corpus run {corpus_dir}")
+    _emit()
+    _emit(f"  {len(run.results)} case(s) re-verified by re-execution.")
+    _emit()
+    _emit("cases")
+    for result in run.results:
+        if result.outcome == REGRESSION:
+            _emit(f"  {result.case_id:<32}{REGRESSION}")
+            for div in result.divergences:
+                where = div.kind if not div.axis else f"{div.axis} {div.kind}"
+                _emit(f"      {where:<24}{div.expected_status} -> {div.got_status}")
+        elif result.outcome == SKIP:
+            _emit(f"  {result.case_id:<32}{SKIP}")
+            _emit(f"      {result.skip_reason}")
+        else:
+            _emit(f"  {result.case_id:<32}{MATCH}")
+
+    _emit()
+    _emit("aggregate")
+    _emit(f"  cases                 {len(run.results)}")
+    _emit(f"  MATCH                 {run.matches}")
+    _emit(f"  REGRESSION            {run.regressions}")
+    _emit(f"  SKIP                  {run.skips}")
+
+    _emit()
+    if run.skips:
+        _emit(
+            f"  {run.skips} case(s) were SKIPPED — not evaluated on this box (off substrate, "
+            f"server unavailable, or capability mismatch). Coverage here was PARTIAL; a SKIP "
+            f"is never a pass and never a regression."
+        )
+    if run.has_regression:
+        _emit(
+            f"belay: {run.regressions} case(s) REGRESSED — a recorded verdict no longer "
+            f"reproduces. The corpus is the regression suite; this is a real drift, not a "
+            f"skip."
+        )
+        return 1
+    _emit("belay: no regressions" + (f" ({run.skips} skipped)" if run.skips else ""))
+    return 0
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="belay", description="The agent harness.")
     subcommands = parser.add_subparsers(dest="group", required=True)
@@ -942,6 +1009,31 @@ def _parser() -> argparse.ArgumentParser:
         help="the MCP server to replay against; everything after --server is its command",
     )
     corpus_add.set_defaults(func=_cmd_corpus_add)
+
+    corpus_run = corpus.add_parser(
+        "run",
+        help="re-verify every stored case and assert it still reaches its recorded verdict",
+        description=(
+            "Re-verify every case in the corpus against the live engine and assert each still "
+            "reaches its recorded verdict. The corpus IS the regression suite: a case that no "
+            "longer reproduces its per-sub-verdict SET (not merely its reduced status) is a "
+            "caught detector DRIFT, and the run exits NON-ZERO.\n\n"
+            "A SKIP is kept distinct from a REGRESSION and is never a pass: a case this box "
+            "cannot evaluate — off the macOS Seatbelt substrate, the recorded server not "
+            "runnable, a backend capability mismatch on restore — is SKIPPED, not failed, so "
+            "the corpus does not fail CI on every non-darwin box. The run exits non-zero IFF "
+            "at least one case REGRESSED; an all-MATCH/SKIP run exits 0 with its SKIP count "
+            "stated plainly."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    corpus_run.add_argument(
+        "corpus_dir",
+        nargs="?",
+        default="corpus",
+        help="the corpus directory of case dirs to re-verify (default: ./corpus)",
+    )
+    corpus_run.set_defaults(func=_cmd_corpus_run)
     return parser
 
 
