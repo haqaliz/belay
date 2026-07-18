@@ -33,7 +33,7 @@ from belay.phase0.runner import run_batch
 from belay.replay.persist import persist_snapshot
 from belay.snapshot.substrate import present_handle, take_snapshot
 from belay.trace import TraceWriter
-from belay.verify.invariants import Invariant, default_invariants
+from belay.verify.invariants import default_invariants
 
 FIXTURES = Path(__file__).parent / "fixtures"
 EDITOR_SERVER = FIXTURES / "weakening_editor_server.py"
