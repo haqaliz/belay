@@ -59,6 +59,12 @@ __all__ = ["main"]
 #: purposes and is why a timeout is not itself reported as a failure.
 DEFAULT_SECONDS = 2.0
 
+#: The per-replay timeout `corpus add` records on a case and re-executes the turn under.
+#: Kept equal to `belay.replay.client.DEFAULT_TIMEOUT` but declared here so building the
+#: parser does not import the replay stack — cli.py imports everything else lazily to keep
+#: `belay --help` cheap, and a `test_default_timeout_matches_client` pins the two together.
+DEFAULT_TIMEOUT = 10.0
+
 _OK = "ok"
 _PROBLEM = "PROBLEM"
 
@@ -650,6 +656,90 @@ def _verify_replays(value: str) -> int:
     return n
 
 
+def _cmd_corpus_add(args: argparse.Namespace) -> int:
+    """`belay corpus add <trace> --turn N` — compose a self-contained case from a run.
+
+    Recomputes the target turn's verdict by REAL re-execution (the same `verify_turn` the
+    verify surface runs, with the same effective A1 policy), then bundles it into a case:
+    the trace slice, the pre-state tree, the A1 policy, and the recomputed expected verdict.
+    The human label is a PASS-THROUGH: `--label` sets it, and its ABSENCE stores `pending` —
+    the engine never derives a label from the verdict it just computed. A malformed
+    `--invariants` file is fail-closed (exit 2), matching `verify`.
+    """
+    from datetime import datetime, timezone
+
+    from belay.corpus.add import add_case
+    from belay.index import derive_correlation, tool_calls
+    from belay.replay.reader import TraceCorrupt, read_trace
+    from belay.verify.invariants import default_invariants, load_invariants
+    from belay.verify.turn import verify_turn
+
+    if not args.server:
+        _emit("belay: a server command is required, after --server. Nothing to replay against.")
+        return 2
+
+    trace_path = Path(args.trace)
+    if not trace_path.exists():
+        _emit(f"belay: trace not found: {trace_path}")
+        return 2
+
+    # The A1 policy this case records — identical to verify: the defaults (unless dropped)
+    # plus any operator file, fail-closed on a file that will not parse.
+    invariants = [] if args.no_default_invariants else default_invariants()
+    if args.invariants is not None:
+        try:
+            invariants = invariants + load_invariants(Path(args.invariants))
+        except ValueError as exc:
+            _emit(f"belay: {exc}")
+            return 2
+
+    try:
+        read = read_trace(trace_path)
+    except TraceCorrupt as exc:
+        _emit(f"belay: {exc}")
+        return 2
+
+    records = list(read.records)
+    total = len(tool_calls(derive_correlation(records)))
+    if not (0 <= args.turn < total):
+        _emit(f"belay: --turn {args.turn} out of range; the trace holds {total} tool call(s)")
+        return 2
+
+    manifest_dir = Path(args.manifest_dir)
+    verdict = verify_turn(
+        records, args.turn,
+        server_command=args.server, manifest_dir=manifest_dir, replays=args.replays,
+        invariants=invariants, timeout=args.timeout,
+    )
+
+    # The CLI is the boundary that may read the clock; `add_case` itself never does.
+    captured_at = datetime.now(timezone.utc).isoformat()
+    try:
+        case_dir = add_case(
+            Path(args.corpus_dir),
+            records=records,
+            target_turn_index=args.turn,
+            verdict=verdict,
+            manifest_dir=manifest_dir,
+            server_command=list(args.server),
+            invariants=invariants,
+            human_label=args.label,
+            replays=args.replays,
+            timeout=args.timeout,
+            source_trace_id=trace_path.stem,
+            captured_at=captured_at,
+        )
+    except ValueError as exc:
+        _emit(f"belay: {exc}")
+        return 2
+
+    _emit(f"belay corpus add: composed case {case_dir}")
+    _emit(f"  turn {args.turn}  verdict {verdict.status.value}  label {args.label}")
+    _emit("  A recomputed verdict and a HUMAN label — the label is 'pending' until a human")
+    _emit("  relabels it; the engine never labels a case from its own verdict.")
+    return 0
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="belay", description="The agent harness.")
     subcommands = parser.add_subparsers(dest="group", required=True)
@@ -770,6 +860,88 @@ def _parser() -> argparse.ArgumentParser:
         help="the MCP server to replay against; everything after --server is its command",
     )
     verify.set_defaults(func=_cmd_verify)
+
+    corpus = subcommands.add_parser(
+        "corpus", help="the failure corpus: labeled, replayable cases from flagged runs"
+    ).add_subparsers(dest="action", required=True)
+    corpus_add = corpus.add_parser(
+        "add",
+        help="compose a self-contained, labeled case from one flagged turn of a trace",
+        description=(
+            "Recompute one tools/call turn's verdict by RE-EXECUTION (the same verify_turn "
+            "the verify surface runs, with the same effective A1 policy) and bundle it into "
+            "a SELF-CONTAINED corpus case: the trace, the pre-state tree (copied in, so the "
+            "case survives deletion of the original run), the A1 policy, and the recomputed "
+            "expected verdict. A later `corpus run` re-replays the case and asserts it still "
+            "reaches this verdict.\n\n"
+            "The human label is a PASS-THROUGH: --label sets it, and its ABSENCE stores "
+            "'pending'. The engine NEVER derives a label from the verdict it just computed — "
+            "a case is labeled true/false-positive by a HUMAN, later, not by the engine that "
+            "flagged it. That separation is what keeps the corpus's precision honest.\n\n"
+            "Manifests: point --manifest-dir at the gate's .manifests sibling, as with verify."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    corpus_add.add_argument("trace", help="the trace file (.jsonl) the flagged turn is in")
+    corpus_add.add_argument(
+        "--turn",
+        type=int,
+        required=True,
+        help="the tools/call turn (0-based) to compose a case from",
+    )
+    corpus_add.add_argument(
+        "--manifest-dir",
+        required=True,
+        help="where the gate persisted this run's snapshot manifests (the .manifests sibling)",
+    )
+    corpus_add.add_argument(
+        "--corpus-dir",
+        default="corpus",
+        help="the corpus directory the case is written under (default: ./corpus)",
+    )
+    corpus_add.add_argument(
+        "--label",
+        choices=["true-positive", "false-positive", "unverifiable"],
+        default="pending",
+        help=(
+            "the HUMAN ground-truth label for this case; omit it and the case is stored "
+            "'pending' for a human to relabel. The engine never labels from its own verdict."
+        ),
+    )
+    corpus_add.add_argument(
+        "--invariants",
+        default=None,
+        metavar="path",
+        help=(
+            "an operator-declared invariant file (JSON) to enforce as A1 when recomputing "
+            "the verdict, on top of the defaults; a malformed file is a fail-closed error"
+        ),
+    )
+    corpus_add.add_argument(
+        "--no-default-invariants",
+        action="store_true",
+        help="do not apply the built-in default invariants (tests/ is read-only)",
+    )
+    corpus_add.add_argument(
+        "--replays",
+        type=_verify_replays,
+        default=3,
+        help="on a DIVERGED reply, re-invoke this many times to classify determinism (min 3)",
+    )
+    corpus_add.add_argument(
+        "--timeout",
+        type=float,
+        default=DEFAULT_TIMEOUT,
+        help=f"per-replay timeout in seconds recorded on the case (default: {DEFAULT_TIMEOUT:g})",
+    )
+    corpus_add.add_argument(
+        "--server",
+        nargs=argparse.REMAINDER,
+        default=[],
+        metavar="cmd ...",
+        help="the MCP server to replay against; everything after --server is its command",
+    )
+    corpus_add.set_defaults(func=_cmd_corpus_add)
     return parser
 
 
