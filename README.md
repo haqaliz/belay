@@ -19,6 +19,10 @@ Belay sits as a transparent proxy between an AI agent and the tools it calls. It
 
 [Quickstart](#quickstart) · [How it works](#how-it-works) · [The verdict](#the-verdict-three-axes-deliberately-unequal) · [Coverage & limits](#coverage--limits-stated-exactly) · [Roadmap](docs/ROADMAP.md) · [Vision](VISION.md) · [Contributing](CONTRIBUTING.md)
 
+<br/>
+
+<img src="https://raw.githubusercontent.com/haqaliz/belay/master/assets/belay-demo.gif" alt="belay verify replays a two-turn trace. Turn 0 is an honest read: A2 result and effect and the A1 tests/ read-only invariant all PASS. Turn 1's write reproduces faithfully so A2 result PASSes, but replay observes a mutation under the read-only tests/ scope, so the A1 invariant FAILs and the turn reduces to FAIL — a corrupt success caught with zero LLM." width="820" />
+
 </div>
 
 ---
@@ -114,6 +118,20 @@ agent  ⇄  [ belay.proxy ]  ⇄  MCP server
 ```
 
 The engine is built in capability layers (see [the roadmap](docs/technical/CAPABILITY_ROADMAP.md)): **C1** capture, **C2** sandbox + snapshot/restore, **C3** deterministic replay with a real before/after delta, **C4** the A2 replay verdict, **C5** the A1 invariant verdict, **C6** the failure corpus. All merged; zero runtime dependencies.
+
+### See it work
+
+**Is the boundary real, and is it actually enforcing?** `belay sandbox check` probes the substrate by *using* it — snapshot, restore, and a write outside the scope that must be refused. The result is a fact, not a claim.
+
+<p align="center"><img src="assets/belay-sandbox.svg" alt="belay sandbox check output: substrate section shows sandbox-exec ok, apfs-clonefile snapshot backend ok, capabilities clone/gc/restore/snapshot, and containment ok because a write outside the scope was refused; scope section shows the writable snapshotted workspace and the non-snapshotted TMPDIR; the server ran and exited cleanly with no denials; final line reads belay: substrate ok." width="760" /></p>
+
+**Coverage, not a verdict.** `belay replay` reports what re-executed and what could not — the `UNVERIFIED` rate with every instance filed under a named cause. It never spins an unverified turn as a `PASS`.
+
+<p align="center"><img src="assets/belay-replay.svg" alt="belay replay output: five turns, three REPLAYED as result-equivalent and two UNVERIFIED (manifest not found; replay did not answer target); a coverage block totals 9 turns, 7 replayed, 2 unverified; the UNVERIFIED RATE is 2 of 9 or 22 percent, broken down by cause. It emits no PASS or FAIL." width="760" /></p>
+
+**Every caught failure compounds.** `belay corpus score` grades the engine's own detection against *human* labels — precision and recall reported only ever beside coverage, with `UNVERIFIED` verdicts and unadjudicated cases excluded, never folded in as a PASS.
+
+<p align="center"><img src="assets/belay-corpus.svg" alt="belay corpus score output: 13 cases scored against human labels; a confusion matrix of TP 7, FP 0, FN 1, TN 5; metrics precision 1.00, recall 0.88, coverage 0.92; an excluded block lists one UNVERIFIED verdict and zero pending labels that are never counted as a PASS." width="760" /></p>
 
 ### The verdict: three axes, deliberately unequal
 

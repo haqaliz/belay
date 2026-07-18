@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="908" height="536" viewBox="0 0 908 536" xml:space="preserve" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace">
+  <defs>
+    <style>
+      .b    { font-size: 14px; }
+      .lbl  { fill: #8b949e; }
+      .txt  { fill: #e6edf3; }
+      .grn  { fill: #3fb950; }
+      .yel  { fill: #d29922; }
+      .cyn  { fill: #39c5cf; }
+      .red  { fill: #f85149; }
+      .mut  { fill: #6e7681; }
+      .cor  { fill: #e76050; }
+      .bold { font-weight: 700; }
+    </style>
+  </defs>
+
+  <rect x="0.5" y="0.5" width="907" height="535" rx="12" fill="#0d1117" stroke="#30363d"/>
+  <path d="M0 12 a12 12 0 0 1 12 -12 h884 a12 12 0 0 1 12 12 v32 h-908 z" fill="#161b22"/>
+  <circle cx="24" cy="22" r="6" fill="#f85149"/>
+  <circle cx="44" cy="22" r="6" fill="#d29922"/>
+  <circle cx="64" cy="22" r="6" fill="#3fb950"/>
+  <text x="454" y="27" text-anchor="middle" class="b mut">belay — coverage, not a verdict: the UNVERIFIED rate, every instance named</text>
+
+  <g class="b">
+    <text y="80"><tspan x="28" class="cor">$ </tspan><tspan class="txt">belay replay demo.jsonl --manifest-dir ./sn.manifests</tspan></text>
+
+    <text y="118"><tspan x="28" class="lbl">turn 0</tspan><tspan x="96" class="txt">fs.read_file</tspan><tspan x="256" class="grn">REPLAYED</tspan><tspan x="376" class="lbl">result EQUIVALENT; no delta</tspan></text>
+    <text y="142"><tspan x="28" class="lbl">turn 1</tspan><tspan x="96" class="txt">fs.write_file</tspan><tspan x="256" class="grn">REPLAYED</tspan><tspan x="376" class="lbl">result EQUIVALENT; wrote 1 path: src/app.py</tspan></text>
+    <text y="166"><tspan x="28" class="lbl">turn 2</tspan><tspan x="96" class="txt">http.get</tspan><tspan x="256" class="yel">UNVERIFIED</tspan><tspan x="376" class="yel">manifest not found</tspan></text>
+    <text y="190"><tspan x="28" class="lbl">turn 3</tspan><tspan x="96" class="txt">fs.write_file</tspan><tspan x="256" class="grn">REPLAYED</tspan><tspan x="376" class="lbl">result EQUIVALENT; wrote 1 path: README.md</tspan></text>
+    <text y="214"><tspan x="28" class="lbl">turn 4</tspan><tspan x="96" class="txt">db.query</tspan><tspan x="256" class="yel">UNVERIFIED</tspan><tspan x="376" class="yel">replay did not answer target</tspan></text>
+
+    <text y="256"><tspan x="28" class="mut">coverage</tspan></text>
+    <text y="280"><tspan x="60" class="lbl">turns total</tspan><tspan x="288" class="txt">9</tspan></text>
+    <text y="302"><tspan x="60" class="lbl">replayed</tspan><tspan x="288" class="grn">7</tspan></text>
+    <text y="324"><tspan x="60" class="lbl">unverified</tspan><tspan x="288" class="yel">2</tspan></text>
+    <text y="346"><tspan x="60" class="lbl">not-verifiable</tspan><tspan x="288" class="txt">0</tspan></text>
+
+    <text y="388"><tspan x="60" class="txt bold">UNVERIFIED RATE</tspan><tspan x="288" class="yel bold">2 / 9  (22%)</tspan></text>
+    <text y="410"><tspan x="88" class="mut">by cause</tspan></text>
+    <text y="432"><tspan x="116" class="lbl">manifest not found</tspan><tspan x="480" class="txt">1</tspan></text>
+    <text y="454"><tspan x="116" class="lbl">replay did not answer target</tspan><tspan x="480" class="txt">1</tspan></text>
+
+    <text y="498"><tspan x="28" class="mut"># an observation about coverage — C3 reports what replayed and what did not; it never emits PASS/FAIL.</tspan></text>
+  </g>
+</svg>

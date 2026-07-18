@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="908" height="474" viewBox="0 0 908 474" xml:space="preserve" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace">
+  <defs>
+    <style>
+      .b    { font-size: 14px; }
+      .lbl  { fill: #8b949e; }
+      .txt  { fill: #e6edf3; }
+      .grn  { fill: #3fb950; }
+      .yel  { fill: #d29922; }
+      .cyn  { fill: #39c5cf; }
+      .red  { fill: #f85149; }
+      .mut  { fill: #6e7681; }
+      .cor  { fill: #e76050; }
+      .bold { font-weight: 700; }
+    </style>
+  </defs>
+
+  <rect x="0.5" y="0.5" width="907" height="473" rx="12" fill="#0d1117" stroke="#30363d"/>
+  <path d="M0 12 a12 12 0 0 1 12 -12 h884 a12 12 0 0 1 12 12 v32 h-908 z" fill="#161b22"/>
+  <circle cx="24" cy="22" r="6" fill="#f85149"/>
+  <circle cx="44" cy="22" r="6" fill="#d29922"/>
+  <circle cx="64" cy="22" r="6" fill="#3fb950"/>
+  <text x="454" y="27" text-anchor="middle" class="b mut">belay — the failure corpus scores its own detection against HUMAN labels</text>
+
+  <g class="b">
+    <text y="80"><tspan x="28" class="cor">$ </tspan><tspan class="txt">belay corpus score corpus/local</tspan></text>
+    <text y="116"><tspan x="28" class="lbl">13 case(s) scored against HUMAN labels (no replay — stored verdicts only).</tspan></text>
+
+    <text y="154"><tspan x="28" class="mut">confusion matrix</tspan><tspan x="220" class="mut">(positive = engine FAIL)</tspan></text>
+    <text y="178"><tspan x="60" class="lbl">TP</tspan><tspan x="110" class="grn bold">7</tspan><tspan x="200" class="lbl">FP</tspan><tspan x="250" class="txt">0</tspan></text>
+    <text y="200"><tspan x="60" class="lbl">FN</tspan><tspan x="110" class="yel">1</tspan><tspan x="200" class="lbl">TN</tspan><tspan x="250" class="txt">5</tspan></text>
+
+    <text y="240"><tspan x="28" class="mut">metrics</tspan></text>
+    <text y="264"><tspan x="60" class="txt bold">precision</tspan><tspan x="220" class="grn bold">1.00</tspan><tspan x="320" class="mut">TP/(TP+FP)</tspan></text>
+    <text y="286"><tspan x="60" class="txt bold">recall</tspan><tspan x="220" class="grn bold">0.88</tspan><tspan x="320" class="mut">TP/(TP+FN)</tspan></text>
+    <text y="308"><tspan x="60" class="txt bold">coverage</tspan><tspan x="220" class="cor bold">0.92</tspan><tspan x="320" class="mut">decided / adjudicable</tspan></text>
+
+    <text y="348"><tspan x="28" class="mut">excluded (never folded in as PASS)</tspan></text>
+    <text y="372"><tspan x="60" class="lbl">UNVERIFIED verdict</tspan><tspan x="320" class="yel">1</tspan><tspan x="352" class="mut">engine could not decide; lowers coverage</tspan></text>
+    <text y="394"><tspan x="60" class="lbl">pending label</tspan><tspan x="320" class="txt">0</tspan><tspan x="352" class="mut">not yet adjudicated by a human</tspan></text>
+
+    <text y="440"><tspan x="28" class="mut"># precision/recall only make sense beside coverage; excluded cases are never counted as a PASS.</tspan></text>
+  </g>
+</svg>

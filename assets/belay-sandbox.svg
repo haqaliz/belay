@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="908" height="512" viewBox="0 0 908 512" xml:space="preserve" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace">
+  <defs>
+    <style>
+      .b    { font-size: 14px; }
+      .lbl  { fill: #8b949e; }
+      .txt  { fill: #e6edf3; }
+      .grn  { fill: #3fb950; }
+      .yel  { fill: #d29922; }
+      .cyn  { fill: #39c5cf; }
+      .red  { fill: #f85149; }
+      .mut  { fill: #6e7681; }
+      .cor  { fill: #e76050; }
+      .bold { font-weight: 700; }
+    </style>
+  </defs>
+
+  <rect x="0.5" y="0.5" width="907" height="511" rx="12" fill="#0d1117" stroke="#30363d"/>
+  <path d="M0 12 a12 12 0 0 1 12 -12 h884 a12 12 0 0 1 12 12 v32 h-908 z" fill="#161b22"/>
+  <circle cx="24" cy="22" r="6" fill="#f85149"/>
+  <circle cx="44" cy="22" r="6" fill="#d29922"/>
+  <circle cx="64" cy="22" r="6" fill="#3fb950"/>
+  <text x="454" y="27" text-anchor="middle" class="b mut">belay — is the boundary real, and is it actually enforcing?</text>
+
+  <g class="b">
+    <text y="80"><tspan x="28" class="cor">$ </tspan><tspan class="txt">belay sandbox check -- fs-server --root ./workspace</tspan></text>
+
+    <text y="118"><tspan x="28" class="mut">substrate</tspan></text>
+    <text y="142"><tspan x="60" class="lbl">sandbox-exec</tspan><tspan x="280" class="txt">/usr/bin/sandbox-exec</tspan><tspan x="520" class="grn">(ok)</tspan></text>
+    <text y="164"><tspan x="60" class="lbl">snapshot backend</tspan><tspan x="280" class="txt">apfs-clonefile</tspan><tspan x="520" class="grn">(ok)</tspan></text>
+    <text y="186"><tspan x="60" class="lbl">capabilities</tspan><tspan x="280" class="txt">clone, gc, restore, snapshot</tspan></text>
+    <text y="208"><tspan x="60" class="lbl">containment</tspan><tspan x="280" class="grn bold">ok</tspan><tspan x="320" class="txt">— a write outside the scope was refused</tspan></text>
+
+    <text y="248"><tspan x="28" class="mut">scope</tspan></text>
+    <text y="272"><tspan x="60" class="lbl">workspace</tspan><tspan x="280" class="txt">./workspace</tspan><tspan x="520" class="mut">writable · the only tree snapshotted</tspan></text>
+    <text y="294"><tspan x="60" class="lbl">TMPDIR</tspan><tspan x="280" class="txt">./.belay-tmp</tspan><tspan x="520" class="mut">writable · NOT snapshotted</tspan></text>
+
+    <text y="334"><tspan x="28" class="mut">server</tspan></text>
+    <text y="358"><tspan x="60" class="lbl">command</tspan><tspan x="280" class="txt">fs-server --root ./workspace</tspan></text>
+    <text y="380"><tspan x="60" class="lbl">ran 3s</tspan><tspan x="280" class="grn">ok</tspan><tspan x="320" class="mut">still running, killed at the sample's end</tspan></text>
+    <text y="402"><tspan x="60" class="lbl">exit</tspan><tspan x="280" class="grn">ok (0)</tspan></text>
+    <text y="424"><tspan x="60" class="lbl">denials</tspan><tspan x="280" class="grn">ok</tspan><tspan x="320" class="mut">no denials observed</tspan></text>
+
+    <text y="470"><tspan x="28" class="grn bold">belay: substrate ok</tspan><tspan class="mut"> — nothing refused in this run. The boundary was probed by using it.</tspan></text>
+  </g>
+</svg>
