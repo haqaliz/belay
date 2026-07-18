@@ -29,7 +29,7 @@ from fixtures.torture_tree import build_torture_tree
 
 from belay.replay.persist import load_snapshot, persist_snapshot
 from belay.snapshot.bth1 import hash_tree
-from belay.snapshot.substrate import GuardedSnapshot, guarded_restore, take_snapshot
+from belay.snapshot.substrate import guarded_restore, take_snapshot
 
 
 @pytest.fixture

@@ -1122,8 +1122,8 @@ def _parser() -> argparse.ArgumentParser:
     )
     corpus_add.add_argument(
         "--corpus-dir",
-        default="corpus",
-        help="the corpus directory the case is written under (default: ./corpus)",
+        default="corpus/local",
+        help="the corpus directory the case is written under (default: ./corpus/local, which is gitignored so cases never get committed)",
     )
     corpus_add.add_argument(
         "--label",
@@ -1189,8 +1189,8 @@ def _parser() -> argparse.ArgumentParser:
     corpus_run.add_argument(
         "corpus_dir",
         nargs="?",
-        default="corpus",
-        help="the corpus directory of case dirs to re-verify (default: ./corpus)",
+        default="corpus/local",
+        help="the corpus directory of case dirs to re-verify (default: ./corpus/local, which is gitignored so cases never get committed)",
     )
     corpus_run.set_defaults(func=_cmd_corpus_run)
 
@@ -1215,8 +1215,8 @@ def _parser() -> argparse.ArgumentParser:
     corpus_score.add_argument(
         "corpus_dir",
         nargs="?",
-        default="corpus",
-        help="the corpus directory of case dirs to score (default: ./corpus)",
+        default="corpus/local",
+        help="the corpus directory of case dirs to score (default: ./corpus/local, which is gitignored so cases never get committed)",
     )
     corpus_score.set_defaults(func=_cmd_corpus_score)
 
@@ -1244,8 +1244,8 @@ def _parser() -> argparse.ArgumentParser:
     )
     corpus_label.add_argument(
         "--corpus-dir",
-        default="corpus",
-        help="the corpus directory the case lives under (default: ./corpus)",
+        default="corpus/local",
+        help="the corpus directory the case lives under (default: ./corpus/local, which is gitignored so cases never get committed)",
     )
     corpus_label.set_defaults(func=_cmd_corpus_label)
 
@@ -1262,8 +1262,8 @@ def _parser() -> argparse.ArgumentParser:
     corpus_list.add_argument(
         "corpus_dir",
         nargs="?",
-        default="corpus",
-        help="the corpus directory of case dirs to list (default: ./corpus)",
+        default="corpus/local",
+        help="the corpus directory of case dirs to list (default: ./corpus/local, which is gitignored so cases never get committed)",
     )
     corpus_list.set_defaults(func=_cmd_corpus_list)
 
@@ -1281,8 +1281,8 @@ def _parser() -> argparse.ArgumentParser:
     corpus_show.add_argument("case_id", help="the case directory name under the corpus dir")
     corpus_show.add_argument(
         "--corpus-dir",
-        default="corpus",
-        help="the corpus directory the case lives under (default: ./corpus)",
+        default="corpus/local",
+        help="the corpus directory the case lives under (default: ./corpus/local, which is gitignored so cases never get committed)",
     )
     corpus_show.set_defaults(func=_cmd_corpus_show)
     return parser

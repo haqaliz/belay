@@ -43,7 +43,6 @@ from pathlib import Path
 from typing import Optional
 
 from belay.corpus.case import load_case
-from belay.replay.engine import UNANSWERED_TARGET
 from belay.replay.reader import read_trace
 from belay.replay.report import REPLAY_DID_NOT_ANSWER, canonical_cause
 from belay.snapshot.substrate import UnrestorableCause
