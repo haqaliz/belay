@@ -110,8 +110,9 @@ def render_report(ledger: RunLedger, metrics: Metrics) -> str:
     3. Per-turn FAIL rate (`fail_turns()/total_turns()`), same n/a discipline.
     4. UNVERIFIED rate by named cause (`unverified_by_cause()`), one line per bucket,
        plus the overall UNVERIFIED turn share.
-    5. FP-rate from the labeled corpus: `1 - metrics.precision`, or `n/a` when
-       `metrics.precision is None`.
+    5. FP-rate from the labeled corpus, rendered as its fraction `FP/(TP+FP) = pct`
+       (FP-rate = 1 - precision = FP/(TP+FP)), or `n/a` when `metrics.precision is None`
+       (TP+FP == 0) — never a fabricated 0.0/1.0.
     6. Flagged-but-unaddable note: total count across instances, labeled as counted
        violations that are not replayable corpus cases.
 
@@ -152,11 +153,12 @@ def render_report(ledger: RunLedger, metrics: Metrics) -> str:
     lines.append("")
 
     if metrics.precision is None:
-        fp_rate_str = "n/a"
+        fp_fraction = "n/a"
     else:
-        fp_rate_str = _format_rate(1 - metrics.precision)
+        fp_denominator = metrics.tp + metrics.fp
+        fp_fraction = f"{metrics.fp}/{fp_denominator} = {_format_rate(metrics.fp / fp_denominator)}"
     lines.append(
-        f"FP-rate (false-positive rate, labeled corpus, UNVERIFIED excluded) = {fp_rate_str}"
+        f"FP-rate (false-positive rate, labeled corpus, UNVERIFIED excluded) = {fp_fraction}"
     )
     lines.append("")
 

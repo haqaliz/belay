@@ -156,11 +156,17 @@ def test_unverified_appears_only_in_its_own_section_never_in_violation_numerator
 
 
 def test_fp_rate_from_precision_and_na_when_precision_is_none() -> None:
-    """(5) precision == 0.8 -> FP-rate shown as 20% (or 0.2); precision is None -> n/a."""
+    """(5) tp=4, fp=1 (precision == 0.8) -> FP-rate shown as its fraction "1/5 = 20.0%",
+    consistent with every other rate this module prints (numerator/denominator alongside
+    the percentage); precision is None -> n/a, never a fabricated 0.0/1.0."""
     ledger = _mixed_ledger()
 
-    report_with_precision = render_report(ledger, _metrics(precision=0.8))
-    assert "20.0%" in report_with_precision or "0.2" in report_with_precision
+    report_with_precision = render_report(ledger, _metrics(tp=4, fp=1, precision=0.8))
+    fp_line_with_precision = next(
+        line for line in report_with_precision.splitlines() if "FP-rate" in line
+    )
+    assert "1/5" in fp_line_with_precision
+    assert "20.0%" in fp_line_with_precision
 
     report_without_precision = render_report(ledger, _metrics(precision=None))
     fp_line = next(
@@ -172,7 +178,7 @@ def test_fp_rate_from_precision_and_na_when_precision_is_none() -> None:
 def test_render_report_is_deterministic() -> None:
     """(6) Same (ledger, metrics) in -> identical string out, every time."""
     ledger = _mixed_ledger()
-    metrics = _metrics(precision=0.75)
+    metrics = _metrics(tp=3, fp=1, precision=0.75)
 
     first = render_report(ledger, metrics)
     second = render_report(ledger, metrics)
