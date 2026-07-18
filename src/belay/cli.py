@@ -49,7 +49,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Sequence
+from typing import Optional, Sequence
 
 __all__ = ["main"]
 
@@ -807,6 +807,72 @@ def _cmd_corpus_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _rate(value: Optional[float]) -> str:
+    """A rate as a 2-decimal string, or the literal "n/a" for a `None` denominator.
+
+    "n/a" is never rendered as "1.00" or "0.00": a rate with no cases under it is undefined,
+    and printing a number there would manufacture a score the corpus never earned.
+    """
+    return "n/a" if value is None else f"{value:.2f}"
+
+
+def _cmd_corpus_score(args: argparse.Namespace) -> int:
+    """`belay corpus score [corpus_dir]` — precision, recall AND coverage vs HUMAN labels.
+
+    Loads every case (fail-closed on a corrupt one) and scores the engine's stored verdicts
+    against the human ground-truth labels: precision, recall, and — always beside them, never
+    omitted — coverage, plus the confusion matrix and the excluded tallies. UNVERIFIED verdicts
+    and `pending`/`unverifiable` labels are EXCLUDED from precision/recall by construction and
+    reported on their own lines; an n/a rate is printed "n/a", never a fabricated 1.00. This is
+    the number the Phase-0 gate publishes. It scores stored data — it does not replay.
+    """
+    from belay.corpus.case import CASE_FILENAME, load_case
+    from belay.corpus.metrics import score
+
+    corpus_dir = Path(args.corpus_dir)
+    if not corpus_dir.is_dir():
+        _emit(f"belay: corpus directory not found: {corpus_dir}")
+        return 2
+
+    case_dirs = sorted(p.parent for p in corpus_dir.glob(f"*/{CASE_FILENAME}"))
+    cases = []
+    for case_dir in case_dirs:
+        try:
+            cases.append(load_case(case_dir))
+        except ValueError as exc:
+            # A corrupt case is fail-closed, exactly as `corpus run` refuses to silently skip
+            # one: a metric scored over a case that would not load is a metric over the wrong set.
+            _emit(f"belay: {exc}")
+            return 2
+
+    m = score(cases)
+
+    _emit(f"belay corpus score {corpus_dir}")
+    _emit()
+    _emit(f"  {m.total} case(s) scored against HUMAN labels (no replay — stored verdicts only).")
+    _emit()
+    _emit("confusion matrix (positive = engine FAIL; over decided verdict x adjudicable label)")
+    _emit(f"  TP                    {m.tp}")
+    _emit(f"  FP                    {m.fp}")
+    _emit(f"  FN                    {m.fn}")
+    _emit(f"  TN                    {m.tn}")
+    _emit()
+    _emit("metrics")
+    _emit(f"  precision             {_rate(m.precision)}   TP/(TP+FP)")
+    _emit(f"  recall                {_rate(m.recall)}   TP/(TP+FN)")
+    _emit(f"  coverage              {_rate(m.coverage)}   decided / adjudicable")
+    _emit()
+    _emit("excluded (not scored in precision/recall — never folded in as PASS)")
+    _emit(f"  UNVERIFIED verdict    {m.unverified}   engine could not decide; lowers coverage")
+    _emit(f"  pending label         {m.pending}   not yet adjudicated by a human")
+    _emit(f"  unverifiable label    {m.unverifiable}   no ground truth to score against")
+    _emit()
+    _emit("  Precision/recall are reported ONLY with coverage: a corpus can look perfect on the")
+    _emit("  cases it decided while shrugging on the rest. An n/a rate means a 0 denominator —")
+    _emit("  it is NOT a 1.00. UNVERIFIED and unadjudicated labels are excluded, never a PASS.")
+    return 0
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="belay", description="The agent harness.")
     subcommands = parser.add_subparsers(dest="group", required=True)
@@ -1034,6 +1100,32 @@ def _parser() -> argparse.ArgumentParser:
         help="the corpus directory of case dirs to re-verify (default: ./corpus)",
     )
     corpus_run.set_defaults(func=_cmd_corpus_run)
+
+    corpus_score = corpus.add_parser(
+        "score",
+        help="precision, recall AND coverage of the stored verdicts against HUMAN labels",
+        description=(
+            "Score the corpus: how well do the engine's STORED verdicts match the HUMAN "
+            "ground-truth labels? Prints precision, recall, and — always beside them, never "
+            "alone — coverage, plus the TP/FP/FN/TN matrix and the excluded tallies. This "
+            "reads each case's recorded verdict and label; it does NOT replay (that is "
+            "`corpus run`).\n\n"
+            "Two exclusions are load-bearing and by construction: an UNVERIFIED verdict is "
+            "NEVER folded into PASS — it is excluded from precision/recall and lowers "
+            "coverage; a `pending` or `unverifiable` label has no ground truth and is "
+            "excluded too. The engine's own verdict can never stand in for a human label, so "
+            "precision cannot be inflated to 1.0 by counting every FAIL as a hit. A rate with "
+            "a 0 denominator prints 'n/a', never a fabricated 1.00."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    corpus_score.add_argument(
+        "corpus_dir",
+        nargs="?",
+        default="corpus",
+        help="the corpus directory of case dirs to score (default: ./corpus)",
+    )
+    corpus_score.set_defaults(func=_cmd_corpus_score)
     return parser
 
 
