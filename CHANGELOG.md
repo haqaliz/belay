@@ -9,6 +9,20 @@ All notable changes to Belay are documented here. The format follows
 
 _Nothing yet._
 
+## [0.2.0] — 2026-07-19
+
+### Added
+
+- **Phase-0 corpus runner** (`src/belay/phase0/`, `belay phase0 run` / `belay phase0 report`). Verifies
+  a whole directory of captured MCP runs, ingests every flagged (FAIL) turn into the failure corpus, and
+  emits *the number*: the **per-instance violation rate with its denominator**, the per-turn FAIL rate,
+  the `UNVERIFIED` rate by named cause, and the false-positive rate. It is a **measurement, not a gate**
+  (exits `0` even with violations present). A batch that captured ~no verifiable turns is reported as
+  `INSTRUMENT SUSPECT`, never a clean `0%` — a broken capture can't masquerade as a passing run. Reuses
+  the C1–C6 engine verbatim through an injectable verifier/ingester seam (so the honesty arithmetic is
+  tested cross-platform, no sandbox), with a darwin-gated end-to-end test proving the seam matches real
+  replay. No verdict logic changed.
+
 ## [0.1.1] — 2026-07-18
 
 ### Changed
