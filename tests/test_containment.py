@@ -209,6 +209,40 @@ def test_the_stock_python3_shim_survives_the_profile(tmp_path: Path) -> None:
     assert "the shim reached its own code" in result.stdout.decode()
 
 
+def test_dev_null_is_writable_but_containment_still_holds(tmp_path: Path) -> None:
+    """`/dev/null` writes are allowed; an out-of-scope REAL write is still denied.
+
+    Redirecting to `/dev/null` (`2>/dev/null`) is one of the most common things any
+    program does — the stock macOS `/usr/bin/python3` shim does it to resolve the
+    interpreter, and denying it exits that shim 72 (surfaced by CI). `/dev/null` is a
+    stateless discard device, so granting `file-write-data` on it escapes no scope. This
+    pins BOTH halves as one checked fact: the grant works, AND it did not widen the
+    filesystem — a write to a real path outside the scope is refused exactly as before,
+    so the null-device allowance is not a hole.
+    """
+    scope, outside = _scope_and_outside(tmp_path)
+    escape = outside / "escaped.txt"
+
+    allowed = run(
+        ["/bin/sh", "-c", "echo hi > /dev/null && echo NULL_OK"],
+        scope=scope,
+        network=NetworkPolicy.deny_all(),
+    )
+    assert allowed.rc == 0, allowed.stderr.decode(errors="replace")
+    assert "NULL_OK" in allowed.stdout.decode()
+    assert allowed.denials == (), allowed.denials
+
+    # The same profile still refuses a real out-of-scope write — /dev/null did not widen it.
+    denied = run(
+        ["/bin/sh", "-c", f"echo escaped > {shlex.quote(str(escape))}"],
+        scope=scope,
+        network=NetworkPolicy.deny_all(),
+    )
+    assert denied.rc != 0, "an out-of-scope write must still be refused"
+    assert not escape.exists(), "the out-of-scope file must not have been created"
+    assert any(d.op == "file-write" for d in denied.denials), denied.denials
+
+
 def test_scope_given_through_a_symlink_behaves_identically(tmp_path: Path) -> None:
     """A9 - M3. /tmp is a symlink to private/tmp; an unresolved subpath grants nothing.
 
