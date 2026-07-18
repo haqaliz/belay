@@ -246,6 +246,16 @@ def build_profile(
             f'(allow file-write* (subpath "{_quote(root)}"))'
             for root in _write_scopes(scope)
         ),
+        # `/dev/null` is a stateless discard device: writing to it persists nothing and
+        # escapes no scope, yet redirecting output to it (`2>/dev/null`) is one of the
+        # most common things any program does — including the stock macOS
+        # `/usr/bin/python3` shim, which runs `xcodebuild ... 2>/dev/null` to resolve the
+        # interpreter and exits 72 if that write is denied (surfaced by CI, where the
+        # runner's python3 is exactly that shim). `file-write-data` is the tightest grant
+        # that lets it through — bytes only, never create/unlink/chmod — so the write
+        # scope above stays the only place real state may change. Measured, not assumed:
+        # `/dev/null` is the one device CI actually denied; no other device is granted.
+        '(allow file-write-data (literal "/dev/null"))',
         "(deny network*)",
         # `network*` covers UNIX domain sockets, not just IP — measured, and the
         # reason this line exists. Without it `deny-all` kills any server that
