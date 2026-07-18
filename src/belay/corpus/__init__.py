@@ -8,3 +8,7 @@ the build. This package currently owns only the on-disk case FORMAT (`case.py`);
 
 Zero runtime dependencies (stdlib only), matching the rest of `src/belay`.
 """
+
+# S1 (Phase-0 seed): deferred until the Phase-0 audit exists — there is no audited seed
+# data to import yet, so no seed adapter is built.
+

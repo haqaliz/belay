@@ -873,6 +873,99 @@ def _cmd_corpus_score(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_corpus_label(args: argparse.Namespace) -> int:
+    """`belay corpus label <case-id> --label ...` — adjudicate a case's HUMAN label.
+
+    Rewrites ONLY `human_label`; the engine's recorded `expected` verdict is untouched (the D3
+    boundary — a human adjudication never rewrites what the engine computed). `--label`'s
+    argparse choices already exclude `pending` and any unknown string, and `set_label` fails
+    closed a second time, so a bad label never lands on disk.
+    """
+    from belay.corpus.curate import set_label
+
+    try:
+        case_dir = set_label(Path(args.corpus_dir), args.case_id, args.label)
+    except ValueError as exc:
+        _emit(f"belay: {exc}")
+        return 2
+
+    _emit(f"belay corpus label: {case_dir}")
+    _emit(f"  human_label -> {args.label}")
+    _emit("  Only the human label changed; the engine's recorded verdict is untouched.")
+    return 0
+
+
+def _cmd_corpus_list(args: argparse.Namespace) -> int:
+    """`belay corpus list [corpus_dir]` — one line per case: id, human label, reduced status.
+
+    Sorted by case-id for a stable listing. Loads each case fail-closed — a corrupt case dir
+    is an error (exit 2), never a silently skipped row, so the list never hides a case.
+    """
+    from belay.corpus.case import CASE_FILENAME, load_case
+
+    corpus_dir = Path(args.corpus_dir)
+    if not corpus_dir.is_dir():
+        _emit(f"belay: corpus directory not found: {corpus_dir}")
+        return 2
+
+    case_dirs = sorted(p.parent for p in corpus_dir.glob(f"*/{CASE_FILENAME}"))
+
+    _emit(f"belay corpus list {corpus_dir}")
+    _emit()
+    _emit(f"  {len(case_dirs)} case(s)")
+    _emit()
+    _emit(f"  {'case-id':<32}{'label':<16}verdict")
+    for case_dir in case_dirs:
+        try:
+            case = load_case(case_dir)
+        except ValueError as exc:
+            _emit(f"belay: {exc}")
+            return 2
+        _emit(f"  {case_dir.name:<32}{case.human_label:<16}{case.expected['reduced_status']}")
+    return 0
+
+
+def _cmd_corpus_show(args: argparse.Namespace) -> int:
+    """`belay corpus show <case-id> [--corpus-dir ...]` — the case's key fields, human-readable.
+
+    Prints the id, target turn, the expected reduced status AND its per-axis sub-verdict set,
+    the human label, the invariants, the server command, and provenance. Loads fail-closed:
+    a missing or corrupt case is a named error (exit 2), never an empty success.
+    """
+    from belay.corpus.case import load_case
+
+    case_dir = Path(args.corpus_dir) / args.case_id
+    try:
+        case = load_case(case_dir)
+    except ValueError as exc:
+        _emit(f"belay: {exc}")
+        return 2
+
+    _emit(f"belay corpus show {case_dir}")
+    _emit()
+    _emit(f"  id                    {case.id}")
+    _emit(f"  target_turn_index     {case.target_turn_index}")
+    _emit(f"  human_label           {case.human_label}")
+    _emit(f"  expected status       {case.expected['reduced_status']}")
+    _emit("  sub-verdicts")
+    for sub in case.expected["sub_verdicts"]:
+        axis = sub.get("axis", "?")
+        kind = sub.get("kind", "?")
+        status = sub.get("status", "?")
+        _emit(f"    {axis} {kind:<12}{status}")
+    _emit(f"  server_command        {' '.join(case.server_command)}")
+    _emit("  invariants")
+    if case.invariants:
+        for inv in case.invariants:
+            _emit(f"    {inv}")
+    else:
+        _emit("    (none)")
+    _emit(f"  provenance            {case.provenance}")
+    _emit(f"  capture_platform      {case.capture_platform}")
+    _emit(f"  capture_capabilities  {', '.join(case.capture_capabilities)}")
+    return 0
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="belay", description="The agent harness.")
     subcommands = parser.add_subparsers(dest="group", required=True)
@@ -1126,6 +1219,72 @@ def _parser() -> argparse.ArgumentParser:
         help="the corpus directory of case dirs to score (default: ./corpus)",
     )
     corpus_score.set_defaults(func=_cmd_corpus_score)
+
+    corpus_label = corpus.add_parser(
+        "label",
+        help="adjudicate a case's HUMAN ground-truth label (never touches the engine verdict)",
+        description=(
+            "Set a case's HUMAN ground-truth label — the adjudication step between `corpus add` "
+            "(which stores a case 'pending') and `corpus score` (which measures the engine's "
+            "verdicts against these labels). Choose one of the three real adjudications; "
+            "re-labeling is allowed, so a human can correct an earlier call.\n\n"
+            "This rewrites ONLY `human_label`. The engine's recorded `expected` verdict is left "
+            "byte-identical — a human adjudication NEVER edits what the engine computed. That "
+            "separation is what lets `corpus score` measure the engine against the labels "
+            "without measuring it against itself."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    corpus_label.add_argument("case_id", help="the case directory name under the corpus dir")
+    corpus_label.add_argument(
+        "--label",
+        required=True,
+        choices=["true-positive", "false-positive", "unverifiable"],
+        help="the HUMAN adjudication for this case (not 'pending' — that is the un-adjudicated default)",
+    )
+    corpus_label.add_argument(
+        "--corpus-dir",
+        default="corpus",
+        help="the corpus directory the case lives under (default: ./corpus)",
+    )
+    corpus_label.set_defaults(func=_cmd_corpus_label)
+
+    corpus_list = corpus.add_parser(
+        "list",
+        help="list every case: id, human label, reduced status (sorted by id)",
+        description=(
+            "List every case in the corpus, one line each: case-id, human label, and the "
+            "recorded expected reduced status. Sorted by case-id for a stable listing. A corrupt "
+            "case is a fail-closed error, never a silently dropped row."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    corpus_list.add_argument(
+        "corpus_dir",
+        nargs="?",
+        default="corpus",
+        help="the corpus directory of case dirs to list (default: ./corpus)",
+    )
+    corpus_list.set_defaults(func=_cmd_corpus_list)
+
+    corpus_show = corpus.add_parser(
+        "show",
+        help="show one case's key fields: verdict, sub-verdict set, label, invariants, provenance",
+        description=(
+            "Show one case's key fields without reading its case.json by hand: id, target turn, "
+            "the expected reduced status AND its per-axis sub-verdict set, the human label, the "
+            "invariants, the server command, and provenance. A missing or corrupt case is a "
+            "fail-closed error."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    corpus_show.add_argument("case_id", help="the case directory name under the corpus dir")
+    corpus_show.add_argument(
+        "--corpus-dir",
+        default="corpus",
+        help="the corpus directory the case lives under (default: ./corpus)",
+    )
+    corpus_show.set_defaults(func=_cmd_corpus_show)
     return parser
 
 
