@@ -8,8 +8,8 @@ recorded tool call again and comparing state. A single stray `import openai` ins
 `src/belay/verify/` would quietly turn the verdict into exactly the thing the project
 exists to replace, and every other test would stay green while it did.
 
-So this walks every module under `src/belay/verify/` with `ast` — never importing
-it, for the same reason `test_import_guard` does not: importing runs side effects and
+So this walks every module under `src/belay/verify/` AND `src/belay/corpus/` with `ast`
+— never importing them, for the same reason `test_import_guard` does not: importing runs side effects and
 reports on the venv rather than on the source that ships — and asserts that none of
 them imports an inference client (a model SDK, a local-inference runtime, or an
 LLM-orchestration framework), and that none reaches for a first-party module whose
@@ -30,7 +30,12 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-VERIFY = Path(__file__).parent.parent / "src" / "belay" / "verify"
+SRC = Path(__file__).parent.parent / "src" / "belay"
+#: The layers whose verdict/measurement must be grounded in re-execution and diffing,
+#: never a model: `verify/` (the A1/A2 verdict) AND `corpus/` (C6 — it stores and scores
+#: those verdicts, and an inference client there would smuggle a judge into the metric or
+#: a re-labeler into the corpus). Both are walked by the same guard.
+GUARDED_ROOTS = (SRC / "verify", SRC / "corpus")
 
 #: Third-party inference clients: hosted model SDKs, local-inference runtimes, and
 #: LLM-orchestration frameworks. None of these may enter the verdict path. The set is
@@ -79,8 +84,8 @@ _INFERENCE_FIRST_PARTY = frozenset(
 
 
 def _modules() -> list[Path]:
-    files = sorted(VERIFY.rglob("*.py"))
-    assert files, f"no modules found under {VERIFY} — this guard would pass vacuously"
+    files = sorted(p for root in GUARDED_ROOTS for p in root.rglob("*.py"))
+    assert files, f"no modules found under {GUARDED_ROOTS} — this guard would pass vacuously"
     return files
 
 
@@ -123,13 +128,13 @@ def test_no_module_in_the_verify_layer_imports_an_inference_client() -> None:
     before it was reverted, so this has teeth rather than passing by luck.
     """
     offenders = [
-        f"{path.relative_to(VERIFY)}:{lineno} imports {dotted!r}"
+        f"{path.relative_to(SRC)}:{lineno} imports {dotted!r}"
         for path in _modules()
         for dotted, lineno in _imported_names(path)
         if _is_inference_import(dotted)
     ]
     assert not offenders, (
-        "an inference client is imported inside src/belay/verify:\n  "
+        "an inference client is imported inside src/belay/verify or src/belay/corpus:\n  "
         + "\n  ".join(offenders)
         + "\n\nWHY THIS IS A FAILURE: Belay's verdict is grounded in RE-EXECUTION and a"
         " state diff — it replays the recorded tool call and compares observed state to"
@@ -156,3 +161,6 @@ def test_the_guard_actually_sees_the_imports_the_layer_makes() -> None:
     }
     # verify composes C3's re-execution; if the walk sees this, it is really reading imports.
     assert any(name.startswith("belay.replay") for name in seen), seen
+    # And corpus/ is genuinely in scope: it imports its own case/verify machinery, so seeing
+    # a belay.corpus import proves the guard walks corpus/, not just verify/.
+    assert any(name.startswith("belay.corpus") for name in seen), seen

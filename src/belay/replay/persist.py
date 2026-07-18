@@ -124,10 +124,20 @@ def load_snapshot(manifest_path: Path) -> GuardedSnapshot:
     setuid and dir mtimes `clonefile` dropped. Reconstructing an empty sidecar here
     is the one thing this function must never do; the fresh-process restore test and
     the empty-sidecar guard exist to keep it from happening quietly.
+
+    `tree_path` is resolved relative to the manifest's OWN directory when it is a
+    relative path, so a corpus case that bundled its tree into `<case>/prestate/`
+    restores identically no matter which directory the process runs from. An ABSOLUTE
+    `tree_path` — what `persist_snapshot` writes and every existing caller relies on —
+    is used verbatim, so this is a pure superset of the prior behaviour.
     """
-    payload = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+    manifest_path = Path(manifest_path)
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    tree_path = Path(payload["tree_path"])
+    if not tree_path.is_absolute():
+        tree_path = manifest_path.parent / tree_path
     snapshot = Snapshot(
-        path=Path(payload["tree_path"]),
+        path=tree_path,
         sidecar=_sidecar_from_json(payload["sidecar"]),
     )
     manifest = Manifest(

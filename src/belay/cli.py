@@ -49,7 +49,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Sequence
+from typing import Optional, Sequence
 
 __all__ = ["main"]
 
@@ -58,6 +58,12 @@ __all__ = ["main"]
 #: stdin will simply be killed at the end of it, which is a clean exit for our
 #: purposes and is why a timeout is not itself reported as a failure.
 DEFAULT_SECONDS = 2.0
+
+#: The per-replay timeout `corpus add` records on a case and re-executes the turn under.
+#: Kept equal to `belay.replay.client.DEFAULT_TIMEOUT` but declared here so building the
+#: parser does not import the replay stack — cli.py imports everything else lazily to keep
+#: `belay --help` cheap, and a `test_default_timeout_matches_client` pins the two together.
+DEFAULT_TIMEOUT = 10.0
 
 _OK = "ok"
 _PROBLEM = "PROBLEM"
@@ -650,6 +656,316 @@ def _verify_replays(value: str) -> int:
     return n
 
 
+def _cmd_corpus_add(args: argparse.Namespace) -> int:
+    """`belay corpus add <trace> --turn N` — compose a self-contained case from a run.
+
+    Recomputes the target turn's verdict by REAL re-execution (the same `verify_turn` the
+    verify surface runs, with the same effective A1 policy), then bundles it into a case:
+    the trace slice, the pre-state tree, the A1 policy, and the recomputed expected verdict.
+    The human label is a PASS-THROUGH: `--label` sets it, and its ABSENCE stores `pending` —
+    the engine never derives a label from the verdict it just computed. A malformed
+    `--invariants` file is fail-closed (exit 2), matching `verify`.
+    """
+    from datetime import datetime, timezone
+
+    from belay.corpus.add import add_case
+    from belay.index import derive_correlation, tool_calls
+    from belay.replay.reader import TraceCorrupt, read_trace
+    from belay.verify.invariants import default_invariants, load_invariants
+    from belay.verify.turn import verify_turn
+
+    if not args.server:
+        _emit("belay: a server command is required, after --server. Nothing to replay against.")
+        return 2
+
+    trace_path = Path(args.trace)
+    if not trace_path.exists():
+        _emit(f"belay: trace not found: {trace_path}")
+        return 2
+
+    # The A1 policy this case records — identical to verify: the defaults (unless dropped)
+    # plus any operator file, fail-closed on a file that will not parse.
+    invariants = [] if args.no_default_invariants else default_invariants()
+    if args.invariants is not None:
+        try:
+            invariants = invariants + load_invariants(Path(args.invariants))
+        except ValueError as exc:
+            _emit(f"belay: {exc}")
+            return 2
+
+    try:
+        read = read_trace(trace_path)
+    except TraceCorrupt as exc:
+        _emit(f"belay: {exc}")
+        return 2
+
+    records = list(read.records)
+    total = len(tool_calls(derive_correlation(records)))
+    if not (0 <= args.turn < total):
+        _emit(f"belay: --turn {args.turn} out of range; the trace holds {total} tool call(s)")
+        return 2
+
+    manifest_dir = Path(args.manifest_dir)
+    verdict = verify_turn(
+        records, args.turn,
+        server_command=args.server, manifest_dir=manifest_dir, replays=args.replays,
+        invariants=invariants, timeout=args.timeout,
+    )
+
+    # The CLI is the boundary that may read the clock; `add_case` itself never does.
+    captured_at = datetime.now(timezone.utc).isoformat()
+    try:
+        case_dir = add_case(
+            Path(args.corpus_dir),
+            records=records,
+            target_turn_index=args.turn,
+            verdict=verdict,
+            manifest_dir=manifest_dir,
+            server_command=list(args.server),
+            invariants=invariants,
+            human_label=args.label,
+            replays=args.replays,
+            timeout=args.timeout,
+            source_trace_id=trace_path.stem,
+            captured_at=captured_at,
+        )
+    except ValueError as exc:
+        _emit(f"belay: {exc}")
+        return 2
+
+    _emit(f"belay corpus add: composed case {case_dir}")
+    _emit(f"  turn {args.turn}  verdict {verdict.status.value}  label {args.label}")
+    _emit("  A recomputed verdict and a HUMAN label — the label is 'pending' until a human")
+    _emit("  relabels it; the engine never labels a case from its own verdict.")
+    return 0
+
+
+def _cmd_corpus_run(args: argparse.Namespace) -> int:
+    """`belay corpus run [corpus_dir]` — re-verify every case; exit non-zero IFF a REGRESSION.
+
+    Re-verifies every stored case against the live engine (the corpus IS the regression
+    suite) and prints each case's outcome plus an aggregate. A REGRESSION shows its diverging
+    axis/kind (expected -> got); a SKIP shows why the case could not be evaluated on this box.
+    The exit is non-zero IFF at least one case REGRESSED — a run that is all MATCH/SKIP exits
+    0, because a pure SKIP is partial coverage (a non-darwin box, an unavailable server), not
+    a CI failure. The SKIP count is stated plainly so partial coverage is never mistaken for
+    a clean full pass.
+    """
+    from belay.corpus.run import MATCH, REGRESSION, SKIP, run_corpus
+
+    corpus_dir = Path(args.corpus_dir)
+    if not corpus_dir.is_dir():
+        _emit(f"belay: corpus directory not found: {corpus_dir}")
+        return 2
+
+    try:
+        run = run_corpus(corpus_dir)
+    except ValueError as exc:
+        # A corrupt/unreadable case dir is fail-closed — never a silent skip.
+        _emit(f"belay: {exc}")
+        return 2
+
+    _emit(f"belay corpus run {corpus_dir}")
+    _emit()
+    _emit(f"  {len(run.results)} case(s) re-verified by re-execution.")
+    _emit()
+    _emit("cases")
+    for result in run.results:
+        if result.outcome == REGRESSION:
+            _emit(f"  {result.case_id:<32}{REGRESSION}")
+            for div in result.divergences:
+                where = div.kind if not div.axis else f"{div.axis} {div.kind}"
+                _emit(f"      {where:<24}{div.expected_status} -> {div.got_status}")
+        elif result.outcome == SKIP:
+            _emit(f"  {result.case_id:<32}{SKIP}")
+            _emit(f"      {result.skip_reason}")
+        else:
+            _emit(f"  {result.case_id:<32}{MATCH}")
+
+    _emit()
+    _emit("aggregate")
+    _emit(f"  cases                 {len(run.results)}")
+    _emit(f"  MATCH                 {run.matches}")
+    _emit(f"  REGRESSION            {run.regressions}")
+    _emit(f"  SKIP                  {run.skips}")
+
+    _emit()
+    if run.skips:
+        _emit(
+            f"  {run.skips} case(s) were SKIPPED — not evaluated on this box (off substrate, "
+            f"server unavailable, or capability mismatch). Coverage here was PARTIAL; a SKIP "
+            f"is never a pass and never a regression."
+        )
+    if run.has_regression:
+        _emit(
+            f"belay: {run.regressions} case(s) REGRESSED — a recorded verdict no longer "
+            f"reproduces. The corpus is the regression suite; this is a real drift, not a "
+            f"skip."
+        )
+        return 1
+    _emit("belay: no regressions" + (f" ({run.skips} skipped)" if run.skips else ""))
+    return 0
+
+
+def _rate(value: Optional[float]) -> str:
+    """A rate as a 2-decimal string, or the literal "n/a" for a `None` denominator.
+
+    "n/a" is never rendered as "1.00" or "0.00": a rate with no cases under it is undefined,
+    and printing a number there would manufacture a score the corpus never earned.
+    """
+    return "n/a" if value is None else f"{value:.2f}"
+
+
+def _cmd_corpus_score(args: argparse.Namespace) -> int:
+    """`belay corpus score [corpus_dir]` — precision, recall AND coverage vs HUMAN labels.
+
+    Loads every case (fail-closed on a corrupt one) and scores the engine's stored verdicts
+    against the human ground-truth labels: precision, recall, and — always beside them, never
+    omitted — coverage, plus the confusion matrix and the excluded tallies. UNVERIFIED verdicts
+    and `pending`/`unverifiable` labels are EXCLUDED from precision/recall by construction and
+    reported on their own lines; an n/a rate is printed "n/a", never a fabricated 1.00. This is
+    the number the Phase-0 gate publishes. It scores stored data — it does not replay.
+    """
+    from belay.corpus.case import CASE_FILENAME, load_case
+    from belay.corpus.metrics import score
+
+    corpus_dir = Path(args.corpus_dir)
+    if not corpus_dir.is_dir():
+        _emit(f"belay: corpus directory not found: {corpus_dir}")
+        return 2
+
+    case_dirs = sorted(p.parent for p in corpus_dir.glob(f"*/{CASE_FILENAME}"))
+    cases = []
+    for case_dir in case_dirs:
+        try:
+            cases.append(load_case(case_dir))
+        except ValueError as exc:
+            # A corrupt case is fail-closed, exactly as `corpus run` refuses to silently skip
+            # one: a metric scored over a case that would not load is a metric over the wrong set.
+            _emit(f"belay: {exc}")
+            return 2
+
+    m = score(cases)
+
+    _emit(f"belay corpus score {corpus_dir}")
+    _emit()
+    _emit(f"  {m.total} case(s) scored against HUMAN labels (no replay — stored verdicts only).")
+    _emit()
+    _emit("confusion matrix (positive = engine FAIL; over decided verdict x adjudicable label)")
+    _emit(f"  TP                    {m.tp}")
+    _emit(f"  FP                    {m.fp}")
+    _emit(f"  FN                    {m.fn}")
+    _emit(f"  TN                    {m.tn}")
+    _emit()
+    _emit("metrics")
+    _emit(f"  precision             {_rate(m.precision)}   TP/(TP+FP)")
+    _emit(f"  recall                {_rate(m.recall)}   TP/(TP+FN)")
+    _emit(f"  coverage              {_rate(m.coverage)}   decided / adjudicable")
+    _emit()
+    _emit("excluded (not scored in precision/recall — never folded in as PASS)")
+    _emit(f"  UNVERIFIED verdict    {m.unverified}   engine could not decide; lowers coverage")
+    _emit(f"  pending label         {m.pending}   not yet adjudicated by a human")
+    _emit(f"  unverifiable label    {m.unverifiable}   no ground truth to score against")
+    _emit()
+    _emit("  Precision/recall are reported ONLY with coverage: a corpus can look perfect on the")
+    _emit("  cases it decided while shrugging on the rest. An n/a rate means a 0 denominator —")
+    _emit("  it is NOT a 1.00. UNVERIFIED and unadjudicated labels are excluded, never a PASS.")
+    return 0
+
+
+def _cmd_corpus_label(args: argparse.Namespace) -> int:
+    """`belay corpus label <case-id> --label ...` — adjudicate a case's HUMAN label.
+
+    Rewrites ONLY `human_label`; the engine's recorded `expected` verdict is untouched (the D3
+    boundary — a human adjudication never rewrites what the engine computed). `--label`'s
+    argparse choices already exclude `pending` and any unknown string, and `set_label` fails
+    closed a second time, so a bad label never lands on disk.
+    """
+    from belay.corpus.curate import set_label
+
+    try:
+        case_dir = set_label(Path(args.corpus_dir), args.case_id, args.label)
+    except ValueError as exc:
+        _emit(f"belay: {exc}")
+        return 2
+
+    _emit(f"belay corpus label: {case_dir}")
+    _emit(f"  human_label -> {args.label}")
+    _emit("  Only the human label changed; the engine's recorded verdict is untouched.")
+    return 0
+
+
+def _cmd_corpus_list(args: argparse.Namespace) -> int:
+    """`belay corpus list [corpus_dir]` — one line per case: id, human label, reduced status.
+
+    Sorted by case-id for a stable listing. Loads each case fail-closed — a corrupt case dir
+    is an error (exit 2), never a silently skipped row, so the list never hides a case.
+    """
+    from belay.corpus.case import CASE_FILENAME, load_case
+
+    corpus_dir = Path(args.corpus_dir)
+    if not corpus_dir.is_dir():
+        _emit(f"belay: corpus directory not found: {corpus_dir}")
+        return 2
+
+    case_dirs = sorted(p.parent for p in corpus_dir.glob(f"*/{CASE_FILENAME}"))
+
+    _emit(f"belay corpus list {corpus_dir}")
+    _emit()
+    _emit(f"  {len(case_dirs)} case(s)")
+    _emit()
+    _emit(f"  {'case-id':<32}{'label':<16}verdict")
+    for case_dir in case_dirs:
+        try:
+            case = load_case(case_dir)
+        except ValueError as exc:
+            _emit(f"belay: {exc}")
+            return 2
+        _emit(f"  {case_dir.name:<32}{case.human_label:<16}{case.expected['reduced_status']}")
+    return 0
+
+
+def _cmd_corpus_show(args: argparse.Namespace) -> int:
+    """`belay corpus show <case-id> [--corpus-dir ...]` — the case's key fields, human-readable.
+
+    Prints the id, target turn, the expected reduced status AND its per-axis sub-verdict set,
+    the human label, the invariants, the server command, and provenance. Loads fail-closed:
+    a missing or corrupt case is a named error (exit 2), never an empty success.
+    """
+    from belay.corpus.case import load_case
+
+    case_dir = Path(args.corpus_dir) / args.case_id
+    try:
+        case = load_case(case_dir)
+    except ValueError as exc:
+        _emit(f"belay: {exc}")
+        return 2
+
+    _emit(f"belay corpus show {case_dir}")
+    _emit()
+    _emit(f"  id                    {case.id}")
+    _emit(f"  target_turn_index     {case.target_turn_index}")
+    _emit(f"  human_label           {case.human_label}")
+    _emit(f"  expected status       {case.expected['reduced_status']}")
+    _emit("  sub-verdicts")
+    for sub in case.expected["sub_verdicts"]:
+        axis = sub.get("axis", "?")
+        kind = sub.get("kind", "?")
+        status = sub.get("status", "?")
+        _emit(f"    {axis} {kind:<12}{status}")
+    _emit(f"  server_command        {' '.join(case.server_command)}")
+    _emit("  invariants")
+    if case.invariants:
+        for inv in case.invariants:
+            _emit(f"    {inv}")
+    else:
+        _emit("    (none)")
+    _emit(f"  provenance            {case.provenance}")
+    _emit(f"  capture_platform      {case.capture_platform}")
+    _emit(f"  capture_capabilities  {', '.join(case.capture_capabilities)}")
+    return 0
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="belay", description="The agent harness.")
     subcommands = parser.add_subparsers(dest="group", required=True)
@@ -770,6 +1086,205 @@ def _parser() -> argparse.ArgumentParser:
         help="the MCP server to replay against; everything after --server is its command",
     )
     verify.set_defaults(func=_cmd_verify)
+
+    corpus = subcommands.add_parser(
+        "corpus", help="the failure corpus: labeled, replayable cases from flagged runs"
+    ).add_subparsers(dest="action", required=True)
+    corpus_add = corpus.add_parser(
+        "add",
+        help="compose a self-contained, labeled case from one flagged turn of a trace",
+        description=(
+            "Recompute one tools/call turn's verdict by RE-EXECUTION (the same verify_turn "
+            "the verify surface runs, with the same effective A1 policy) and bundle it into "
+            "a SELF-CONTAINED corpus case: the trace, the pre-state tree (copied in, so the "
+            "case survives deletion of the original run), the A1 policy, and the recomputed "
+            "expected verdict. A later `corpus run` re-replays the case and asserts it still "
+            "reaches this verdict.\n\n"
+            "The human label is a PASS-THROUGH: --label sets it, and its ABSENCE stores "
+            "'pending'. The engine NEVER derives a label from the verdict it just computed — "
+            "a case is labeled true/false-positive by a HUMAN, later, not by the engine that "
+            "flagged it. That separation is what keeps the corpus's precision honest.\n\n"
+            "Manifests: point --manifest-dir at the gate's .manifests sibling, as with verify."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    corpus_add.add_argument("trace", help="the trace file (.jsonl) the flagged turn is in")
+    corpus_add.add_argument(
+        "--turn",
+        type=int,
+        required=True,
+        help="the tools/call turn (0-based) to compose a case from",
+    )
+    corpus_add.add_argument(
+        "--manifest-dir",
+        required=True,
+        help="where the gate persisted this run's snapshot manifests (the .manifests sibling)",
+    )
+    corpus_add.add_argument(
+        "--corpus-dir",
+        default="corpus/local",
+        help="the corpus directory the case is written under (default: ./corpus/local, which is gitignored so cases never get committed)",
+    )
+    corpus_add.add_argument(
+        "--label",
+        choices=["true-positive", "false-positive", "unverifiable"],
+        default="pending",
+        help=(
+            "the HUMAN ground-truth label for this case; omit it and the case is stored "
+            "'pending' for a human to relabel. The engine never labels from its own verdict."
+        ),
+    )
+    corpus_add.add_argument(
+        "--invariants",
+        default=None,
+        metavar="path",
+        help=(
+            "an operator-declared invariant file (JSON) to enforce as A1 when recomputing "
+            "the verdict, on top of the defaults; a malformed file is a fail-closed error"
+        ),
+    )
+    corpus_add.add_argument(
+        "--no-default-invariants",
+        action="store_true",
+        help="do not apply the built-in default invariants (tests/ is read-only)",
+    )
+    corpus_add.add_argument(
+        "--replays",
+        type=_verify_replays,
+        default=3,
+        help="on a DIVERGED reply, re-invoke this many times to classify determinism (min 3)",
+    )
+    corpus_add.add_argument(
+        "--timeout",
+        type=float,
+        default=DEFAULT_TIMEOUT,
+        help=f"per-replay timeout in seconds recorded on the case (default: {DEFAULT_TIMEOUT:g})",
+    )
+    corpus_add.add_argument(
+        "--server",
+        nargs=argparse.REMAINDER,
+        default=[],
+        metavar="cmd ...",
+        help="the MCP server to replay against; everything after --server is its command",
+    )
+    corpus_add.set_defaults(func=_cmd_corpus_add)
+
+    corpus_run = corpus.add_parser(
+        "run",
+        help="re-verify every stored case and assert it still reaches its recorded verdict",
+        description=(
+            "Re-verify every case in the corpus against the live engine and assert each still "
+            "reaches its recorded verdict. The corpus IS the regression suite: a case that no "
+            "longer reproduces its per-sub-verdict SET (not merely its reduced status) is a "
+            "caught detector DRIFT, and the run exits NON-ZERO.\n\n"
+            "A SKIP is kept distinct from a REGRESSION and is never a pass: a case this box "
+            "cannot evaluate — off the macOS Seatbelt substrate, the recorded server not "
+            "runnable, a backend capability mismatch on restore — is SKIPPED, not failed, so "
+            "the corpus does not fail CI on every non-darwin box. The run exits non-zero IFF "
+            "at least one case REGRESSED; an all-MATCH/SKIP run exits 0 with its SKIP count "
+            "stated plainly."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    corpus_run.add_argument(
+        "corpus_dir",
+        nargs="?",
+        default="corpus/local",
+        help="the corpus directory of case dirs to re-verify (default: ./corpus/local, which is gitignored so cases never get committed)",
+    )
+    corpus_run.set_defaults(func=_cmd_corpus_run)
+
+    corpus_score = corpus.add_parser(
+        "score",
+        help="precision, recall AND coverage of the stored verdicts against HUMAN labels",
+        description=(
+            "Score the corpus: how well do the engine's STORED verdicts match the HUMAN "
+            "ground-truth labels? Prints precision, recall, and — always beside them, never "
+            "alone — coverage, plus the TP/FP/FN/TN matrix and the excluded tallies. This "
+            "reads each case's recorded verdict and label; it does NOT replay (that is "
+            "`corpus run`).\n\n"
+            "Two exclusions are load-bearing and by construction: an UNVERIFIED verdict is "
+            "NEVER folded into PASS — it is excluded from precision/recall and lowers "
+            "coverage; a `pending` or `unverifiable` label has no ground truth and is "
+            "excluded too. The engine's own verdict can never stand in for a human label, so "
+            "precision cannot be inflated to 1.0 by counting every FAIL as a hit. A rate with "
+            "a 0 denominator prints 'n/a', never a fabricated 1.00."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    corpus_score.add_argument(
+        "corpus_dir",
+        nargs="?",
+        default="corpus/local",
+        help="the corpus directory of case dirs to score (default: ./corpus/local, which is gitignored so cases never get committed)",
+    )
+    corpus_score.set_defaults(func=_cmd_corpus_score)
+
+    corpus_label = corpus.add_parser(
+        "label",
+        help="adjudicate a case's HUMAN ground-truth label (never touches the engine verdict)",
+        description=(
+            "Set a case's HUMAN ground-truth label — the adjudication step between `corpus add` "
+            "(which stores a case 'pending') and `corpus score` (which measures the engine's "
+            "verdicts against these labels). Choose one of the three real adjudications; "
+            "re-labeling is allowed, so a human can correct an earlier call.\n\n"
+            "This rewrites ONLY `human_label`. The engine's recorded `expected` verdict is left "
+            "byte-identical — a human adjudication NEVER edits what the engine computed. That "
+            "separation is what lets `corpus score` measure the engine against the labels "
+            "without measuring it against itself."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    corpus_label.add_argument("case_id", help="the case directory name under the corpus dir")
+    corpus_label.add_argument(
+        "--label",
+        required=True,
+        choices=["true-positive", "false-positive", "unverifiable"],
+        help="the HUMAN adjudication for this case (not 'pending' — that is the un-adjudicated default)",
+    )
+    corpus_label.add_argument(
+        "--corpus-dir",
+        default="corpus/local",
+        help="the corpus directory the case lives under (default: ./corpus/local, which is gitignored so cases never get committed)",
+    )
+    corpus_label.set_defaults(func=_cmd_corpus_label)
+
+    corpus_list = corpus.add_parser(
+        "list",
+        help="list every case: id, human label, reduced status (sorted by id)",
+        description=(
+            "List every case in the corpus, one line each: case-id, human label, and the "
+            "recorded expected reduced status. Sorted by case-id for a stable listing. A corrupt "
+            "case is a fail-closed error, never a silently dropped row."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    corpus_list.add_argument(
+        "corpus_dir",
+        nargs="?",
+        default="corpus/local",
+        help="the corpus directory of case dirs to list (default: ./corpus/local, which is gitignored so cases never get committed)",
+    )
+    corpus_list.set_defaults(func=_cmd_corpus_list)
+
+    corpus_show = corpus.add_parser(
+        "show",
+        help="show one case's key fields: verdict, sub-verdict set, label, invariants, provenance",
+        description=(
+            "Show one case's key fields without reading its case.json by hand: id, target turn, "
+            "the expected reduced status AND its per-axis sub-verdict set, the human label, the "
+            "invariants, the server command, and provenance. A missing or corrupt case is a "
+            "fail-closed error."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    corpus_show.add_argument("case_id", help="the case directory name under the corpus dir")
+    corpus_show.add_argument(
+        "--corpus-dir",
+        default="corpus/local",
+        help="the corpus directory the case lives under (default: ./corpus/local, which is gitignored so cases never get committed)",
+    )
+    corpus_show.set_defaults(func=_cmd_corpus_show)
     return parser
 
 
