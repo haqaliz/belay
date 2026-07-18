@@ -14,7 +14,6 @@ observing while the client was still writing.
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 import threading
 import time

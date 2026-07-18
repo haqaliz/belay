@@ -68,7 +68,6 @@ from belay.declared import (
     DECLARED_FALSE,
     DECLARED_NON_BOOLEAN,
     DECLARED_TRUE,
-    NOT_DECLARED,
     declared_state,
 )
 from belay.frames import message_of

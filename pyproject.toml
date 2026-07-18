@@ -3,11 +3,50 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "belay"
-version = "0.0.0"
-description = "The agent harness: sandbox, verify by replay, deterministic trace."
+# The PyPI distribution name is `belay-harness` because `belay` is already taken on
+# PyPI (an unrelated MicroPython tool). The import package and the CLI stay `belay`:
+#   pip install belay-harness   ->   belay --help   /   import belay
+name = "belay-harness"
+version = "0.1.0"
+description = "The agent harness: sandbox any agent, verify each step by replaying it against real state, and keep a deterministic trace."
+readme = "README.md"
 requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Ali Haqiqi" }]
+keywords = [
+    "agent",
+    "harness",
+    "mcp",
+    "sandbox",
+    "replay",
+    "verification",
+    "observability",
+    "llm",
+    "ai-safety",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+    "Typing :: Typed",
+]
+# Zero runtime dependencies — stdlib only. This is a deliberate, load-bearing property.
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/haqaliz/belay"
+Repository = "https://github.com/haqaliz/belay"
+Issues = "https://github.com/haqaliz/belay/issues"
+Changelog = "https://github.com/haqaliz/belay/blob/master/CHANGELOG.md"
 
 [project.scripts]
 belay = "belay.cli:main"

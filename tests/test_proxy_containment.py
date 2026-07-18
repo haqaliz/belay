@@ -23,7 +23,6 @@ quietly stopped writing.
 from __future__ import annotations
 
 import base64
-import json
 import os
 import subprocess
 import sys
@@ -161,7 +160,7 @@ def test_without_a_scope_the_same_escape_lands(tmp_path):
     containment claim with no ablation behind it is a claim about a test, not
     about a boundary.
     """
-    workspace = make_workspace(tmp_path)
+    make_workspace(tmp_path)  # side effect: lay down the workspace the drive writes from
     outside = tmp_path / "escaped.txt"
 
     env = os.environ.copy()
