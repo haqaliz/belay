@@ -1,0 +1,16 @@
+<svg width="120" height="120" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Belay">
+  <!-- A carabiner: the climbing gear that clips the rope to an anchor. The gate opening
+       and the rope loop passing through read as "the harness that holds the fall". -->
+  <g stroke="#3fb950" stroke-width="9" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <!-- carabiner body: a rounded, offset oval with a gap (the gate) at top-right -->
+    <path d="M74 22
+             C93 22 102 40 102 60
+             C102 84 88 100 66 100
+             C40 100 26 82 26 58
+             C26 38 38 24 58 22" />
+    <!-- the gate (the sprung opening) -->
+    <path d="M58 22 L74 30" stroke-width="7" />
+    <!-- the rope loop clipped through the carabiner -->
+    <path d="M46 60 C46 44 74 44 74 60 C74 76 46 76 46 60 Z" stroke-width="7" opacity="0.55" />
+  </g>
+</svg>

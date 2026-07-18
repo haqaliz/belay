@@ -25,9 +25,7 @@ import pytest
 from belay.replay import engine
 from belay.replay.client import ANSWERED, FrameOutcome, ReplayResult
 from belay.replay.engine import (
-    DIVERGED,
     EQUAL,
-    NOT_VERIFIABLE,
     REPLAYED,
     UNVERIFIED,
     replay_turn,

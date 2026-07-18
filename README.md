@@ -1,381 +1,175 @@
+<div align="center">
+
+<img src="assets/belay-logo.svg" alt="Belay" width="104" />
+
 # Belay
 
-Belay is an **agent harness**: it sits between an AI agent and the tools it calls, records
-exactly what crossed, and is built so that a run can later be **replayed against real state**
-and checked by re-execution rather than by asking a model whether it thinks it did well.
+**The agent harness: sandbox any agent, verify each step by replaying it against real state, and keep a deterministic trace.**
 
-**What exists today is capture (C1), containment (C2), deterministic replay (C3), and the
-first grounded per-turn verdict — A2, by re-execution (C4).** Belay is a transparent stdio
-proxy in front of your MCP servers: it forwards bytes verbatim, writes an append-only trace
-of every frame, runs the server **inside a sandbox**, and snapshots each turn's pre-state
-before the call reaches the server. `belay verify` then replays each recorded tool call
-against its restored pre-state and renders a PASS/FAIL/UNVERIFIED **grounded in
-re-execution, with no model consulted** — see [the coverage of that verdict, stated
-exactly](#what-belay-verify-proves-and-what-it-does-not). The **A1 invariant axis** that
-would catch a *cheating* agent (corrupt success) is **not built yet** — that is C5.
+Belay sits as a transparent proxy between an AI agent and the tools it calls. It **records** exactly what crossed, runs the tools **inside a sandbox**, snapshots each turn's real pre-state, and then **replays every tool call against that restored state** — rendering an honest `PASS` / `WARN` / `FAIL` / `UNVERIFIED` verdict grounded in *re-execution and a state diff*, never in a model's opinion of itself. Every caught failure becomes a labeled, replayable case in a corpus that compounds.
 
-> ### What `BELAY_SANDBOX_SCOPE` gets you, stated exactly
->
-> With it set, `python -m belay.proxy <server>` spawns your server under
-> `sandbox-exec`: a write **outside the scope is refused by the kernel** and recorded as a
-> `denial` naming the path. Measured on a real proxy run, against a real refusal, with a
-> positive control that legitimate work inside the scope still succeeds, and an ablation
-> that the same write lands when the scope is unset
-> (`tests/test_proxy_containment.py`).
->
-> **The network is denied by default.** `BELAY_SANDBOX_NETWORK` widens it when your server
-> needs one — `allow-all`, or `allow-ports:8080,9000` for outbound loopback. A server that
-> needs the network fails loudly and you widen it deliberately; the alternative default
-> contains nothing on that axis and tells no one.
->
-> **What it does not get you.** The scope contains what the server can **change**, not what
-> it can **read** — `file-read*` is granted wholesale. And it contains **only the server
-> Belay spawns** — see [coverage](#coverage-belay-sees-what-crosses-the-mcp-boundary-and-nothing-else).
+[![Release](https://img.shields.io/github/v/release/haqaliz/belay?color=3fb950&label=release)](https://github.com/haqaliz/belay/releases/latest)
+[![CI](https://github.com/haqaliz/belay/actions/workflows/ci.yml/badge.svg)](https://github.com/haqaliz/belay/actions/workflows/ci.yml)
+[![Status](https://img.shields.io/badge/status-alpha%20·%20macOS%20only-3fb950)](docs/ROADMAP.md)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.10+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Built with uv](https://img.shields.io/badge/built%20with-uv-DE5FE9?logo=astral&logoColor=white)](https://github.com/astral-sh/uv)
+[![Zero dependencies](https://img.shields.io/badge/runtime%20deps-zero-3fb950)](pyproject.toml)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-3fb950)](CONTRIBUTING.md)
 
-Zero runtime dependencies. Stdlib only. It runs on your machine and sends nothing anywhere.
-**macOS only** — see [below](#the-sandbox-is-macos-only-and-linux-is-unverified).
+[Quickstart](#quickstart) · [How it works](#how-it-works) · [The verdict](#the-verdict-three-axes-deliberately-unequal) · [Coverage & limits](#coverage--limits-stated-exactly) · [Roadmap](docs/ROADMAP.md) · [Vision](VISION.md) · [Contributing](CONTRIBUTING.md)
 
-## Use it
+</div>
 
-Put `belay.proxy` in front of the server command you already run:
+---
 
-```bash
-BELAY_TRACE_DIR=./traces python -m belay.proxy <server-command> [args...]
-```
+## Why Belay
 
-For an MCP client that launches servers for you (Claude Code, Cursor, …), wrap the command
-in its config:
+Three kinds of tools sit near agents. Frameworks (LangGraph, CrewAI) *build* the agent. Observability (Langfuse, Phoenix, LangSmith, Braintrust) *records* what it did — and at most bolts an LLM-judge on top to score it. **Belay is the third thing: the harness.** It answers the question none of the others do — *"was this step actually correct?"* — by replaying the tool call in a sandbox and diffing observed-vs-claimed state.
 
-```jsonc
-{
-  "mcpServers": {
-    "files": {
-      "command": "python",
-      "args": ["-m", "belay.proxy", "npx", "-y", "@modelcontextprotocol/server-filesystem", "/data"],
-      "env": { "BELAY_TRACE_DIR": "/path/to/traces" }
-    }
-  }
-}
-```
+Why that question matters, and why a judge can't answer it:
 
-With `BELAY_TRACE_DIR` unset the proxy still forwards; it attaches no observer and writes no
-file. The format is documented in [`docs/technical/TRACE_FORMAT.md`](docs/technical/TRACE_FORMAT.md).
+- **27–78% of benchmark-reported agent "successes" are *corrupt successes*** — the right end-state reached through a broken, unsafe, or cheating path ([arXiv 2603.03116](https://arxiv.org/abs/2603.03116)). A run can look done and be wrong.
+- **LLM-as-judge is unreliable exactly where it matters:** up to **35% false positives** ([2507.08794](https://arxiv.org/abs/2507.08794)), with verdicts flipping 10–30% on trivial reorderings. A guess about correctness is not a verification of it.
 
-### Contain the server, and snapshot each turn's pre-state
+Belay's verdict is **grounded in execution, not opinion** — which means it gets *better* as base models improve (they write better checks and cleaner tools), never redundant.
 
-Set a scope and somewhere to put the snapshots:
+- 🧗 **The name.** To *belay*, in climbing, is to manage the rope that **catches a climber when they fall**. Belay catches an agent when it fails: it contains the fall, proves what happened, and lets you replay it. The harness holds; the climber takes the risk.
+- 🧱 **Sandbox / execution boundaries.** The agent's tools run inside enforced filesystem and network limits — a bad action is contained, not catastrophic. The same boundary that *contains* an action is the machinery that *judges* it.
+- 🔁 **Per-turn verification by replay.** Each tool call is re-executed in isolation against its restored pre-state, and the observed effect is diffed against what was claimed.
+- 🎞 **Deterministic trace + replay.** Every run is captured exactly and can be re-run — for debugging, regression, and audit.
+- 📈 **A compounding failure corpus.** Every caught failure becomes a labeled, replayable case; `belay corpus run` re-replays the whole corpus as a regression suite, and precision/recall/coverage measures detection against **human** labels.
+- 🔒 **Runs on your infrastructure.** Self-hostable, zero runtime dependencies, stdlib only. Traces and state stay on your box; nothing is uploaded, ever.
+
+> **Honesty is the whole product.** `UNVERIFIED` is *never* rendered as `PASS`, the verdict never over-claims beyond what the replay actually checked, and where Belay cannot see or cannot ground a claim it says so by name. Read [Coverage & limits](#coverage--limits-stated-exactly) before trusting any verdict.
+
+---
+
+## Quickstart
+
+> **Requirements:** macOS (Apple Silicon or Intel), Python 3.10+. The sandbox and snapshot are macOS-only today — see [limits](#the-sandbox-is-macos-only). [uv](https://github.com/astral-sh/uv) is recommended.
+
+Install (once v0.1.0 is published — until then, [run from source](#develop)):
 
 ```bash
+uv tool install belay-harness      # or: pipx install belay-harness  /  pip install belay-harness
+# the distribution is `belay-harness` (the name `belay` is taken on PyPI); the command is `belay`
+belay --help
+```
+
+> **No container yet.** Belay's sandbox (macOS Seatbelt) and snapshot (APFS `clonefile`) are
+> macOS-only, and a Linux container can't run them — so there is deliberately no Docker image
+> until the Linux sandbox slice lands, rather than a container that can't do the core.
+
+### 1 · Put the proxy in front of the server you already run
+
+Belay is a transparent stdio proxy. Wherever your agent launches an MCP server, wrap the command:
+
+```bash
+# was:   my-mcp-server --flag
+# now:
 BELAY_TRACE_DIR=./traces \
-BELAY_SANDBOX_SCOPE=/path/to/workspace \
-BELAY_SNAPSHOT_DIR=/path/to/snapshots \
-python -m belay.proxy <server-command> [args...]
+BELAY_SANDBOX_SCOPE=./workspace \
+  python -m belay.proxy my-mcp-server --flag
 ```
 
-The server now runs under a Seatbelt profile that grants writes to the workspace and
-nothing else it did not need. Each `tools/call` that arrives with **no other call
-outstanding** is held while the workspace is snapshotted, and that frame carries a handle
-naming its own pre-state. A call that arrives while another is still in flight is **not**
-snapshotted — there is no pre-state left to capture, so it is recorded `unrestorable` and
-forwarded unchanged ([why](#parallel-tool-calls-are-recorded-unrestorable-not-snapshotted)).
-`BELAY_SNAPSHOT_DIR` must be
-**outside** the scope, or every turn would snapshot the previous turns' snapshots; the
-proxy refuses at startup rather than recording a pre-state the agent never had. Setting a
-scope without a snapshot dir is likewise refused, and so is setting one on a platform where
-Belay cannot contain anything — a run that quietly dropped the boundary would report
-exactly like a contained one.
+Bytes are forwarded verbatim in both directions. With `BELAY_SANDBOX_SCOPE` set, the server runs under macOS Seatbelt — a write outside the scope is refused by the kernel and recorded as a `denial` naming the path; **the network is denied by default** (`BELAY_SANDBOX_NETWORK=allow-all` to widen). Each `tools/call` is held just long enough to snapshot its pre-state before the call reaches the server.
 
-#### The write scope and the snapshot scope are not the same scope
-
-Belay grants your server a **temp directory of its own** (`belay-tmp-<digest>` under the
-machine's temp root) and points `$TMPDIR`/`TMP`/`TEMP` at it. Servers write temp files
-constantly — `tempfile.mkstemp()` is the common case — and the real `$TMPDIR` is under
-`/var/folders`, which no workspace scope should ever grant.
-
-That temp directory is **writable and never snapshotted**, and it sits outside your
-workspace so that this is true by construction rather than by a filter:
-
-- **the snapshot scope** (what each turn clones) is the workspace **only**, so temp churn
-  cannot pollute a state diff, and
-- a **unix socket in the server's temp dir cannot poison a turn.** Belay refuses to
-  snapshot a tree containing a socket — a copied socket is an empty file where a live
-  endpoint was — so with `$TMPDIR` inside the snapshotted tree, a server that opens one
-  would report `unrestorable` on *every* turn. Both halves are measured on a real run
-  (`tests/test_proxy_containment.py`).
-
-`belay sandbox check` prints both paths. The temp directory is derived from the workspace
-path, so it is the same one every run; it is not cleaned up, and it is safe to delete.
-
-### Check the sandbox before you trust it
+### 2 · Verify the run by re-execution
 
 ```bash
-belay sandbox check --scope /path/to/workspace -- <server-command> [args...]
-# or, without installing the console script:
-python -m belay.cli sandbox check --scope /path/to/workspace -- <server-command> [args...]
+belay verify ./traces/<run>.jsonl --manifest-dir ./traces.manifests --server my-mcp-server --flag
 ```
 
-It answers two questions, and they are **not** equally answerable. *Does the substrate work
-on this machine?* — it probes by using it: it **attempts a real escape under the profile and
-confirms the kernel refuses it**, then takes a real snapshot and restores it. (Building a
-profile proves nothing — that is string formatting. The failure worth catching is a
-deprecated Seatbelt that runs your command and enforces nothing, and only an attempted
-escape can see it.) *Is the scope too tight for this server?* — it runs the server briefly
-and reports any denial with its exact path.
+For each recorded `tools/call`, Belay restores its pre-state, re-invokes the server, and renders a per-turn verdict:
 
-**The second answer is refutable only, never confirmable.** A server that ran cleanly for a
-few seconds has proven that it started, not that its scope is sufficient. The command says
-so in its own output, and it never widens a scope for you: it prints the path and the
-decision stays yours.
+- **A2 — replay:** did the recorded result reproduce, and did the filesystem effect match the tool's declared `readOnlyHint`? (catches *trace infidelity*)
+- **A1 — invariant:** was a task-scoped policy violated by the observed effect? The `tests/` read-only default is on unless `--no-default-invariants`; add your own with `--invariants policy.json`. (catches *corrupt success* — a cheating agent whose trace is perfectly faithful, which A2 structurally cannot catch)
 
-### Replay a trace, and read the UNVERIFIED rate
+Both are decided by **re-execution and diffing. No model is consulted** — enforced by an AST test that bans any inference import from the verdict path.
+
+### 3 · Grow the corpus
 
 ```bash
-belay replay ./traces/<trace>.jsonl --manifest-dir ./sn.manifests --server <server-command> [args...]
-# or, without installing the console script:
-python -m belay.cli replay ./traces/<trace>.jsonl --manifest-dir ./sn.manifests --server <server-command> [args...]
+belay corpus add ./traces/<run>.jsonl --turn 7 --manifest-dir ./traces.manifests --server my-mcp-server
+belay corpus label <case-id> --label true-positive     # a human adjudicates; the engine never labels its own cases
+belay corpus run                                        # re-replay every case, assert its verdict — the corpus IS the regression suite
+belay corpus score                                      # precision · recall · coverage vs human labels (UNVERIFIED excluded, reported separately)
 ```
 
-It replays every recorded `tools/call` against its restored pre-state and reports, per turn
-and in aggregate, what **replayed**, what was **unverified** (with a named cause), and what
-was **not-verifiable** — plus the headline: the **UNVERIFIED rate, broken down by cause,
-with every instance named**. A turn that is unverified for no stated reason is a bug, not a
-shrug. This **observes coverage; it emits no PASS/FAIL** — that is a later capability.
+Cases are self-contained (they bundle their own pre-state) and live under the gitignored `corpus/local/` — nothing leaves your machine.
 
-**Where `--manifest-dir` points.** The trace records the snapshot *handle*, not where its
-manifest lives. The proxy writes each turn's manifest to a **sibling** of the snapshot dir:
-`BELAY_SNAPSHOT_DIR=./sn` → `./sn.manifests/`. Point `--manifest-dir` there. A `present` turn
-whose manifest is not found under that dir is an **honest UNVERIFIED** ("manifest not found")
-— never a fabricated result and never a silent skip. A high UNVERIFIED rate is a signal to
-read, not a number to bury: it says how much of a run this replay could speak to, and why it
-could not speak to the rest.
+---
 
-### Verify a trace: the first grounded verdict
+## How it works
 
-```bash
-belay verify ./traces/<trace>.jsonl --manifest-dir ./sn.manifests --server <server-command> [args...]
-# or, without installing the console script:
-python -m belay.cli verify ./traces/<trace>.jsonl --manifest-dir ./sn.manifests --server <server-command> [args...]
+```
+agent  ⇄  [ belay.proxy ]  ⇄  MCP server
+              │   records every frame verbatim  → append-only trace (.jsonl)
+              │   runs the server in a sandbox   → writes outside scope refused, network denied by default
+              │   snapshots each turn's pre-state → APFS clonefile + a fidelity-declaring manifest
+              ▼
+         belay verify / corpus
+              restore pre-state → re-invoke → diff observed vs claimed → grounded verdict
 ```
 
-For each recorded `tools/call` it replays the call against its restored pre-state and
-renders the **A2 verdict**, reduced worst-status-wins to one `PASS` / `FAIL` / `UNVERIFIED`
-per turn, showing **both** sub-verdicts so a `FAIL` is explainable:
+The engine is built in capability layers (see [the roadmap](docs/technical/CAPABILITY_ROADMAP.md)): **C1** capture, **C2** sandbox + snapshot/restore, **C3** deterministic replay with a real before/after delta, **C4** the A2 replay verdict, **C5** the A1 invariant verdict, **C6** the failure corpus. All merged; zero runtime dependencies.
 
-- **result-equivalence** — did the replayed reply reproduce the recorded one? (a
-  deterministic divergence is a `FAIL`; a nondeterministic one is `UNVERIFIED`, never a
-  false `FAIL`).
-- **effect-conformance** — did the filesystem effect match the tool's declared
-  `readOnlyHint`? (a `readOnlyHint: true` tool that mutates is a grounded `FAIL`; an
-  un-annotated tool is `UNVERIFIED`, never a default `PASS`). A tool that declares
-  `openWorldHint: false` adds a **network dimension** that is honestly `UNVERIFIED` — Belay
-  observes no egress, so it downgrades a filesystem `PASS` to `UNVERIFIED` rather than
-  silently passing an unverified network claim, and it is **never a network `PASS`**.
+### The verdict: three axes, deliberately unequal
 
-The aggregate reports the `PASS` / `FAIL` / `UNVERIFIED` counts, the **FAIL list with its
-concrete grounding** (the recorded-vs-observed diff, or the mutated path), and every
-`UNVERIFIED` turn under a **named cause** — never hidden, never spun as `PASS`. The process
-exits non-zero if any turn is not `PASS`. `--manifest-dir` points where the gate persisted
-this run's manifests (the `.manifests` sibling of the snapshot dir), exactly as for
-`belay replay`.
+| Axis | Grounding | May emit | Catches | Status |
+|------|-----------|----------|---------|--------|
+| **A1 · Invariant** | A task-scoped policy, violated during replay | PASS / WARN / FAIL / UNVERIFIED | **Corrupt success** (the 27–78%) | ✅ built (C5) |
+| **A2 · Replay** | Re-execution + state diff | PASS / WARN / FAIL / UNVERIFIED | **Trace infidelity** (fabricated / tampered results) | ✅ built (C4) |
+| **A3 · Claim re-derivation** | A model *writes* a check; **execution** decides | WARN / FAIL / UNVERIFIED — **never PASS** | **Intent drift** | ⏳ planned (C8), cuttable |
 
-#### What `belay verify` proves, and what it does not
+The reduction is worst-status-wins across A1 and A2. **A1 and A2 are not redundant** — and getting this wrong is the single easiest way the project could fail quietly. A2 cannot catch a *cheating* agent: a cheater's trace is perfectly faithful (it really did weaken the test), so replay restores the recorded pre-state, re-invokes, sees the same result, and returns `PASS` — correctly. Only a declared invariant (A1) calls that success corrupt. Belay ships a launch demo that proves exactly this: on one turn, A2 `PASS` + A1 `FAIL` → the turn is `FAIL`, driven solely by A1.
 
-> **An A2 `PASS` means THE TRACE REPRODUCES.** The recorded tool call, re-executed against
-> its restored pre-state, produced the same result and its filesystem effect matched its
-> declared `readOnlyHint`. **It does NOT mean the agent did the right thing.**
+---
 
-- **It does not catch a cheating agent.** A cheater's trace is *faithful*: it really did
-  weaken the test, and replay restores that already-weakened pre-state, re-runs, reproduces
-  the same "tests pass", and returns `PASS` — **correctly**. The tampering is in the ground
-  truth A2 was handed. Only a declared **invariant** (A1, capability C5, **not built yet**)
-  catches corrupt success. This is not a gap in the implementation; it is the deliberate
-  division of labour between the axes, and `tests/test_verify_pass_on_cheat.py` pins it.
-- **What is verified:** filesystem effects (the BTH-1 delta), result-equivalence, and
-  protocol/tool errors.
-- **What is not verified:** network egress, in either direction. Successful egress under an
-  `allow-all` policy is not observed — a tool that phoned home leaves no filesystem trace for
-  the delta to catch — and a denial under `deny-all` cannot be attributed to the network,
-  because an egress denial and a filesystem-write denial reach the child as the identical
-  `EPERM` line. So there is **no whole-network snapshot** the way there is a whole-tree
-  filesystem snapshot, and `openWorldHint` conformance is therefore `UNVERIFIED`, **never a
-  `PASS`**. (Belay does *not* fabricate a network `FAIL` from a denial it cannot attribute —
-  that would be a guess dressed as a grounded verdict.)
-- **No model is consulted.** The verdict is re-execution and diffing — no LLM, ever. This is
-  the whole answer to "isn't this an LLM judge with extra steps?", and it is enforced
-  structurally by `tests/test_verify_zero_llm.py`, which fails if any module in the verify
-  layer so much as imports an inference client.
+## Coverage & limits, stated exactly
 
-## What the capture proves, and what it does not
+Belay's entire value is an honest verdict, so its limits are documented as precisely as its claims. **Read this before trusting any output.**
 
-**The neutrality claim is narrow, and it is the only one supported.**
+### Belay sees what crosses the MCP boundary, and nothing else
+An agent's **built-in** tools do not traverse MCP and are invisible to Belay. Claude Code's `Bash` and `Edit` are in-process; they never reach a stdio transport, so no proxy on that transport can see them. Read a trace as *"here is what went over MCP"*, never as *"here is what the agent did"*. The sandbox's limit is the same limit: Belay contains the processes it spawns (the MCP servers it proxies) — not tools it never launched. An OpenTelemetry/OpenLLMetry ingestion path (C9) will let Belay sit beside existing observability.
 
-> Against a deterministic fixture, the proxy is byte-transparent — proven by a differential
-> test (`tests/test_differential.py`) that is itself proven to fail on a re-serialising proxy
-> (`tests/test_teeth.py`).
+### The sandbox is macOS only
+The sandbox is macOS **Seatbelt** (`sandbox-exec`); the snapshot is APFS **`clonefile`**. Everything Belay claims about containment was measured on macOS. **Linux is entirely unverified** — off macOS the sandbox *raises* rather than returning a cheerful no-op, because a no-op reporting success would claim a boundary that does not exist. Linux/Docker is a planned second slice. What the sandbox does and does not enforce (reads are not scoped; denial records are inferred) is in [`docs/technical/THREAT_MODEL.md`](docs/technical/THREAT_MODEL.md).
 
-That is the whole claim. It is **not** the claim that no real server is ever perturbed. A
-byte-level differential is **unrunnable** against a real, nondeterministic server: two runs
-of one differ for reasons that have nothing to do with the proxy — varying ids, timestamps,
-progress tokens. Real-world runs are **corroborating evidence, not proof**, and this
-distinction is not going to be quietly upgraded later.
+### Parallel tool calls are recorded `unrestorable`, not snapshotted
+A turn's pre-state is only capturable while nothing else is in flight. When a `tools/call` arrives while another is outstanding — which is the **default** for clients that batch independent calls (Claude Code, Cursor, the OpenAI agents SDK) — the workspace is already a mid-state of the first call, so Belay refuses to clone it and call it a pre-state. It records `unrestorable` and forwards the call unchanged; that turn verifies as `UNVERIFIED`. Belay does **not** serialize turns to make them capturable — that would change how your agent behaves, the one thing this proxy exists not to do. What you lose is coverage; what you keep is honesty.
 
-Separately, a real `mcp` SDK client completes `initialize` → `tools/list` → `tools/call`
-through the proxy (`tests/test_real_client.py`). That proves compatibility. It proves nothing
-about byte-transparency: the fixture it drives is conforming, and a re-serialising proxy would
-pass it unnoticed. The two tests answer different questions and neither substitutes for the
-other.
+### A restore declares its own gaps
+A snapshot preserves content, mode (including setuid), nanosecond mtime, symlink targets, xattrs, `st_flags`, hardlink structure, and empty directories — each because a naïve copy was measured losing it. It does **not** restore birthtime/ctime/atime (physically unsettable or self-invalidating) or ownership (when not root), and it **detects and refuses** sockets/devices/FIFOs by name rather than silently skipping them. A `present` handle therefore declares its own gaps instead of implying a fidelity no snapshot has.
 
-## The sandbox is macOS only, and Linux is unverified
+### A trace is as sensitive as the agent's most sensitive tool argument
+Capture is lossless by design, so everything crossing the boundary — **API keys, tokens, file contents, customer data** — lands in the trace verbatim and recoverable. Trace files are owner-only (`0600`); beyond that there is deliberately no redaction and no secret scanning (both are opinions, and a redacted trace can't be replayed). **Treat a trace file as the credential it may contain.**
 
-The sandbox is macOS **Seatbelt** (`sandbox-exec`), and the snapshot is APFS
-**`clonefile`**. Everything Belay claims about containment was measured on macOS 26.5.2 /
-arm64.
+### Content-neutral, not latency-neutral
+The turn gate holds each `tools/call` while it snapshots the pre-state — measured at ~5 ms per turn on a 400-file tree; the cost scales with the tree, so a large workspace pays more. The bytes are never altered; the turn just waits, because a snapshot must complete before the call reaches the server or it is not a pre-state.
 
-**Linux is entirely unverified — nothing has ever been run there.** Not "partially
-supported", not "should work". Off macOS the sandbox **raises** rather than returning a
-cheerful no-op, because a no-op that reported success would be Belay claiming a boundary
-that does not exist on that platform. `ext4` has no reflink and GitHub's Linux runners are
-ext4, so the `clonefile` approach has **no CI equivalent** there either. Linux/Docker is
-C2's second slice.
-
-What the sandbox does and does not enforce — reads are not scoped, per-host network rules
-are inexpressible, denial records are *inferred* — is in
-[`docs/technical/THREAT_MODEL.md`](docs/technical/THREAT_MODEL.md). Read it before trusting
-the word "sandbox".
-
-## Belay is content-neutral, not latency-neutral
-
-The turn gate holds each `tools/call` while it snapshots the pre-state. **Measured: ~5ms
-per turn** (4.9 / 5.0 / 5.1 / 5.5 / 4.9 ms) — **on a 400-file tree**, which is the size the
-suite measures. The gate walks and clones the scope, so the cost scales with the tree: that
-number is a measurement, not a constant, and a large workspace will pay more.
-
-**Replies are held too**, and for much less: a `json.loads` of a copy, to see which turn just
-ended. Belay has to learn that from the reply *before the client does* — otherwise the
-client's next call races its own response, and a perfectly sequential turn gets recorded
-`unrestorable` for a concurrency it never had.
-
-C1's neutrality claim was written to assert **bytes, never timing**, and this is what that
-narrowness was for. The bytes the client sent are the bytes the server receives, and the
-bytes the server sent are the bytes the client receives, gate or no gate — but the turn
-waits. A snapshot must complete *before* the call reaches the server, or it is not a
-pre-state; it is a race against whatever the server has already done.
-
-## Parallel tool calls are recorded `unrestorable`, not snapshotted
-
-**This is the coverage limit that bites the headline capability, on the most common client
-behaviour there is.** Read it before you read a trace.
-
-A turn's pre-state is only capturable while nothing else is running. "The frame was
-forwarded" and "the turn started executing" are the same instant only if at most one call is
-ever in flight — and JSON-RPC ids exist precisely so a client may **pipeline**. Claude Code
-is instructed to batch independent tool calls into one block; Cursor and the OpenAI agents
-SDK do the same. So this is the default, not an edge case.
-
-When a `tools/call` arrives while another is outstanding, the workspace is no longer the
-second turn's pre-state — it is already a mid-state of the first. Belay does **not** clone it
-and call it a pre-state. It records:
-
-```json
-"state_handle": {"status": "unrestorable", "cause": "UNRESTORABLE_CONCURRENT_TURN", ...}
-```
-
-and forwards the call unchanged. C4 renders that UNVERIFIED. **What you lose is coverage —
-a batched turn is not verifiable by replay.** What you do not lose is honesty: a `present`
-handle here would be confident, hashed, self-consistent and wrong, which is worse than no
-snapshot at all.
-
-Belay does **not** serialise turns to make the pre-state capturable. Holding call N+1 until
-N replies would change the proxy from content-neutral to **concurrency-altering** — it would
-change how your agent behaves, which is the one thing this proxy exists not to do.
-
-Two consequences worth stating plainly:
-
-- **A batch of `tools/call` in one frame** is refused for the same reason: they begin
-  together, one frame carries one handle, and only the first ran against that tree.
-- **A `tools/call` with no id** is unanswerable, so Belay can never see it end. Its own
-  pre-state is snapshotted, and every later turn in that run is recorded `unrestorable`.
-
-Measured end-to-end in `tests/test_turn_gate.py` against a server that does real work per
-call — the case where the answer is decided rather than raced.
-
-## What a restore does and does not bring back
-
-**Preserved, and measured** — content · mode including **setuid** · nanosecond mtime ·
-symlink targets · **xattrs** (the mechanism a macOS resource fork is stored in) ·
-`st_flags` · **hardlink structure** · empty directories.
-
-Each of those is in the tree hash because a real copy mechanism was measured losing it:
-`clonefile` silently drops hardlink identity, setuid (`0o4711` → `0o0711`) and directory
-mtimes; `shutil.copytree` drops xattrs. A content-only hash calls every one of those copies
-"byte-identical".
-
-**Not restored, each for a stated reason:**
-
-- **birthtime** — unsettable by anyone, including `tar`.
-- **ctime** — unsettable.
-- **atime** — self-invalidating: hashing reads every file, which changes it.
-- **ownership**, when not running as root.
-- **sockets, devices, FIFOs** — **detected and refused, never silently skipped.**
-
-That last one is the contract, not an apology. Copy a FIFO and you restore an empty pipe,
-losing the queued bytes with no record that anything was lost. Skip it and the restored
-tree is missing an entry, and every verdict grounded on that pre-state is grounded on a
-tree that never existed. Both report success. **Refusal is the only option that leaves a
-reader able to tell what happened** — so the snapshot is refused, by name, with the cause
-in the trace.
-
-A `present` handle therefore declares its own gaps rather than implying a fidelity no
-snapshot has.
-
-## Coverage: Belay sees what crosses the MCP boundary, and nothing else
-
-**An agent's built-in tools do not traverse MCP and are invisible to Belay.** Claude Code's
-`Bash` and `Edit` are in-process; they never reach a stdio transport, so no proxy on that
-transport can see them. An agent can read a file, run a command, or rewrite your working tree
-without a single byte crossing Belay.
-
-This is a real limit, not a temporary gap in the docs. Read a trace as *"here is what went
-over MCP"*, never as *"here is what the agent did"*. The `connection_window` records bound
-the period Belay was listening at all, which is the honest denominator for that question.
-
-**The sandbox's limit and the MCP boundary's limit are the same limit.** Belay contains the
-processes it spawns — the MCP servers it proxies. `Bash` and `Edit` are never spawned by
-our proxy and are therefore **never in our sandbox**. Wiring the sandbox into the proxy did
-not widen what Belay can see by one byte; it changed what happens to what Belay could
-already see.
-
-## A trace is as sensitive as the agent's most sensitive tool argument
-
-Capture is lossless by design, so everything crossing the boundary is recorded verbatim:
-**API keys, tokens, file contents, customer data**. It lands in the trace in fully
-recoverable form.
-
-Trace files are created owner-only (`0600`). Beyond that there is deliberately **no redaction
-and no secret scanning**. Both are opinions, capture is opinion-free, and a redacted trace
-cannot be replayed — which would defeat the only reason the trace exists. **Treat a trace
-file as the credential it may contain.**
-
-## The protocol is moving
-
-Belay is developed against MCP revision **`2025-11-25`**.
-
-The **`2026-07-28`** revision removes the `initialize`/`initialized` handshake, protocol-level
-sessions and `Mcp-Session-Id`, and server-initiated requests. Belay forwards bytes and does
-not model the conversation, so the proxy is not expected to be affected — **but Belay has not
-been tested against that revision and does not claim support for it.** No such server exists
-to test against yet. When one does, the claim can be made on evidence.
-
-The trace format records what the wire carried rather than what a revision assumes it meant;
-where that mattered, the reasoning is in [`docs/technical/TRACE_FORMAT.md`](docs/technical/TRACE_FORMAT.md).
+---
 
 ## Develop
 
+Belay is greenfield-clean: Python 3.10+, [uv](https://github.com/astral-sh/uv), zero runtime dependencies.
+
 ```bash
-uv run pytest            # full suite
-uv run pytest -m sdk     # the tests driving a real MCP SDK client
+git clone https://github.com/haqaliz/belay && cd belay
+uv sync
+uv run pytest            # the full suite (macOS runs the sandbox/replay tests; one is platform-gated)
+uv run belay --help      # the CLI, from source
 ```
 
-`mcp` is a **dev-only, test-only** dependency and must never appear in `src/belay/`.
-`tests/test_import_guard.py` enforces that statically, along with the zero-runtime-dependency
-rule and the rule that the forwarding path cannot import `json`.
+The engine is strictly test-first, and its honesty properties are guarded by tests with *teeth* (watched failing against a stub before they were trusted): the verdict path imports no model, `UNVERIFIED` never counts as `PASS`, the corpus engine never labels its own cases. See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow and [SECURITY.md](SECURITY.md) for the privacy model and reporting.
+
+---
+
+## Status & roadmap
+
+**Alpha.** The full record → sandbox → replay → verdict spine plus the failure corpus (C1–C6) is built and merged; the live console (C7), the A3 claim-re-derivation axis (C8, cuttable), and observability interop (C9, cuttable) are ahead. The [roadmap](docs/ROADMAP.md) and [capability backlog](docs/technical/CAPABILITY_ROADMAP.md) are authoritative on sequencing; [VISION.md](VISION.md) is the thesis.
+
+## License
+
+[Apache-2.0](LICENSE) — permissive, with an explicit patent and trademark grant.
