@@ -17,7 +17,7 @@ Arguments and conventions are identical to `belay-end-fast`.
 
 **REQUIRED SUB-SKILL:** Use `belay-end-fast` for the cleanup and release pipeline.
 
-Run its **Phase 0 → Phase 3 exactly as written** (safety check → master + pull → remove worktree → delete branch, then the **optional** new-version release). Belay's base branch is **`master`**, never `main`. The release in its Phase 3 is a no-op today (Belay has no release machinery yet) and opt-in once it exists: ask, and default to skipping. Only proceed to the report once cleanup verification passes.
+Run its **Phase 0 → Phase 3 exactly as written** (safety check → master + pull → remove worktree → delete branch, then the new-version release). Belay's base branch is **`master`**, never `main`. **Phase 3 ALWAYS runs** now that release machinery exists — every finished unit of work cuts a release (feat→minor, bug/chore→patch) via a tag push that `release.yml` publishes to PyPI + a GitHub Release; verify both channels live before calling it done. Only proceed to the report once cleanup verification AND the release both pass.
 
 ### Phase 4 — Completion report
 
@@ -52,5 +52,5 @@ The comment can mirror the report's plain-English summary in a sentence or two. 
 | Passing the wrong type to `belay-report` | Apply the mapping table (`feat`/`feature` → `feature`, `chore` → `task`) |
 | Posting the issue comment before the report | The comment (Phase 5) comes after the report (Phase 4); the report's plain-English summary is good source material |
 | Cleaning up against `main` | Belay's base branch is `master` |
-| Auto-releasing during end | The release is `belay-end-fast` Phase 3: a no-op today, opt-in later, and it belongs to haqaliz not playdolphia |
+| Skipping the release during end | The release is `belay-end-fast` Phase 3 and ALWAYS runs now (feat→minor, bug/chore→patch) via a tag push; it belongs to haqaliz, never playdolphia/aliz-manifold, and publishes PyPI + a GitHub Release |
 | Posting the comment without confirmation | Draft first, confirm with the user, then post |
