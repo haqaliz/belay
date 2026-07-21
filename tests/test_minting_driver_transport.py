@@ -21,6 +21,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 ECHO_SERVER = FIXTURES / "minting_driver_echo_server.py"
 SILENT_EXIT_SERVER = FIXTURES / "minting_driver_silent_exit_server.py"
 HANG_SERVER = FIXTURES / "minting_driver_hang_server.py"
+NOISY_STDERR_SERVER = FIXTURES / "minting_driver_noisy_stderr_server.py"
 
 # Short so the suite that hits the timeout paths stays fast.
 SHORT_TIMEOUT = 0.3
@@ -104,6 +105,28 @@ def test_no_reply_from_a_live_process_times_out_explicitly() -> None:
             transport.request(
                 {"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {}}, timeout=SHORT_TIMEOUT
             )
+    finally:
+        transport.close()
+
+
+def test_a_server_that_logs_heavily_to_stderr_still_replies_without_timing_out() -> None:
+    """Task 2 review fix: the stderr pipe must be drained continuously.
+
+    `NOISY_STDERR_SERVER` writes ~1MB to stderr around its reply — well past a
+    typical 64KB OS pipe buffer. If `StdioMcp` never reads the child's stderr,
+    the child's own `write()` to its full stderr pipe blocks, so it never gets
+    to writing its stdout reply, and `request()` sees a spurious `ReplyTimeout`
+    against a perfectly healthy server. A transport that drains stderr in the
+    background must still get the correct reply, well within a generous but
+    bounded timeout.
+    """
+    transport = _spawn(NOISY_STDERR_SERVER)
+    try:
+        reply = transport.request(
+            {"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {}}, timeout=5.0
+        )
+        assert reply["id"] == 1
+        assert reply["result"] == {"echoed": 1}
     finally:
         transport.close()
 

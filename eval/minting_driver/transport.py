@@ -44,12 +44,19 @@ import json
 import os
 import select
 import subprocess
+import threading
 import time
 from typing import Any, Optional
 
 #: A generous default for a real run; tests pass a short value to exercise the
 #: timeout paths fast.
 DEFAULT_TIMEOUT = 10.0
+
+#: Bounded tail of the server's stderr kept for diagnostics (e.g. surfacing in
+#: a `ServerExited`/`ReplyTimeout` message). Draining discards everything past
+#: this many trailing bytes — the point is to never let the OS pipe buffer
+#: fill, not to buffer the server's whole log in memory.
+_STDERR_TAIL_BYTES = 8192
 
 
 class TransportError(RuntimeError):
@@ -150,6 +157,54 @@ class _Replies:
         return _id_key(message.get("id")) == key
 
 
+class _StderrDrain:
+    """Continuously drains a child's stderr in a background daemon thread.
+
+    Started once from `StdioMcp.__init__` and runs until the stream hits EOF
+    (the child exited) or is closed out from under it. This is the fix for a
+    real deadlock: `StdioMcp` spawns its server with `stderr=subprocess.PIPE`,
+    and if nothing reads that pipe, a server that logs verbosely to stderr
+    fills the OS pipe buffer (typically 64KB) and blocks on its own
+    `write()`. A blocked server never gets around to writing the stdout reply
+    a caller is awaiting, which then surfaces as a spurious `ReplyTimeout`
+    against a perfectly healthy server. Draining continuously, independent of
+    whether anyone is awaiting a reply, is the only fix — reading stderr only
+    from inside `request()`/`close()` would still leave gaps where the pipe
+    can fill.
+
+    Only a bounded tail (`_STDERR_TAIL_BYTES`) is kept, for diagnostics; the
+    goal is to keep the pipe empty, not to buffer a chatty server's whole log.
+    """
+
+    def __init__(self, stream: Any) -> None:
+        self._stream = stream
+        self._tail = b""
+        self._lock = threading.Lock()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        try:
+            while True:
+                chunk = self._stream.read(65536)
+                if not chunk:
+                    return  # EOF: the server exited (or never wrote anything)
+                with self._lock:
+                    self._tail = (self._tail + chunk)[-_STDERR_TAIL_BYTES:]
+        except (ValueError, OSError):
+            # The stream was closed out from under us during teardown —
+            # nothing left to drain, and nothing to raise here for.
+            return
+
+    def tail(self) -> bytes:
+        """The last `_STDERR_TAIL_BYTES` of stderr seen so far, for diagnostics."""
+        with self._lock:
+            return self._tail
+
+    def join(self, timeout: float) -> None:
+        self._thread.join(timeout)
+
+
 class StdioMcp:
     """One spawned MCP server, spoken to interactively over newline-JSON stdio.
 
@@ -166,8 +221,16 @@ class StdioMcp:
             stderr=subprocess.PIPE,
             env=env,
         )
-        assert self._proc.stdin is not None and self._proc.stdout is not None
+        assert (
+            self._proc.stdin is not None
+            and self._proc.stdout is not None
+            and self._proc.stderr is not None
+        )
         self._replies = _Replies(self._proc.stdout.fileno())
+        # Drain stderr continuously from the moment the process is spawned —
+        # see `_StderrDrain` for why this can't wait until `request()` or
+        # `close()` without reintroducing the pipe-buffer deadlock.
+        self._stderr_drain = _StderrDrain(self._proc.stderr)
 
     def _send(self, obj: dict) -> None:
         assert self._proc.stdin is not None
@@ -198,9 +261,17 @@ class StdioMcp:
         self._send(obj)
 
     def close(self) -> None:
-        """Tear down the subprocess cleanly: close pipes, then terminate/kill."""
+        """Tear down the subprocess cleanly: close pipes, then terminate/kill.
+
+        stderr is deliberately NOT closed in the same pass as stdin/stdout:
+        `_StderrDrain` owns that stream from another thread, and closing it
+        out from under an in-flight read is a race. Instead, terminate/kill
+        the process first (which drives the drain thread to EOF on its own),
+        then join the thread, then close the stream — never blocking forever
+        even if the process was already dead on entry.
+        """
         proc = self._proc
-        for stream in (proc.stdin, proc.stdout, proc.stderr):
+        for stream in (proc.stdin, proc.stdout):
             try:
                 if stream is not None:
                     stream.close()
@@ -213,6 +284,12 @@ class StdioMcp:
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait(timeout=5)
+        self._stderr_drain.join(timeout=5)
+        try:
+            if proc.stderr is not None:
+                proc.stderr.close()
+        except Exception:
+            pass
 
 
 __all__ = ["DEFAULT_TIMEOUT", "ReplyTimeout", "ServerExited", "StdioMcp", "TransportError"]
