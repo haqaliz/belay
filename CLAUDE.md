@@ -35,14 +35,24 @@ This file orients a coding agent working in this repository. Read it first.
 > running the live smoke for the first time: `npx -y` cannot spawn a server behind the gated proxy** (the
 > contained run denies network and `~/.npm` writes by design, so npx hangs); servers are now pre-installed
 > into a gitignored `eval/servers/` and launched by absolute `node` path. See `eval/README.md`.
-> **Next: run the live Phase-0 mint and publish the number.** The harness is built; the blocker is a valid
-> model key (the smoke reached the model and got a 401 on the configured `ANTHROPIC_API_KEY`). Staged
-> plan: Stage 1 (one instance, prove the bridge against a real capture) → Stage 2 (~10, measure attrition +
-> cost, fix `selected.json`) → Stage 3 (~65–70 to land a denominator ≥50, incl. 3 clean control instances).
-> Gate criteria are **pre-registered** in the PRD (`docs/planning/phase0-live-mint/prd.md`): PROCEED iff ≥3
+> **Stage 1 of the live mint ran and PROVED the harness end-to-end** — `run_mint` → real git clone at
+> `base_commit` → gated capture → bridge → stock `belay phase0 run` → replay, on `pallets__flask-4045` via
+> BYOK (Ollama, then Gemini's OpenAI-compat endpoint). **But the number is now BLOCKED on a CORE-ENGINE
+> finding, not the eval harness:** replay verdicts are contaminated by live workspace state. Gemini made a
+> *correct* edit yet the run reported `VERIFIED_FLAGGED 1/1`; reverting the workspace changed the verdicts.
+> Root cause (verified against the engine's own design assumption): replay restores into a scratch dir and
+> sets the server's **cwd** there, so it is faithful only for **cwd-relative** servers; the reference
+> filesystem MCP server uses an **absolute `allowed_dir` / absolute paths** and bypasses the scratch
+> restore. Its FLAGs are false positives. See
+> `docs/planning/phase0-live-mint/mint-execution/STAGE1_FINDINGS.md`. **Do not scale a mint or publish a
+> rate until replay is faithful for absolute-path servers** — that is the next unit (`src/belay/replay` +
+> `sandbox`), off `master`. Stage 1 caught this false-positive machine *before* scaling, exactly as the R6
+> "verify ONE before scaling" rule intends.
+> **Gate criteria are pre-registered** in the PRD (`docs/planning/phase0-live-mint/prd.md`): PROCEED iff ≥3
 > *independent* hand-audited TPs AND denominator ≥50 AND no INSTRUMENT SUSPECT; a FAILing control voids the
-> mint. Then audit, fill `docs/technical/PHASE0_RESULTS.md`, fix the stale RUNBOOK; then C7 (live console —
-> first UI). C8 (A3 claim re-derivation) and C9 (observability interop) are cuttable, last.
+> mint. After the replay fix: Stage 2 (~10, measure attrition + cost, fix `selected.json`) → Stage 3
+> (~65–70, incl. 3 controls) → audit → fill `docs/technical/PHASE0_RESULTS.md` → fix the stale RUNBOOK; then
+> C7 (live console — first UI). C8 (A3 claim re-derivation) and C9 (observability interop) are cuttable, last.
 >
 > [`docs/ROADMAP.md`](docs/ROADMAP.md) (phased plan + gates) and
 > [`docs/technical/CAPABILITY_ROADMAP.md`](docs/technical/CAPABILITY_ROADMAP.md)
