@@ -78,6 +78,27 @@ snapshot; that it moved with the live workspace is the contamination.
 (`disposition ∈ {VERIFIED_CLEAN, VERIFIED_FLAGGED}`) — a **false-positive FLAG satisfies
 that assertion**. So the smoke "passing" never implied the verdict was *correct*.
 
+**Adversarial verification — the finding is a real engine limitation, NOT misuse
+(confirmed 2026-07-22).** The counter-hypothesis was "you invoked replay wrong / the engine
+means to restore into the original path." Refuted by the engine's own design assumption,
+documented in `tests/fixtures/weakening_editor_server.py`:
+
+> *"Under replay the cwd is the restored pre-state scratch copy (`client.replay_turn` sets
+> the server's cwd to it), whose `tests/` directory holds the STRONG test. Overwriting it
+> with the WEAKENED body is a real content change…"*
+
+Every replay test fixture is a **cwd-relative** server: it operates on paths *relative to
+cwd*, and the engine restores the snapshot into a scratch dir and sets the server's cwd
+there (`client.replay_turn`). That is the whole isolation mechanism. The reference **node
+filesystem server is the inverse**: it takes an **absolute `allowed_dir` at launch** and the
+tool calls carry **absolute paths**, which ignore cwd. So the scratch restore + cwd=scratch
+does nothing for it — it reads/writes the original absolute path regardless. **No `--server`
+invocation can fix this**: the `allowed_dir` would need to be the *dynamic per-replay
+scratch* path (the static CLI cannot express it), and the recorded absolute tool-call paths
+would still resolve to the original workspace. The engine is correct for cwd-relative
+servers and silently unfaithful for absolute-path / launch-time-root servers — which is a
+large, common class (the reference filesystem server among them).
+
 **Scope & ownership:** this is a **core-engine** issue (`src/belay/replay` + `sandbox`),
 **not** the eval harness. It is out of scope for `phase0-live-mint` (eval-only) and needs
 its own unit of work. Candidate resolutions to investigate (not decided):
