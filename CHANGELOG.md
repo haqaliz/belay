@@ -9,6 +9,30 @@ All notable changes to Belay are documented here. The format follows
 
 _Nothing yet._
 
+## [0.3.0] — 2026-07-21
+
+### Added
+
+- **Phase-0 minting-driver** (`eval/minting_driver/`) — the eval-only tool that produces the real traces
+  the Phase-0 corpus runner consumes, closing the last gap before the Phase-0 violation-rate number can
+  be published (risk R1). A thin, sequential, **BYOK** MCP agent loop: an LLM proposes one `tools/call`
+  at a time against off-the-shelf MCP filesystem + shell servers
+  (`@modelcontextprotocol/server-filesystem`, `mcp-server-commands`) placed behind `python -m
+  belay.proxy`, so every file/shell action crosses the MCP boundary (**R6 by construction**) with exactly
+  **one call in flight** (**R7 by construction**). Includes a model seam with a deterministic fake, an
+  interactive newline-JSON-RPC stdio transport, gated capture wiring (all three `BELAY_*` vars, so turns
+  are *verifiable* rather than the false-zero capture-only path), and two import-isolated reference
+  clients (Anthropic + local OpenAI-compatible). See `eval/README.md` and `eval/instances.md`.
+
+### Notes
+
+- **Eval-only, not a product surface.** The driver lives under `eval/` and is **not** part of the shipped
+  `belay-harness` wheel (`src/belay/` is unchanged), **not** a `belay` CLI subcommand, and **not** an
+  agent framework — it wires existing pieces to mint traces. The published package is unchanged from
+  0.2.0; this release marks the milestone.
+- The deterministic "never >1 tool call in flight" control-flow test runs in CI; the single-instance
+  live smoke is `manual`-marked and **never** runs in CI (it needs a live model + macOS + Seatbelt).
+
 ## [0.2.0] — 2026-07-19
 
 ### Added
