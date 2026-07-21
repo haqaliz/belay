@@ -19,6 +19,17 @@ Snapshot *trees* are never moved: manifest tree paths are absolute
 (`src/belay/replay/persist.py:109`), so the trees stay where the gate wrote them and only the
 trace file and its `.manifests` dir are renamed into the batch dir. Uses `shutil.move`, not
 copy — the capture is consumed into the batch, not duplicated.
+
+**A MISSING manifests dir is not a failure — it is an honest NO_VERIFIABLE_TURNS.** The gate
+creates the `<snapshots>.manifests/` dir *lazily* (`src/belay/sandbox/gate.py:429`), only when
+it persists a snapshot. A session that issued tool calls but snapshotted nothing therefore has
+a trace but no manifests sibling. In that case the bridge still moves the trace and creates an
+**empty** dest manifests dir, so `run_batch` sees the instance, finds no manifests, and
+classifies it `NO_VERIFIABLE_TURNS` — the truth. Raising instead would let the instance vanish
+from the ledger (never reaching `run_batch`, never counted toward `INSTRUMENT SUSPECT`), making
+a mint full of no-verifiable-turn captures read *cleaner* than it is — the exact false-zero the
+guard exists to prevent. A trace that IS present is never a bridge failure; only a MISSING
+trace is (`NoTraceError`), and the exactly-one-trace guard is never weakened by this.
 """
 
 from __future__ import annotations
@@ -83,6 +94,11 @@ def bridge_capture(
     to `batch_dir/trace-<instance_id>.manifests/`. Snapshot trees under `snapshot_dir` are
     left in place (their manifest paths are absolute). Returns the path of the renamed trace.
 
+    When the gate never persisted a snapshot the source `<snapshots>.manifests/` dir does not
+    exist; the trace is still moved and an **empty** dest manifests dir is created instead, so
+    `run_batch` classifies the instance `NO_VERIFIABLE_TURNS` rather than the instance
+    vanishing from the ledger (see the module docstring's honesty note).
+
     Raises `NoTraceError`/`MultipleTracesError` unless exactly one trace is present, and
     `BridgeCollisionError` if either destination already exists.
     """
@@ -123,7 +139,14 @@ def bridge_capture(
 
     batch_dir.mkdir(parents=True, exist_ok=True)
     shutil.move(str(source_trace), str(dest_trace))
-    shutil.move(str(source_manifests), str(dest_manifests))
+    if source_manifests.exists():
+        shutil.move(str(source_manifests), str(dest_manifests))
+    else:
+        # The gate snapshotted nothing this session, so it never created the manifests dir
+        # (it makes it lazily, gate.py:429). Create an empty dest dir instead of moving a
+        # non-existent source: the instance stays in the ledger and reads as
+        # NO_VERIFIABLE_TURNS, never a dropped instance. See the module docstring.
+        dest_manifests.mkdir()
     return dest_trace
 
 

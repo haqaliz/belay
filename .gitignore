@@ -30,6 +30,10 @@ dist/
 # run data, never committed (no-egress guardrail).
 /eval/clones/
 
+# The batch driver's mint output (per-instance workspaces/traces/snapshots + the bridged
+# batch dir + the resume checkpoint) — the user's run data, never committed.
+/eval/mint/
+
 # Dashboard
 node_modules/
 .next/

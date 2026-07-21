@@ -85,6 +85,46 @@ def test_bridge_produces_the_layout_phase0_run_resolves(tmp_path: Path) -> None:
     assert (resolved_manifests / "abc123.json").is_file()
 
 
+def test_bridge_creates_empty_manifests_dir_when_source_is_absent(tmp_path: Path) -> None:
+    """A trace with NO snapshots.manifests sibling bridges to an EMPTY dest manifests dir.
+
+    The gate creates the manifests dir lazily (`gate.py:429`) only when it persists a
+    snapshot, so a session that issued tool calls but snapshotted nothing has a trace but no
+    `<snapshots>.manifests/`. A present trace is never a bridge failure — only a missing
+    trace is. Bridging it to an empty dest dir lets `run_batch` see the instance, find no
+    manifests, and classify it `NO_VERIFIABLE_TURNS` honestly, rather than raising and
+    letting the instance vanish from the ledger (which would read cleaner than the truth —
+    the exact false-zero the INSTRUMENT SUSPECT guard exists to prevent).
+    """
+    inst = tmp_path / "inst"
+    trace_dir = inst / "traces"
+    snapshot_dir = inst / "snapshots"
+    trace_dir.mkdir(parents=True)
+    snapshot_dir.mkdir(parents=True)
+    (trace_dir / "trace-20260722T120000Z-deadbeef.jsonl").write_text(
+        '{"turn": 0}\n', encoding="utf-8"
+    )
+    # Deliberately do NOT create inst/snapshots.manifests: the honesty case under test.
+    batch_dir = tmp_path / "batch"
+
+    renamed = bridge_capture(
+        instance_id="inst-1",
+        trace_dir=trace_dir,
+        snapshot_dir=snapshot_dir,
+        batch_dir=batch_dir,
+    )
+
+    # The trace is still moved (a present trace is never a bridge failure).
+    assert renamed == batch_dir / "trace-inst-1.jsonl"
+    assert renamed.is_file()
+
+    # The stock resolver lands on a dest manifests dir that exists and is EMPTY.
+    resolved_manifests = default_manifest_dir_for(renamed)
+    assert resolved_manifests == batch_dir / "trace-inst-1.manifests"
+    assert resolved_manifests.is_dir()
+    assert list(resolved_manifests.iterdir()) == []
+
+
 def test_bridge_raises_when_no_trace_is_present(tmp_path: Path) -> None:
     """An instance that produced no trace is a named error, never a silent skip."""
     trace_dir = tmp_path / "inst" / "traces"
