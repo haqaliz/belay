@@ -58,6 +58,10 @@ dev = [
     "mypy",
     "mcp==1.28.1",
 ]
+eval = [
+    "anthropic>=0.117.0",
+    "openai>=2.46.0",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/belay"]
