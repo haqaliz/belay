@@ -34,23 +34,65 @@ direction"): every action the model takes this way crosses the proxy boundary an
 recorded as a trace turn. Anything the model did through a built-in tool instead would be
 invisible to Belay — this driver exists specifically so that doesn't happen.
 
-## The MCP servers (pinned)
+## The MCP servers (pinned, pre-installed)
 
-Two servers, each launched via a pinned `npx -y <pkg>@<version>` so a stale
-`~/.npm/_npx` cache entry can never silently swap in a different version mid-mint.
+Two servers, each pinned to an exact version and **pre-installed** into a gitignored
+`eval/servers/`, then launched by **absolute `node` path**.
 
-Resolved by running `npm view <pkg> version` on 2026-07-21 (matches the versions found in
-research — re-run this before minting in case newer versions have shipped since):
+> ### ⚠️ `npx -y` does NOT work behind the gated proxy — measured, not theorised
+>
+> This was the documented launch method until 2026-07-21, when the first live smoke run
+> proved it cannot work. Recording the finding here so nobody re-derives it:
+>
+> A gated run (`BELAY_SANDBOX_SCOPE` + `BELAY_SNAPSHOT_DIR` set) spawns the server inside
+> Seatbelt, which **denies all network by default** (`src/belay/sandbox/launch.py:73-98` —
+> a deliberate, argued default, not an oversight) and confines writes to the workspace
+> scope. `npx` needs both: it contacts the registry and writes `~/.npm/_npx` and
+> `~/.npm/_logs`. Denied both, it **hangs** rather than failing loudly — the proxy emits
+> nothing and the client times out on `initialize`.
+>
+> Worse, npm misattributes the write denial to an unrelated known bug and prints
+> *"Your cache folder contains root-owned files"*. **That message is a red herring** —
+> `find ~/.npm -user root` returns nothing. Do not chase it.
+>
+> The trace-only path (`BELAY_TRACE_DIR` alone, no sandbox) works fine with `npx`, which is
+> why this went unnoticed: it is only the *contained* run that breaks, and the contained
+> run is the only one that produces verifiable turns.
+>
+> **The sandbox is not the bug.** Deny-all network is exactly what makes a minted turn
+> worth verifying. The eval harness was wrong to depend on a package manager at spawn time.
+> Pre-installing also makes the mint fully offline, which strengthens what the published
+> number can claim.
+
+Versions resolved by `npm view <pkg> version` on 2026-07-21 (re-run before minting in case
+newer versions have shipped since):
 
 ```bash
 npm view @modelcontextprotocol/server-filesystem version   # 2026.7.10
 npm view mcp-server-commands version                       # 0.8.2
 ```
 
+### Install once, before any mint
+
+Run **outside** the sandbox, from the repo root:
+
+```bash
+mkdir -p eval/servers
+cd eval/servers
+npm install @modelcontextprotocol/server-filesystem@2026.7.10 mcp-server-commands@0.8.2
+```
+
+`eval/servers/` is gitignored — third-party JS, pinned but never vendored into a repo whose
+Python core has zero runtime dependencies. `eval/minting_driver/servers.py` resolves the
+entrypoints and raises a named error naming this exact command if they are absent, so a
+missing install fails loudly at startup rather than as a mysterious timeout.
+
+Override the install root with `BELAY_EVAL_SERVER_ROOT` if you keep servers elsewhere.
+
 ### filesystem — `@modelcontextprotocol/server-filesystem@2026.7.10`
 
 ```bash
-npx -y @modelcontextprotocol/server-filesystem@2026.7.10 <abs-allowed-dir>
+node eval/servers/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js <abs-allowed-dir>
 ```
 
 - Write tools: `write_file`, `edit_file`.
@@ -66,8 +108,11 @@ npx -y @modelcontextprotocol/server-filesystem@2026.7.10 <abs-allowed-dir>
 ### shell — `mcp-server-commands@0.8.2`
 
 ```bash
-npx -y mcp-server-commands@0.8.2
+node eval/servers/node_modules/mcp-server-commands/build/index.js
 ```
+
+(Entrypoint is `build/index.js`, **not** `dist/` — read from the package's own
+`bin` field at install time, not guessed.)
 
 - Tool: `run_process`.
 - **This server declares no MCP annotations.** There is no `readOnlyHint`/
@@ -149,9 +194,10 @@ the model client only ever sees the running conversation this driver builds loca
 ## macOS gotchas
 
 - **Node 20 or 22 LTS.** Older/newer Node versions are untested against these servers.
-- **Always pin the exact version** in `npx -y pkg@version` (as shown above). An unpinned
-  `npx -y pkg` can resolve to whatever is cached in `~/.npm/_npx`, which silently drifts
-  from what you tested against and breaks reproducibility of the mint.
+- **Always pin the exact version** in the `npm install` above. An unpinned install resolves
+  to whatever is newest at install time, which silently drifts from what you tested against
+  and breaks reproducibility of the mint. Pinning is why the version appears in the install
+  command and in `eval/minting_driver/servers.py`.
 - **Point the filesystem server's allowed-dir at a neutral working directory** — a repo
   clone under `~/dev/...` or a scratch directory you create for the mint — **not**
   `~/Desktop`, `~/Documents`, or `~/Downloads`. macOS's TCC (Transparency, Consent, and
@@ -193,8 +239,9 @@ this task's.
 
 ## Running the single-instance smoke
 
-The smoke is a real, live, spending run: real model API calls, real `npx`-spawned MCP
-servers, real Seatbelt sandboxing. It is **never part of CI** — guarded by both a
+The smoke is a real, live, spending run: real model API calls, real pre-installed MCP
+servers spawned by `node`, real Seatbelt sandboxing. It **skips** with an actionable message
+if `eval/servers/` has not been installed (see "Install once" above). It is **never part of CI** — guarded by both a
 `sys.platform == "darwin"` skip and an explicit env flag, and excluded from the default
 `pytest` collection via a registered `manual` marker (`-m "not manual"` in the default
 run). See `docs/planning/phase0-minting-driver/plan_20260721.md` (Task 5) for the guard

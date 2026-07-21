@@ -20,6 +20,12 @@ dist/
 /_sandbox/
 /corpus/local/
 
+# Pre-installed MCP servers for the eval mint. Installed OUTSIDE the sandbox by a
+# documented `npm install` (see eval/README.md) and invoked by absolute `node` path:
+# `npx -y` cannot be used behind the gated proxy, which denies both network and
+# writes to ~/.npm by design. Third-party JS, pinned but never vendored.
+/eval/servers/
+
 # Dashboard
 node_modules/
 .next/

@@ -1,6 +1,7 @@
 """Task 5 — the manual-gated single-instance smoke: the real end-to-end path.
 
-A live model, a real `npx`-spawned MCP filesystem server, Belay's gated proxy (trace +
+A live model, a real MCP filesystem server (pre-installed, launched by absolute path with
+`node` -- see "Why `node <abs path>`, never `npx`" below), Belay's gated proxy (trace +
 Seatbelt sandbox + snapshot), and `belay.phase0.runner.run_batch` -- wired together end
 to end and run against ONE curated instance. This is the founder's manual proof that the
 minting driver actually produces a verifiable trace before scaling to the real ≥50-instance
@@ -37,10 +38,23 @@ and hands the model `eval/instances.md`'s task string, adapted to describe a loc
 rather than a repository checkout. Self-contained, fast, and the only live dependencies
 left are the ones this smoke is actually testing: the model API and the MCP server itself.
 
+## Why `node <abs path>`, never `npx`
+
+`npx -y <pkg>@<version>` cannot work behind the gated proxy. A contained run applies a
+Seatbelt profile that denies network by default and confines writes to the workspace
+scope, so `npx` can neither reach the npm registry nor write its `~/.npm` cache: it
+hangs, and npm surfaces the write denial as a misleading "your cache folder contains
+root-owned files" error. Both sandbox defaults are deliberate; the harness was wrong to
+use `npx`. This test therefore resolves a *pre-installed* server -- installed once,
+outside the sandbox -- and launches it as `node <abs entrypoint> <allowed dir>` via
+`eval.minting_driver.servers`, which replies to `initialize` immediately under full
+gating. If the server is not installed the test SKIPS with the exact `npm install`
+command; it never fails on a missing install, and never passes without one.
+
 ## Only the filesystem server is exercised
 
-`eval/README.md` documents both a filesystem and a shell MCP server (the pinned `npx`
-commands the mint uses). `eval/instances.md` explicitly marks a shell-server turn as
+`eval/README.md` documents both a filesystem and a shell MCP server (the pinned versions
+the mint uses). `eval/instances.md` explicitly marks a shell-server turn as
 *optional* ("If a shell-server turn is also wanted for the smoke..."). This test only
 needs ONE verifiable turn to satisfy Task 5's assertion, and the filesystem server's
 `edit_file`/`write_file` calls are exactly what produces it (as a bonus, per
@@ -68,7 +82,7 @@ The import-guard (`tests/test_import_guard.py`) only walks `src/belay`'s OWN int
 dependency graph; it says nothing about what a test file may import. `belay` has zero
 runtime dependencies, so importing `belay.phase0.runner`, `belay.phase0.ledger`, and
 `belay.verify.invariants` at module level is safe and matches `tests/test_phase0_e2e.py`.
-Only the live-only pieces (`anthropic`/`openai`, and the `npx`-spawned MCP subprocess)
+Only the live-only pieces (`anthropic`/`openai`, and the MCP server subprocess)
 are deferred into the test body -- see the module-level `pytestmark` and the guarded
 imports inside `_build_model`.
 """
@@ -86,6 +100,7 @@ import pytest
 from eval.minting_driver.capture import gated_env, proxy_command
 from eval.minting_driver.mcp import MonotonicIds, initialize, initialized, tools_list
 from eval.minting_driver.model import Model
+from eval.minting_driver.servers import MissingServerError, filesystem_server_command
 from eval.minting_driver.session import run_session
 from eval.minting_driver.transport import StdioMcp
 
@@ -98,17 +113,12 @@ pytestmark = [
     pytest.mark.skipif(
         not (sys.platform == "darwin" and os.environ.get("BELAY_EVAL_LIVE") == "1"),
         reason=(
-            "manual-gated live smoke: real model + real npx MCP server + Seatbelt "
+            "manual-gated live smoke: real model + real MCP server + Seatbelt "
             "sandbox. Set BELAY_EVAL_LIVE=1 and run on darwin to opt in -- see "
             "eval/README.md 'Running the single-instance smoke'."
         ),
     ),
 ]
-
-#: Pinned exactly as documented in `eval/README.md` ("The MCP servers (pinned)") --
-#: never an unpinned `npx -y pkg`, so a stale `~/.npm/_npx` cache entry can't silently
-#: swap in a different version mid-run.
-FILESYSTEM_SERVER_PACKAGE = "@modelcontextprotocol/server-filesystem@2026.7.10"
 
 #: Overridable via `BELAY_EVAL_MODEL` for a founder who wants a different model at mint
 #: time; the default matches this skill's guidance (Claude Opus 4.8) for the Anthropic
@@ -172,14 +182,21 @@ BLUEPRINT_STUB = (
 
 
 def _fs_server_command(allowed_dir: Path) -> list[str]:
-    """The raw (unproxied) filesystem server argv, pinned per `eval/README.md`.
+    """The raw (unproxied) filesystem server argv: `node <abs entrypoint> <allowed_dir>`.
 
-    This is also exactly what `run_batch`'s `server_command=` needs: replay
-    re-invokes the downstream server directly, never through the proxy.
-    `allowed_dir` must be absolute -- the filesystem server's own sandbox boundary,
-    per `eval/README.md`'s "macOS gotchas".
+    Resolved from the pinned, pre-installed server via `eval.minting_driver.servers`
+    (see the module docstring's "Why `node <abs path>`, never `npx`"). This is also
+    exactly what `run_batch`'s `server_command=` needs: replay re-invokes the downstream
+    server directly, never through the proxy. `allowed_dir` must be absolute -- the
+    filesystem server's own sandbox boundary, per `eval/README.md`'s "macOS gotchas".
+
+    Skips (never fails) when the server is not installed, surfacing the exact
+    `npm install` command from `MissingServerError`.
     """
-    return ["npx", "-y", FILESYSTEM_SERVER_PACKAGE, str(allowed_dir)]
+    try:
+        return filesystem_server_command(allowed_dir)
+    except MissingServerError as exc:
+        pytest.skip(f"pinned MCP filesystem server not installed -- {exc}")
 
 
 def _fetch_tools_list(server_command: list[str]) -> list[dict[str, Any]]:
