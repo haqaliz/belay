@@ -52,10 +52,11 @@ from typing import Any, Optional
 #: timeout paths fast.
 DEFAULT_TIMEOUT = 10.0
 
-#: Bounded tail of the server's stderr kept for diagnostics (e.g. surfacing in
-#: a `ServerExited`/`ReplyTimeout` message). Draining discards everything past
-#: this many trailing bytes — the point is to never let the OS pipe buffer
-#: fill, not to buffer the server's whole log in memory.
+#: Bounded tail of the server's stderr kept for diagnostics, exposed via
+#: `_StderrDrain.tail()` for a caller that wants to inspect it (not currently
+#: woven into the error messages). Draining discards everything past this many
+#: trailing bytes — the point is to never let the OS pipe buffer fill, not to
+#: buffer the server's whole log in memory.
 _STDERR_TAIL_BYTES = 8192
 
 
