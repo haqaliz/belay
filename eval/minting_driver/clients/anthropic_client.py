@@ -107,6 +107,19 @@ class AnthropicModel:
                 # takes `system` as a request-level string, not a conversation turn.
                 self._system_prompt = message.content
             elif message.role == "tool":
+                if self._pending_tool_use_id is None:
+                    # No tool call is outstanding — either a caller bug (a tool-result
+                    # ingested before any ToolCall was proposed) or an internal desync.
+                    # Silently stamping `tool_use_id: None` onto the request produces a
+                    # confusing 400 from the Anthropic API deep inside a live mint;
+                    # raise here instead, where the cause is still clear.
+                    raise ValueError(
+                        "AnthropicModel: got a tool-result Message but there is no "
+                        "pending tool_use_id to correlate it with (no ToolCall was "
+                        "proposed since the last one was consumed). This message "
+                        "cannot be sent to the Anthropic API without a valid "
+                        "tool_use_id."
+                    )
                 is_error = message.content.startswith("error:")
                 self._anthropic_messages.append(
                     {

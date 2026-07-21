@@ -91,6 +91,19 @@ class LocalOpenAICompatModel:
     def _ingest_new_messages(self, messages: list[Message]) -> None:
         for message in messages[self._seen :]:
             if message.role == "tool":
+                if self._pending_tool_call_id is None:
+                    # No tool call is outstanding — same reasoning as
+                    # `AnthropicModel._ingest_new_messages`: silently stamping
+                    # `tool_call_id: None` produces a confusing rejection from the
+                    # OpenAI-compat endpoint deep inside a live mint. Raise here,
+                    # where the cause (a caller bug or internal desync) is still clear.
+                    raise ValueError(
+                        "LocalOpenAICompatModel: got a tool-result Message but there "
+                        "is no pending tool_call_id to correlate it with (no ToolCall "
+                        "was proposed since the last one was consumed). This message "
+                        "cannot be sent to the chat.completions API without a valid "
+                        "tool_call_id."
+                    )
                 self._openai_messages.append(
                     {
                         "role": "tool",
@@ -143,7 +156,17 @@ class LocalOpenAICompatModel:
 
         chosen = tool_calls[0]
         self._pending_tool_call_id = chosen.id
-        arguments = json.loads(chosen.function.arguments) if chosen.function.arguments else {}
+        try:
+            arguments = json.loads(chosen.function.arguments) if chosen.function.arguments else {}
+        except json.JSONDecodeError as exc:
+            # A raw JSONDecodeError bubbling up from deep in this client is not
+            # actionable at a live mint — it doesn't say which tool or what payload.
+            # Raise a clear, local error naming both instead.
+            raise ValueError(
+                f"LocalOpenAICompatModel: tool call {chosen.function.name!r} "
+                f"(id={chosen.id!r}) returned arguments that are not valid JSON: "
+                f"{chosen.function.arguments!r}"
+            ) from exc
         return ToolCall(name=chosen.function.name, arguments=arguments)
 
 
