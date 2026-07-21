@@ -64,6 +64,10 @@ packages = ["src/belay"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Repo root on sys.path so tests/ can `import eval.minting_driver` — `eval/` is a new,
+# eval-only top-level tree (not part of the `belay-harness` wheel: see `[tool.hatch.build
+# .targets.wheel] packages`), so it is not reachable via the editable install of `belay`.
+pythonpath = ["."]
 markers = [
     "sdk: uses the real mcp SDK client (dev-only dep)",
 ]
