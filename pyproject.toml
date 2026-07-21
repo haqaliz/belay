@@ -74,4 +74,10 @@ testpaths = ["tests"]
 pythonpath = ["."]
 markers = [
     "sdk: uses the real mcp SDK client (dev-only dep)",
+    "manual: real model + real npx MCP servers + live spend; never runs in CI, select in with -m manual",
 ]
+# `manual`-marked tests (the Task 5 minting-driver smoke) are excluded from the default
+# run: they spawn real npx MCP servers, spend against a real model API, and require
+# Darwin + Seatbelt. `-m manual` on the command line overrides this addopts value, so
+# `uv run pytest tests/test_minting_driver_smoke.py -m manual` still selects it.
+addopts = "-m 'not manual'"
