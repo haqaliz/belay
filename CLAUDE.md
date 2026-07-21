@@ -18,10 +18,16 @@ This file orients a coding agent working in this repository. Read it first.
 > the per-instance violation rate with its denominator, plus per-turn FAIL, UNVERIFIED-by-cause, and
 > false-positive rates. It is a measurement, not a gate (exits 0 with violations present), and a mint that
 > captured ~no verifiable turns reads as `INSTRUMENT SUSPECT`, never a clean 0% (the R6 false-zero defense).
+> **The Phase-0 minting-driver is built** (`eval/minting_driver/`, eval-only — NOT a product surface,
+> NOT the `belay` CLI): a thin, sequential, BYOK MCP agent loop that drives an LLM's file/shell actions
+> through off-the-shelf MCP servers (`@modelcontextprotocol/server-filesystem`, `mcp-server-commands`)
+> placed behind `python -m belay.proxy`, one `tools/call` in flight at a time (R7 by construction; all
+> edits cross the MCP boundary, R6 by construction). The deterministic "never >1 in flight" control-flow
+> test runs in CI; the single-instance live smoke is `manual`-marked and never in CI. See `eval/README.md`.
 > **Next: run the live Phase-0 mint and publish the number** — drive ≥50 SWE-bench-lite instances through
-> the proxy (needs the `minting-driver`, spec'd but not built: `docs/planning/phase0-corpus-run/`), audit,
-> and fill `docs/technical/PHASE0_RESULTS.md`; then C7 (live console — first UI). C8 (A3 claim
-> re-derivation) and C9 (observability interop) are cuttable, last.
+> the proxy with the driver (start with the one curated instance in `eval/instances.md`, verify before
+> scaling), audit the flags, and fill `docs/technical/PHASE0_RESULTS.md`; then C7 (live console — first
+> UI). C8 (A3 claim re-derivation) and C9 (observability interop) are cuttable, last.
 >
 > [`docs/ROADMAP.md`](docs/ROADMAP.md) (phased plan + gates) and
 > [`docs/technical/CAPABILITY_ROADMAP.md`](docs/technical/CAPABILITY_ROADMAP.md)
