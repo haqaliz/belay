@@ -249,3 +249,57 @@ def test_strict_handshake_server_accepts_the_loops_ordering() -> None:
 
     assert transcript.stop_reason == "done"
     assert "notifications/initialized" in transport.calls
+
+
+class TimeoutRecordingTransport:
+    """Records the `timeout` each `request` call receives — `None` when the loop omits
+    the kwarg entirely, a float when `request_timeout` is threaded through. Lets a test
+    assert exactly what per-request ceiling reaches `transport.request` for every call
+    (`initialize`, `tools/list`, `tools/call`)."""
+
+    def __init__(self) -> None:
+        self.timeouts: list[float | None] = []
+
+    def request(self, obj: dict, timeout: float | None = None) -> dict:
+        self.timeouts.append(timeout)
+        method = obj["method"]
+        if method == "initialize":
+            return {"jsonrpc": "2.0", "id": obj["id"], "result": {}}
+        if method == "tools/list":
+            return {"jsonrpc": "2.0", "id": obj["id"], "result": {"tools": []}}
+        if method == "tools/call":
+            return {
+                "jsonrpc": "2.0",
+                "id": obj["id"],
+                "result": {"content": [{"type": "text", "text": "ok"}]},
+            }
+        raise AssertionError(f"unexpected method: {method}")
+
+    def notify(self, obj: dict) -> None:
+        pass
+
+
+def test_request_timeout_reaches_every_transport_request() -> None:
+    """`run_task(..., request_timeout=45.0)` threads 45.0 into every `transport.request`
+    call — `initialize` (the cold-start ceiling) and each shell `tools/call` alike."""
+    steps: list[ToolCall | Done] = [ToolCall(name="run_tests", arguments={}), Done(reason="done")]
+    model = ScriptedModel(steps)
+    transport = TimeoutRecordingTransport()
+
+    run_task(model, transport, system="s", task="t", max_steps=10, request_timeout=45.0)
+
+    # initialize, tools/list, one tools/call — all three see 45.0.
+    assert transport.timeouts == [45.0, 45.0, 45.0]
+
+
+def test_request_timeout_none_omits_the_kwarg_preserving_default_behavior() -> None:
+    """With no `request_timeout` the loop passes no `timeout` kwarg at all, so the
+    transport falls back to its own `DEFAULT_TIMEOUT` — today's behavior, byte-identical.
+    The recording fake reports `None` for a call it received without the kwarg."""
+    steps: list[ToolCall | Done] = [ToolCall(name="run_tests", arguments={}), Done(reason="done")]
+    model = ScriptedModel(steps)
+    transport = TimeoutRecordingTransport()
+
+    run_task(model, transport, system="s", task="t", max_steps=10)
+
+    assert transport.timeouts == [None, None, None]
