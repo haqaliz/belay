@@ -24,10 +24,25 @@ This file orients a coding agent working in this repository. Read it first.
 > placed behind `python -m belay.proxy`, one `tools/call` in flight at a time (R7 by construction; all
 > edits cross the MCP boundary, R6 by construction). The deterministic "never >1 in flight" control-flow
 > test runs in CI; the single-instance live smoke is `manual`-marked and never in CI. See `eval/README.md`.
-> **Next: run the live Phase-0 mint and publish the number** — drive ≥50 SWE-bench-lite instances through
-> the proxy with the driver (start with the one curated instance in `eval/instances.md`, verify before
-> scaling), audit the flags, and fill `docs/technical/PHASE0_RESULTS.md`; then C7 (live console — first
-> UI). C8 (A3 claim re-derivation) and C9 (observability interop) are cuttable, last.
+> **The Phase-0 batch mint harness is built** (`eval/minting_driver/{batch,bridge,checkpoint,workspace}.py`
+> + `eval/instances/`, eval-only): a stratified instance registry (166 strict-eligible SWE-bench-lite
+> instances vs the ≥50 needed; the draw balances the 83% django+sympy concentration so the number isn't a
+> django/sympy number), per-instance workspace prep at `base_commit` via cached bare clones, and a
+> sequential, resumable, error-contained `run_mint` that drives each instance through the gated proxy and
+> **renames each capture into the layout the stock `belay phase0 run` resolves** (`bridge_capture` — a
+> mis-wire here would read as `INSTRUMENT SUSPECT`, a fake PIVOT, so it is the aspect's load-bearing test).
+> All deterministic and offline; the live mint stays `manual`. **A real defect was found and fixed by
+> running the live smoke for the first time: `npx -y` cannot spawn a server behind the gated proxy** (the
+> contained run denies network and `~/.npm` writes by design, so npx hangs); servers are now pre-installed
+> into a gitignored `eval/servers/` and launched by absolute `node` path. See `eval/README.md`.
+> **Next: run the live Phase-0 mint and publish the number.** The harness is built; the blocker is a valid
+> model key (the smoke reached the model and got a 401 on the configured `ANTHROPIC_API_KEY`). Staged
+> plan: Stage 1 (one instance, prove the bridge against a real capture) → Stage 2 (~10, measure attrition +
+> cost, fix `selected.json`) → Stage 3 (~65–70 to land a denominator ≥50, incl. 3 clean control instances).
+> Gate criteria are **pre-registered** in the PRD (`docs/planning/phase0-live-mint/prd.md`): PROCEED iff ≥3
+> *independent* hand-audited TPs AND denominator ≥50 AND no INSTRUMENT SUSPECT; a FAILing control voids the
+> mint. Then audit, fill `docs/technical/PHASE0_RESULTS.md`, fix the stale RUNBOOK; then C7 (live console —
+> first UI). C8 (A3 claim re-derivation) and C9 (observability interop) are cuttable, last.
 >
 > [`docs/ROADMAP.md`](docs/ROADMAP.md) (phased plan + gates) and
 > [`docs/technical/CAPABILITY_ROADMAP.md`](docs/technical/CAPABILITY_ROADMAP.md)
