@@ -73,7 +73,7 @@ def test_never_more_than_one_tool_call_in_flight() -> None:
     assert transport.max_in_flight <= 1
 
 
-def test_strict_ordering_initialize_then_tools_list_then_calls() -> None:
+def test_strict_ordering_initialize_then_initialized_then_tools_list_then_calls() -> None:
     steps: list[ToolCall | Done] = [ToolCall(name="read_file", arguments={}), Done(reason="done")]
     model = ScriptedModel(steps)
     transport = FakeTransport()
@@ -81,8 +81,9 @@ def test_strict_ordering_initialize_then_tools_list_then_calls() -> None:
     run_task(model, transport, system="s", task="t", max_steps=10)
 
     assert transport.calls[0] == "initialize"
-    assert transport.calls[1] == "tools/list"
-    assert transport.calls[2] == "tools/call"
+    assert transport.calls[1] == "notifications/initialized"
+    assert transport.calls[2] == "tools/list"
+    assert transport.calls[3] == "tools/call"
 
 
 def test_done_terminates_the_loop_without_issuing_a_tool_call() -> None:
@@ -95,7 +96,7 @@ def test_done_terminates_the_loop_without_issuing_a_tool_call() -> None:
     assert transcript.stop_reason == "done"
     assert transcript.done == Done(reason="nothing to do")
     assert transcript.tool_calls == []
-    assert transport.calls == ["initialize", "tools/list"]
+    assert transport.calls == ["initialize", "notifications/initialized", "tools/list"]
 
 
 class AlwaysCallModel:
@@ -184,3 +185,67 @@ def test_transcript_shape_is_minimal_and_inspectable() -> None:
     assert transcript.tool_calls == [ToolCall(name="read_file", arguments={"path": "a.py"})]
     assert transcript.stop_reason == "done"
     assert any(m.role == "tool" for m in transcript.messages)
+
+
+def test_notifications_initialized_sent_after_initialize_before_tools_list() -> None:
+    """MCP requires `notifications/initialized` after the `initialize` reply and before
+    any `tools/list`/`tools/call`. `FakeTransport.notify` records into the same ordered
+    `calls` list as `request`, so this is a direct assertion on the merged sequence."""
+    steps: list[ToolCall | Done] = [Done(reason="done")]
+    model = ScriptedModel(steps)
+    transport = FakeTransport()
+
+    run_task(model, transport, system="s", task="t", max_steps=10)
+
+    assert "notifications/initialized" in transport.calls
+    initialize_idx = transport.calls.index("initialize")
+    initialized_idx = transport.calls.index("notifications/initialized")
+    tools_list_idx = transport.calls.index("tools/list")
+    assert initialize_idx < initialized_idx < tools_list_idx
+
+
+class StrictHandshakeTransport:
+    """A server-ish fake that RAISES if `tools/list` (or `tools/call`) arrives before
+    `notifications/initialized` was sent — proving the loop actually satisfies the MCP
+    handshake ordering, not just that a lenient fake happens to record it in order."""
+
+    def __init__(self) -> None:
+        self._initialized_sent = False
+        self.calls: list[str] = []
+
+    def request(self, obj: dict) -> dict:
+        method = obj["method"]
+        self.calls.append(method)
+        if method != "initialize" and not self._initialized_sent:
+            raise AssertionError(
+                f"{method} arrived before notifications/initialized was sent"
+            )
+        if method == "initialize":
+            return {"jsonrpc": "2.0", "id": obj["id"], "result": {}}
+        if method == "tools/list":
+            return {"jsonrpc": "2.0", "id": obj["id"], "result": {"tools": []}}
+        if method == "tools/call":
+            return {
+                "jsonrpc": "2.0",
+                "id": obj["id"],
+                "result": {"content": [{"type": "text", "text": "ok"}]},
+            }
+        raise AssertionError(f"unexpected method: {method}")
+
+    def notify(self, obj: dict) -> None:
+        self.calls.append(obj["method"])
+        if obj["method"] == "notifications/initialized":
+            self._initialized_sent = True
+
+
+def test_strict_handshake_server_accepts_the_loops_ordering() -> None:
+    """A fake that would raise on premature `tools/list`/`tools/call` does not raise —
+    the loop sends `notifications/initialized` before either."""
+    steps: list[ToolCall | Done] = [ToolCall(name="read_file", arguments={}), Done(reason="done")]
+    model = ScriptedModel(steps)
+    transport = StrictHandshakeTransport()
+
+    transcript = run_task(model, transport, system="s", task="t", max_steps=10)
+
+    assert transcript.stop_reason == "done"
+    assert "notifications/initialized" in transport.calls

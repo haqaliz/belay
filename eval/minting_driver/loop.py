@@ -26,6 +26,7 @@ from typing import Optional, Protocol
 from eval.minting_driver.mcp import (
     MonotonicIds,
     initialize,
+    initialized,
     parse_tools_call_reply,
     tools_call,
     tools_list,
@@ -34,12 +35,17 @@ from eval.minting_driver.model import Done, Message, Model, ToolCall
 
 
 class Transport(Protocol):
-    """The one method the loop needs from a transport: send a JSON-RPC request dict and
-    block until its matching reply comes back. `StdioMcp.request` (`transport.py`) and
-    any test fake satisfy this structurally — no inheritance required.
+    """The two methods the loop needs from a transport: `request` sends a JSON-RPC
+    request dict and blocks until its matching reply comes back; `notify` sends a
+    JSON-RPC notification (no reply expected) — used for `notifications/initialized`,
+    which MCP requires between the `initialize` reply and the first `tools/list`.
+    `StdioMcp` (`transport.py`) and any test fake satisfy this structurally — no
+    inheritance required.
     """
 
     def request(self, obj: dict) -> dict: ...
+
+    def notify(self, obj: dict) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -69,7 +75,9 @@ def run_task(
 ) -> Transcript:
     """Drive one sequential MCP agent turn-loop to completion.
 
-    Sequence: `initialize` (awaited), `tools/list` (awaited), then up to `max_steps`
+    Sequence: `initialize` (awaited), `notifications/initialized` (sent, not awaited —
+    MCP requires this notification after the `initialize` reply and before any
+    `tools/list`/`tools/call`), `tools/list` (awaited), then up to `max_steps`
     iterations of "propose -> if `Done`, stop; else send exactly one `tools/call`, await
     its reply, append the parsed result to `messages`, repeat." The model is never asked
     for a step beyond the budget: the loop calls `propose_next` at most `max_steps`
@@ -77,6 +85,7 @@ def run_task(
     """
     next_id = MonotonicIds()
     transport.request(initialize(next_id()))
+    transport.notify(initialized())
     transport.request(tools_list(next_id()))
 
     messages: list[Message] = [

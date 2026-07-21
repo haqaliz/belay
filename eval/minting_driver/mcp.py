@@ -68,6 +68,18 @@ def initialize(
     }
 
 
+def initialized() -> dict:
+    """The `notifications/initialized` notification.
+
+    MCP requires the client to send this *after* the `initialize` reply and *before*
+    any `tools/list`/`tools/call` — it is the client's acknowledgement that the
+    handshake completed and the session is now open for use. A notification carries
+    no `id` (nothing replies to it); `loop.run_task` sends it via
+    `transport.notify(...)`, not `transport.request(...)`.
+    """
+    return {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}
+
+
 def tools_list(id_: int) -> dict:
     """The `tools/list` request."""
     return {"jsonrpc": "2.0", "id": id_, "method": "tools/list", "params": {}}
@@ -113,6 +125,7 @@ __all__ = [
     "PROTOCOL_VERSION",
     "MonotonicIds",
     "initialize",
+    "initialized",
     "parse_tools_call_reply",
     "tools_call",
     "tools_list",
