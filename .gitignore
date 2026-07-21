@@ -26,6 +26,10 @@ dist/
 # writes to ~/.npm by design. Third-party JS, pinned but never vendored.
 /eval/servers/
 
+# Cached bare clones per repo for the eval mint's per-instance worktrees — the user's
+# run data, never committed (no-egress guardrail).
+/eval/clones/
+
 # Dashboard
 node_modules/
 .next/
