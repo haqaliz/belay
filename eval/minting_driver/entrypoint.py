@@ -561,6 +561,30 @@ def mint_one(
     return _report_for([record], cfg, checkpoint, entrypoint=entrypoint)
 
 
+def mint_from_registry(cfg: MintConfig, **seams: Any) -> MintReport:
+    """Mint every instance in `cfg.registry_path` — the batch entry point.
+
+    Thin on purpose: preflight, load the registry, hand the records to `mint_batch`, and
+    fold the returned `Checkpoint` into a `MintReport`. There is **no `try/except`
+    around `run_mint`**: its per-instance containment is the contract, and wrapping it
+    would either swallow a real setup failure or turn one bad instance into an aborted
+    mint.
+
+    Resumable by construction — `cfg.checkpoint_path` defaults to
+    `<root>/checkpoint.json`, so re-running the same `--root` skips everything already
+    recorded (`captured` or `failed`) and a new `--root` is a genuinely fresh attempt
+    with a fresh ledger.
+
+    The report counts EVERY registry record, including ones skipped on resume, because
+    the operator's question is "where does this whole selection stand", not "what did
+    this particular invocation touch".
+    """
+    entrypoint = preflight_servers(cfg)
+    records = load_records(cfg)
+    checkpoint = mint_batch(records, cfg, **seams)
+    return _report_for(records, cfg, checkpoint, entrypoint=entrypoint)
+
+
 __all__ = [
     "DEFAULT_CLONES_DIR",
     "DEFAULT_CORPUS_DIR",
@@ -584,6 +608,7 @@ __all__ = [
     "load_records",
     "make_model_factory",
     "mint_batch",
+    "mint_from_registry",
     "mint_one",
     "preflight_servers",
     "resolve_credentials",

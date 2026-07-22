@@ -28,6 +28,7 @@ import pytest
 from eval.instances.registry import InstanceRecord, dump_registry
 from eval.minting_driver import transport as transport_module
 from eval.minting_driver.batch import run_mint
+from eval.minting_driver.checkpoint import Checkpoint, load_checkpoint
 from eval.minting_driver.clients.local_client import LocalOpenAICompatModel
 from eval.minting_driver.entrypoint import (
     DEFAULT_REQUEST_TIMEOUT,
@@ -39,6 +40,7 @@ from eval.minting_driver.entrypoint import (
     UnknownInstanceError,
     make_model_factory,
     mint_batch,
+    mint_from_registry,
     mint_one,
     preflight_servers,
     resolve_credentials,
@@ -724,3 +726,171 @@ def test_verify_command_is_printed_with_the_workspace_placeholder(
     assert " -- " not in command, "--server is nargs=REMAINDER; a separator would reach node"
     # The report renders the command it carries — the printed line IS the artifact.
     assert command in report.render()
+
+
+# --------------------------------------------------------------------------------------
+# `mint_from_registry` — the batch entry point: resume, containment, and honest counts
+# --------------------------------------------------------------------------------------
+
+
+def test_batch_entrypoint_resumes_from_checkpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A batch interrupted at instance k resumes without re-spending on 1..k-1.
+
+    `run_mint` already skips recorded instances; this asserts the property survives
+    THROUGH the entry point — i.e. that the entry point passes the same checkpoint path
+    it reports, rather than starting a fresh ledger and silently re-minting.
+    """
+    server_root = tmp_path / "servers"
+    _install_stub_server(server_root)
+    registry = _write_registry(
+        tmp_path / "registry.json",
+        ["octo__repo-1", "octo__repo-2", "octo__repo-3", "octo__repo-4"],
+    )
+    cfg = MintConfig(
+        root=tmp_path / "mint", registry_path=registry, server_root=server_root
+    )
+
+    # Two already done, seeded through the real Checkpoint writer.
+    seeded = Checkpoint()
+    seeded.record("octo__repo-1", "captured", trace_path="somewhere/trace-1.jsonl")
+    seeded.record("octo__repo-2", "failed", reason="a previous ServerExited")
+    seeded.save(cfg.checkpoint_path)
+
+    prepare = StubPrepare()
+    factory = SpyModelFactory()
+    report = mint_from_registry(cfg, **_mint_one_seams(prepare, factory))
+
+    assert prepare.prepared == ["octo__repo-3", "octo__repo-4"]
+    assert factory.calls == 2, "an already-recorded instance must not be re-spent on"
+    # The report covers the whole registry, and the two seeded dispositions survive.
+    assert report.instance_ids == (
+        "octo__repo-1",
+        "octo__repo-2",
+        "octo__repo-3",
+        "octo__repo-4",
+    )
+    assert report.counts["captured"] == 3
+    assert report.counts["failed"] == 1
+    assert report.checkpoint.reason("octo__repo-2") == "a previous ServerExited"
+
+
+def test_batch_error_containment_is_not_weakened(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One instance blowing up is recorded and the mint continues — never re-raised.
+
+    The entry point must not wrap `run_mint` in a `try/except` (which would swallow a
+    real setup failure) nor let one exception escape (which would abort a mint at #37).
+    """
+    server_root = tmp_path / "servers"
+    _install_stub_server(server_root)
+    registry = _write_registry(
+        tmp_path / "registry.json",
+        ["octo__repo-1", "octo__repo-2", "octo__repo-3", "octo__repo-4"],
+    )
+    cfg = MintConfig(
+        root=tmp_path / "mint", registry_path=registry, server_root=server_root
+    )
+
+    def transport_factory(command: list[str], env: dict) -> object:
+        # The per-instance workspace is baked into the fs server's argv, so the failing
+        # instance is selected by the command it would have been driven with.
+        if any("octo__repo-3" in part for part in command):
+            raise RuntimeError("server exited before initialize")
+        return OkTransport()
+
+    prepare = StubPrepare()
+    factory = SpyModelFactory()
+    report = mint_from_registry(
+        cfg,
+        model_factory=factory,
+        prepare=prepare,
+        transport_factory=transport_factory,
+        discover_tools=lambda cmd: [],
+    )
+
+    assert prepare.prepared == [
+        "octo__repo-1",
+        "octo__repo-2",
+        "octo__repo-3",
+        "octo__repo-4",
+    ], "the loop must keep going past the failing instance"
+    assert report.counts["captured"] == 3
+    assert report.counts["failed"] == 1
+    assert report.checkpoint.status("octo__repo-3") == "failed"
+    assert "server exited" in str(report.checkpoint.reason("octo__repo-3"))
+    # A failed instance is named in the summary, not quietly rolled into a total.
+    assert "octo__repo-3" in report.render()
+
+
+def test_report_counts_match_the_checkpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The summary is derived from the durable ledger, not a parallel counter.
+
+    Proven by reloading the saved checkpoint FROM DISK and re-deriving the counts: a
+    tally kept alongside the run could drift from the file the resume actually reads.
+    """
+    server_root = tmp_path / "servers"
+    _install_stub_server(server_root)
+    registry = _write_registry(
+        tmp_path / "registry.json", ["octo__repo-1", "octo__repo-2", "octo__repo-3"]
+    )
+    cfg = MintConfig(
+        root=tmp_path / "mint", registry_path=registry, server_root=server_root
+    )
+
+    def transport_factory(command: list[str], env: dict) -> object:
+        if any("octo__repo-2" in part for part in command):
+            raise RuntimeError("boom")
+        return OkTransport()
+
+    report = mint_from_registry(
+        cfg,
+        model_factory=SpyModelFactory(),
+        prepare=StubPrepare(),
+        transport_factory=transport_factory,
+        discover_tools=lambda cmd: [],
+    )
+
+    on_disk = load_checkpoint(cfg.checkpoint_path)
+    from_disk = {"captured": 0, "failed": 0}
+    for instance_id in report.instance_ids:
+        from_disk[str(on_disk.status(instance_id))] += 1
+
+    assert report.counts == from_disk
+    assert report.counts == {"captured": 2, "failed": 1}
+
+
+def test_missing_registry_file_is_named_for_the_batch_entry_point_too(
+    tmp_path: Path,
+) -> None:
+    """Both entry points fail the same, legible way on an absent selection file."""
+    server_root = tmp_path / "servers"
+    _install_stub_server(server_root)
+    cfg = MintConfig(
+        root=tmp_path / "mint",
+        registry_path=tmp_path / "nope" / "selected.json",
+        server_root=server_root,
+    )
+
+    with pytest.raises(RegistryNotFoundError, match="instance-pool"):
+        mint_from_registry(cfg, **_mint_one_seams(StubPrepare(), SpyModelFactory()))
+
+
+def test_batch_preflight_runs_before_the_registry_is_read(tmp_path: Path) -> None:
+    """A missing server install is reported even when the registry is missing too.
+
+    Ordering matters: the preflight is the one check that must precede everything, so a
+    forgotten `npm install` never hides behind another setup error.
+    """
+    cfg = MintConfig(
+        root=tmp_path / "mint",
+        registry_path=tmp_path / "nope" / "selected.json",
+        server_root=tmp_path / "servers",
+    )
+
+    with pytest.raises(MissingServerError):
+        mint_from_registry(cfg, **_mint_one_seams(StubPrepare(), SpyModelFactory()))
