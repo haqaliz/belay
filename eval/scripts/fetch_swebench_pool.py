@@ -85,6 +85,26 @@ CONFIG = "default"
 SPLIT = "test"
 ROWS_ENDPOINT = "https://datasets-server.huggingface.co/rows"
 
+#: Keys a `/rows` payload might carry a dataset revision under. Probed rather than
+#: assumed: as observed on 2026-07-23 the envelope is
+#: `{features, rows, num_rows_total, num_rows_per_page, partial}` and carries **none** of
+#: these, so `revision` lands as `null`. Probing anyway means the pin starts working for
+#: free if the endpoint ever grows one, without this script claiming today that it has.
+_REVISION_KEYS = ("revision", "dataset_revision", "sha")
+
+#: Why `revision` may be null, written into the header so the artifact is honest without
+#: this file. D2 asked for a pin "with an honest fallback"; this is the fallback, stated.
+REVISION_NOTE = (
+    "The datasets-server /rows envelope reported no dataset revision when this pool was "
+    "fetched (observed keys: features, rows, num_rows_total, num_rows_per_page, "
+    "partial), so no commit sha could be pinned and 'revision' is null. This file is "
+    "committed and is itself the source of truth; re-derivability here is drift "
+    "*detection*, not a time machine. Drift shows up as a changed 'num_rows_total' or "
+    "changed tier 'counts' on a refetch, both of which produce a reviewable diff. If the "
+    "endpoint later reports a revision it is recorded here, and "
+    "--expect-revision refuses a fetch whose live revision differs from the pinned one."
+)
+
 
 def changed_line_count(patch: str) -> int:
     """Changed lines in a unified diff, by D5's rule.
@@ -247,6 +267,54 @@ def rows_to_pool(
     return tuple(records), counts
 
 
+def build_header(
+    counts: Mapping[str, int],
+    *,
+    num_rows_total: int,
+    revision: str | None,
+    fetched_at: str,
+) -> dict[str, object]:
+    """The provenance header written above the records in `pool.json`. Pure.
+
+    Records what a reader needs to judge the pool without running this code: the dataset
+    coordinates, the revision (or `null` plus `REVISION_NOTE` — D2's honest fallback),
+    the three filter thresholds **taken from the module constants** rather than typed,
+    D5's counting rule verbatim, and the surviving count at each filter tier.
+
+    The header is a *claim*; `tests/test_eval_mint_set.py` checks it against the records
+    in the same file (`counts["short_statement"] == len(records)`, thresholds equal the
+    constants). That check is what makes the published composition falsifiable instead of
+    decorative — a regeneration that moves the data but not the claim fails loudly.
+
+    `fetched_at` and `revision` are arguments, not read here, so this stays free of the
+    clock and the network and can be tested offline.
+    """
+    return {
+        "dataset": DATASET,
+        "config": CONFIG,
+        "split": SPLIT,
+        "revision": revision,
+        "revision_note": REVISION_NOTE,
+        "source_url": ROWS_ENDPOINT,
+        "fetched_at": fetched_at,
+        "num_rows_total": num_rows_total,
+        "filters": {
+            "pure_python_repos": sorted(PURE_PYTHON_REPOS),
+            "known_excluded_repos": sorted(KNOWN_EXCLUDED_REPOS),
+            "max_changed_lines": MAX_CHANGED_LINES,
+            "changed_line_rule": (
+                "count lines of the instance's `patch` that begin with '+' or '-', "
+                "excluding the '+++'/'---' file headers; '@@' hunk headers, "
+                "'diff --git'/'index' lines and context lines are not changes and are "
+                "not counted"
+            ),
+            "max_statement_chars": MAX_STATEMENT_CHARS,
+            "requires_non_blank_statement": True,
+        },
+        "counts": dict(counts),
+    }
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Fetch the dataset and write the pool. **The only thing here that hits the network.**
 
@@ -258,6 +326,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     import urllib.error
     import urllib.parse
     import urllib.request
+    from datetime import datetime, timezone
 
     parser = argparse.ArgumentParser(
         description=(
@@ -280,9 +349,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=300,
         help="stop after this many rows (default: the 300 rows of SWE-bench-lite)",
     )
+    parser.add_argument(
+        "--expect-revision",
+        default=None,
+        help=(
+            "refuse the fetch unless the live dataset revision equals this value. D2's "
+            "drift guard. The /rows envelope reported no revision when the committed "
+            "pool was fetched, so passing this currently fails loudly rather than "
+            "silently accepting an unpinnable fetch."
+        ),
+    )
     args = parser.parse_args(argv)
 
     rows: list[object] = []
+    revision: str | None = None
+    num_rows_total: int | None = None
     offset = 0
     while offset < args.max_rows:
         query = urllib.parse.urlencode(
@@ -308,13 +389,37 @@ def main(argv: Sequence[str] | None = None) -> int:
         page = payload.get("rows")
         if not isinstance(page, list):
             raise ValueError(f"{url} returned no 'rows' list")
+
+        for key in _REVISION_KEYS:
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                revision = value
+                break
+        reported_total = payload.get("num_rows_total")
+        if isinstance(reported_total, int):
+            num_rows_total = reported_total
+
         if not page:
             break
         rows.extend(page)
         offset += len(page)
 
+    if args.expect_revision is not None and args.expect_revision != revision:
+        raise ValueError(
+            f"--expect-revision {args.expect_revision!r} does not match the revision "
+            f"reported by {ROWS_ENDPOINT}, which was {revision!r}. Refusing rather than "
+            f"refreshing silently: an unexpected revision means the pool would be drawn "
+            f"from a dataset nobody reviewed."
+        )
+
     records, counts = rows_to_pool(rows)
-    dump_registry(records, args.out)
+    header = build_header(
+        counts,
+        num_rows_total=num_rows_total if num_rows_total is not None else counts["all"],
+        revision=revision,
+        fetched_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    )
+    dump_registry(records, args.out, header=header)
     print(
         f"wrote {len(records)} instances to {args.out} (tiers: {counts})",
         file=sys.stderr,
@@ -335,6 +440,8 @@ __all__ = [
     "MAX_STATEMENT_CHARS",
     "KNOWN_EXCLUDED_REPOS",
     "PURE_PYTHON_REPOS",
+    "REVISION_NOTE",
+    "build_header",
     "changed_line_count",
     "rows_to_pool",
     "main",

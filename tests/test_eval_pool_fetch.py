@@ -34,6 +34,8 @@ from eval.instances.tasks import TASK_PREFIX, derive_task_string
 from eval.scripts.fetch_swebench_pool import (
     MAX_CHANGED_LINES,
     MAX_STATEMENT_CHARS,
+    REVISION_NOTE,
+    build_header,
     changed_line_count,
     rows_to_pool,
 )
@@ -409,3 +411,37 @@ def test_the_allow_list_is_imported_not_restated() -> None:
     from eval.scripts.fetch_swebench_pool import PURE_PYTHON_REPOS as imported
 
     assert imported is PURE_PYTHON_REPOS
+
+
+def test_build_header_publishes_the_constants_and_the_counts() -> None:
+    """The header is derived from the code, not typed beside it.
+
+    `build_header` is pure — it takes the clock and the revision as arguments — so the
+    one thing worth pinning is that the published thresholds ARE the module constants
+    and the published tiers ARE the counts the transform returned. If a threshold were
+    ever hand-written into the header, `pool.json` would describe a filter that was
+    never applied, and every downstream consistency check would pass while lying.
+    """
+    _, counts = rows_to_pool(_fixture_rows())
+
+    header = build_header(
+        counts,
+        num_rows_total=len(_fixture_rows()),
+        revision=None,
+        fetched_at="2026-07-23T00:00:00+00:00",
+    )
+
+    assert header["counts"] == counts
+    assert header["counts"] is not counts, "the header must not alias the caller's dict"
+    assert header["filters"]["max_changed_lines"] == MAX_CHANGED_LINES
+    assert header["filters"]["max_statement_chars"] == MAX_STATEMENT_CHARS
+    assert header["filters"]["changed_line_rule"].strip()
+    assert header["revision"] is None
+    assert header["revision_note"] == REVISION_NOTE, (
+        "a null revision must always carry the stated reason: D2 asked for a pin with "
+        "an honest fallback, and an unexplained null reads as an oversight"
+    )
+    assert "instances" not in header, (
+        "an 'instances' key in the header would shadow the records; dump_registry "
+        "refuses it, and it must never be constructed in the first place"
+    )
