@@ -426,7 +426,14 @@ class TurnGate:
             # cannot be written to disk is not resolvable in a later process, so it
             # must be reported as a failure rather than as a `present` handle that
             # promises a restore no later process could perform.
-            persist_snapshot(snap, self.manifest_root / f"{snap.manifest.handle}.json")
+            persist_snapshot(
+                snap,
+                self.manifest_root / f"{snap.manifest.handle}.json",
+                # The original workspace root, already resolved at `__init__`
+                # (`Path(scope).resolve()`). Recorded per turn so replay can know the
+                # source prefix; recorded only — this axis never consumes it.
+                source_root=str(self._scope),
+            )
         except Unrestorable as exc:
             # Task 6 refused by name — a FIFO, a socket, a capability gap. The
             # refusal is the useful fact, and it is already named.

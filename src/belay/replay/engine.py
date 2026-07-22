@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import shutil
 import tempfile
 from dataclasses import dataclass
@@ -64,6 +65,7 @@ from belay.index import derive_correlation, tool_calls
 from belay.replay.client import ANSWERED, DEFAULT_TIMEOUT, FrameOutcome
 from belay.replay.client import replay_turn as _client_replay_turn
 from belay.replay.persist import load_snapshot
+from belay.replay.relocate import canonicalize_obj, turn_needs_relocation
 from belay.snapshot.bth1 import FieldDiff, diff_records, scan_tree
 from belay.snapshot.substrate import guarded_restore
 
@@ -90,6 +92,19 @@ UNANSWERED_TARGET = "the re-invoked server did not answer the target frame"
 EQUAL = "equal"
 #: They differ. What that MEANS is C4's to decide; C3 only reports that they do.
 DIVERGED = "diverged"
+
+#: The honest fallback for the absolute-path class: a turn that carries an in-root
+#: absolute path but whose manifest recorded NO `source_root` cannot be faithfully
+#: relocated into the scratch, so no verdict is guessed. Carried verbatim like the
+#: gate's SNAPSHOT_FAILED string — this is where UNVERIFIED-never-PASS is code for the
+#: relocation axis.
+ROOTLESS_RELOCATION = (
+    "original workspace root not recorded; cannot relocate absolute paths"
+)
+
+#: A sentinel both roots fold to when canonicalizing replies for comparison. NUL-wrapped
+#: so it cannot occur in a filesystem path and thus cannot collide with real reply text.
+_ROOT_PLACEHOLDER = "\x00belay-workspace-root\x00"
 
 _HANDSHAKE_METHODS = ("initialize", "notifications/initialized")
 
@@ -183,20 +198,93 @@ def _replayed_version(outcomes: Sequence[FrameOutcome]) -> Any:
     return None
 
 
-def _equivalence(recorded: Optional[Any], replayed: Optional[bytes]) -> Optional[str]:
+def _equivalence(
+    recorded: Optional[Any],
+    replayed: Optional[bytes],
+    *,
+    from_root: Optional[str] = None,
+    to_root: Optional[str] = None,
+) -> Optional[str]:
     """`EQUAL` / `DIVERGED`, or `None` when there is nothing to compare.
 
     Compared as parsed messages, not raw bytes: two servers may serialise the same
     result with different key order, and whether *that* matters is C4's call. `None`
     is honest — a turn with no recorded reply, or no replayed one, has no
     equivalence fact, and inventing one would be the fabrication this module refuses.
+
+    When `from_root`/`to_root` are both given (a relocated turn), both parsed messages
+    are canonicalized — the recorded reply carries the ORIGINAL root, the replayed one the
+    SCRATCH root, in the same string positions — so a path buried in a reply (a diff header,
+    a `file://` URL) folds to one form and compares equal. The fold is applied per string
+    VALUE inside the parsed structure (`canonicalize_obj`), so the comparison stays the
+    key-order-independent structural `==` and never a text dump. It is **comparison-only**:
+    the raw `recorded_reply`/`replayed_reply` bytes are stored unchanged; nothing is
+    persisted or written to the scratch.
     """
     if recorded is None or replayed is None:
         return None
     try:
-        return EQUAL if recorded == json.loads(replayed) else DIVERGED
+        replayed_parsed = json.loads(replayed)
     except ValueError:
         return DIVERGED
+    if from_root is not None and to_root is not None:
+        recorded = canonicalize_obj(recorded, from_root, to_root, _ROOT_PLACEHOLDER)
+        replayed_parsed = canonicalize_obj(replayed_parsed, from_root, to_root, _ROOT_PLACEHOLDER)
+    return EQUAL if recorded == replayed_parsed else DIVERGED
+
+
+def _arguments_of(message: Optional[Any]) -> object:
+    """The `tools/call` frame's `arguments` object, or `None` if it has none."""
+    if not isinstance(message, dict):
+        return None
+    params = message.get("params")
+    if not isinstance(params, dict):
+        return None
+    return params.get("arguments")
+
+
+def _arguments_hold_absolute_path(obj: object) -> bool:
+    """Does `obj` hold any whole-value string that is an absolute path? (root-independent).
+
+    The rootless companion to `turn_needs_relocation`: with no recorded root, in-root
+    membership cannot be tested, so the honest signal that a turn WOULD need relocation is a
+    whole-value argument string that is itself an absolute path (`os.path.isabs`). Used only
+    to trip the honest-`UNVERIFIED` fallback, never to remap — without a root there is no
+    prefix to swap. Conservative by construction: a content string that merely begins with a
+    separator reads as absolute here and yields UNVERIFIED, never a false verdict.
+    """
+    if isinstance(obj, dict):
+        return any(_arguments_hold_absolute_path(value) for value in obj.values())
+    if isinstance(obj, list):
+        return any(_arguments_hold_absolute_path(item) for item in obj)
+    if isinstance(obj, str):
+        return os.path.isabs(obj)
+    return False
+
+
+def _relocation_decision(
+    source_root: Optional[str], arguments: object, argv: Sequence[str]
+) -> tuple[Optional[str], Optional[str]]:
+    """Gate relocation. Return `(relocation_root, fallback_cause)`.
+
+    - `relocation_root` is the root to hand the client, or `None` to keep today's
+      byte-for-byte cwd-relative replay.
+    - `fallback_cause` is set (with `relocation_root` `None`) only for the honest fallback:
+      a turn that carries an absolute-path argument but whose manifest recorded no root.
+
+    With a recorded root, the whole-value/in-root rule (`turn_needs_relocation`) decides
+    exactly, so an out-of-root abs path (`/etc/hosts`) and a cwd-relative turn are both
+    UNCHANGED. Without a recorded root, argv is NOT consulted — it always holds an absolute
+    interpreter/server path — so the signal is an absolute-path *argument*, which a
+    cwd-relative turn never carries.
+    """
+    if source_root is not None:
+        if turn_needs_relocation(arguments, list(argv), source_root):
+            return source_root, None
+        return None, None
+    if _arguments_hold_absolute_path(arguments):
+        return None, ROOTLESS_RELOCATION
+    return None, None
 
 
 def replay_turn(
@@ -291,10 +379,22 @@ def replay_turn(
 
     frames_to_send, target_index = _gather_frames(records, by_seq, target_seq, target_record)
 
+    # Gate absolute-path relocation on the RECORDED root and the target's own arguments,
+    # BEFORE any restore or spawn. A turn that needs relocation but has no recorded root is
+    # the honest fallback: UNVERIFIED, named cause, no re-invocation — never a guessed
+    # verdict for the absolute-path class. A cwd-relative turn decides "no relocation" and
+    # keeps today's byte-for-byte path.
+    snap = load_snapshot(manifest_path)
+    source_root = snap.manifest.source_root
+    relocation_root, fallback_cause = _relocation_decision(
+        source_root, _arguments_of(target_message), server_command
+    )
+    if fallback_cause is not None:
+        return TurnReplay(turn_index=n, status=UNVERIFIED, cause=fallback_cause)
+
     # Pre-state: a fresh, deterministic restore of the same snapshot. Restore is
     # byte-identical by construction (C2's guarantee), so this equals the state the
     # server's own scratch copy starts from — the honest baseline for the delta.
-    snap = load_snapshot(manifest_path)
     pre_dir = Path(tempfile.mkdtemp(prefix="belay-replay-pre-"))
     guarded_restore(snap, pre_dir)
     before = scan_tree(pre_dir)
@@ -305,6 +405,7 @@ def replay_turn(
         frames=frames_to_send,
         network=network,
         timeout=timeout,
+        source_root=relocation_root,
     )
     # The delta is a real before/after diff ONLY when the replay produced a post-state to
     # scan. A missing workspace means no post-state was ever observed, so there is nothing
@@ -372,7 +473,12 @@ def replay_turn(
         status=REPLAYED,
         reinvoked=True,
         delta=delta,
-        result_equivalence=_equivalence(recorded_parsed, replayed_reply),
+        result_equivalence=_equivalence(
+            recorded_parsed,
+            replayed_reply,
+            from_root=relocation_root,
+            to_root=result.workspace if relocation_root is not None else None,
+        ),
         recorded_reply=recorded_reply,
         replayed_reply=replayed_reply,
         recorded_version=recorded_version,
@@ -417,6 +523,7 @@ __all__ = [
     "EQUAL",
     "NOT_VERIFIABLE",
     "REPLAYED",
+    "ROOTLESS_RELOCATION",
     "UNANSWERED_TARGET",
     "UNVERIFIED",
     "TurnReplay",

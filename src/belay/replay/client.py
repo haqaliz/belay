@@ -63,6 +63,7 @@ from typing import Any, Optional, Sequence
 
 from belay.index import _id_key, classify
 from belay.replay.persist import load_snapshot
+from belay.replay.relocate import remap_argv, remap_arguments
 from belay.sandbox.gate import _UntrackableTurn
 from belay.sandbox.launch import contained, network_policy
 from belay.snapshot.substrate import guarded_restore
@@ -290,6 +291,39 @@ def converse(
     return outcomes
 
 
+def _relocate_frame(frame: bytes, from_root: str, to_root: str) -> bytes:
+    """Remap in-root whole-value path arguments in a `tools/call` frame; else verbatim.
+
+    Only a `tools/call` frame's `params.arguments` are relocated, and only its **whole-value**
+    in-root path strings — `remap_arguments`' conservative rule, so a `path` moves while a
+    `content`/`newText` field that merely *mentions* the root is preserved byte-for-byte. The
+    frame is decoded, its argument paths swapped, and re-serialized **preserving the JSON-RPC
+    `id` and every non-path field**, so `converse`'s id-correlation still matches the reply.
+    A non-`tools/call` frame (an `initialize`, a notification), an unparseable frame, or a
+    `tools/call` with no in-root path is returned as the **exact input bytes** — nothing is
+    re-serialized, so a cwd-relative replay stays byte-identical.
+    """
+    try:
+        message = json.loads(frame)
+    except (ValueError, RecursionError):
+        return frame
+    if not isinstance(message, dict) or message.get("method") != "tools/call":
+        return frame
+    params = message.get("params")
+    if not isinstance(params, dict) or "arguments" not in params:
+        return frame
+    new_arguments, changed = remap_arguments(params["arguments"], from_root, to_root)
+    if not changed:
+        # No in-root whole-value path moved: keep the original bytes rather than a
+        # re-serialized copy, so a path-free frame is passed through untouched.
+        return frame
+    new_params = dict(params)
+    new_params["arguments"] = new_arguments
+    new_message = dict(message)
+    new_message["params"] = new_params
+    return json.dumps(new_message).encode("utf-8")
+
+
 def replay_turn(
     server_command: Sequence[str],
     *,
@@ -297,6 +331,7 @@ def replay_turn(
     frames: Sequence[bytes],
     network: Any = None,
     timeout: float = DEFAULT_TIMEOUT,
+    source_root: Optional[str] = None,
 ) -> ReplayResult:
     """Restore the snapshot to a scratch copy, spawn the server in the sandbox, replay.
 
@@ -306,6 +341,14 @@ def replay_turn(
     `deny-all` network unless the caller widens it) with its cwd set to that scratch
     copy, so a server that writes relative paths mutates the copy and nothing else.
     A fresh process is spawned and torn down within the sandbox's lifetime.
+
+    `source_root`, when given, is the recorded original workspace root (already realpath'd
+    at capture). It turns on **relocation**: the argv root token and every in-root whole-value
+    path argument are rewritten from that root to the realpath'd scratch, so an absolute-path
+    server's reads and writes land in the restored copy rather than leaking to live state.
+    When `None` (the default), the argv and frames are used exactly as recorded — a
+    cwd-relative replay is byte-for-byte unchanged. The engine gates this: it passes a root
+    ONLY for a turn that carries an in-root absolute path.
 
     Off macOS `contained` raises `UnsupportedPlatform` rather than running unsandboxed.
     """
@@ -318,8 +361,16 @@ def replay_turn(
 
     net = network if network is not None else network_policy(None)
     outcomes: list[FrameOutcome] = []
-    resolved = str(scratch)
-    with contained(list(server_command), workspace=scratch, network=net) as spawn:
+    # The realpath'd scratch is the relocation target and equals `spawn.scope.snapshot_root`
+    # (both are `os.path.realpath(str(scratch))`); computed here so argv/frames can be
+    # rewritten BEFORE the spawn, and reasserted from the scope inside the block.
+    resolved = os.path.realpath(str(scratch))
+    argv = list(server_command)
+    frames_to_send: Sequence[bytes] = frames
+    if source_root is not None:
+        argv = remap_argv(argv, source_root, resolved)[0]
+        frames_to_send = [_relocate_frame(frame, source_root, resolved) for frame in frames]
+    with contained(argv, workspace=scratch, network=net) as spawn:
         resolved = spawn.scope.snapshot_root
         proc = subprocess.Popen(
             spawn.argv,
@@ -329,7 +380,7 @@ def replay_turn(
             cwd=resolved,
         )
         try:
-            outcomes = converse(proc, frames, timeout=timeout)
+            outcomes = converse(proc, frames_to_send, timeout=timeout)
         finally:
             _terminate(proc)
     return ReplayResult(outcomes=outcomes, workspace=resolved)

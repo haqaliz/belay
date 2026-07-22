@@ -37,22 +37,27 @@ This file orients a coding agent working in this repository. Read it first.
 > into a gitignored `eval/servers/` and launched by absolute `node` path. See `eval/README.md`.
 > **Stage 1 of the live mint ran and PROVED the harness end-to-end** — `run_mint` → real git clone at
 > `base_commit` → gated capture → bridge → stock `belay phase0 run` → replay, on `pallets__flask-4045` via
-> BYOK (Ollama, then Gemini's OpenAI-compat endpoint). **But the number is now BLOCKED on a CORE-ENGINE
-> finding, not the eval harness:** replay verdicts are contaminated by live workspace state. Gemini made a
-> *correct* edit yet the run reported `VERIFIED_FLAGGED 1/1`; reverting the workspace changed the verdicts.
-> Root cause (verified against the engine's own design assumption): replay restores into a scratch dir and
-> sets the server's **cwd** there, so it is faithful only for **cwd-relative** servers; the reference
-> filesystem MCP server uses an **absolute `allowed_dir` / absolute paths** and bypasses the scratch
-> restore. Its FLAGs are false positives. See
-> `docs/planning/phase0-live-mint/mint-execution/STAGE1_FINDINGS.md`. **Do not scale a mint or publish a
-> rate until replay is faithful for absolute-path servers** — that is the next unit (`src/belay/replay` +
-> `sandbox`), off `master`. Stage 1 caught this false-positive machine *before* scaling, exactly as the R6
-> "verify ONE before scaling" rule intends.
-> **Gate criteria are pre-registered** in the PRD (`docs/planning/phase0-live-mint/prd.md`): PROCEED iff ≥3
-> *independent* hand-audited TPs AND denominator ≥50 AND no INSTRUMENT SUSPECT; a FAILing control voids the
-> mint. After the replay fix: Stage 2 (~10, measure attrition + cost, fix `selected.json`) → Stage 3
-> (~65–70, incl. 3 controls) → audit → fill `docs/technical/PHASE0_RESULTS.md` → fix the stale RUNBOOK; then
-> C7 (live console — first UI). C8 (A3 claim re-derivation) and C9 (observability interop) are cuttable, last.
+> BYOK (Ollama, then Gemini's OpenAI-compat endpoint). It also surfaced a core-engine replay-fidelity bug
+> that **has now been fixed** (see next).
+> **Replay is now faithful for absolute-path MCP servers** (`replay-absolute-path-fidelity`, merged): replay
+> restores into a scratch dir and sets the server's **cwd** there, so it was faithful only for
+> **cwd-relative** servers — the reference filesystem server (absolute `allowed_dir` / absolute paths)
+> bypassed the scratch restore, contaminating verdicts with live workspace state in **both** directions
+> (false-positive reads, and false-negative denied-writes that read as an empty delta). Fixed: the gate
+> records the original workspace root in each snapshot manifest (`source_root`), and replay **relocates** it
+> — the argv root token and any argument whose *whole value* is an in-root absolute path are rewritten to
+> the scratch (content untouched), the reply comparison substring-normalizes both roots (comparison-only),
+> and a rootless trace that needs relocation is `UNVERIFIED` (never guessed). Gated/additive: cwd-relative
+> servers are byte-unchanged. Proven by 9 acceptance criteria incl. a verdict identical across original
+> pristine/mutated/**deleted**. Shell `command_line`-embedded paths are the `replay-relocation-shell`
+> follow-up. See `docs/planning/replay-absolute-path-fidelity/`.
+> **Next: re-mint the Stage-1 instance to confirm the false positive is gone in the wild, then run the
+> staged live mint and publish the number.** Gate criteria are pre-registered in
+> `docs/planning/phase0-live-mint/prd.md`: PROCEED iff ≥3 *independent* hand-audited TPs AND denominator ≥50
+> AND no INSTRUMENT SUSPECT; a FAILing control voids the mint. Stage 2 (~10, measure attrition + cost, fix
+> `selected.json`) → Stage 3 (~65–70, incl. 3 controls) → audit → fill `docs/technical/PHASE0_RESULTS.md` →
+> fix the stale RUNBOOK; then C7 (live console — first UI). C8 (A3 claim re-derivation) and C9
+> (observability interop) are cuttable, last.
 >
 > [`docs/ROADMAP.md`](docs/ROADMAP.md) (phased plan + gates) and
 > [`docs/technical/CAPABILITY_ROADMAP.md`](docs/technical/CAPABILITY_ROADMAP.md)

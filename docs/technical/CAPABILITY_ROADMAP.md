@@ -203,6 +203,20 @@ the line between us and Langfuse/Phoenix.
   observed state delta.
 - Replay is **side-effect-contained by construction** — it runs in the sandbox, against a
   restored copy, never against live state.
+- **Path portability across replay (added 2026-07-22, `replay-absolute-path-fidelity`).**
+  The restored copy lives in a fresh *scratch* dir, and the server's cwd is set there. A
+  server that addresses files by paths **relative to cwd** is faithful for free. A server
+  that takes an **absolute root at launch** and uses **absolute paths** (the reference
+  `@modelcontextprotocol/server-filesystem`) would otherwise read/write the *original*
+  workspace — leaking live state into the verdict (false positives) and letting a denied
+  corrupt write read as an empty delta (false negatives). So the gate records the original
+  workspace root in each snapshot manifest (`source_root`), and replay **relocates** it:
+  the server argv root token and any argument whose *whole value* is an in-root absolute path
+  are rewritten to the scratch (content fields are never touched), and the reply comparison
+  substring-normalizes both roots (comparison-only). A trace lacking a recorded root that
+  needs relocation is **UNVERIFIED** (named cause), never guessed. Servers that embed paths
+  *inside* command strings (a shell server's `command_line`) are **not yet** relocated —
+  tracked as the `replay-relocation-shell` follow-up.
 - Nondeterminism is *detected, not hidden*: replaying a turn N times and observing divergent
   results marks the tool nondeterministic in the trace. That marking is an input to C4, not
   an excuse.

@@ -37,6 +37,7 @@ from __future__ import annotations
 import base64
 import json
 from pathlib import Path
+from typing import Optional
 
 from belay.snapshot.clone import Sidecar, Snapshot
 from belay.snapshot.substrate import FIDELITY_GAPS, GuardedSnapshot, Manifest
@@ -95,13 +96,23 @@ def _sidecar_from_json(data: dict) -> Sidecar:
     )
 
 
-def persist_snapshot(snap: GuardedSnapshot, manifest_path: Path) -> None:
+def persist_snapshot(
+    snap: GuardedSnapshot,
+    manifest_path: Path,
+    *,
+    source_root: Optional[str] = None,
+) -> None:
     """Write a manifest joining `snap`'s handle to its tree and its sidecar bytes.
 
     Everything a later process needs to reconstruct a restorable `GuardedSnapshot`:
     the handle the trace records, the absolute path of the cloned tree, the backend
     and capabilities `guarded_restore` refuses across, the fidelity gaps a reader
     must be told about, and the sidecar — base64, never decoded.
+
+    `source_root`, when given, is the absolute workspace the snapshot was taken
+    *from* (the gate passes its already-resolved `self._scope`). It is stored
+    verbatim — resolution is the caller's responsibility, not this function's. When
+    `None`, the key is **omitted entirely**, so an old-shaped manifest stays byte-clean.
     """
     manifest_path = Path(manifest_path)
     payload = {
@@ -112,6 +123,8 @@ def persist_snapshot(snap: GuardedSnapshot, manifest_path: Path) -> None:
         "fidelity_gaps": [gap.value for gap in FIDELITY_GAPS],
         "sidecar": _sidecar_to_json(snap.snapshot.sidecar),
     }
+    if source_root is not None:
+        payload["source_root"] = str(source_root)
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
@@ -144,8 +157,28 @@ def load_snapshot(manifest_path: Path) -> GuardedSnapshot:
         backend=payload["backend"],
         capabilities=frozenset(payload["capabilities"]),
         handle=payload["handle"],
+        source_root=_load_source_root(payload),
     )
     return GuardedSnapshot(snapshot=snapshot, manifest=manifest)
+
+
+def _load_source_root(payload: dict) -> Optional[str]:
+    """The manifest's `source_root`, fail-closed: absent -> None, malformed -> error.
+
+    ABSENT (an old capture written before the field existed) is `None` — backward
+    compatible. PRESENT must be a non-empty ABSOLUTE string; anything else (blank, a
+    relative path, a non-string) is a named `ValueError`, never a silent `None`. Losing
+    the malformed-vs-absent distinction is exactly how a corrupt field would read as an
+    honest old manifest.
+    """
+    if "source_root" not in payload:
+        return None
+    value = payload["source_root"]
+    if not isinstance(value, str) or not value or not Path(value).is_absolute():
+        raise ValueError(
+            f"manifest source_root must be a non-empty absolute path, got {value!r}"
+        )
+    return value
 
 
 __all__ = ["load_snapshot", "persist_snapshot"]
