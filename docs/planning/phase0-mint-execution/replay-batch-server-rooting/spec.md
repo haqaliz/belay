@@ -114,10 +114,26 @@ stays green.
 
 ---
 
+## Decisions
+
+- **D2 — the conservative rooting rule: DECIDED, committed in code (2026-07-23).** With a
+  recorded `source_root`, a turn that needs relocation but whose server argv has **no token
+  under that root** returns UNVERIFIED (`UNROOTABLE_SERVER_COMMAND`, `src/belay/replay/engine.py`)
+  before any restore or spawn. Its cost is accepted and stated plainly: a server that is
+  **rootless by design** yet takes absolute paths is relocatable through its arguments alone,
+  and this rule marks it UNVERIFIED regardless — argv alone cannot tell "rootless by design"
+  from "rooted at the wrong workspace". That is a **false abstention, not a false verdict**,
+  and it is the correct direction under UNVERIFIED-never-PASS; the failure it replaces (a
+  silent, confident FAIL from a rooting problem) is far worse. The plan asked for a flag if the
+  rule caught a real rootless absolute-path server already under test — **it did not**: no
+  pre-existing test flipped to UNVERIFIED, so no such server is exercised anywhere in the
+  suite, and the rule stands as written.
+- **CLI surface for (a): DECIDED — the `{workspace}` placeholder, no new flag.** Each trace's
+  root is derived from its own manifest (`WORKSPACE_PLACEHOLDER`, substituted per turn, then
+  relocated by the existing path). See the plan's D3.
+
 ## Open questions / risks
 
-- **CLI surface for (a)** — decide in the plan (see in-scope item 5). Deriving each trace's
-  root from its own manifest is the strongest candidate and removes an operator footgun.
 - **Requirement 1 raises the UNVERIFIED rate by design** (risk R7). That is correct behavior,
   but if it dominates a real mint it is a *gate signal* and must be reported as such, not
   engineered away.

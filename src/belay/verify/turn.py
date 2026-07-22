@@ -176,6 +176,23 @@ def verify_turn(
     # REPLAYED: both A2 checks share the one replay. The classifier is consulted ONLY on a
     # DIVERGED reply — a match is a reproduction at one replay, and classifying it would
     # triple the replay cost for nothing (Task 2's cost discipline, threaded through here).
+    #
+    # SHARP EDGE (named, not fixed here — `replay-batch-server-rooting`, 2026-07-23): the
+    # classifier answers "does this TOOL behave deterministically?", but all it can actually
+    # observe is "do N replays of this BROKEN invocation agree?". A *deterministically broken*
+    # command — a server spawned at the wrong root, an unspawnable binary — agrees with itself
+    # every time, so it is classified DETERMINISTIC and a rooting/spawn failure is promoted
+    # into a confident FAIL (DIVERGED + DETERMINISTIC → FAIL, `verify/result.py`). The
+    # mirror-image reading is worse: each replay restores into its OWN `mkdtemp` scratch, so
+    # when the server's error text embeds that scratch path the probe replies differ from EACH
+    # OTHER and the tool is called NONDETERMINISTIC — blaming the tool when the tool is fine
+    # and the ROOTING was broken. `replay/determinism.py:154 _signature` compares raw parsed
+    # replies with no root canonicalization, unlike the engine's recorded-vs-replayed
+    # comparison, which substring-normalizes both roots. This is LATENT, not live: the engine's
+    # relocation gate now abstains (UNROOTABLE_SERVER_COMMAND / ROOTLESS_RELOCATION) before any
+    # spawn, so the mis-rooted case short-circuits above and never reaches this call. Do not
+    # "fix" it by loosening the classifier — the real repair is to make the probe's comparison
+    # root-aware, which is its own unit.
     determinism: Optional[DeterminismResult] = None
     if reply.result_equivalence == DIVERGED:
         determinism = classify_determinism(

@@ -217,6 +217,28 @@ the line between us and Langfuse/Phoenix.
   needs relocation is **UNVERIFIED** (named cause), never guessed. Servers that embed paths
   *inside* command strings (a shell server's `command_line`) are **not yet** relocated —
   tracked as the `replay-relocation-shell` follow-up.
+- **The same contract across a heterogeneous batch (added 2026-07-23,
+  `replay-batch-server-rooting`).** `belay phase0 run` verifies a whole directory of captures
+  from **one** `--server` command, but every trace in it carries its **own** recorded
+  `source_root` — a batch of mint instances is rooted in as many workspaces as it has
+  instances. A single literal root in that argv is therefore right for at most one trace and
+  wrong for the rest, and a server spawned at the wrong root rejects the scratch paths, so the
+  reply diverges from a recorded success and the turn reads as a confident **FAIL** — a
+  rooting failure published as a violation, which is the worst thing this engine can do. The
+  fix keeps one code path: the argv may carry the token `{workspace}`
+  (`belay.replay.engine.WORKSPACE_PLACEHOLDER`), which the engine substitutes **per turn**
+  with *that turn's* recorded `source_root` before relocation runs; the existing relocation
+  then rewrites it to the scratch exactly as it does a literal root. No new flag, no second
+  mechanism, and an argv without the placeholder behaves byte-for-byte as before. Two guards
+  hold the floor: a placeholder with no recorded root is `ROOTLESS_RELOCATION`, and a server
+  command that needs relocation but is **not rooted anywhere under** the recorded root is
+  `UNROOTABLE_SERVER_COMMAND` — both **UNVERIFIED**, decided *before* any restore or spawn, so
+  a rooting problem can never reach a verdict. That second rule is **deliberately
+  conservative**: a server that is rootless *by design* yet takes absolute paths is
+  relocatable through its arguments alone, and it is marked UNVERIFIED anyway, because argv
+  alone cannot distinguish "rootless by design" from "rooted at the wrong workspace". The cost
+  is a **false abstention, never a false verdict** — the honest direction, and consistent with
+  UNVERIFIED-never-PASS.
 - Nondeterminism is *detected, not hidden*: replaying a turn N times and observing divergent
   results marks the tool nondeterministic in the trace. That marking is an input to C4, not
   an excuse.
