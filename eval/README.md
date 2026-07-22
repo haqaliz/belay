@@ -37,7 +37,13 @@ invisible to Belay — this driver exists specifically so that doesn't happen.
 ## The MCP servers (pinned, pre-installed)
 
 Two servers, each pinned to an exact version and **pre-installed** into a gitignored
-`eval/servers/`, then launched by **absolute `node` path**.
+`eval/servers/`, then launched by **absolute *entrypoint* path**: the argv is
+`["node", "<abs .../dist/index.js>", ...]` (`eval/minting_driver/servers.py`) — the
+entrypoint is absolute, `node` itself is still a plain `$PATH` lookup. That is enough for
+the finding below (a resolved entrypoint needs no registry and no cache write), but it is
+worth stating precisely, because this same argv is also the replay `--server` command:
+resolving `node` absolutely would change replay inputs and is deliberately a separate
+question, not something to "fix" in passing.
 
 > ### ⚠️ `npx -y` does NOT work behind the gated proxy — measured, not theorised
 >
@@ -77,10 +83,14 @@ npm view mcp-server-commands version                       # 0.8.2
 Run **outside** the sandbox, from the repo root:
 
 ```bash
-mkdir -p eval/servers
-cd eval/servers
-npm install @modelcontextprotocol/server-filesystem@2026.7.10 mcp-server-commands@0.8.2
+npm install --prefix eval/servers \
+  @modelcontextprotocol/server-filesystem@2026.7.10 mcp-server-commands@0.8.2
 ```
+
+(The `--prefix` form is the one `eval/minting_driver/servers.py` generates in its
+`MissingServerError`, so this is byte-for-byte the command the error you would actually
+see tells you to run. Its earlier `cd eval/servers && npm install` form was equivalent in
+effect but not in text, which is worse than useless in an error-recovery path.)
 
 `eval/servers/` is gitignored — third-party JS, pinned but never vendored into a repo whose
 Python core has zero runtime dependencies. `eval/minting_driver/servers.py` resolves the
@@ -223,11 +233,17 @@ The traces this driver writes under `BELAY_TRACE_DIR` are exactly what RUNBOOK S
 (`belay phase0 run`) consumes:
 
 ```bash
-belay phase0 run ./traces \
+belay phase0 run <root>/batch \
   --ledger runs/phase0.json \
   --corpus-dir corpus/local \
-  --server -- <mcp-server-command>
+  --server node <abs-entrypoint> '{workspace}'
 ```
+
+**No `--` separator after `--server`** — it is `nargs=REMAINDER`, so everything after it
+*is* the server command and a separator would be handed to `node` as an argument. And
+`'{workspace}'` (quoted, as one whole argument) is what makes ONE static command correct
+for a batch captured from many workspaces: replay substitutes each trace's own recorded
+`source_root`. The mint prints this exact line when it finishes — see "Running a mint".
 
 **Note the split of responsibility:** this driver produces traces for the real
 `belay phase0 run` CLI path above (RUNBOOK Step 2 as written). The single-instance smoke
@@ -236,6 +252,81 @@ test (next section) is a *different*, narrower path — it calls
 the CLI, because the smoke's job is only to prove one instance produces ≥1 verifiable
 turn before any batch run is attempted. That smoke test is Task 5's deliverable, not
 this task's.
+
+## Running a mint
+
+The committed mint commands. **Never `belay mint ...`** — `eval/` is not a product
+surface, so the entry point is a plain module invocation:
+
+```bash
+# one instance by id (the Stage-1 tool)
+uv run python -m eval.minting_driver one pallets__flask-4045 \
+  --root eval/mint/stage1 --registry eval/instances/stage1.json
+
+# the whole selection (Stage 2 / Stage 3)
+uv run python -m eval.minting_driver batch \
+  --root eval/mint/stage3 --registry eval/instances/selected.json
+```
+
+Both take the same flags: `--root` (**required, no default**), `--registry`,
+`--clones-dir`, `--checkpoint` (default `<root>/checkpoint.json`), `--provider`
+(default `openai-compat`), `--model` (default `gemini-flash-latest`),
+`--request-timeout` (default `120.0`), `--max-steps`, `--server-root`, and `--verify`.
+`python -m eval.minting_driver one --help` is authoritative.
+
+### Required environment
+
+```bash
+uv sync --group eval                      # anthropic + openai (non-default group)
+export OPENAI_BASE_URL=...                # the OpenAI-compatible endpoint
+export OPENAI_API_KEY=...                 # required and never substituted (see below)
+unset ANTHROPIC_API_KEY                   # unless you pass --provider anthropic
+```
+
+Three deliberate properties, each of which exists because its absence produces an **empty
+mint** — which `belay phase0 run` reports as `INSTRUMENT SUSPECT`, i.e. a *fake* PIVOT
+caused by operator setup rather than by the agents being measured:
+
+- **The provider is an argument, never an environment sniff.** A stray `ANTHROPIC_API_KEY`
+  cannot change which model mints; if it could, the published number would name the wrong
+  model. Environment variables supply credentials only.
+- **`OPENAI_API_KEY` is required, not defaulted.** `LocalOpenAICompatModel` substitutes a
+  local sentinel key when it is unset — right for Ollama, and a 401 on the first call of
+  *every* instance against a hosted endpoint. The entry point refuses to start instead.
+- **The server install is preflighted once, before anything is prepped or spent.** A
+  missing `eval/servers/` exits 2 with the `npm install --prefix ...` command on stderr,
+  rather than recording ~65 identical contained failures an hour after you walked away.
+
+`BELAY_EVAL_MODEL` is **not** an entry-point knob — it is read only by
+`tests/test_minting_driver_smoke.py`. Use `--model`.
+
+### Re-minting an instance
+
+Use a **fresh `--root`**. An instance already recorded in `<root>/checkpoint.json` is
+skipped (that is the resume, and it is what stops a crash at #37 from re-spending on
+1..36), and its bridge destination in `<root>/batch` already exists. There is deliberately
+no `--force` and no way to forget a recorded disposition: both are ways to double-spend by
+accident and to lose the record of what already ran. A directory you name is a better unit
+of "this is a new attempt".
+
+### Scoring the mint
+
+Every completed mint prints where its artifacts landed and the exact `belay phase0 run`
+command that turns them into the number:
+
+```
+minted 1 captured, 0 failed of 1 instance(s)
+  batch dir:  eval/mint/stage1/batch
+  checkpoint: eval/mint/stage1/checkpoint.json
+
+verify with:
+  belay phase0 run eval/mint/stage1/batch --ledger runs/phase0.json \
+    --corpus-dir corpus/local --server node <abs-entrypoint> '{workspace}'
+```
+
+`--verify` runs that same command in process immediately after minting. **The mint itself
+is a live observation and is not reproducible**; the ledger → report path is, and this
+printed line is what makes that second half true.
 
 ## Running the single-instance smoke
 
