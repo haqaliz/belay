@@ -25,6 +25,7 @@ from __future__ import annotations
 import copy
 
 from belay.replay.relocate import (
+    canonicalize_obj,
     canonicalize_reply,
     is_under,
     remap_argv,
@@ -152,6 +153,45 @@ def test_canonicalize_reply_is_symmetric_on_a_diff() -> None:
     assert canonicalize_reply(recorded, root_a, root_b, placeholder) == canonicalize_reply(
         recorded, root_b, root_a, placeholder
     )
+
+
+def test_canonicalize_obj_folds_string_values_structurally() -> None:
+    """`canonicalize_obj` folds both roots in every STRING value, keeping the structure.
+
+    The parsed-structure companion to `canonicalize_reply`: it walks a decoded JSON message
+    and substring-replaces both roots inside each string leaf, leaving dict/list shape (and
+    every non-string scalar) intact. A path buried in a nested reply string — a diff header,
+    a `file://` URL — folds to the placeholder on both the recorded (original root) and
+    replayed (scratch root) side, so a structural `==` compares them equal WITHOUT dumping
+    to text (which would reintroduce key-order sensitivity). Dict KEYS are left untouched.
+    """
+    placeholder = "<WS>"
+    recorded = {
+        "result": {
+            "content": [{"type": "text", "text": "wrote /root/proj/a.py"}],
+            "isError": False,
+            "count": 3,
+        }
+    }
+    replayed = {
+        "result": {
+            "content": [{"type": "text", "text": "wrote /scratch-xyz/proj/a.py"}],
+            "isError": False,
+            "count": 3,
+        }
+    }
+    canon_recorded = canonicalize_obj(recorded, "/root/proj", "/scratch-xyz/proj", placeholder)
+    canon_replayed = canonicalize_obj(replayed, "/root/proj", "/scratch-xyz/proj", placeholder)
+    assert canon_recorded == canon_replayed, "the two replies must fold to the same structure"
+    # Structure preserved: still a dict of a dict of a list; the non-string scalars survive.
+    assert canon_recorded["result"]["isError"] is False
+    assert canon_recorded["result"]["count"] == 3
+    assert placeholder in canon_recorded["result"]["content"][0]["text"]
+
+    # Order-independent and non-mutating: the input object is untouched.
+    before = copy.deepcopy(recorded)
+    canonicalize_obj(recorded, "/scratch-xyz/proj", "/root/proj", placeholder)
+    assert recorded == before
 
 
 def test_turn_needs_relocation_false_for_cwd_relative() -> None:

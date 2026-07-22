@@ -454,7 +454,9 @@ def test_no_observed_post_state_yields_none_delta_not_empty(tmp_path, monkeypatc
         _tools_list_readonly() + [("c2s", call, handle), ("s2c", _echo_reply(2, "hi"), None)],
     )
 
-    def _stub_client_replay(server_command, *, snapshot_manifest, frames, network, timeout):
+    def _stub_client_replay(
+        server_command, *, snapshot_manifest, frames, network, timeout, source_root=None
+    ):
         # A post-state that was never observed: workspace is None, yet the target answered.
         return ReplayResult(
             outcomes=[

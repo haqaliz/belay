@@ -44,6 +44,7 @@ import os
 from typing import Any
 
 __all__ = [
+    "canonicalize_obj",
     "canonicalize_reply",
     "is_under",
     "remap_argv",
@@ -158,6 +159,34 @@ def canonicalize_reply(
     """
     first, second = sorted((root_a, root_b), key=len, reverse=True)
     return text.replace(first, placeholder).replace(second, placeholder)
+
+
+def canonicalize_obj(
+    obj: object, root_a: str, root_b: str, placeholder: str
+) -> object:
+    """Fold both roots to `placeholder` in every STRING value of a parsed message.
+
+    The parsed-structure companion to `canonicalize_reply`, and — like it — for
+    **COMPARISON ONLY**. `_equivalence` compares the recorded reply and the replayed one as
+    *parsed* messages (`recorded == json.loads(replayed)`), which is key-order-independent;
+    dumping back to text to normalize would reintroduce key-order sensitivity. So the fold is
+    applied per string leaf instead: `dict`/`list` shape is preserved, every non-string
+    scalar passes through, and each `str` value has both roots substring-replaced (via
+    `canonicalize_reply`) so a path buried in a diff header or a `file://` URL compares equal
+    across the original and scratch roots. Dict KEYS are deliberately left untouched — a path
+    is a value, and folding a key could collide two distinct keys into one. A NEW structure is
+    returned; the input is never mutated, so the recorded message stays byte-clean.
+    """
+    if isinstance(obj, dict):
+        return {
+            key: canonicalize_obj(value, root_a, root_b, placeholder)
+            for key, value in obj.items()
+        }
+    if isinstance(obj, list):
+        return [canonicalize_obj(item, root_a, root_b, placeholder) for item in obj]
+    if isinstance(obj, str):
+        return canonicalize_reply(obj, root_a, root_b, placeholder)
+    return obj
 
 
 def turn_needs_relocation(arguments: object, argv: list[str], root: str) -> bool:
