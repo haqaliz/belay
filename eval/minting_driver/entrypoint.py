@@ -38,9 +38,23 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Optional, Sequence, Union
 
-from eval.minting_driver.batch import ModelFactory
+from eval.instances.registry import InstanceRecord
+from eval.minting_driver.batch import (
+    BuildServerCommand,
+    DiscoverTools,
+    ModelFactory,
+    PrepareWorkspace,
+    run_mint,
+)
+from eval.minting_driver.checkpoint import Checkpoint
+from eval.minting_driver.servers import (
+    filesystem_server_command,
+    resolve_server_entrypoint,
+)
+from eval.minting_driver.session import TransportFactory
+from eval.minting_driver.workspace import WorkspaceLayout, prepare_workspace
 
 StrPath = Union[str, "os.PathLike[str]"]
 
@@ -266,6 +280,82 @@ def make_model_factory(
     return anthropic_factory
 
 
+def preflight_servers(cfg: MintConfig) -> Path:
+    """Resolve the pinned filesystem server's entrypoint — or fail loudly, once, now.
+
+    **This must run before anything is prepped, driven, or spent.** `run_mint` builds
+    each instance's server command *inside* its per-instance `try/except`, which is
+    exactly right for a mint (one `ServerExited` must not abort the batch) and exactly
+    wrong for a missing install: every one of ~65 instances would be recorded `failed`
+    with the same message, the batch dir would be empty, and `belay phase0 run` would
+    report `INSTRUMENT SUSPECT` — a *fake* PIVOT produced by an `npm install` that was
+    never run, an hour after the operator walked away.
+
+    `MissingServerError` already carries the exact pinned install command
+    (`servers.py`), so it propagates unchanged rather than being re-worded here.
+    """
+    return resolve_server_entrypoint("filesystem", root=cfg.server_root)
+
+
+def mint_batch(
+    records: Sequence[InstanceRecord],
+    cfg: MintConfig,
+    *,
+    model_factory: Optional[ModelFactory] = None,
+    build_server_command: Optional[BuildServerCommand] = None,
+    prepare: PrepareWorkspace = prepare_workspace,
+    transport_factory: Optional[TransportFactory] = None,
+    discover_tools: Optional[DiscoverTools] = None,
+) -> Checkpoint:
+    """Drive `records` sequentially through the gated proxy, per `cfg`.
+
+    Thin by design: preflight, then wire `run_mint`'s seams from the config, then call
+    it. **No `try/except` around `run_mint`** — its per-instance containment is the
+    contract and wrapping it would either swallow a real setup failure or turn one bad
+    instance into an aborted mint.
+
+    The keyword seams (`model_factory`, `prepare`, `transport_factory`,
+    `discover_tools`, `build_server_command`) exist so the whole path is testable with
+    no subprocess, no git, no network and no spend. They are Python kwargs, never
+    command-line flags.
+    """
+    # FIRST statement — see `preflight_servers`. Before the registry, before prep,
+    # before any model or credential resolution, before a single byte is spent.
+    preflight_servers(cfg)
+
+    if model_factory is None:
+        model_factory = make_model_factory(provider=cfg.provider, model=cfg.model)
+
+    if build_server_command is None:
+
+        def build_server_command_for(layout: WorkspaceLayout) -> list[str]:
+            # THIS instance's workspace is the filesystem server's own allowed-directory
+            # boundary, passed in its argv — a constant command would point every
+            # instance after the first at the first instance's workspace.
+            return filesystem_server_command(layout.work_dir, root=cfg.server_root)
+
+        build_server_command = build_server_command_for
+
+    extra: dict[str, Any] = {}
+    if discover_tools is not None:
+        extra["discover_tools"] = discover_tools
+
+    return run_mint(
+        records,
+        root=cfg.root,
+        clones_dir=cfg.clones_dir,
+        model_factory=model_factory,
+        build_server_command=build_server_command,
+        checkpoint_path=cfg.checkpoint_path,
+        request_timeout=cfg.request_timeout,
+        max_steps=cfg.max_steps,
+        system=cfg.system,
+        prepare=prepare,
+        transport_factory=transport_factory,
+        **extra,
+    )
+
+
 __all__ = [
     "DEFAULT_CLONES_DIR",
     "DEFAULT_MAX_STEPS",
@@ -281,5 +371,7 @@ __all__ = [
     "OPENAI_BASE_URL_ENV",
     "PROVIDERS",
     "make_model_factory",
+    "mint_batch",
+    "preflight_servers",
     "resolve_credentials",
 ]

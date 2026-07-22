@@ -34,8 +34,12 @@ from eval.minting_driver.entrypoint import (
     MintConfigError,
     MissingCredentialsError,
     make_model_factory,
+    mint_batch,
+    preflight_servers,
     resolve_credentials,
 )
+from eval.minting_driver.servers import PINNED_SERVERS, MissingServerError
+from eval.minting_driver.workspace import layout_for
 
 ENTRYPOINT_SOURCE = (
     Path(__file__).parent.parent / "eval" / "minting_driver" / "entrypoint.py"
@@ -218,3 +222,188 @@ def test_unknown_provider_is_a_named_error(tmp_path: Path) -> None:
     """A typo'd provider is refused at config time, listing the known providers."""
     with pytest.raises(MintConfigError, match="provider"):
         MintConfig(root=tmp_path / "mint", provider="openai")
+
+
+# --------------------------------------------------------------------------------------
+# Seams — the same vocabulary as `tests/test_minting_driver_batch.py`, ~15 lines
+# duplicated deliberately rather than lifted into a premature shared fixture.
+# --------------------------------------------------------------------------------------
+
+
+class StubPrepare:
+    """Workspace prep without git: makes the layout dirs and drops a fake trace file.
+
+    The fake `trace-*.jsonl` is what the REAL `bridge_capture` moves — with no gated
+    proxy running, nothing else would write one. Records which instances it prepared, in
+    order, so a test can assert which were driven and which were never touched.
+    """
+
+    def __init__(self) -> None:
+        self.prepared: list[str] = []
+
+    def __call__(
+        self, record: InstanceRecord, *, root: object, clones_dir: object
+    ) -> object:
+        layout = layout_for(record.instance_id, Path(str(root)))
+        layout.work_dir.mkdir(parents=True, exist_ok=True)
+        layout.trace_dir.mkdir(parents=True, exist_ok=True)
+        layout.snapshot_dir.mkdir(parents=True, exist_ok=True)
+        (layout.trace_dir / "trace-20260723T000000Z-abcd1234.jsonl").write_text(
+            '{"turn": 0}\n', encoding="utf-8"
+        )
+        self.prepared.append(record.instance_id)
+        return layout
+
+
+class OkTransport:
+    """A benign fake transport: canned replies, no subprocess, no trace side effects."""
+
+    def request(self, obj: dict, timeout: float | None = None) -> dict:
+        method = obj["method"]
+        if method == "initialize":
+            return {"jsonrpc": "2.0", "id": obj["id"], "result": {}}
+        if method == "tools/list":
+            return {"jsonrpc": "2.0", "id": obj["id"], "result": {"tools": []}}
+        if method == "tools/call":
+            return {
+                "jsonrpc": "2.0",
+                "id": obj["id"],
+                "result": {"content": [{"type": "text", "text": "ok"}]},
+            }
+        raise AssertionError(f"unexpected method: {method}")
+
+    def notify(self, obj: dict) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
+class SpyModelFactory:
+    """Counts factory calls and hands back a fresh `ScriptedModel` each time."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.models: list[object] = []
+
+    def __call__(self, tools: object) -> object:
+        from eval.minting_driver.fakes import ScriptedModel
+        from eval.minting_driver.model import Done, ToolCall
+
+        self.calls += 1
+        model = ScriptedModel([ToolCall(name="read_file"), Done(reason="done")])
+        self.models.append(model)
+        return model
+
+
+def _install_stub_server(server_root: Path, name: str = "filesystem") -> Path:
+    """A fake 'installed' server: an empty file at the pinned entrypoint path.
+
+    `resolve_server_entrypoint` only calls `.is_file()`, so this is a valid fixture and
+    CI never runs `npm install` or spawns `node`.
+    """
+    entrypoint = server_root / PINNED_SERVERS[name].entrypoint
+    entrypoint.parent.mkdir(parents=True, exist_ok=True)
+    entrypoint.write_text("// stub\n", encoding="utf-8")
+    return entrypoint
+
+
+# --------------------------------------------------------------------------------------
+# The server preflight — loud, once, before anything is prepped or spent
+# --------------------------------------------------------------------------------------
+
+
+def test_missing_servers_fail_fast_with_install_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An absent `eval/servers/` names the exact pinned `npm install` to run."""
+    monkeypatch.setenv("BELAY_EVAL_SERVER_ROOT", str(tmp_path / "servers"))
+
+    cfg = MintConfig(root=tmp_path / "mint")
+    with pytest.raises(MissingServerError) as excinfo:
+        preflight_servers(cfg)
+
+    message = str(excinfo.value)
+    assert "npm install" in message
+    assert "@modelcontextprotocol/server-filesystem@2026.7.10" in message
+
+
+def test_preflight_runs_before_any_prep_or_model_construction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ordering assertion — this is what distinguishes a preflight from a contained
+    per-instance failure.
+
+    `build_server_command` is called INSIDE `run_mint`'s per-instance `try/except`, so a
+    missing install would otherwise record every one of ~65 instances `failed` with the
+    same message, produce an empty batch dir, and read as INSTRUMENT SUSPECT — a fake
+    PIVOT from an `npm install` that was never run, an hour after the mint started.
+    """
+    monkeypatch.setenv("BELAY_EVAL_SERVER_ROOT", str(tmp_path / "servers"))
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.invalid/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+
+    cfg = MintConfig(root=tmp_path / "mint")
+    prepare = StubPrepare()
+    factory = SpyModelFactory()
+
+    with pytest.raises(MissingServerError):
+        mint_batch(
+            [_record("octo__repo-1"), _record("octo__repo-2")],
+            cfg,
+            model_factory=factory,
+            prepare=prepare,
+            transport_factory=lambda cmd, env: OkTransport(),
+            discover_tools=lambda cmd: [],
+        )
+
+    assert prepare.prepared == [], "no workspace may be prepped before the preflight"
+    assert factory.calls == 0, "no model may be constructed before the preflight"
+    assert not cfg.checkpoint_path.exists(), "no checkpoint may be written"
+    assert not cfg.batch_dir.exists(), "no batch dir may be created"
+
+
+def test_preflight_passes_with_a_stub_entrypoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With the pinned entrypoint present, the preflight returns its absolute path."""
+    server_root = tmp_path / "servers"
+    entrypoint = _install_stub_server(server_root)
+    monkeypatch.setenv("BELAY_EVAL_SERVER_ROOT", str(tmp_path / "elsewhere"))
+
+    # `--server-root` (cfg.server_root) wins over the environment variable.
+    cfg = MintConfig(root=tmp_path / "mint", server_root=server_root)
+    resolved = preflight_servers(cfg)
+
+    assert resolved == entrypoint.resolve()
+    assert resolved.is_absolute()
+
+
+def test_mint_batch_runs_through_the_real_bridge_once_servers_are_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Preflight OK -> the batch actually drives, bridges, and records `captured`."""
+    server_root = tmp_path / "servers"
+    _install_stub_server(server_root)
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.invalid/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+
+    cfg = MintConfig(root=tmp_path / "mint", server_root=server_root)
+    prepare = StubPrepare()
+    factory = SpyModelFactory()
+
+    checkpoint = mint_batch(
+        [_record("octo__repo-1")],
+        cfg,
+        model_factory=factory,
+        prepare=prepare,
+        transport_factory=lambda cmd, env: OkTransport(),
+        discover_tools=lambda cmd: [],
+    )
+
+    assert prepare.prepared == ["octo__repo-1"]
+    assert factory.calls == 1
+    assert checkpoint.status("octo__repo-1") == "captured"
+    # The layout the stock `belay phase0 run` resolves — the real `bridge_capture` ran.
+    assert (cfg.batch_dir / "trace-octo__repo-1.jsonl").is_file()
+    assert (cfg.batch_dir / "trace-octo__repo-1.manifests").is_dir()
