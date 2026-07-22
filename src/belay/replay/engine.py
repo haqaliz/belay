@@ -65,7 +65,7 @@ from belay.index import derive_correlation, tool_calls
 from belay.replay.client import ANSWERED, DEFAULT_TIMEOUT, FrameOutcome
 from belay.replay.client import replay_turn as _client_replay_turn
 from belay.replay.persist import load_snapshot
-from belay.replay.relocate import canonicalize_obj, turn_needs_relocation
+from belay.replay.relocate import canonicalize_obj, is_under, turn_needs_relocation
 from belay.snapshot.bth1 import FieldDiff, diff_records, scan_tree
 from belay.snapshot.substrate import guarded_restore
 
@@ -100,6 +100,17 @@ DIVERGED = "diverged"
 #: relocation axis.
 ROOTLESS_RELOCATION = (
     "original workspace root not recorded; cannot relocate absolute paths"
+)
+
+#: The honesty floor for a mis-rooted replay: the manifest DID record a root, but the
+#: server command handed to the replay is not rooted anywhere under it, so relocating the
+#: turn's paths into the scratch would point the server outside what it can reach. A
+#: rooting problem is an evaluation failure, not a violation — so the turn abstains here,
+#: before any restore or spawn, rather than diverging into a fabricated FAIL (or a
+#: causeless "nondeterministic tool"). Distinct from `ROOTLESS_RELOCATION`, which names the
+#: opposite gap: there the root was never recorded at all.
+UNROOTABLE_SERVER_COMMAND = (
+    "server command is not rooted at the recorded workspace; cannot relocate"
 )
 
 #: A sentinel both roots fold to when canonicalizing replies for comparison. NUL-wrapped
@@ -269,17 +280,29 @@ def _relocation_decision(
 
     - `relocation_root` is the root to hand the client, or `None` to keep today's
       byte-for-byte cwd-relative replay.
-    - `fallback_cause` is set (with `relocation_root` `None`) only for the honest fallback:
-      a turn that carries an absolute-path argument but whose manifest recorded no root.
+    - `fallback_cause` is set (with `relocation_root` `None`) for the two honest fallbacks:
+      `ROOTLESS_RELOCATION` — a turn that carries an absolute-path argument but whose
+      manifest recorded no root; and `UNROOTABLE_SERVER_COMMAND` — a turn that needs
+      relocation, whose root WAS recorded, but whose server command holds no token under
+      that root, so the command cannot be relocated with it.
 
     With a recorded root, the whole-value/in-root rule (`turn_needs_relocation`) decides
     exactly, so an out-of-root abs path (`/etc/hosts`) and a cwd-relative turn are both
     UNCHANGED. Without a recorded root, argv is NOT consulted — it always holds an absolute
     interpreter/server path — so the signal is an absolute-path *argument*, which a
     cwd-relative turn never carries.
+
+    When relocation IS needed, argv is consulted for one thing only: whether any token is
+    `is_under` the recorded root. If none is, the server is rooted somewhere else (or
+    rootless by design) and relocating the turn's paths would hand it paths it cannot
+    serve; the resulting divergence would say nothing about the recorded run. Abstaining is
+    conservative on purpose — a rootless-by-design absolute-path server is marked UNVERIFIED
+    too, which is a false abstention, never a false verdict.
     """
     if source_root is not None:
         if turn_needs_relocation(arguments, list(argv), source_root):
+            if not any(is_under(token, source_root) for token in argv):
+                return None, UNROOTABLE_SERVER_COMMAND
             return source_root, None
         return None, None
     if _arguments_hold_absolute_path(arguments):
