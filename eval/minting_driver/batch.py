@@ -128,7 +128,7 @@ def run_mint(
     model_factory: ModelFactory,
     build_server_command: BuildServerCommand,
     checkpoint_path: StrPath,
-    request_timeout: Optional[float],
+    request_timeout: float,
     max_steps: int,
     system: str,
     prepare: PrepareWorkspace = prepare_workspace,
@@ -154,6 +154,23 @@ def run_mint(
     `StdioMcp`) and `discover_tools` are injectable seams so tests exercise the real
     `run_session`/`bridge` path with no subprocess, no git, no spend.
     """
+    # `None` is NOT "no timeout": it falls through `run_session` -> `run_task` ->
+    # `transport.request`'s `DEFAULT_TIMEOUT = 10.0`, silently capping every live turn at
+    # ten seconds — too tight for a model turn plus a cold `node` start under Seatbelt,
+    # so an unconfigured batch would record `ReplyTimeout` for every instance and read as
+    # INSTRUMENT SUSPECT. Refused here, for every caller, not just at the entry point.
+    if request_timeout is None or isinstance(request_timeout, bool) or not isinstance(
+        request_timeout, (int, float)
+    ):
+        raise ValueError(
+            f"run_mint: request_timeout must be a positive number of seconds, got "
+            f"{request_timeout!r}. `None` silently means the transport's 10s default."
+        )
+    if request_timeout <= 0:
+        raise ValueError(
+            f"run_mint: request_timeout must be > 0 seconds, got {request_timeout!r}"
+        )
+
     checkpoint = load_checkpoint(checkpoint_path)
     batch_dir = Path(root) / "batch"
 
