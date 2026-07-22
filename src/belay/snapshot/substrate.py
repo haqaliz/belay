@@ -350,11 +350,18 @@ class Manifest:
     This is honesty, not portability. The alternative — restore anyway, drop what
     the destination cannot hold — returns a tree that is missing a field and
     reports a pre-state it did not restore.
+
+    `source_root` is the absolute workspace the snapshot was taken *from* (vs
+    `Snapshot.path`, the clone it was written *to*). It is recorded so a later
+    process can know the original prefix; it is defaulted `None` for manifests
+    written before the field existed, and this axis never consumes it — recording,
+    reading, and exposing it changes no verdict.
     """
 
     backend: str
     capabilities: frozenset[str]
     handle: str = ""
+    source_root: Optional[str] = None
 
 
 @dataclass(frozen=True)
