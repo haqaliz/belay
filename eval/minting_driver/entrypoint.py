@@ -40,7 +40,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional, Sequence, Union
 
-from eval.instances.registry import InstanceRecord
+from eval.instances.registry import InstanceRecord, load_registry
 from eval.minting_driver.batch import (
     BuildServerCommand,
     DiscoverTools,
@@ -98,6 +98,20 @@ DEFAULT_SYSTEM_PROMPT = (
 OPENAI_BASE_URL_ENV = "OPENAI_BASE_URL"
 OPENAI_API_KEY_ENV = "OPENAI_API_KEY"
 
+#: The literal `belay.replay.engine.WORKSPACE_PLACEHOLDER`, restated rather than imported:
+#: `eval/` may not import `belay` (guardrail #1 — this is not a product surface, and the
+#: driver must import with `belay` absent). A test pins the two together so they cannot
+#: drift silently. Written as ONE argument of the verify command, it makes a single static
+#: `--server` command correct for a heterogeneous batch: replay substitutes each trace's
+#: OWN recorded `source_root`, which beats restating a root the trace already carries.
+WORKSPACE_PLACEHOLDER = "{workspace}"
+
+#: Where the printed verify command writes its run ledger / reads and ingests its corpus.
+#: These match `belay phase0 run`'s own documented defaults; they are here so the printed
+#: command is copy-pasteable rather than a template with holes in it.
+DEFAULT_LEDGER_PATH = Path("runs/phase0.json")
+DEFAULT_CORPUS_DIR = Path("corpus/local")
+
 
 class MintConfigError(ValueError):
     """A mint configuration value is missing, malformed, or out of range."""
@@ -108,6 +122,24 @@ class MissingCredentialsError(RuntimeError):
 
     Raised BEFORE any instance is prepped or driven, and it names the variables. The
     alternative — a silent sentinel key — is one 401 per instance and an empty mint.
+    """
+
+
+class RegistryNotFoundError(MintConfigError):
+    """The instance registry file does not exist.
+
+    Named, and naming the aspect that produces the file, because the alternative is a
+    bare `FileNotFoundError` traceback mid-setup for what is really "that file has not
+    been generated yet / you passed the wrong `--registry`".
+    """
+
+
+class UnknownInstanceError(MintConfigError):
+    """No record in the registry carries the requested `instance_id`.
+
+    Loud rather than an empty selection: a mint that drives nothing produces an empty
+    batch dir, which `belay phase0 run` reads as `INSTRUMENT SUSPECT` — a *fake* PIVOT
+    caused by a typo'd id rather than by the agents under measurement.
     """
 
 
@@ -368,8 +400,171 @@ def mint_batch(
     )
 
 
+def load_records(cfg: MintConfig) -> tuple[InstanceRecord, ...]:
+    """The registry at `cfg.registry_path`, or a named error if it is not there.
+
+    `load_registry` is already fail-closed on *content*; this adds the one case it
+    reports as an unreadable-file `ValueError` and which has a specific, actionable
+    cause: the file is simply absent because the `instance-pool` aspect that generates
+    `eval/instances/selected.json` has not landed (or `--registry` points elsewhere).
+    """
+    path = Path(cfg.registry_path)
+    if not path.is_file():
+        raise RegistryNotFoundError(
+            f"instance registry not found: {path}\n"
+            f"The default registry ({DEFAULT_REGISTRY_PATH}) is the `instance-pool` "
+            f"aspect's deliverable — generate it, or pass --registry <path> to an "
+            f"existing selection file. A mint with no records drives nothing, and an "
+            f"empty batch reads as INSTRUMENT SUSPECT rather than as a missing file."
+        )
+    return load_registry(path)
+
+
+def select_record(
+    records: Sequence[InstanceRecord], instance_id: str
+) -> InstanceRecord:
+    """The one record named `instance_id`, or `UnknownInstanceError`."""
+    for record in records:
+        if record.instance_id == instance_id:
+            return record
+    raise UnknownInstanceError(
+        f"instance {instance_id!r} is not in the registry, which holds "
+        f"{len(records)} record(s). Nothing was minted — a typo'd id must never read "
+        f"as a run that captured nothing."
+    )
+
+
+def verify_command(
+    cfg: MintConfig,
+    *,
+    entrypoint: Path,
+    ledger_path: StrPath = DEFAULT_LEDGER_PATH,
+    corpus_dir: StrPath = DEFAULT_CORPUS_DIR,
+) -> str:
+    """The `belay phase0 run` command that turns this mint's captures into the number.
+
+    Printed on every completion: this line IS the reproduce-the-number artifact. Two
+    details are load-bearing:
+
+    * `{workspace}` (`WORKSPACE_PLACEHOLDER`) rather than a per-trace command — replay
+      substitutes each trace's own recorded `source_root`, so ONE static command is
+      correct for a batch captured from many workspaces.
+    * **No `--` separator.** `--server` is `nargs=REMAINDER`, so a separator would be
+      handed to `node` as an argument instead of being consumed by argparse.
+    """
+    return (
+        f"belay phase0 run {cfg.batch_dir} "
+        f"--ledger {Path(ledger_path)} --corpus-dir {Path(corpus_dir)} "
+        f"--server node {entrypoint} '{WORKSPACE_PLACEHOLDER}'"
+    )
+
+
+@dataclass(frozen=True)
+class MintReport:
+    """What one mint produced: where the artifacts are, and how to score them.
+
+    Counts are derived from the `Checkpoint` (the durable ledger), never from a parallel
+    tally kept alongside it — a second counter is free to drift from the file the resume
+    actually reads, and then the summary would describe a mint that did not happen.
+    """
+
+    batch_dir: Path
+    checkpoint_path: Path
+    checkpoint: Checkpoint
+    instance_ids: tuple[str, ...]
+    counts: dict[str, int]
+    verify_command: str
+
+    @property
+    def captured(self) -> int:
+        return self.counts.get("captured", 0)
+
+    @property
+    def failed(self) -> int:
+        return self.counts.get("failed", 0)
+
+    def render(self) -> str:
+        """The operator-facing summary, ending with the verify command."""
+        lines = [
+            f"minted {self.captured} captured, {self.failed} failed "
+            f"of {len(self.instance_ids)} instance(s)",
+            f"  batch dir:  {self.batch_dir}",
+            f"  checkpoint: {self.checkpoint_path}",
+        ]
+        failures = [
+            (instance_id, self.checkpoint.reason(instance_id))
+            for instance_id in self.instance_ids
+            if self.checkpoint.status(instance_id) == "failed"
+        ]
+        for instance_id, reason in failures:
+            # Named, not summarised: a mint that quietly loses instances shrinks the
+            # denominator of the published rate.
+            lines.append(f"  FAILED {instance_id}: {reason}")
+        lines.append("")
+        lines.append("verify with:")
+        lines.append(f"  {self.verify_command}")
+        return "\n".join(lines)
+
+
+def _report_for(
+    records: Sequence[InstanceRecord],
+    cfg: MintConfig,
+    checkpoint: Checkpoint,
+    *,
+    entrypoint: Path,
+) -> MintReport:
+    """Fold a finished mint into a `MintReport`, counting straight off the checkpoint."""
+    counts = {"captured": 0, "failed": 0}
+    for record in records:
+        status = checkpoint.status(record.instance_id)
+        if status is None:
+            # Should be unreachable: `run_mint` records every record it sees. Counted
+            # under its own key rather than dropped, because a silently-vanishing
+            # instance is exactly how a denominator shrinks unnoticed.
+            counts["unrecorded"] = counts.get("unrecorded", 0) + 1
+        else:
+            counts[status] = counts.get(status, 0) + 1
+    return MintReport(
+        batch_dir=cfg.batch_dir,
+        checkpoint_path=Path(cfg.checkpoint_path or cfg.root / "checkpoint.json"),
+        checkpoint=checkpoint,
+        instance_ids=tuple(record.instance_id for record in records),
+        counts=counts,
+        verify_command=verify_command(cfg, entrypoint=entrypoint),
+    )
+
+
+def mint_one(
+    instance_id: str,
+    cfg: MintConfig,
+    **seams: Any,
+) -> MintReport:
+    """Mint exactly ONE registry instance, by id — the Stage-1 tool.
+
+    Deliberately `mint_batch` over a one-record list rather than a bespoke
+    single-instance pipeline. Stage 1's entire value was that it rehearsed the *batch*
+    path before the batch was spent on; a separate pipeline would rehearse only itself
+    (which is what made the deleted `scratchpad/drive_one.py` worthless the moment it
+    was gone) and would let resume, containment, bridge and checkpoint semantics drift
+    apart between the two commands.
+
+    **Inherited consequence, by design:** an instance already recorded `captured` in
+    `cfg.checkpoint_path` is SKIPPED, and re-bridging into a used batch dir would raise
+    `BridgeCollisionError` anyway. Re-minting is therefore a fresh `--root` (a fresh
+    ledger for a fresh attempt), not a checkpoint edit — deleting a recorded disposition
+    is how a mint double-spends by accident and loses the record of what already ran.
+    """
+    # The preflight FIRST — before the registry is even opened. See `preflight_servers`.
+    entrypoint = preflight_servers(cfg)
+    record = select_record(load_records(cfg), instance_id)
+    checkpoint = mint_batch([record], cfg, **seams)
+    return _report_for([record], cfg, checkpoint, entrypoint=entrypoint)
+
+
 __all__ = [
     "DEFAULT_CLONES_DIR",
+    "DEFAULT_CORPUS_DIR",
+    "DEFAULT_LEDGER_PATH",
     "DEFAULT_MAX_STEPS",
     "DEFAULT_MODEL",
     "DEFAULT_PROVIDER",
@@ -378,12 +573,20 @@ __all__ = [
     "DEFAULT_SYSTEM_PROMPT",
     "MintConfig",
     "MintConfigError",
+    "MintReport",
     "MissingCredentialsError",
     "OPENAI_API_KEY_ENV",
     "OPENAI_BASE_URL_ENV",
     "PROVIDERS",
+    "RegistryNotFoundError",
+    "UnknownInstanceError",
+    "WORKSPACE_PLACEHOLDER",
+    "load_records",
     "make_model_factory",
     "mint_batch",
+    "mint_one",
     "preflight_servers",
     "resolve_credentials",
+    "select_record",
+    "verify_command",
 ]

@@ -25,17 +25,21 @@ from typing import Any
 
 import pytest
 
-from eval.instances.registry import InstanceRecord
+from eval.instances.registry import InstanceRecord, dump_registry
 from eval.minting_driver import transport as transport_module
 from eval.minting_driver.batch import run_mint
 from eval.minting_driver.clients.local_client import LocalOpenAICompatModel
 from eval.minting_driver.entrypoint import (
     DEFAULT_REQUEST_TIMEOUT,
+    WORKSPACE_PLACEHOLDER,
     MintConfig,
     MintConfigError,
     MissingCredentialsError,
+    RegistryNotFoundError,
+    UnknownInstanceError,
     make_model_factory,
     mint_batch,
+    mint_one,
     preflight_servers,
     resolve_credentials,
 )
@@ -571,3 +575,152 @@ def test_conversation_state_does_not_bleed_between_instances(
     assert not any(
         "TASK-ONE" in str(message.get("content")) for message in second_request
     )
+
+
+# --------------------------------------------------------------------------------------
+# `mint_one` — the Stage-1 tool: one instance, by id, from committed code
+# --------------------------------------------------------------------------------------
+
+
+def _write_registry(path: Path, instance_ids: list[str]) -> Path:
+    """A real registry file, written by the real `dump_registry` — never hand-rolled JSON."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    dump_registry([_record(instance_id) for instance_id in instance_ids], path)
+    return path
+
+
+def _mint_one_seams(prepare: object, factory: object) -> dict:
+    """The fake seams every `mint_one` test uses: no git, no subprocess, no spend."""
+    return {
+        "model_factory": factory,
+        "prepare": prepare,
+        "transport_factory": lambda cmd, env: OkTransport(),
+        "discover_tools": lambda cmd: [],
+    }
+
+
+def test_single_instance_entrypoint_is_importable_and_wired(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One id in, one bridged capture out — through the SAME path the batch uses.
+
+    `mint_one` is deliberately `mint_batch` over a one-record list, not a bespoke
+    single-instance pipeline: Stage 1's whole value was rehearsing the batch path before
+    the batch was spent on, and a separate pipeline would rehearse only itself (exactly
+    what made the deleted `scratchpad/drive_one.py` worthless).
+    """
+    server_root = tmp_path / "servers"
+    _install_stub_server(server_root)
+    registry = _write_registry(
+        tmp_path / "registry.json", ["octo__repo-1", "octo__repo-2", "octo__repo-3"]
+    )
+
+    cfg = MintConfig(
+        root=tmp_path / "mint", registry_path=registry, server_root=server_root
+    )
+    prepare = StubPrepare()
+    factory = SpyModelFactory()
+
+    report = mint_one("octo__repo-2", cfg, **_mint_one_seams(prepare, factory))
+
+    # Only the named instance was prepped, driven, and recorded.
+    assert prepare.prepared == ["octo__repo-2"]
+    assert factory.calls == 1
+    assert report.checkpoint.status("octo__repo-2") == "captured"
+    assert report.checkpoint.status("octo__repo-1") is None
+    assert report.counts["captured"] == 1
+    assert report.counts["failed"] == 0
+    assert report.instance_ids == ("octo__repo-2",)
+
+    # The REAL `bridge_capture` ran: the layout the stock `belay phase0 run` resolves.
+    assert (cfg.batch_dir / "trace-octo__repo-2.jsonl").is_file()
+    assert (cfg.batch_dir / "trace-octo__repo-2.manifests").is_dir()
+    assert report.batch_dir == cfg.batch_dir
+    assert report.checkpoint_path == cfg.checkpoint_path
+    assert cfg.checkpoint_path.is_file()
+
+
+def test_unknown_instance_id_is_a_named_error_listing_candidates(
+    tmp_path: Path,
+) -> None:
+    """A typo'd id says so; it never mints nothing and calls that a run.
+
+    An empty mint is not a null result — `belay phase0 run` reads it as
+    `INSTRUMENT SUSPECT`, i.e. a *fake* PIVOT caused by operator setup.
+    """
+    server_root = tmp_path / "servers"
+    _install_stub_server(server_root)
+    registry = _write_registry(tmp_path / "registry.json", ["octo__repo-1", "octo__repo-2"])
+    cfg = MintConfig(
+        root=tmp_path / "mint", registry_path=registry, server_root=server_root
+    )
+    prepare = StubPrepare()
+
+    with pytest.raises(UnknownInstanceError) as excinfo:
+        mint_one("octo__repo-typo", cfg, **_mint_one_seams(prepare, SpyModelFactory()))
+
+    message = str(excinfo.value)
+    assert "octo__repo-typo" in message
+    assert "2" in message, "the error must say how many records the registry does hold"
+    assert prepare.prepared == [], "nothing may be prepped for an id that does not exist"
+
+
+def test_missing_registry_file_names_the_instance_pool_aspect(tmp_path: Path) -> None:
+    """An absent `--registry` is a named error, not a `FileNotFoundError` traceback.
+
+    `eval/instances/selected.json` is the `instance-pool` aspect's deliverable and may not
+    exist yet; the two aspects are order-independent, so this path must be legible.
+    """
+    server_root = tmp_path / "servers"
+    _install_stub_server(server_root)
+    cfg = MintConfig(
+        root=tmp_path / "mint",
+        registry_path=tmp_path / "nope" / "selected.json",
+        server_root=server_root,
+    )
+
+    with pytest.raises(RegistryNotFoundError) as excinfo:
+        mint_one(
+            "octo__repo-1", cfg, **_mint_one_seams(StubPrepare(), SpyModelFactory())
+        )
+
+    message = str(excinfo.value)
+    assert "selected.json" in message
+    assert "instance-pool" in message
+
+
+def test_verify_command_is_printed_with_the_workspace_placeholder(
+    tmp_path: Path,
+) -> None:
+    """The reproduce-the-number command uses `{workspace}`, and takes no `--` separator.
+
+    One static `--server` command verifies a heterogeneous batch: replay substitutes each
+    trace's OWN recorded `source_root` for the placeholder, which is strictly more correct
+    than restating a root the trace already carries. And `--server` is `nargs=REMAINDER`,
+    so a `--` separator would be passed to `node`, not consumed by argparse.
+    """
+    from belay.replay.engine import WORKSPACE_PLACEHOLDER as ENGINE_PLACEHOLDER
+
+    # `eval/` may not import `belay`, so the literal is restated — pinned here so the two
+    # can never drift apart silently.
+    assert WORKSPACE_PLACEHOLDER == ENGINE_PLACEHOLDER
+
+    server_root = tmp_path / "servers"
+    entrypoint = _install_stub_server(server_root)
+    registry = _write_registry(tmp_path / "registry.json", ["octo__repo-1"])
+    cfg = MintConfig(
+        root=tmp_path / "mint", registry_path=registry, server_root=server_root
+    )
+
+    report = mint_one(
+        "octo__repo-1", cfg, **_mint_one_seams(StubPrepare(), SpyModelFactory())
+    )
+
+    command = report.verify_command
+    assert "belay phase0 run" in command
+    assert str(cfg.batch_dir) in command
+    assert WORKSPACE_PLACEHOLDER in command
+    assert str(entrypoint.resolve()) in command
+    assert " -- " not in command, "--server is nargs=REMAINDER; a separator would reach node"
+    # The report renders the command it carries — the printed line IS the artifact.
+    assert command in report.render()
