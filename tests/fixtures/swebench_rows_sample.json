@@ -1,0 +1,172 @@
+{
+  "_note": "A HAND-WRITTEN slice in the shape recorded from the HuggingFace datasets-server /rows endpoint for princeton-nlp/SWE-bench_Lite (config=default, split=test): {'features': [...], 'rows': [{'row_idx': int, 'row': {...}, 'truncated_cells': []}], 'num_rows_total': int}. Only instance_id, repo, base_commit, problem_statement and patch are consumed; the other row fields are kept so the shape stays honest. Six rows on purpose: 2 keepers, 1 known-excluded repo, 1 oversized patch, 1 overlong problem statement, 1 unknown repo.",
+  "features": [
+    {
+      "feature_idx": 0,
+      "name": "instance_id",
+      "type": {
+        "dtype": "string",
+        "_type": "Value"
+      }
+    },
+    {
+      "feature_idx": 1,
+      "name": "repo",
+      "type": {
+        "dtype": "string",
+        "_type": "Value"
+      }
+    },
+    {
+      "feature_idx": 2,
+      "name": "base_commit",
+      "type": {
+        "dtype": "string",
+        "_type": "Value"
+      }
+    },
+    {
+      "feature_idx": 3,
+      "name": "problem_statement",
+      "type": {
+        "dtype": "string",
+        "_type": "Value"
+      }
+    },
+    {
+      "feature_idx": 4,
+      "name": "patch",
+      "type": {
+        "dtype": "string",
+        "_type": "Value"
+      }
+    },
+    {
+      "feature_idx": 5,
+      "name": "hints_text",
+      "type": {
+        "dtype": "string",
+        "_type": "Value"
+      }
+    },
+    {
+      "feature_idx": 6,
+      "name": "test_patch",
+      "type": {
+        "dtype": "string",
+        "_type": "Value"
+      }
+    },
+    {
+      "feature_idx": 7,
+      "name": "created_at",
+      "type": {
+        "dtype": "string",
+        "_type": "Value"
+      }
+    },
+    {
+      "feature_idx": 8,
+      "name": "version",
+      "type": {
+        "dtype": "string",
+        "_type": "Value"
+      }
+    }
+  ],
+  "rows": [
+    {
+      "row_idx": 0,
+      "row": {
+        "instance_id": "pallets__flask-4045",
+        "repo": "pallets/flask",
+        "base_commit": "d8c37f43724cd9fb0870f77877b7c4c7e38a19e0",
+        "problem_statement": "Raise an error when a blueprint name contains a dot.\n\nNested blueprints are registered with a dotted name, so a dot in a blueprint's own name is now ambiguous.",
+        "patch": "diff --git a/src/flask/blueprints.py b/src/flask/blueprints.py\n--- a/src/flask/blueprints.py\n+++ b/src/flask/blueprints.py\n@@ -188,6 +188,9 @@ def __init__(\n         self.cli_group = cli_group\n         self._blueprints = []\n \n+        if \".\" in name:\n+            raise ValueError(\"'name' may not contain a dot '.' character.\")\n+\n",
+        "hints_text": "",
+        "test_patch": "",
+        "created_at": "2021-05-13T22:52:38Z",
+        "version": "2.0"
+      },
+      "truncated_cells": []
+    },
+    {
+      "row_idx": 1,
+      "row": {
+        "instance_id": "psf__requests-2317",
+        "repo": "psf/requests",
+        "base_commit": "091991be0da19de9108dbe5e3752917fea3d7fdc",
+        "problem_statement": "method = builtin_str(method) misbehaves on Python 3 when the method is a binary string.",
+        "patch": "diff --git a/requests/sessions.py b/requests/sessions.py\n--- a/requests/sessions.py\n+++ b/requests/sessions.py\n@@ -425,7 +425,7 @@ def request(self, method, url,\n-        method = builtin_str(method)\n+        method = to_native_string(method)\n",
+        "hints_text": "",
+        "test_patch": "",
+        "created_at": "2014-11-08T00:00:00Z",
+        "version": "2.4"
+      },
+      "truncated_cells": []
+    },
+    {
+      "row_idx": 2,
+      "row": {
+        "instance_id": "matplotlib__matplotlib-23913",
+        "repo": "matplotlib/matplotlib",
+        "base_commit": "3eadeacc06c9f2ddcdac6ae39f9ea0d0ea11d8ba",
+        "problem_statement": "legend draggable as keyword argument.",
+        "patch": "diff --git a/lib/matplotlib/legend.py b/lib/matplotlib/legend.py\n--- a/lib/matplotlib/legend.py\n+++ b/lib/matplotlib/legend.py\n@@ -100,6 +100,7 @@\n+        draggable=False,\n",
+        "hints_text": "",
+        "test_patch": "",
+        "created_at": "2022-09-16T00:00:00Z",
+        "version": "3.6"
+      },
+      "truncated_cells": []
+    },
+    {
+      "row_idx": 3,
+      "row": {
+        "instance_id": "django__django-99001",
+        "repo": "django/django",
+        "base_commit": "0f4e1a37e0b8c8d0f14cbf35a9d0f0ea5a2a4d4f",
+        "problem_statement": "A wide refactor of the queryset combinator handling.",
+        "patch": "diff --git a/django/db/models/query.py b/django/db/models/query.py\n--- a/django/db/models/query.py\n+++ b/django/db/models/query.py\n@@ -10,4 +10,20 @@\n-    old_line_0\n+    new_line_0\n-    old_line_1\n+    new_line_1\n-    old_line_2\n+    new_line_2\n-    old_line_3\n+    new_line_3\n-    old_line_4\n+    new_line_4\n-    old_line_5\n+    new_line_5\n-    old_line_6\n+    new_line_6\n-    old_line_7\n+    new_line_7\n",
+        "hints_text": "",
+        "test_patch": "",
+        "created_at": "2023-01-01T00:00:00Z",
+        "version": "4.2"
+      },
+      "truncated_cells": []
+    },
+    {
+      "row_idx": 4,
+      "row": {
+        "instance_id": "sympy__sympy-99002",
+        "repo": "sympy/sympy",
+        "base_commit": "1923822ddf8265199dbd9ef9ce09641d3fd042b9",
+        "problem_statement": "Sympy sentence number 0 describing the reported defect in detail. Sympy sentence number 1 describing the reported defect in detail. Sympy sentence number 2 describing the reported defect in detail. Sympy sentence number 3 describing the reported defect in detail. Sympy sentence number 4 describing the reported defect in detail. Sympy sentence number 5 describing the reported defect in detail. Sympy sentence number 6 describing the reported defect in detail. Sympy sentence number 7 describing the reported defect in detail. Sympy sentence number 8 describing the reported defect in detail. Sympy sentence number 9 describing the reported defect in detail. Sympy sentence number 10 describing the reported defect in detail. Sympy sentence number 11 describing the reported defect in detail. Sympy sentence number 12 describing the reported defect in detail. Sympy sentence number 13 describing the reported defect in detail. Sympy sentence number 14 describing the reported defect in detail. Sympy sentence number 15 describing the reported defect in detail. Sympy sentence number 16 describing the reported defect in detail. Sympy sentence number 17 describing the reported defect in detail. Sympy sentence number 18 describing the reported defect in detail. Sympy sentence number 19 describing the reported defect in detail. Sympy sentence number 20 describing the reported defect in detail. Sympy sentence number 21 describing the reported defect in detail. Sympy sentence number 22 describing the reported defect in detail. Sympy sentence number 23 describing the reported defect in detail. Sympy sentence number 24 describing the reported defect in detail. Sympy sentence number 25 describing the reported defect in detail. Sympy sentence number 26 describing the reported defect in detail. Sympy sentence number 27 describing the reported defect in detail. Sympy sentence number 28 describing the reported defect in detail. Sympy sentence number 29 describing the reported defect in detail. Sympy sentence number 30 describing the reported defect in detail. Sympy sentence number 31 describi",
+        "patch": "diff --git a/sympy/core/mul.py b/sympy/core/mul.py\n--- a/sympy/core/mul.py\n+++ b/sympy/core/mul.py\n@@ -20,3 +20,3 @@\n-    return coeff\n+    return coeff.simplify()\n",
+        "hints_text": "",
+        "test_patch": "",
+        "created_at": "2023-02-02T00:00:00Z",
+        "version": "1.12"
+      },
+      "truncated_cells": []
+    },
+    {
+      "row_idx": 5,
+      "row": {
+        "instance_id": "acme__widget-1",
+        "repo": "acme/widget",
+        "base_commit": "5f0c3f2b1a9d4e6c8b7a0d1e2f3a4b5c6d7e8f90",
+        "problem_statement": "A repository that is in neither the allow-list nor the known-excluded list.",
+        "patch": "diff --git a/widget.py b/widget.py\n--- a/widget.py\n+++ b/widget.py\n@@ -1,2 +1,2 @@\n-x = 1\n+x = 2\n",
+        "hints_text": "",
+        "test_patch": "",
+        "created_at": "2024-03-03T00:00:00Z",
+        "version": "0.1"
+      },
+      "truncated_cells": []
+    }
+  ],
+  "num_rows_total": 300,
+  "num_rows_per_page": 100,
+  "partial": false
+}
