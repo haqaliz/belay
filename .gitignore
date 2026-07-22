@@ -20,6 +20,20 @@ dist/
 /_sandbox/
 /corpus/local/
 
+# Pre-installed MCP servers for the eval mint. Installed OUTSIDE the sandbox by a
+# documented `npm install` (see eval/README.md) and invoked by absolute `node` path:
+# `npx -y` cannot be used behind the gated proxy, which denies both network and
+# writes to ~/.npm by design. Third-party JS, pinned but never vendored.
+/eval/servers/
+
+# Cached bare clones per repo for the eval mint's per-instance worktrees — the user's
+# run data, never committed (no-egress guardrail).
+/eval/clones/
+
+# The batch driver's mint output (per-instance workspaces/traces/snapshots + the bridged
+# batch dir + the resume checkpoint) — the user's run data, never committed.
+/eval/mint/
+
 # Dashboard
 node_modules/
 .next/

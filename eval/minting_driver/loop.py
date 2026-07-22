@@ -43,7 +43,7 @@ class Transport(Protocol):
     inheritance required.
     """
 
-    def request(self, obj: dict) -> dict: ...
+    def request(self, obj: dict, timeout: float = ...) -> dict: ...
 
     def notify(self, obj: dict) -> None: ...
 
@@ -72,6 +72,7 @@ def run_task(
     system: str,
     task: str,
     max_steps: int,
+    request_timeout: Optional[float] = None,
 ) -> Transcript:
     """Drive one sequential MCP agent turn-loop to completion.
 
@@ -82,11 +83,23 @@ def run_task(
     its reply, append the parsed result to `messages`, repeat." The model is never asked
     for a step beyond the budget: the loop calls `propose_next` at most `max_steps`
     times, so a model that never says `Done` still only issues `max_steps` tool calls.
+
+    `request_timeout` is the per-request ceiling applied to *every* `transport.request`
+    — the `initialize` cold start and each shell `tools/call` alike. `None` (the default)
+    passes no `timeout` kwarg at all, so the transport falls back to its own
+    `DEFAULT_TIMEOUT`; this keeps the no-argument path byte-identical to before the knob
+    existed. A float raises the ceiling for a slow cold start or a long-running command.
     """
+
+    def _request(obj: dict) -> dict:
+        if request_timeout is None:
+            return transport.request(obj)
+        return transport.request(obj, timeout=request_timeout)
+
     next_id = MonotonicIds()
-    transport.request(initialize(next_id()))
+    _request(initialize(next_id()))
     transport.notify(initialized())
-    transport.request(tools_list(next_id()))
+    _request(tools_list(next_id()))
 
     messages: list[Message] = [
         Message(role="system", content=system),
@@ -101,7 +114,7 @@ def run_task(
                 messages=messages, tool_calls=tool_calls, stop_reason="done", done=step
             )
         tool_calls.append(step)
-        reply = transport.request(tools_call(next_id(), step.name, step.arguments))
+        reply = _request(tools_call(next_id(), step.name, step.arguments))
         messages.append(parse_tools_call_reply(reply))
 
     return Transcript(messages=messages, tool_calls=tool_calls, stop_reason="max_steps")

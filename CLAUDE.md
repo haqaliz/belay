@@ -24,10 +24,40 @@ This file orients a coding agent working in this repository. Read it first.
 > placed behind `python -m belay.proxy`, one `tools/call` in flight at a time (R7 by construction; all
 > edits cross the MCP boundary, R6 by construction). The deterministic "never >1 in flight" control-flow
 > test runs in CI; the single-instance live smoke is `manual`-marked and never in CI. See `eval/README.md`.
-> **Next: run the live Phase-0 mint and publish the number** — drive ≥50 SWE-bench-lite instances through
-> the proxy with the driver (start with the one curated instance in `eval/instances.md`, verify before
-> scaling), audit the flags, and fill `docs/technical/PHASE0_RESULTS.md`; then C7 (live console — first
-> UI). C8 (A3 claim re-derivation) and C9 (observability interop) are cuttable, last.
+> **The Phase-0 batch mint harness is built** (`eval/minting_driver/{batch,bridge,checkpoint,workspace}.py`
+> + `eval/instances/`, eval-only): a stratified instance registry (166 strict-eligible SWE-bench-lite
+> instances vs the ≥50 needed; the draw balances the 83% django+sympy concentration so the number isn't a
+> django/sympy number), per-instance workspace prep at `base_commit` via cached bare clones, and a
+> sequential, resumable, error-contained `run_mint` that drives each instance through the gated proxy and
+> **renames each capture into the layout the stock `belay phase0 run` resolves** (`bridge_capture` — a
+> mis-wire here would read as `INSTRUMENT SUSPECT`, a fake PIVOT, so it is the aspect's load-bearing test).
+> All deterministic and offline; the live mint stays `manual`. **A real defect was found and fixed by
+> running the live smoke for the first time: `npx -y` cannot spawn a server behind the gated proxy** (the
+> contained run denies network and `~/.npm` writes by design, so npx hangs); servers are now pre-installed
+> into a gitignored `eval/servers/` and launched by absolute `node` path. See `eval/README.md`.
+> **Stage 1 of the live mint ran and PROVED the harness end-to-end** — `run_mint` → real git clone at
+> `base_commit` → gated capture → bridge → stock `belay phase0 run` → replay, on `pallets__flask-4045` via
+> BYOK (Ollama, then Gemini's OpenAI-compat endpoint). It also surfaced a core-engine replay-fidelity bug
+> that **has now been fixed** (see next).
+> **Replay is now faithful for absolute-path MCP servers** (`replay-absolute-path-fidelity`, merged): replay
+> restores into a scratch dir and sets the server's **cwd** there, so it was faithful only for
+> **cwd-relative** servers — the reference filesystem server (absolute `allowed_dir` / absolute paths)
+> bypassed the scratch restore, contaminating verdicts with live workspace state in **both** directions
+> (false-positive reads, and false-negative denied-writes that read as an empty delta). Fixed: the gate
+> records the original workspace root in each snapshot manifest (`source_root`), and replay **relocates** it
+> — the argv root token and any argument whose *whole value* is an in-root absolute path are rewritten to
+> the scratch (content untouched), the reply comparison substring-normalizes both roots (comparison-only),
+> and a rootless trace that needs relocation is `UNVERIFIED` (never guessed). Gated/additive: cwd-relative
+> servers are byte-unchanged. Proven by 9 acceptance criteria incl. a verdict identical across original
+> pristine/mutated/**deleted**. Shell `command_line`-embedded paths are the `replay-relocation-shell`
+> follow-up. See `docs/planning/replay-absolute-path-fidelity/`.
+> **Next: re-mint the Stage-1 instance to confirm the false positive is gone in the wild, then run the
+> staged live mint and publish the number.** Gate criteria are pre-registered in
+> `docs/planning/phase0-live-mint/prd.md`: PROCEED iff ≥3 *independent* hand-audited TPs AND denominator ≥50
+> AND no INSTRUMENT SUSPECT; a FAILing control voids the mint. Stage 2 (~10, measure attrition + cost, fix
+> `selected.json`) → Stage 3 (~65–70, incl. 3 controls) → audit → fill `docs/technical/PHASE0_RESULTS.md` →
+> fix the stale RUNBOOK; then C7 (live console — first UI). C8 (A3 claim re-derivation) and C9
+> (observability interop) are cuttable, last.
 >
 > [`docs/ROADMAP.md`](docs/ROADMAP.md) (phased plan + gates) and
 > [`docs/technical/CAPABILITY_ROADMAP.md`](docs/technical/CAPABILITY_ROADMAP.md)

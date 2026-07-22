@@ -2,6 +2,21 @@
 
 This runbook is the step-by-step procedure to run the Phase-0 corpus mint on SWE-bench-lite and produce the violation-rate number for the gate. Refer to `docs/technical/PHASE0_RESULTS.md` for the templated results and decision rule.
 
+> **⚠️ 2026-07-22 — the number is currently BLOCKED and this runbook is partly stale.**
+> The batch mint harness is built (`eval/minting_driver/{batch,bridge,checkpoint,workspace}.py`,
+> `eval/instances/`) and a live Stage-1 run proved the whole capture→bridge→`phase0 run`
+> plumbing end-to-end. But that run also **confirmed a core-engine replay-fidelity
+> contamination**: filesystem-server replay verdicts move with the *live* workspace state
+> instead of depending only on the restored snapshot, so its FLAGs are false positives.
+> **Do not scale a mint or publish a rate until that is resolved** — see
+> [`docs/planning/phase0-live-mint/mint-execution/STAGE1_FINDINGS.md`](../phase0-live-mint/mint-execution/STAGE1_FINDINGS.md)
+> (finding #3). The command-level steps below are also being superseded by the built
+> harness; where they conflict with STAGE1_FINDINGS §4, the findings note is authoritative.
+> Confirmed corrections already known: MCP servers are **pre-installed** and launched by
+> absolute `node` path (never `npx -y` behind the proxy); `belay phase0 run --server` takes
+> **no `--` separator**; traces are `trace-<ts>-<hex>.jsonl` (renamed to `trace-<id>` by the
+> bridge), not `trace-<instance-id>` at capture time.
+
 ---
 
 ## Prerequisites

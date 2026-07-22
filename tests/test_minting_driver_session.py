@@ -114,6 +114,55 @@ def test_run_session_closes_transport_exactly_once_when_run_task_raises() -> Non
     assert transport.close_count == 1
 
 
+class TimeoutRecordingTransport(FakeCloseCountingTransport):
+    """`FakeCloseCountingTransport` that also records the `timeout` each `request`
+    receives (`None` when the kwarg is omitted), so a test can assert `run_session`
+    forwards its `request_timeout` down into every `run_task` -> `transport.request`."""
+
+    def __init__(self, tool_replies: dict[str, dict] | None = None) -> None:
+        super().__init__(tool_replies)
+        self.timeouts: list[float | None] = []
+
+    def request(self, obj: dict, timeout: float | None = None) -> dict:
+        self.timeouts.append(timeout)
+        return super().request(obj)
+
+
+def test_run_session_forwards_request_timeout_to_run_task() -> None:
+    transport = TimeoutRecordingTransport()
+    model = ScriptedModel([ToolCall(name="noop", arguments={}), Done(reason="done")])
+
+    run_session(
+        model,
+        server_command=["fake-server"],
+        env={},
+        system="s",
+        task="t",
+        max_steps=10,
+        transport_factory=lambda command, env: transport,
+        request_timeout=45.0,
+    )
+
+    assert transport.timeouts == [45.0, 45.0, 45.0]
+
+
+def test_run_session_defaults_request_timeout_to_none_omitting_the_kwarg() -> None:
+    transport = TimeoutRecordingTransport()
+    model = ScriptedModel([ToolCall(name="noop", arguments={}), Done(reason="done")])
+
+    run_session(
+        model,
+        server_command=["fake-server"],
+        env={},
+        system="s",
+        task="t",
+        max_steps=10,
+        transport_factory=lambda command, env: transport,
+    )
+
+    assert transport.timeouts == [None, None, None]
+
+
 def test_run_session_passes_server_command_and_env_to_factory() -> None:
     seen: dict = {}
 
