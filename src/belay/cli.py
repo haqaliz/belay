@@ -1010,6 +1010,17 @@ def _cmd_phase0_run(args: argparse.Namespace) -> int:
     `trace-dir`, a malformed `--invariants` file -- never "violations were found". A ledger
     full of VERIFIED_FLAGGED instances still exits 0; only `belay verify`/`belay corpus run`
     are the pass/fail gates.
+
+    `--server` takes ONE command for the whole batch, but a Phase-0 batch is HETEROGENEOUS:
+    its traces were captured from different workspaces. Write the literal `{workspace}`
+    (quoted, as a whole argument) where the server's allow-root goes and replay substitutes
+    each trace's OWN recorded `source_root` before relocating it into the scratch --
+
+        belay phase0 run traces/ --server node fs-server.js '{workspace}'
+
+    A trace that recorded no root is UNVERIFIED, never rooted at a guess; a command that
+    cannot be rooted at the recorded workspace is UNVERIFIED too, and both appear by name in
+    the report's UNVERIFIED-by-cause table rather than as a fabricated FAIL.
     """
     from datetime import datetime, timezone
 
@@ -1487,7 +1498,12 @@ def _parser() -> argparse.ArgumentParser:
         nargs=argparse.REMAINDER,
         default=[],
         metavar="cmd ...",
-        help="the MCP server to replay against; everything after --server is its command",
+        help=(
+            "the MCP server to replay against; everything after --server is its command. "
+            "A whole argument equal to the literal {workspace} is replaced, per trace, with "
+            "that trace's own recorded workspace root -- so ONE command verifies a batch "
+            "captured from many workspaces (quote it: '{workspace}')"
+        ),
     )
     phase0_run.set_defaults(func=_cmd_phase0_run)
 

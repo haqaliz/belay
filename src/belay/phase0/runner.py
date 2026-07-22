@@ -87,12 +87,13 @@ def run_batch(
     trace_dir: Path,
     *,
     corpus_dir: Path,
-    server_command: list[str],
+    server_command: list[str] | None = None,
     invariants: Sequence[Invariant],
     captured_at: str,
     replays: int = 3,
     timeout: float = DEFAULT_TIMEOUT,
     manifest_dir_for: Callable[[Path], Path] = default_manifest_dir_for,
+    server_command_for: Callable[[Path], list[str]] | None = None,
     verifier: Callable[..., TurnVerdict] = verify_turn,
     ingester: Callable[..., Path] = add_case,
 ) -> RunLedger:
@@ -102,7 +103,22 @@ def run_batch(
     the same directory produces instances in the same sequence. Each trace's `source_trace_id`
     is its file stem. See the module docstring for the disposition rule and the ERRORED
     exception boundary.
+
+    The server command is resolved PER TRACE. `server_command_for(trace_path) -> list[str]`
+    is the library seam (what `eval/` calls) for a batch whose traces need different
+    commands; the plain `server_command` list stays the ordinary case and is simply wrapped
+    in a constant resolver, so every existing caller is unaffected. Note that varying the
+    *workspace root* alone needs NEITHER: `belay.replay.engine.WORKSPACE_PLACEHOLDER`
+    (`{workspace}`) in one static command is substituted with each trace's own recorded
+    `source_root`, which is strictly more correct than restating a root the trace carries.
+    Exactly one of the two must be given.
     """
+    if (server_command is None) == (server_command_for is None):
+        raise TypeError("run_batch requires exactly one of server_command / server_command_for")
+    if server_command_for is None:
+        constant = list(server_command or [])
+        server_command_for = lambda _trace_path: constant  # noqa: E731
+
     instances: list[InstanceRecord] = []
 
     for trace_path in sorted(Path(trace_dir).glob("trace-*.jsonl")):
@@ -112,7 +128,7 @@ def run_batch(
                 trace_path,
                 source_trace_id=source_trace_id,
                 corpus_dir=corpus_dir,
-                server_command=server_command,
+                server_command=server_command_for(trace_path),
                 invariants=invariants,
                 captured_at=captured_at,
                 replays=replays,
