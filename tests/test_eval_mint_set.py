@@ -22,18 +22,27 @@ asserted on.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from pathlib import Path
+
+import pytest
 
 from eval.instances import tasks
 from eval.instances.controls import CONTROL_EXPECTATIONS, CONTROL_RECORDS
 from eval.instances.registry import (
     InstanceRecord,
     controls,
+    dump_registry,
     load_header,
     load_registry,
     real,
 )
-from eval.instances.selection import PURE_PYTHON_REPOS
+from eval.instances.selection import (
+    LARGE_REPOS,
+    PURE_PYTHON_REPOS,
+    InsufficientPoolError,
+)
+from eval.scripts.draw_mint_set import SEED, TARGET, build_selection
 from eval.scripts.fetch_swebench_pool import (
     CONFIG,
     DATASET,
@@ -44,6 +53,7 @@ from eval.scripts.fetch_swebench_pool import (
 
 REPO_ROOT = Path(__file__).parent.parent
 POOL = REPO_ROOT / "eval" / "instances" / "pool.json"
+SELECTED = REPO_ROOT / "eval" / "instances" / "selected.json"
 INSTANCES_DOC = REPO_ROOT / "eval" / "instances.md"
 
 #: `owner/name`, anchored — the same shape `workspace.py` expands into a clone URL.
@@ -300,3 +310,146 @@ def test_control_repos_and_commits_come_from_the_pool() -> None:
             f"{record.instance_id}: ({record.repo}, {record.base_commit}) is neither in "
             f"the committed pool nor documented in eval/instances.md"
         )
+
+
+# --------------------------------------------------------------------------------------
+# The draw (D4) and the committed `selected.json`. The draw fixes what the published
+# number covers, so it must be a pure function of `(pool, target, seed)` and the committed
+# artifact must be exactly what that function produces — checked byte-for-byte, which also
+# pins the key order and the trailing newline.
+# --------------------------------------------------------------------------------------
+
+
+def test_draw_is_reproducible_from_seed(tmp_path: Path) -> None:
+    """AC2, in its strongest form: the committed bytes are re-derivable, not just the ids.
+
+    A weaker "the instance ids match" assertion would pass while the header drifted, and
+    the header is where the seed, the composition and the control expectations live — the
+    part of the file a reviewer would use to falsify the published number.
+    """
+    pool = load_registry(POOL)
+    records, header = build_selection(pool)
+
+    redrawn = tmp_path / "selected.json"
+    dump_registry(records, redrawn, header=header)
+
+    assert redrawn.read_bytes() == SELECTED.read_bytes(), (
+        "re-running the draw from the committed pool did not reproduce the committed "
+        "selected.json byte-for-byte; the seed, the target, the control set or the "
+        "writer changed without the artifact being regenerated"
+    )
+
+
+def test_selected_registry_is_68_records_with_3_controls() -> None:
+    """The launched set in one assertion: 65 drawn + 3 controls (D4, a decision).
+
+    These are the only literal counts in this file, and they are here deliberately: they
+    are choices, not measurements, so they *should* break loudly if someone changes them.
+    """
+    records = load_registry(SELECTED)
+
+    assert len(records) == LAUNCH_SIZE
+    assert len(real(records)) == TARGET
+    assert controls(records) == CONTROL_RECORDS, (
+        "the committed selection's controls are not the three in controls.py, in order"
+    )
+    assert records[: len(real(records))] == real(records), (
+        "controls must be appended after the draw, not interleaved with it"
+    )
+
+
+def test_draw_composition_is_stratified() -> None:
+    """AC3. The scarce diversity is never wasted and the top-up is balanced.
+
+    No literal per-repo counts: a refetched pool may shift the small stratum by one or
+    two, and hard-coding 28/19/18 here would be "fixed" by editing the data. The
+    properties survive a regeneration; the numbers would not.
+    """
+    pool = load_registry(POOL)
+    drawn = real(load_registry(SELECTED))
+    drawn_ids = {record.instance_id for record in drawn}
+
+    small_in_pool = {
+        record.instance_id for record in pool if record.repo not in LARGE_REPOS
+    }
+    assert small_in_pool <= drawn_ids, (
+        f"small-repo instances are the scarce diversity and none may be wasted; missing: "
+        f"{sorted(small_in_pool - drawn_ids)}"
+    )
+
+    by_repo = Counter(record.repo for record in drawn)
+    assert set(by_repo) <= set(PURE_PYTHON_REPOS)
+    django, sympy = by_repo["django/django"], by_repo["sympy/sympy"]
+    assert abs(django - sympy) <= 1, (
+        f"the large-repo top-up is not balanced: django={django}, sympy={sympy}; the "
+        f"dataset's 83% django+sympy concentration would then become the sample's"
+    )
+
+
+def test_published_composition_matches_the_records() -> None:
+    """AC3's second half: the published table is generated from the file, not typed."""
+    header = load_header(SELECTED)
+    records = load_registry(SELECTED)
+    composition = header["composition"]
+
+    assert composition["launched"] == len(records)
+    assert composition["real"] == len(real(records))
+    assert composition["controls"] == len(controls(records))
+    assert composition["by_repo"] == dict(
+        sorted(Counter(record.repo for record in real(records)).items())
+    ), (
+        "the header's per-repo composition disagrees with the records beside it; the "
+        "published composition would then be unfalsifiable typing"
+    )
+
+
+def test_selected_header_records_the_seed_and_its_history() -> None:
+    """The seed is only honest if it was fixed before the draw was inspected.
+
+    `seed_history` is the only defense against silent seed-shopping that survives review:
+    a re-roll must leave the superseded seed and the reason in the committed file. An
+    empty history is the claim "drawn once, never re-rolled" — and it is a claim someone
+    can check against this file's git history.
+    """
+    header = load_header(SELECTED)
+
+    assert header["seed"] == SEED
+    assert header["target"] == TARGET
+    assert header["control_count"] == len(CONTROL_RECORDS)
+    assert header["seed_rationale"].strip()
+    assert isinstance(header["seed_history"], list)
+    for entry in header["seed_history"]:
+        assert entry["seed"] != header["seed"]
+        assert entry["reason"].strip(), "a superseded seed must carry its reason"
+    assert header["source_pool"] == "eval/instances/pool.json"
+    assert not Path(header["source_pool"]).is_absolute(), (
+        "an absolute path in the header would not reproduce on another machine"
+    )
+
+
+def test_selected_header_publishes_the_control_expectations() -> None:
+    """The controls' expected outcomes travel with the mint set, not in someone's head."""
+    published = load_header(SELECTED)["controls"]
+
+    assert set(published) == {record.instance_id for record in CONTROL_RECORDS}
+    for instance_id, expectation in published.items():
+        stated = CONTROL_EXPECTATIONS[instance_id]
+        assert expectation["expected_verdict"] == stated["expected_verdict"]
+        assert expectation["expected_delta"] == stated["expected_delta"]
+        assert expectation["rationale"] == stated["rationale"]
+        assert expectation["written_paths"] == list(stated["written_paths"]), (
+            "JSON has no tuples; the published write set must round-trip as a list"
+        )
+
+
+def test_insufficient_pool_raises_rather_than_drawing_short() -> None:
+    """AC6. A short draw is a short denominator — the R6 false-zero mode one layer up.
+
+    Asserted against the real pool rather than a fabricated one, so it guards the exact
+    call the draw script makes.
+    """
+    pool = load_registry(POOL)
+    eligible = [record for record in pool if record.repo in PURE_PYTHON_REPOS]
+
+    with pytest.raises(InsufficientPoolError):
+        build_selection(pool, target=len(eligible) + 1)
