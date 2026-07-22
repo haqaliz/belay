@@ -9,6 +9,49 @@ All notable changes to Belay are documented here. The format follows
 
 _Nothing yet._
 
+## [0.4.0] — 2026-07-22
+
+### Fixed
+
+- **Replay is now faithful for absolute-path MCP servers** (`src/belay/replay`, `src/belay/sandbox`,
+  `src/belay/snapshot`). Replay restores a snapshot into a scratch dir and sets the server's **cwd**
+  there, so it was faithful only for **cwd-relative** servers. A server that takes an absolute root at
+  launch and addresses files by absolute path — the reference `@modelcontextprotocol/server-filesystem`
+  — bypassed the scratch restore, contaminating the verdict with **live** workspace state in **both**
+  directions: false-positive reads (they leaked to the current file), and false-negative writes (a
+  corrupt write to the original path was sandbox-denied → empty scratch delta → effect PASS, so a corrupt
+  success went uncaught). The gate now records the original workspace root in each snapshot manifest
+  (`source_root`), and replay **relocates** it: the server argv root token and any argument whose *whole
+  value* is an in-root absolute path are rewritten to the scratch (file **content** is never touched),
+  and the reply comparison substring-normalizes both roots (comparison-only). A trace lacking a recorded
+  root that needs relocation is **`UNVERIFIED`** with a named cause, never guessed. **Gated and
+  additive** — cwd-relative servers are byte-unchanged. Proven by 9 acceptance criteria, including a
+  verdict identical across the original workspace being pristine, mutated, and deleted. Found by the
+  first live Phase-0 mint. Shell servers that embed paths inside command strings (`command_line`) are a
+  tracked follow-up (`replay-relocation-shell`).
+
+### Added
+
+- **Phase-0 batch mint harness** (`eval/minting_driver/{batch,bridge,checkpoint,workspace}.py`,
+  `eval/instances/`, eval-only). A stratified SWE-bench-lite instance registry (the draw balances the
+  django+sympy concentration so the published number isn't an artifact of two repos), per-instance
+  workspace prep at `base_commit` via cached bare clones, and a sequential, resumable, error-contained
+  `run_mint` that drives each instance through the gated proxy and renames each capture into the layout
+  the stock `belay phase0 run` resolves. Includes a configurable replay/request timeout threaded through
+  `run_session`, and an end-to-end test that a short-denominator mint reads as `INSTRUMENT SUSPECT`
+  (the R6 false-zero defense) rather than a clean 0%. See `docs/planning/phase0-live-mint/`.
+
+### Notes
+
+- **`npx -y` cannot spawn a server behind the gated proxy** — the contained run denies network and
+  `~/.npm` writes by design, so `npx` hangs (npm misreports it as a "root-owned cache" bug). The eval
+  harness now **pre-installs** the pinned MCP servers into a gitignored `eval/servers/` and launches them
+  by absolute `node` path. Documented in `eval/README.md`.
+- The batch harness is **eval-only** and not part of the shipped `belay-harness` wheel. The
+  product-affecting change in this release is the replay-fidelity fix above.
+- The live Phase-0 mint and its published number remain the next step: re-mint the Stage-1 instance to
+  confirm the false positive is gone, then run the staged mint against the pre-registered gate criteria.
+
 ## [0.3.0] — 2026-07-21
 
 ### Added

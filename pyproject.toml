@@ -7,7 +7,7 @@ build-backend = "hatchling.build"
 # PyPI (an unrelated MicroPython tool). The import package and the CLI stay `belay`:
 #   pip install belay-harness   ->   belay --help   /   import belay
 name = "belay-harness"
-version = "0.3.0"
+version = "0.4.0"
 description = "The agent harness: sandbox any agent, verify each step by replaying it against real state, and keep a deterministic trace."
 readme = "README.md"
 requires-python = ">=3.10"
