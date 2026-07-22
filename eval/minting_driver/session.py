@@ -48,6 +48,7 @@ def run_session(
     task: str,
     max_steps: int,
     transport_factory: Optional[TransportFactory] = None,
+    request_timeout: Optional[float] = None,
 ) -> Transcript:
     """Construct a transport for `server_command`/`env`, run one task through it, and
     always close it.
@@ -57,11 +58,22 @@ def run_session(
     subprocess and no real model. `close()` is called exactly once, in a `finally`, on
     every path: normal completion, `run_task` hitting `max_steps`, and `run_task`
     raising — the exception still propagates, but the transport is never leaked.
+
+    `request_timeout` is forwarded verbatim to `run_task`, where it becomes the per-request
+    ceiling on every `transport.request`. `None` (the default) leaves the transport's own
+    `DEFAULT_TIMEOUT` in force — byte-identical to before the knob existed.
     """
     factory = transport_factory or _default_transport_factory
     transport = factory(server_command, env)
     try:
-        return run_task(model, transport, system=system, task=task, max_steps=max_steps)
+        return run_task(
+            model,
+            transport,
+            system=system,
+            task=task,
+            max_steps=max_steps,
+            request_timeout=request_timeout,
+        )
     finally:
         transport.close()
 
