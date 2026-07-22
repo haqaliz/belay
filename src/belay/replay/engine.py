@@ -113,6 +113,20 @@ UNROOTABLE_SERVER_COMMAND = (
     "server command is not rooted at the recorded workspace; cannot relocate"
 )
 
+#: The literal argv token an operator writes where the server's workspace allow-root
+#: goes, so ONE server command can verify a batch of traces captured from DIFFERENT
+#: workspaces. Before the relocation gate runs, a token EQUAL to this placeholder is
+#: replaced by that turn's OWN recorded `source_root`; the existing relocation path then
+#: rewrites it to the scratch exactly as it does a hand-written root, so there is one code
+#: path and no second mechanism. Whole-token only — the same whole-value rule
+#: `relocate.remap_argv` applies, so an embedded `--root={workspace}` is NOT substituted
+#: and reads as `UNROOTABLE_SERVER_COMMAND` rather than being silently half-handled. A
+#: placeholder with no recorded root is `ROOTLESS_RELOCATION`: the root genuinely was not
+#: recorded, and no root is ever guessed. Cannot collide with a real argv value: the
+#: substitution is exact-equality against this whole token, and a path is only ever
+#: compared to it literally — nothing is expanded, formatted, or pattern-matched.
+WORKSPACE_PLACEHOLDER = "{workspace}"
+
 #: A sentinel both roots fold to when canonicalizing replies for comparison. NUL-wrapped
 #: so it cannot occur in a filesystem path and thus cannot collide with real reply text.
 _ROOT_PLACEHOLDER = "\x00belay-workspace-root\x00"
@@ -409,6 +423,17 @@ def replay_turn(
     # keeps today's byte-for-byte path.
     snap = load_snapshot(manifest_path)
     source_root = snap.manifest.source_root
+    # Resolve the server's root per TRACE, not per batch: a `{workspace}` token becomes
+    # this turn's own recorded root, and everything downstream (the gate, the relocation,
+    # the spawn) then sees an ordinary rooted command. Without a recorded root there is
+    # nothing to substitute, and guessing one is exactly what UNVERIFIED-never-PASS forbids.
+    if WORKSPACE_PLACEHOLDER in server_command:
+        if source_root is None:
+            return TurnReplay(turn_index=n, status=UNVERIFIED, cause=ROOTLESS_RELOCATION)
+        server_command = [
+            source_root if token == WORKSPACE_PLACEHOLDER else token
+            for token in server_command
+        ]
     relocation_root, fallback_cause = _relocation_decision(
         source_root, _arguments_of(target_message), server_command
     )
@@ -548,7 +573,9 @@ __all__ = [
     "REPLAYED",
     "ROOTLESS_RELOCATION",
     "UNANSWERED_TARGET",
+    "UNROOTABLE_SERVER_COMMAND",
     "UNVERIFIED",
+    "WORKSPACE_PLACEHOLDER",
     "TurnReplay",
     "replay_turn",
 ]
