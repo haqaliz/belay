@@ -11,6 +11,32 @@ relocating the recorded root → the scratch restore, additively and gated. Fix 
 directions the dig confirmed: false-positive reads (leak to live state) and false-negative
 writes (denied → empty delta → effect PASS).
 
+## Shell-server determination (task 1, DONE 2026-07-22)
+
+Read `mcp-server-commands@0.8.2`'s `run_process` schema (`build/tools.js:20-50`): it takes
+`command_line` **or** `argv` (the command — paths appear **embedded inside** these strings),
+plus an optional `cwd` (a clean path field), `stdin_text`, `timeout_ms`.
+
+**Conclusion: the shell server is a DISTINCT, harder problem → filesystem fixed here, shell
+is a follow-up unit** (stated openly per the PRD rule). Reasoning, which also **sharpens the
+filesystem rule**:
+
+- The safe, content-preserving, server-agnostic rule for **mutated arguments** is:
+  **remap a string iff its *entire value* is an absolute path under the recorded root.**
+  This covers the filesystem `path` field and the shell `cwd` field; it **never** touches
+  `content`/`newText`/`oldText` (file content that may legitimately contain the path) — those
+  aren't whole-value paths. Content is preserved by construction, satisfying the PRD's locked
+  content boundary without any per-tool field registry.
+- The shell's `command_line`/`argv` embed paths **inside** a command string (`python
+  /abs/x.py`). The whole-value rule deliberately won't touch them, and a *substring* remap of
+  a mutated command string reopens the content-corruption risk. Faithful shell replay
+  therefore needs command-string-aware relocation — a separate, harder design. Out of scope
+  here; filed as `replay-relocation-shell` follow-up so the Phase-0 number's shell batch is
+  known-contaminated, not silently so.
+- **Asymmetry (the key insight):** *arguments* are mutated → remap **conservatively**
+  (whole-value path only). *Replies* are only compared → normalize **liberally** (substring
+  anywhere, e.g. diff `Index:` lines) because it's transient and can't corrupt anything.
+
 ## In scope
 
 1. **A committed absolute-path fixture server** — takes an absolute root arg and addresses
@@ -22,10 +48,13 @@ writes (denied → empty delta → effect PASS).
    a. **Argv root-token rewrite** — before spawn (`client.py:322`), replace an argv token
       that *is* or is *under* the recorded root with the scratch root
       (`spawn.scope.snapshot_root`). Only in-root tokens; never arbitrary args.
-   b. **`arguments` path-field remap** — recursively over the frame's `arguments` string
-      values, swap the recorded-root prefix → scratch prefix for any value whose realpath'd
-      form is under the recorded root. Re-serialize the frame preserving the JSON-RPC `id`.
-      Content is **not** touched — only `arguments` (see §Content boundary).
+   b. **`arguments` whole-value path remap** — recursively over the frame's `arguments`
+      string values, swap the recorded-root prefix → scratch prefix **only for a string whose
+      *entire value* is an absolute path under the recorded root** (the sharpened rule from
+      the shell determination). This covers filesystem `path` (and shell `cwd`) and **never**
+      touches `content`/`newText`/`oldText`, which are file content — content is preserved by
+      construction, no per-tool field registry. Re-serialize the frame preserving the
+      JSON-RPC `id`.
    c. **Reply comparison normalization** — inside `result_equivalence` (`engine.py:375`),
       canonicalize the recorded reply (original paths) and the replayed reply (scratch
       paths) to the same form by substituting **both** roots (as substrings, anywhere they
