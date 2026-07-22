@@ -35,6 +35,7 @@ from eval.minting_driver.entrypoint import (
     WORKSPACE_PLACEHOLDER,
     MintConfig,
     MintConfigError,
+    MintReport,
     MissingCredentialsError,
     RegistryNotFoundError,
     UnknownInstanceError,
@@ -44,6 +45,7 @@ from eval.minting_driver.entrypoint import (
     mint_one,
     preflight_servers,
     resolve_credentials,
+    run_verify,
 )
 from eval.minting_driver.servers import PINNED_SERVERS, MissingServerError
 from eval.minting_driver.workspace import layout_for
@@ -894,3 +896,50 @@ def test_batch_preflight_runs_before_the_registry_is_read(tmp_path: Path) -> Non
 
     with pytest.raises(MissingServerError):
         mint_from_registry(cfg, **_mint_one_seams(StubPrepare(), SpyModelFactory()))
+
+
+def test_run_verify_scores_the_batch_in_process(tmp_path: Path) -> None:
+    """`--verify` really reaches `belay phase0 run`'s machinery — the lazy import works.
+
+    Run over an EMPTY batch dir, so `run_batch` enumerates zero traces: no replay, no
+    Seatbelt, no subprocess, no spend — but the whole import path, the ledger write and
+    the report render are exercised for real rather than through a stand-in.
+    """
+    batch_dir = tmp_path / "mint" / "batch"
+    batch_dir.mkdir(parents=True)
+    report = MintReport(
+        batch_dir=batch_dir,
+        checkpoint_path=tmp_path / "mint" / "checkpoint.json",
+        checkpoint=Checkpoint(),
+        instance_ids=(),
+        counts={"captured": 0, "failed": 0},
+        verify_command="belay phase0 run ...",
+    )
+
+    ledger_path = tmp_path / "runs" / "phase0.json"
+    code = run_verify(
+        report,
+        server_command=["node", "server.js", WORKSPACE_PLACEHOLDER],
+        ledger_path=ledger_path,
+        corpus_dir=tmp_path / "corpus",
+    )
+
+    assert code == 0
+    assert ledger_path.is_file()
+
+
+def test_run_verify_on_a_missing_batch_dir_is_a_named_failure(tmp_path: Path) -> None:
+    """A batch dir that was never produced is exit 2, not a scored empty run.
+
+    "Nothing to verify" must never render as a clean measurement.
+    """
+    report = MintReport(
+        batch_dir=tmp_path / "never" / "batch",
+        checkpoint_path=tmp_path / "checkpoint.json",
+        checkpoint=Checkpoint(),
+        instance_ids=(),
+        counts={"captured": 0, "failed": 0},
+        verify_command="belay phase0 run ...",
+    )
+
+    assert run_verify(report, server_command=["node", "x"]) == 2

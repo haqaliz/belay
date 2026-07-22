@@ -434,6 +434,15 @@ def select_record(
     )
 
 
+def verify_server_command(entrypoint: StrPath) -> list[str]:
+    """The replay `--server` argv: `node <abs entrypoint> {workspace}`.
+
+    ONE static command for the whole batch. `{workspace}` is a whole argument, which is
+    what makes it substitutable per trace with that trace's own recorded `source_root`.
+    """
+    return ["node", str(entrypoint), WORKSPACE_PLACEHOLDER]
+
+
 def verify_command(
     cfg: MintConfig,
     *,
@@ -585,6 +594,69 @@ def mint_from_registry(cfg: MintConfig, **seams: Any) -> MintReport:
     return _report_for(records, cfg, checkpoint, entrypoint=entrypoint)
 
 
+def run_verify(
+    report: MintReport,
+    *,
+    server_command: Sequence[str],
+    ledger_path: StrPath = DEFAULT_LEDGER_PATH,
+    corpus_dir: StrPath = DEFAULT_CORPUS_DIR,
+) -> int:
+    """Score the batch this mint just captured, in process. **The only `belay` import.**
+
+    Exactly the work `belay phase0 run` does, so `--verify` and the printed command are
+    the same measurement rather than two that could disagree: verify every trace by
+    re-execution, ingest each flagged turn into the corpus, write the ledger, print the
+    Phase-0 report. It is a MEASUREMENT, not a gate — violations present still returns 0;
+    only a hard error (a missing batch dir) returns 2.
+
+    `belay` is imported HERE, lazily, and nowhere else in `eval/`: the mint driver must
+    import and run with `belay` absent from the environment, and `eval/` must never grow
+    into a product surface (`CLAUDE.md` guardrail #1).
+    """
+    import json
+    from datetime import datetime, timezone
+
+    from belay.corpus.case import CASE_FILENAME, load_case
+    from belay.corpus.metrics import score
+    from belay.phase0 import runner as phase0_runner
+    from belay.phase0.ledger import to_json
+    from belay.phase0.report import render_report
+    from belay.verify.invariants import default_invariants
+
+    batch_dir = Path(report.batch_dir)
+    if not batch_dir.is_dir():
+        print(f"mint: nothing to verify, batch directory not found: {batch_dir}")
+        return 2
+
+    ledger = phase0_runner.run_batch(
+        batch_dir,
+        corpus_dir=Path(corpus_dir),
+        server_command=list(server_command),
+        invariants=default_invariants(),
+        # The only clock read in the whole mint path.
+        captured_at=datetime.now(timezone.utc).isoformat(),
+    )
+    Path(ledger_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(ledger_path).write_text(json.dumps(to_json(ledger), indent=2), encoding="utf-8")
+
+    # Same shape as `belay phase0 run`'s own corpus load: an absent corpus dir scores an
+    # empty list (a fresh corpus is not an error), and every case dir that IS there is
+    # loaded fail-closed.
+    cases_dir = Path(corpus_dir)
+    cases = (
+        [
+            load_case(case_dir)
+            for case_dir in sorted(
+                path.parent for path in cases_dir.glob(f"*/{CASE_FILENAME}")
+            )
+        ]
+        if cases_dir.is_dir()
+        else []
+    )
+    print(render_report(ledger, score(cases)))
+    return 0
+
+
 __all__ = [
     "DEFAULT_CLONES_DIR",
     "DEFAULT_CORPUS_DIR",
@@ -612,6 +684,8 @@ __all__ = [
     "mint_one",
     "preflight_servers",
     "resolve_credentials",
+    "run_verify",
     "select_record",
     "verify_command",
+    "verify_server_command",
 ]
