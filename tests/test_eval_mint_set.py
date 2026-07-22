@@ -24,7 +24,15 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from eval.instances.registry import load_header, load_registry
+from eval.instances import tasks
+from eval.instances.controls import CONTROL_EXPECTATIONS, CONTROL_RECORDS
+from eval.instances.registry import (
+    InstanceRecord,
+    controls,
+    load_header,
+    load_registry,
+    real,
+)
 from eval.instances.selection import PURE_PYTHON_REPOS
 from eval.scripts.fetch_swebench_pool import (
     CONFIG,
@@ -34,7 +42,9 @@ from eval.scripts.fetch_swebench_pool import (
     SPLIT,
 )
 
-POOL = Path(__file__).parent.parent / "eval" / "instances" / "pool.json"
+REPO_ROOT = Path(__file__).parent.parent
+POOL = REPO_ROOT / "eval" / "instances" / "pool.json"
+INSTANCES_DOC = REPO_ROOT / "eval" / "instances.md"
 
 #: `owner/name`, anchored — the same shape `workspace.py` expands into a clone URL.
 _SLUG = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$")
@@ -144,3 +154,149 @@ def test_committed_pool_header_counts_match_the_records() -> None:
         "every row the dataset reported must have entered the transform; a mismatch "
         "means the fetch paged short and the pool is drawn from part of the dataset"
     )
+
+
+# --------------------------------------------------------------------------------------
+# The three controls (D6). A control exists to detect *instrument error*: a flag raised on
+# a control is, by construction, a false positive. That only holds if the control cannot
+# fail for an innocent reason, so these tests check the properties that make it so —
+# hand-written (not derived) tasks, no `tests/` path (the default A1 invariant is then
+# unreachable), no shell or network action, and repos/commits that really exist.
+# --------------------------------------------------------------------------------------
+
+#: Words that would put a control's task outside the filesystem server: a shell turn can
+#: trip an invariant, and a network turn is denied by the gate, so either one lets a
+#: control fail for a reason that says nothing about the instrument.
+_OFF_LIMITS_TASK_WORDS = (
+    "shell",
+    "bash",
+    "terminal",
+    "command",
+    "execute",
+    "run ",
+    "pip",
+    "install",
+    "curl",
+    "http://",
+    "https://",
+    "network",
+    "git ",
+)
+
+
+def test_controls_are_marked_by_field_and_separable() -> None:
+    """AC4. `controls()`/`real()` partition on the *field*, never on the id spelling.
+
+    The decoy record's id contains "control" and its `is_control` is False: if the
+    partition were ever "reimplemented" as a name check, that record would be misfiled as
+    a control and the launched set would report 4 controls and 64 real instances — a
+    silently wrong denominator, which is the whole failure mode `is_control` exists to
+    prevent.
+    """
+    assert len(CONTROL_RECORDS) == 3, (
+        f"D6 specifies exactly three controls, found {len(CONTROL_RECORDS)}"
+    )
+    assert all(record.is_control for record in CONTROL_RECORDS)
+
+    decoy = InstanceRecord(
+        instance_id="django__django-control-flow-11099",
+        repo="django/django",
+        base_commit="0" * 40,
+        problem_statement="a real instance whose id merely contains the word control",
+        task_string="Fix the following issue in this repository:\n\nsomething",
+        is_control=False,
+    )
+    mixed = CONTROL_RECORDS + (decoy,)
+
+    assert controls(mixed) == CONTROL_RECORDS
+    assert real(mixed) == (decoy,)
+    assert len(controls(mixed)) + len(real(mixed)) == len(mixed)
+
+
+def test_control_ids_cannot_collide_with_a_drawn_instance() -> None:
+    """`control__*` is a namespace no SWE-bench id uses, so no duplicate can arise."""
+    pool_ids = {record.instance_id for record in load_registry(POOL)}
+
+    for record in CONTROL_RECORDS:
+        assert record.instance_id.startswith("control__")
+        assert record.instance_id not in pool_ids
+    assert len({record.instance_id for record in CONTROL_RECORDS}) == 3
+
+
+def test_control_task_is_trivially_correct() -> None:
+    """AC5. Each control's task is hand-written, filesystem-only, and cannot trip A1."""
+    for record in CONTROL_RECORDS:
+        task = record.task_string
+
+        assert not task.startswith(tasks.TASK_PREFIX), (
+            f"{record.instance_id}: a control's task is hand-written; deriving it from a "
+            f"problem statement would make its expected outcome a guess"
+        )
+        assert task.strip()
+        assert "tests/" not in task, (
+            f"{record.instance_id}: the task names a path under 'tests/', which is the "
+            f"default A1 invariant — the control could then FAIL honestly and void the "
+            f"mint"
+        )
+        lowered = task.lower()
+        for word in _OFF_LIMITS_TASK_WORDS:
+            assert word not in lowered, (
+                f"{record.instance_id}: task mentions {word!r}; controls are "
+                f"filesystem-server-only so they cannot fail for an off-target reason"
+            )
+
+        expectation = CONTROL_EXPECTATIONS[record.instance_id]
+        assert expectation["expected_verdict"].strip()
+        assert expectation["expected_delta"].strip()
+        assert expectation["rationale"].strip()
+
+    assert set(CONTROL_EXPECTATIONS) == {
+        record.instance_id for record in CONTROL_RECORDS
+    }, "every control has a stated expectation and nothing else does"
+
+
+def test_control_writes_are_new_root_level_files_only() -> None:
+    """D6's hard rule: a control never edits an existing file, only adds a root-level one.
+
+    An edit invites the model to improvise — reformat a neighbour, touch a second file —
+    and every improvisation is an innocent-divergence vector under replay.
+    """
+    for record in CONTROL_RECORDS:
+        expectation = CONTROL_EXPECTATIONS[record.instance_id]
+        written = expectation["written_paths"]
+
+        assert isinstance(written, tuple)
+        for path in written:
+            assert "/" not in path, (
+                f"{record.instance_id}: control writes {path!r}, which is not at the "
+                f"repository root"
+            )
+            assert path.startswith("BELAY_CONTROL"), (
+                f"{record.instance_id}: control write {path!r} does not use the "
+                f"collision-proof BELAY_CONTROL prefix"
+            )
+            assert path in record.task_string
+
+
+def test_control_repos_and_commits_come_from_the_pool() -> None:
+    """No invented commits: an invented commit fails at clone time and burns a live run.
+
+    Each control's `(repo, base_commit)` is either a real pair in the committed pool, or
+    the Stage-1 flask commit — which is not in the pool (its instance did not survive the
+    filters) but is documented in `eval/instances.md` and has already been cloned and
+    driven end-to-end for real.
+    """
+    pool_pairs = {(record.repo, record.base_commit) for record in load_registry(POOL)}
+    doc = INSTANCES_DOC.read_text(encoding="utf-8")
+
+    for record in CONTROL_RECORDS:
+        assert record.repo in PURE_PYTHON_REPOS
+        assert re.fullmatch(r"[0-9a-f]{40}", record.base_commit), (
+            f"{record.instance_id}: base_commit {record.base_commit!r} is not a full sha"
+        )
+        in_pool = (record.repo, record.base_commit) in pool_pairs
+        documented = record.base_commit in doc
+        assert in_pool or documented, (
+            f"{record.instance_id}: ({record.repo}, {record.base_commit}) is neither in "
+            f"the committed pool nor documented in eval/instances.md"
+        )
