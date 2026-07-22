@@ -21,6 +21,7 @@ mistake that produces an empty mint, which `belay phase0 run` reads as
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -57,13 +58,13 @@ class FakeOpenAIClient:
         raise AssertionError("no model call may happen in this test")
 
 
-def _record(instance_id: str) -> InstanceRecord:
+def _record(instance_id: str, *, task: str = "make the edit") -> InstanceRecord:
     return InstanceRecord(
         instance_id=instance_id,
         repo="octo/repo",
         base_commit="abc1234",
         problem_statement="an issue to fix",
-        task_string="make the edit",
+        task_string=task,
     )
 
 
@@ -407,3 +408,166 @@ def test_mint_batch_runs_through_the_real_bridge_once_servers_are_present(
     # The layout the stock `belay phase0 run` resolves — the real `bridge_capture` ran.
     assert (cfg.batch_dir / "trace-octo__repo-1.jsonl").is_file()
     assert (cfg.batch_dir / "trace-octo__repo-1.manifests").is_dir()
+
+
+# --------------------------------------------------------------------------------------
+# A fresh model client per instance — instance N never inherits instance N-1
+# --------------------------------------------------------------------------------------
+
+
+class _FakeFunction:
+    def __init__(self, name: str, arguments: str) -> None:
+        self.name = name
+        self.arguments = arguments
+
+
+class _FakeToolCall:
+    def __init__(self, call_id: str, name: str, arguments: str = "{}") -> None:
+        self.id = call_id
+        self.function = _FakeFunction(name, arguments)
+
+
+class _FakeMessage:
+    def __init__(self, content: str | None, tool_calls: list | None = None) -> None:
+        self.content = content
+        self.tool_calls = tool_calls
+
+
+class _FakeChoice:
+    def __init__(self, message: _FakeMessage) -> None:
+        self.message = message
+        self.finish_reason = "stop"
+
+
+class _FakeResponse:
+    def __init__(self, message: _FakeMessage) -> None:
+        self.choices = [_FakeChoice(message)]
+
+
+class ScriptedOpenAIClient:
+    """A fake OpenAI-compatible client: one scripted reply per `create`, all recorded.
+
+    Shaped exactly like the slice of the SDK `LocalOpenAICompatModel` touches
+    (`.chat.completions.create` -> `.choices[0].message.{content,tool_calls}`), so the
+    REAL client class is under test and the `openai` package is never imported.
+    """
+
+    def __init__(self, script: list[_FakeMessage]) -> None:
+        self._script = list(script)
+        self.calls: list[list[dict]] = []
+        self.chat = self  # type: ignore[assignment]
+        self.completions = self  # type: ignore[assignment]
+
+    def create(self, **kwargs: object) -> _FakeResponse:
+        messages = kwargs["messages"]
+        assert isinstance(messages, list)
+        # A deep-enough copy: the model mutates its running list in place.
+        self.calls.append([dict(message) for message in messages])
+        if not self._script:
+            raise AssertionError(
+                "ScriptedOpenAIClient: more calls than scripted replies"
+            )
+        return _FakeResponse(self._script.pop(0))
+
+
+class RecordingModelFactory:
+    """Wraps a real `ModelFactory` and keeps every model it built, in order."""
+
+    def __init__(self, inner: object) -> None:
+        self._inner = inner
+        self.models: list[Any] = []
+
+    def __call__(self, tools: object) -> Any:
+        model = self._inner(tools)  # type: ignore[operator]
+        self.models.append(model)
+        return model
+
+
+def test_fresh_model_client_per_instance(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The factory builds a NEW model on every call — never a cached singleton.
+
+    `run_mint` calls `model_factory` once per instance, and the clients accumulate
+    conversation state (`LocalOpenAICompatModel._openai_messages`). A factory that
+    closed over one pre-built model would hand instance N instance N-1's conversation.
+    Asserted on the REAL class with an injected fake `client=`, not on a stand-in.
+    """
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.invalid/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+
+    factory = make_model_factory(
+        provider="openai-compat",
+        model="gemini-flash-latest",
+        client=FakeOpenAIClient(),
+    )
+    first = factory([])
+    second = factory([])
+
+    assert isinstance(first, LocalOpenAICompatModel)
+    assert isinstance(second, LocalOpenAICompatModel)
+    assert first is not second
+    # Distinct list OBJECTS, not merely equal empty lists — a shared list is exactly how
+    # a "cache the client, it's the same config" refactor would leak the conversation.
+    assert first._openai_messages is not second._openai_messages
+    assert first._seen == 0 and second._seen == 0
+
+
+def test_conversation_state_does_not_bleed_between_instances(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two instances driven through `mint_batch`: the second starts from an empty
+    conversation, even though the first issued a tool call and got a result back."""
+    server_root = tmp_path / "servers"
+    _install_stub_server(server_root)
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.invalid/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+
+    client = ScriptedOpenAIClient(
+        [
+            # Instance 1, turn 1: a tool call (so a `role="tool"` message lands in its
+            # conversation) ...
+            _FakeMessage(None, [_FakeToolCall("call-1", "read_file")]),
+            # ... turn 2: stop.
+            _FakeMessage("instance one done"),
+            # Instance 2, turn 1: stop immediately.
+            _FakeMessage("instance two done"),
+        ]
+    )
+    factory = RecordingModelFactory(
+        make_model_factory(
+            provider="openai-compat", model="gemini-flash-latest", client=client
+        )
+    )
+
+    cfg = MintConfig(root=tmp_path / "mint", server_root=server_root, max_steps=4)
+    checkpoint = mint_batch(
+        [
+            _record("octo__repo-1", task="TASK-ONE"),
+            _record("octo__repo-2", task="TASK-TWO"),
+        ],
+        cfg,
+        model_factory=factory,
+        prepare=StubPrepare(),
+        transport_factory=lambda cmd, env: OkTransport(),
+        discover_tools=lambda cmd: [],
+    )
+
+    assert checkpoint.status("octo__repo-1") == "captured"
+    assert checkpoint.status("octo__repo-2") == "captured"
+    assert len(factory.models) == 2, "one model per instance"
+    assert factory.models[0] is not factory.models[1]
+
+    # Instance 1's conversation really did accumulate a tool result ...
+    first_conversation = factory.models[0]._openai_messages
+    assert any(message["role"] == "tool" for message in first_conversation)
+    assert any(
+        "TASK-ONE" in str(message.get("content")) for message in first_conversation
+    )
+
+    # ... and none of it reached instance 2. Its FIRST request to the endpoint carried
+    # only its own system + task messages: `_seen` was 0 when it began.
+    second_request = client.calls[2]
+    assert [message["role"] for message in second_request] == ["system", "user"]
+    assert second_request[1]["content"] == "TASK-TWO"
+    assert not any(
+        "TASK-ONE" in str(message.get("content")) for message in second_request
+    )

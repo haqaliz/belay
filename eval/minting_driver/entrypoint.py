@@ -254,7 +254,13 @@ def make_model_factory(
         from eval.minting_driver.clients.local_client import LocalOpenAICompatModel
 
         def openai_compat_factory(tools: list[dict]) -> Any:
-            # New model object per instance — see the docstring. Do not hoist.
+            # A NEW model object on every call — never hoisted, never cached.
+            # `batch.ModelFactory` is documented as "called ONCE PER INSTANCE so no
+            # conversation state leaks between instances", and these clients really do
+            # accumulate it (`_openai_messages` / `_seen` here; the `tool_use_id`
+            # bookkeeping in the Anthropic client). "Cache the client, it's the same
+            # config" is the obvious future refactor, and it silently hands instance N
+            # instance N-1's conversation.
             kwargs: dict[str, Any] = {"model": model, "tools": list(tools)}
             if client is not None:
                 kwargs["client"] = client
@@ -269,7 +275,13 @@ def make_model_factory(
     from eval.minting_driver.clients.anthropic_client import AnthropicModel
 
     def anthropic_factory(tools: list[dict]) -> Any:
-        # New model object per instance — see the docstring. Do not hoist.
+        # A NEW model object on every call — never hoisted, never cached.
+        # `batch.ModelFactory` is documented as "called ONCE PER INSTANCE so no
+        # conversation state leaks between instances", and these clients really do
+        # accumulate it (`_openai_messages` / `_seen` here; the `tool_use_id`
+        # bookkeeping in the Anthropic client). "Cache the client, it's the same
+        # config" is the obvious future refactor, and it silently hands instance N
+        # instance N-1's conversation.
         kwargs: dict[str, Any] = {"model": model, "tools": list(tools)}
         if client is not None:
             kwargs["client"] = client
