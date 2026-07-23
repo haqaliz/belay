@@ -442,9 +442,14 @@ _VERIFY_COVERAGE = (
     "  it FAILs a turn whose replay wrote under a read-only scope, and is UNVERIFIED (never\n"
     "  a false PASS) when no post-state was observed or the rule cannot be grounded.\n"
     "  Verified: filesystem effects (the delta), result-equivalence, protocol/tool\n"
-    "  errors. NOT verified: network egress, so openWorldHint conformance is UNVERIFIED,\n"
-    "  never a network PASS. Belay observes no outbound bytes — successful egress under\n"
-    "  allow-all is uncaptured, and a deny-all denial cannot be told from a filesystem one.\n"
+    "  errors. NOT COVERED: network egress. Belay has no network instrument at all, so\n"
+    "  openWorldHint conformance is NOT_COVERED — a coverage boundary, never a network\n"
+    "  PASS and never a fabricated FAIL. NOT_COVERED is EXCLUDED from the reduction, so a\n"
+    "  turn whose tool declared openWorldHint: false CAN reduce to PASS: that PASS covers\n"
+    "  only the dimensions above and asserts NOTHING about the network — read the\n"
+    "  coverage block in the aggregate for what each run left uncovered. Belay observes\n"
+    "  no outbound bytes — successful egress under allow-all is uncaptured, and a\n"
+    "  deny-all denial cannot be told from a filesystem one.\n"
     "  No model is consulted. The verdict is re-execution and diffing — no LLM."
 )
 
@@ -575,7 +580,68 @@ def _axes_in_order(sub_verdicts) -> list[str]:
     return seen
 
 
+#: The statuses a TURN can reduce to, in severity order — the aggregate's fixed lines.
+#: By NAME, not by member, because `Status` is imported lazily inside the command and
+#: handed to these helpers. Any enum member missing from this tuple is still printed by
+#: `_emit_aggregate` when its count is non-zero; nothing is dropped for being unlisted.
+_SCORED_STATUS_NAMES = ("PASS", "WARN", "FAIL", "UNVERIFIED")
+
+
+def _emit_coverage(verdicts, Status) -> None:
+    """What these turns did NOT cover — printed beside the tally, never instead of it.
+
+    A NOT_COVERED sub-verdict is excluded from the reduction, so it moves no status and a
+    reader scanning statuses alone would never learn it existed. That is exactly the
+    false-PASS shape this status was introduced to avoid, so the block is unconditional:
+    it prints even when there is nothing to report, saying so in words that do not claim
+    full coverage.
+
+    Counted per TURN per kind (a kind is counted once for a turn however many sub-verdicts
+    of that kind it carries), so `n/total` reads as a fraction of the turns just rendered.
+    The sub-verdict's own message is echoed once per kind, because the message is what
+    distinguishes "this tool PROMISED a closed network posture and we did not check it"
+    from "nothing was promised" — a distinction the reduction no longer makes and the
+    record therefore must.
+    """
+    total = len(verdicts)
+    counts: dict[str, int] = {}
+    messages: dict[str, str] = {}
+    for verdict in verdicts:
+        uncovered = [s for s in verdict.sub_verdicts if s.status is Status.NOT_COVERED]
+        for sub in uncovered:
+            messages.setdefault(sub.kind, sub.message)
+        for kind in sorted({sub.kind for sub in uncovered}):
+            counts[kind] = counts.get(kind, 0) + 1
+
+    _emit()
+    _emit("  coverage (NOT_COVERED — outside what Belay observes; never a PASS)")
+    if not counts:
+        _emit(
+            "    no NOT_COVERED dimension on these turns; the coverage statement below "
+            "still bounds what a PASS means"
+        )
+        return
+    for kind in sorted(counts):
+        _emit(f"    {kind:<20}NOT observed for {counts[kind]}/{total} turn(s)")
+        _emit(f"      {messages[kind]}")
+
+
 def _emit_aggregate(verdicts, Status) -> None:
+    """The run's tally — status-complete, and never a status line without its coverage line.
+
+    The four scored statuses print in severity order. Every OTHER member of the enum is
+    printed too, loudly, if it ever has a non-zero count: the counts dict is built from
+    `Status` itself, so a status that exists but is not listed here would be tallied and
+    then silently dropped — which is how a turn gets rendered with a status the reader
+    never sees. NOT_COVERED is not in the scored list because a turn's reduced status can
+    never be it (`verdict.reduce` filters it before ranking); if one ever appears, the
+    fallback line below says so rather than hiding it.
+
+    The coverage block follows unconditionally. That is the rule this whole status exists
+    to serve: no surface renders a turn's status without also rendering what was outside
+    coverage, or a PASS on a tool that declared `openWorldHint: false` reads as "the
+    network was checked".
+    """
     counts = {status: 0 for status in Status}
     for verdict in verdicts:
         counts[verdict.status] += 1
@@ -583,10 +649,17 @@ def _emit_aggregate(verdicts, Status) -> None:
     _emit()
     _emit("aggregate")
     _emit(f"  turns verified        {len(verdicts)}")
-    _emit(f"  PASS                  {counts[Status.PASS]}")
-    _emit(f"  WARN                  {counts[Status.WARN]}")
-    _emit(f"  FAIL                  {counts[Status.FAIL]}")
-    _emit(f"  UNVERIFIED            {counts[Status.UNVERIFIED]}")
+    for name in _SCORED_STATUS_NAMES:
+        _emit(f"  {name:<22}{counts[Status[name]]}")
+    for status in Status:
+        if status.name in _SCORED_STATUS_NAMES or counts[status] == 0:
+            continue
+        _emit(
+            f"  {status.name:<22}{counts[status]}"
+            "  <- NOT a reduced status; see coverage below"
+        )
+
+    _emit_coverage(verdicts, Status)
 
     fails = [v for v in verdicts if v.status is Status.FAIL]
     if fails:
@@ -614,11 +687,23 @@ def _first_unverified_message(verdict, Status) -> str:
     A turn that WAS replayed can still reduce to UNVERIFIED (an un-annotated tool, a
     nondeterministic divergence) with `cause is None` — its explanation lives in the
     sub-verdict, not a bucket. Surface it so no UNVERIFIED turn is causeless in the list.
+
+    A turn whose ONLY non-PASS sub-verdicts are NOT_COVERED reduces to UNVERIFIED via the
+    empty-after-filter rule in `verdict.reduce`, and has no UNVERIFIED sub-verdict at all.
+    That case used to fall through to the bare literal `"unverified"` — a turn described by
+    the word "unverified" and nothing else, when the true and available explanation is that
+    every dimension it carried was outside coverage. It is named explicitly below.
     """
     for sub in verdict.sub_verdicts:
         if sub.status is Status.UNVERIFIED:
             return sub.message
-    return "unverified"
+    uncovered = sorted({s.kind for s in verdict.sub_verdicts if s.status is Status.NOT_COVERED})
+    if uncovered:
+        return (
+            f"nothing on this turn was inside Belay's coverage: every sub-verdict was "
+            f"NOT_COVERED ({', '.join(uncovered)}), so nothing was checked — never a PASS"
+        )
+    return "unverified: this turn carried no sub-verdict that could decide it"
 
 
 def _worst(verdicts, Status):
