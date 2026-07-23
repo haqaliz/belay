@@ -625,12 +625,24 @@ def _worst(verdicts, Status):
     """The worst status across the turns, worst-status-wins. Empty -> UNVERIFIED.
 
     Mirrors `verdict.reduce`'s ordering (FAIL > UNVERIFIED > WARN > PASS) so the exit
-    code agrees with the honesty contract: an all-UNVERIFIED run is not a success.
+    code agrees with the honesty contract: an all-UNVERIFIED run is not a success. The
+    mirroring includes the NOT_COVERED filter and its rank entry — this function decides
+    the process exit code, so a divergence from `reduce` is a divergence between what
+    Belay printed and what it told the shell. A turn's status can never BE NOT_COVERED
+    (reduce drops it), so the filter here is defensive; keeping it identical is what
+    stops the two orderings drifting apart again.
     """
-    rank = {Status.PASS: 0, Status.WARN: 1, Status.UNVERIFIED: 2, Status.FAIL: 3}
-    if not verdicts:
+    rank = {
+        Status.NOT_COVERED: -1,
+        Status.PASS: 0,
+        Status.WARN: 1,
+        Status.UNVERIFIED: 2,
+        Status.FAIL: 3,
+    }
+    scored = [v.status for v in verdicts if v.status is not Status.NOT_COVERED]
+    if not scored:
         return Status.UNVERIFIED
-    return max((v.status for v in verdicts), key=lambda s: rank[s])
+    return max(scored, key=lambda s: rank[s])
 
 
 #: The floor `belay verify` enforces on `--replays`. The determinism classifier itself
