@@ -205,10 +205,19 @@ def verify_turn(
     sub_verdicts = [result_verdict, effect_verdict]
     # The NETWORK dimension is a THIRD, separate sub-verdict — never folded into the
     # filesystem `effect_verdict` (that made a PASS message carry an UNVERIFIED status).
-    # It is present only when the tool declared a network RESTRICTION Belay cannot verify
-    # (`openWorldHint` false / non-boolean); `reduce` then lowers the turn to UNVERIFIED
-    # by worst-status-wins, and the reader sees exactly which dimension was unverified. An
-    # un-annotated turn gets no network sub-verdict, so its status is unchanged.
+    # It is present only when the tool declared a network RESTRICTION Belay does not observe
+    # (`openWorldHint` false / non-boolean); an un-annotated turn gets no network sub-verdict.
+    #
+    # This comment used to end: "`reduce` then lowers the turn to UNVERIFIED by
+    # worst-status-wins, and the reader sees exactly which dimension was unverified." That
+    # fold was REVERSED. The sub-verdict now carries `Status.NOT_COVERED`, which `reduce`
+    # drops before ranking, so it no longer lowers the turn. Reason: Belay has no network
+    # instrument at all, so this is a coverage boundary rather than a failed attempt to
+    # verify — and the old rule made an honestly-declared closed posture strictly worse than
+    # silence (declare nothing -> PASS; declare truthfully -> UNVERIFIED forever). The
+    # sub-verdict is still composed here, is still never a PASS, and still cannot soften a
+    # FAIL; what it no longer does is decide the turn. Rendering surfaces must show it
+    # alongside the status — a PASS without its coverage line is the failure mode.
     net_verdict = network_subverdict(records, n)
     if net_verdict is not None:
         sub_verdicts.append(net_verdict)
