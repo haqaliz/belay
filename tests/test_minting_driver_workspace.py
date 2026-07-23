@@ -159,6 +159,103 @@ def test_prepare_reuses_a_cached_bare_clone_across_instances(tmp_path: Path) -> 
     assert len(worktree_calls) == 2
 
 
+def test_prepare_resolves_relative_paths_before_invoking_git(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A RELATIVE `--root` must not put the worktree inside the bare clone.
+
+    Found by running the live Stage-1 mint with `--root eval/mint/stage1-remint`:
+    `git -C <bare_clone> worktree add --detach <relative work_dir>` resolves the target
+    **against `-C`**, not against the process CWD, so the tree landed at
+    `eval/clones/pallets__flask.git/eval/mint/stage1-remint/.../workspace`, the intended
+    `work_dir` never existed, the filesystem server was handed a nonexistent
+    `allowed_dir` and exited — surfacing as the misleading "server's stdout closed
+    before a matching reply arrived". The paths git is given must be ABSOLUTE.
+    """
+    monkeypatch.chdir(tmp_path)
+    runner = _FakeRunner()
+
+    layout = workspace.prepare_workspace(
+        _record(),
+        root=Path("mint/stage1"),
+        clones_dir=Path("clones"),
+        runner=runner,
+    )
+
+    clone_call = next(c for c in runner.calls if "clone" in c)
+    worktree_call = next(c for c in runner.calls if "worktree" in c and "add" in c)
+
+    # The load-bearing assertion: every path in git's argv is absolute, so `-C` cannot
+    # reinterpret it.
+    assert Path(clone_call[-1]).is_absolute()
+    assert Path(worktree_call[-2]).is_absolute()
+    assert Path(worktree_call[worktree_call.index("-C") + 1]).is_absolute()
+
+    # And it is the intended location, not one nested under the bare clone.
+    expected = tmp_path / "mint" / "stage1" / "django__django-12345" / "workspace"
+    assert Path(worktree_call[-2]) == expected
+    assert layout.work_dir == expected
+    assert layout.work_dir.is_dir()
+
+    # The layout the gate is handed carries absolute paths throughout.
+    assert layout.trace_dir.is_absolute()
+    assert layout.snapshot_dir.is_absolute()
+    assert layout.trace_dir.is_dir()
+    assert layout.snapshot_dir.is_dir()
+
+
+def test_layout_for_is_absolute_even_from_a_relative_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`WorkspaceLayout` always carries absolute paths — every caller, not just the CLI.
+
+    These paths become `BELAY_SANDBOX_SCOPE`/`BELAY_TRACE_DIR`/`BELAY_SNAPSHOT_DIR` and
+    a server's `allowed_dir` argv: a relative path handed to a child process with a
+    different CWD is a silent mis-target.
+    """
+    monkeypatch.chdir(tmp_path)
+
+    layout = workspace.layout_for("astropy__astropy-7008", Path("mint/stage1"))
+
+    assert layout.work_dir == tmp_path / "mint" / "stage1" / "astropy__astropy-7008" / "workspace"
+    assert layout.trace_dir.is_absolute()
+    assert layout.snapshot_dir.is_absolute()
+
+
+def test_prepare_refuses_a_workspace_git_did_not_create(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A zero-exit git that left no `work_dir` is a named error, not a doomed server.
+
+    This is the guard that would have named the bug above at its source: the alternative
+    is spawning the filesystem server on a nonexistent `allowed_dir` and reading its
+    immediate exit as "server's stdout closed".
+    """
+
+    class _LyingRunner(_FakeRunner):
+        def __call__(self, argv, **kwargs):
+            argv = list(argv)
+            self.calls.append(argv)
+            if "clone" in argv:
+                Path(argv[-1]).mkdir(parents=True, exist_ok=True)
+            # `worktree add` reports success but creates nothing.
+            return subprocess.CompletedProcess(argv, returncode=0, stdout="", stderr="")
+
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(workspace.WorkspacePrepError) as excinfo:
+        workspace.prepare_workspace(
+            _record(),
+            root=Path("mint/stage1"),
+            clones_dir=Path("clones"),
+            runner=_LyingRunner(),
+        )
+
+    message = str(excinfo.value)
+    assert "django__django-12345" in message
+    assert "workspace" in message
+
+
 def test_prepare_surfaces_a_git_failure_as_a_named_error(tmp_path: Path) -> None:
     # A bad base_commit makes `git worktree add` exit non-zero; that must surface as a
     # named error, not a silent partial workspace.

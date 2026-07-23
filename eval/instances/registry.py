@@ -21,6 +21,14 @@ naming convention on `instance_id`, which is a string anyone can typo.
 Pure and deterministic apart from the two explicit file reads/writes: no clock, no
 network, no randomness. `dump_registry` emits a stable key order and a trailing newline
 so a regenerated registry produces a reviewable diff rather than a reshuffled one.
+
+A committed registry may also carry a **provenance header** — the dataset revision and
+filter thresholds behind a pool, or the seed, target and composition behind a draw —
+written by `dump_registry(..., header=...)` and read back by `load_header`. It goes
+through this writer rather than around it so exactly one place decides key order and the
+trailing newline; two writers drift. The seam is strictly additive: with no header the
+bytes are unchanged, and `load_registry` ignores the header exactly as it has always
+ignored unknown top-level keys.
 """
 
 from __future__ import annotations
@@ -28,7 +36,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Mapping
 
 #: Fields that MUST be present and non-blank in every registry entry. `is_control` is
 #: deliberately absent: it has a declared default, and absent-means-False is an
@@ -192,16 +200,78 @@ def load_registry(path: Path) -> tuple[InstanceRecord, ...]:
     return records
 
 
-def dump_registry(records: Iterable[InstanceRecord], path: Path) -> None:
+def dump_registry(
+    records: Iterable[InstanceRecord],
+    path: Path,
+    *,
+    header: Mapping[str, object] | None = None,
+) -> None:
     """Write `records` to `path` with a stable key order and a trailing newline.
 
     Stable so a regenerated registry produces a reviewable diff. Record order is
     preserved exactly as given — the draw upstream decides it, not this writer.
+
+    `header` is optional provenance — the dataset revision and filter thresholds behind a
+    pool, or the seed, target and composition behind a draw. Its keys are emitted
+    **before** `"instances"`, in the caller's order, and `load_registry` ignores them (it
+    ignores every unknown top-level key on purpose). `header=None` — and `header={}` —
+    produce exactly the bytes this writer produced before headers existed, which is what
+    makes the seam additive: adding provenance to a committed file must not reformat the
+    records underneath it, or a review diff cannot tell the two apart.
+
+    Provenance goes through this writer rather than around it so there is exactly one
+    place that decides key order and the trailing newline. Two writers drift.
+
+    Raises `ValueError` if `header` contains an `"instances"` key — last-write-wins there
+    would emit a file that still parses, still loads, and has silently lost every record.
+    Raises `TypeError` (from `json`) for a header that cannot be serialized; in both cases
+    nothing is written, so a failed dump never leaves a truncated registry behind.
     """
-    payload = {"instances": [_record_to_json(record) for record in records]}
-    Path(path).write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-    )
+    payload: dict[str, object] = {}
+    if header:
+        if "instances" in header:
+            raise ValueError(
+                "registry header may not contain an 'instances' key: it would shadow "
+                "the records and produce a file that still parses but has lost every "
+                "instance"
+            )
+        payload.update(header)
+    payload["instances"] = [_record_to_json(record) for record in records]
+
+    # Serialize fully before touching the filesystem: a header that cannot be encoded
+    # must fail with no file written rather than half of one.
+    text = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+    Path(path).write_text(text, encoding="utf-8")
+
+
+def load_header(path: Path) -> dict:
+    """The provenance header of the registry at `path` — every key except `"instances"`.
+
+    Beside `load_registry` so the draw script, the tests, and the docs generator do not
+    each re-implement `json.loads`. Returns `{}` for a file written without a header, so
+    a headerless registry reads as "no provenance", never as an error.
+
+    Raises the same named `ValueError`s as `load_registry` for an unreadable file, invalid
+    JSON, or a payload that is not a JSON object.
+    """
+    path = Path(path)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValueError(f"could not read registry file {str(path)!r}: {exc}") from exc
+
+    try:
+        raw = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"registry file {str(path)!r} is not valid JSON: {exc}") from exc
+
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"registry file {str(path)!r} must contain a JSON object, "
+            f"got {type(raw).__name__}"
+        )
+
+    return {key: value for key, value in raw.items() if key != "instances"}
 
 
 __all__ = [
@@ -209,5 +279,6 @@ __all__ = [
     "controls",
     "real",
     "load_registry",
+    "load_header",
     "dump_registry",
 ]
