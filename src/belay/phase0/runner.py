@@ -67,6 +67,7 @@ from belay.index import derive_correlation, tool_calls
 from belay.phase0.ledger import Disposition, InstanceRecord, RunLedger
 from belay.replay.client import DEFAULT_TIMEOUT
 from belay.replay.reader import read_trace
+from belay.replay.report import canonical_cause
 from belay.verify.invariants import Invariant
 from belay.verify.turn import TurnVerdict, verify_turn
 from belay.verify.verdict import Status
@@ -212,7 +213,16 @@ def _verify_one_trace(
             not_covered_turns[kind] = not_covered_turns.get(kind, 0) + 1
 
         if verdict.status is Status.UNVERIFIED:
-            bucket = verdict.cause if verdict.cause is not None else _UNKNOWN_CAUSE
+            # Bucket by the CANONICAL name, as the runner spec says this table does
+            # (`phase0-runner/spec.md:48`) — it never actually called `canonical_cause`,
+            # it copied the field, so any caller handing over a verbatim engine string got
+            # its own per-turn row in the published breakdown. `verify_turn` already
+            # canonicalises on both of its paths, so for the real verifier this is a
+            # no-op; it is the seam that keeps every OTHER verifier honest. A `None` cause
+            # still goes to the catch-all rather than through `canonical_cause`, which
+            # would relabel it "unrestorable (no recorded cause)" and assert a restore
+            # failure nobody observed.
+            bucket = canonical_cause(verdict.cause) if verdict.cause is not None else _UNKNOWN_CAUSE
             unverified_causes[bucket] = unverified_causes.get(bucket, 0) + 1
         elif verdict.status is Status.NOT_COVERED:
             # DECIDED, not accidental. `verdict.reduce` filters NOT_COVERED out before

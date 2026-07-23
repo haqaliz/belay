@@ -57,7 +57,7 @@ from belay.index import derive_correlation, tool_calls
 from belay.replay.client import DEFAULT_TIMEOUT
 from belay.replay.determinism import DeterminismResult, classify_determinism
 from belay.replay.engine import DIVERGED, REPLAYED, TurnReplay, replay_turn
-from belay.replay.report import canonical_cause
+from belay.replay.report import REPLAYED_SUB_VERDICT, canonical_cause
 from belay.verify.effect import network_subverdict, render_effect_verdict
 from belay.verify.invariants import Invariant, evaluate_invariant
 from belay.verify.result import render_result_verdict
@@ -135,6 +135,34 @@ def _unverifiable_verdict(reply: TurnReplay) -> tuple[Verdict, str]:
         ),
     )
     return verdict, bucket
+
+
+def _replayed_cause(sub_verdicts: Sequence[Verdict]) -> Optional[str]:
+    """The canonical named cause for a turn that REPLAYED and *then* reduced to UNVERIFIED.
+
+    The gate's contract is that EVERY unverified turn traces to a named cause. That held
+    only for turns that never replayed (`_unverifiable_verdict` above); this path returned
+    `cause=None` unconditionally, so `phase0.runner` filed a replayed-but-unverified turn
+    under its causeless catch-all — the Stage-1 re-mint published `unknown: 12`.
+
+    The cause names the DECIDING sub-verdict — the first UNVERIFIED one in composition
+    order, which is the one `reduce`'s worst-status-wins actually settled on — not an
+    arbitrary member of the list: "the reply could not be compared" and "the declared
+    filesystem contract could not be checked" are different findings. Its verbatim message
+    is carried for detail and then bucketed by `canonical_cause`, exactly as the
+    non-replayed path does, so `TurnVerdict.cause` is a stable LABEL on both paths and a
+    consumer never has to know which path produced it. Returns `None` for any other
+    reduced status: `cause` explains an UNVERIFIED and nothing else.
+    """
+    deciding = next((v for v in sub_verdicts if v.status is Status.UNVERIFIED), None)
+    if deciding is None:
+        # `reduce` also answers UNVERIFIED when nothing SCORED remains (every sub-verdict
+        # was NOT_COVERED, or there were none) — unreachable on this path, which always
+        # composes the two A2 checks, but still named rather than left causeless.
+        return canonical_cause(REPLAYED_SUB_VERDICT)
+    return canonical_cause(
+        f"{REPLAYED_SUB_VERDICT} {deciding.axis}/{deciding.kind}: {deciding.message}"
+    )
 
 
 def verify_turn(
@@ -235,12 +263,15 @@ def verify_turn(
     for inv in invariants:
         sub_verdicts.append(evaluate_invariant(inv, reply.delta, n))
 
+    status = reduce(sub_verdicts)
     return TurnVerdict(
         turn_index=n,
         tool_name=tool_name,
-        status=reduce(sub_verdicts),
+        status=status,
         sub_verdicts=sub_verdicts,
-        cause=None,
+        # A replayed turn can still reduce to UNVERIFIED, and the gate requires every one
+        # of those to name a cause — see `_replayed_cause`. Any other status carries none.
+        cause=_replayed_cause(sub_verdicts) if status is Status.UNVERIFIED else None,
     )
 
 
