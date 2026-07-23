@@ -418,7 +418,9 @@ def test_network_policy_is_recorded_as_a_fact(tmp_path: Path) -> None:
     policies = [r for r in read_trace(tmp_path / "trace") if r.get("kind") == "network_policy"]
     assert len(policies) == 1
     assert policies[0]["policy"] == "deny-all"
-    verdict_shaped = {"PASS", "WARN", "FAIL", "UNVERIFIED", "replayable", "verdict"}
+    verdict_shaped = {
+        "PASS", "WARN", "FAIL", "UNVERIFIED", "NOT_COVERED", "replayable", "verdict",
+    }
     assert not verdict_shaped & set(map(str, policies[0].values())) | verdict_shaped & set(
         policies[0]
     ), f"C2 wrote something verdict-shaped: {policies[0]!r}"

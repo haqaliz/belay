@@ -1161,7 +1161,12 @@ def _cmd_phase0_run(args: argparse.Namespace) -> int:
         ingester=phase0_runner.add_case,
     )
 
-    Path(args.ledger).write_text(json.dumps(to_json(ledger), indent=2), encoding="utf-8")
+    # Create the parent BEFORE writing. This runs after the entire batch has been
+    # re-executed, so an absent directory does not fail early and cheaply -- it discards a
+    # completed verification run. Hit for real during the Stage-1 re-mint.
+    ledger_out = Path(args.ledger)
+    ledger_out.parent.mkdir(parents=True, exist_ok=True)
+    ledger_out.write_text(json.dumps(to_json(ledger), indent=2), encoding="utf-8")
 
     cases, error = _load_scored_cases(corpus_dir)
     if error is not None:
