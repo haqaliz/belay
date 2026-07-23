@@ -42,15 +42,16 @@ Within each instance, multiple tool calls (turns) may be executed. This reports 
 
 **Headline:** <!-- FILL: e.g., "48 turns UNVERIFIED (19%)" --> **TO-BE-FILLED**
 
-Each unverified turn is filed under a named cause. The causes are exhaustive — every UNVERIFIED turn has a category.
+Each unverified turn is filed under a named cause. The causes are exhaustive — every UNVERIFIED turn has a category. **A turn published under `unknown` is a gate blocker, not a bucket**: it means the engine reduced a turn to UNVERIFIED without naming why, which is the one thing the report must never do. (This was live until the `NOT_COVERED` release: a turn that replayed *fine* and only then reduced to UNVERIFIED carried no cause at all, and the Stage-1 re-mint published `unknown: 12`. Those turns now name the dimension that drove the reduction — `replayed but result unverified` / `... effect unverified` / `... invariant unverified`.)
 
 **By cause:**
 - Manifest not found: <!-- FILL: count --> **TO-BE-FILLED**
 - Snapshot restore failed: <!-- FILL: count --> **TO-BE-FILLED**
-- Tool not annotated (unannotated tool): <!-- FILL: count --> **TO-BE-FILLED**
-- Nondeterministic tool (diverged on replay): <!-- FILL: count --> **TO-BE-FILLED**
-- Server unavailable (could not re-run): <!-- FILL: count --> **TO-BE-FILLED**
-- Other (unclassified): <!-- FILL: count --> **TO-BE-FILLED**
+- Replay did not answer target: <!-- FILL: count --> **TO-BE-FILLED**
+- Replayed but result unverified: <!-- FILL: count --> **TO-BE-FILLED**
+- Replayed but effect unverified (e.g. an unannotated tool): <!-- FILL: count --> **TO-BE-FILLED**
+- Replayed but invariant unverified: <!-- FILL: count --> **TO-BE-FILLED**
+- Other (must be a NAMED bucket; `unknown` here voids the run): <!-- FILL: count --> **TO-BE-FILLED**
 
 ### False-Positive Rate
 
@@ -78,6 +79,12 @@ Each true-positive is a violation Belay detected that a human confirmed reflects
 **MCP boundary only (R6).** Belay observes tool calls crossing the MCP proxy boundary. Built-in tools (Claude Code's `Bash`, `Edit`) and any agent-native tool calls do NOT cross the proxy and are invisible to Belay. This run measures only what the proxy captures. The runbook (Capture step) ensures the test harness routes file and shell actions through MCP servers so traces are not empty, but the limitation stands: any tool not routed through MCP is unverified.
 
 **Batching → UNVERIFIED (R7).** When multiple tool calls are batched into a single invocation (a single tool call that reads/writes multiple files, or a shell command that chains actions), Belay captures it as one turn but cannot decompose the pre/post state for each sub-action. This can render a turn UNVERIFIED even if some sub-actions are correct. The UNVERIFIED rate will include a tallied count of batching-related cases.
+
+**A `PASS` here excludes the network dimension (`NOT_COVERED`).** Belay has no network instrument. A tool that declares `openWorldHint: false` gets a `NOT_COVERED` network sub-verdict — *"promised, and Belay does not observe egress"* — which is excluded from the reduction, so the turn reduces on the dimensions Belay actually checks. Every number in this document is therefore a number about the **filesystem + result-equivalence + invariant** dimensions, and the coverage line printed beside each verdict states what that left out.
+
+**The UNVERIFIED rate is NOT COMPARABLE across the `NOT_COVERED` release.** Before it, a declared-false network promise dragged the whole turn to UNVERIFIED, which pinned *every* turn against the reference `@modelcontextprotocol/server-filesystem` at UNVERIFIED regardless of agent behavior (Stage 1 measured 12/12, `NO_VERIFIABLE_TURNS`, `INSTRUMENT SUSPECT`). Any before/after UNVERIFIED-rate comparison quoted in this document must carry this sentence: **the drop is a reclassification of a dimension Belay never had an instrument for, not improved detection.** Only rates measured on the same side of that boundary may be compared.
+
+**Expected `belay corpus run` REGRESSIONs after the `NOT_COVERED` release.** `corpus/run.py` compares the recomputed sub-verdict set against the stored one **exactly**, so any case stored *before* the release whose network sub-verdict was recorded as `UNVERIFIED` now recomputes as `NOT_COVERED` and is reported **REGRESSION**. This is expected and is not a defect, not a detection failure, and not a reason to relabel the case: the finding did not change, its status name did. Confirm the diff is confined to the `A2 / effect:network` entry, then re-mint or re-store the case. A REGRESSION touching any other axis/kind is a real one.
 
 **macOS-only engine.** The Seatbelt sandbox is macOS-specific. This run is conducted on macOS; the engine is not validated on Linux or Windows. A port would require a different sandbox backend.
 

@@ -141,13 +141,34 @@ an LLM's opinion of itself.
 | Axis | Grounding | May emit | Catches |
 |------|-----------|----------|---------|
 | **A1 · Invariant** | Sandbox policy, violated during replay | PASS / WARN / FAIL / UNVERIFIED | **Corrupt success** (the 27–78%) |
-| **A2 · Replay** | Re-execution + state diff | PASS / WARN / FAIL / UNVERIFIED | **Trace infidelity** (fabricated/tampered results) |
+| **A2 · Replay** | Re-execution + state diff | PASS / WARN / FAIL / UNVERIFIED **· NOT_COVERED** (sub-verdict only) | **Trace infidelity** (fabricated/tampered results) |
 | **A3 · Claim re-derivation** | A model writes a check; **execution** decides | WARN / FAIL / UNVERIFIED — **never PASS** | **Intent drift** |
 
 Reduction: worst-status-wins across **A1 and A2 only**. A3 may downgrade, never promote, and
 never turns UNVERIFIED into PASS. `belay --no-claim-axis` disables A3 and every PASS/FAIL
 verdict must survive unchanged — that guarantee is enforced by a test, and it is the
 one-command refutation of "isn't this an LLM judge with extra steps?"
+
+**`NOT_COVERED` is a fifth status, and it is SUB-VERDICT-ONLY.** It marks a dimension Belay
+has no instrument for at all — today exactly one: a tool's `openWorldHint: false` network
+promise, which no filesystem delta can confirm or refute. `UNVERIFIED` means *"we tried to
+check this and could not"*; `NOT_COVERED` means *"this was never inside what Belay claims to
+check"*. `verdict.reduce` **drops it before ranking**, so it can never be a turn's reduced
+status, never lowers a turn, and never lifts one — the empty-after-filter case reduces to
+`UNVERIFIED`, never to `NOT_COVERED` and never to `PASS`. Folding it in was the old behavior
+and it made an honestly-declared closed posture strictly *worse* than silence (declare
+nothing → PASS; declare truthfully → UNVERIFIED forever), which pinned every turn of the
+reference filesystem server at UNVERIFIED.
+
+The honesty cost is real and named: a `PASS` now means *"passed on the dimensions Belay
+checks"*, so **the coverage line must travel with the status on every surface** — a PASS
+rendered without it is the failure mode this status creates. That rule is enforced by a test
+per surface, not by review.
+
+**The UNVERIFIED rate before and after this change is NOT COMPARABLE.** The population moved:
+turns that were UNVERIFIED only because of an unobservable network promise are now PASS with a
+`NOT_COVERED` sub-verdict. Any Phase-0 write-up quoting an UNVERIFIED-rate drop across this
+boundary must say so — the drop is a reclassification, **not** improved detection.
 
 **The axes are NOT redundant, and this is the easiest thing here to get wrong.** A2 cannot
 catch a cheating agent, because a cheater's trace is perfectly *faithful* — it really did
