@@ -240,8 +240,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return run_verify(
             report,
             server_command=verify_server_command(entrypoint),
-            ledger_path=Path(args.ledger),
-            corpus_dir=Path(args.corpus_dir),
+            # Absolute, like every path in `MintConfig`: these name where the verify
+            # output lands, and a relative path is only unambiguous from one CWD.
+            ledger_path=Path(args.ledger).resolve(),
+            corpus_dir=Path(args.corpus_dir).resolve(),
         )
 
     return 0

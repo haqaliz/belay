@@ -63,8 +63,10 @@ def test_cli_parses_into_a_mint_config(tmp_path: Path) -> None:
     assert cfg.root == tmp_path / "stage1"
     assert cfg.checkpoint_path == tmp_path / "stage1" / "checkpoint.json"
     assert cfg.batch_dir == tmp_path / "stage1" / "batch"
-    assert cfg.registry_path == DEFAULT_REGISTRY_PATH
-    assert cfg.clones_dir == DEFAULT_CLONES_DIR
+    # The defaults are relative constants, resolved once at the config boundary — every
+    # consumer is a child process with a CWD of its own.
+    assert cfg.registry_path == DEFAULT_REGISTRY_PATH.resolve()
+    assert cfg.clones_dir == DEFAULT_CLONES_DIR.resolve()
     assert cfg.provider == DEFAULT_PROVIDER
     assert cfg.model == DEFAULT_MODEL
     assert cfg.request_timeout == DEFAULT_REQUEST_TIMEOUT
@@ -107,6 +109,99 @@ def test_cli_overrides_every_config_field(tmp_path: Path) -> None:
     assert cfg.request_timeout == 90.0
     assert cfg.max_steps == 6
     assert cfg.server_root == tmp_path / "servers"
+
+
+def test_cli_resolves_every_path_flag_to_an_absolute_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Relative path flags become absolute before anything is spawned.
+
+    Defense in depth for the bug the live Stage-1 mint hit: a relative `--root` was
+    handed to `git -C <bare_clone> worktree add`, which resolved it against the clone.
+    Any relative path handed to a sandboxed child process (a server's `allowed_dir`,
+    `BELAY_SANDBOX_SCOPE`, the snapshot root) is the same footgun.
+    """
+    monkeypatch.chdir(tmp_path)
+
+    cfg = build_config(
+        [
+            "batch",
+            "--root",
+            "mint/stage1",
+            "--registry",
+            "reg/selected.json",
+            "--clones-dir",
+            "clones",
+            "--checkpoint",
+            "ck.json",
+            "--server-root",
+            "servers",
+        ]
+    )
+
+    for path in (
+        cfg.root,
+        cfg.registry_path,
+        cfg.clones_dir,
+        cfg.checkpoint_path,
+        cfg.server_root,
+        cfg.batch_dir,
+    ):
+        assert path is not None and path.is_absolute(), path
+
+    assert cfg.root == tmp_path / "mint" / "stage1"
+    assert cfg.checkpoint_path == tmp_path / "ck.json"
+    assert cfg.batch_dir == tmp_path / "mint" / "stage1" / "batch"
+
+
+def test_cli_resolves_the_verify_output_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--ledger` and `--corpus-dir` reach `run_verify` absolute, too."""
+    from eval.minting_driver import cli as cli_module
+    from eval.minting_driver.checkpoint import Checkpoint
+    from eval.minting_driver.entrypoint import MintReport
+
+    _install_stub_server(tmp_path / "servers")
+    seen: dict = {}
+
+    def fake_mint_one(instance_id: str, cfg: object, **seams: object) -> MintReport:
+        return MintReport(
+            batch_dir=tmp_path / "mint" / "batch",
+            checkpoint_path=tmp_path / "mint" / "checkpoint.json",
+            checkpoint=Checkpoint(),
+            instance_ids=(instance_id,),
+            counts={"captured": 1, "failed": 0},
+            verify_command="belay phase0 run ...",
+        )
+
+    def fake_run_verify(report: MintReport, **kwargs: object) -> int:
+        seen.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(cli_module, "mint_one", fake_mint_one)
+    monkeypatch.setattr(cli_module, "run_verify", fake_run_verify)
+    monkeypatch.chdir(tmp_path)
+
+    code = main(
+        [
+            "one",
+            "octo__repo-1",
+            "--root",
+            "mint",
+            "--server-root",
+            "servers",
+            "--ledger",
+            "runs/phase0.json",
+            "--corpus-dir",
+            "corpus/local",
+            "--verify",
+        ]
+    )
+
+    assert code == 0
+    assert seen["ledger_path"] == tmp_path / "runs" / "phase0.json"
+    assert seen["corpus_dir"] == tmp_path / "corpus" / "local"
 
 
 def test_cli_default_request_timeout_is_not_the_transport_default() -> None:

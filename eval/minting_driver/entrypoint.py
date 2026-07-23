@@ -165,18 +165,24 @@ class MintConfig:
     server_root: Optional[Path] = field(default=None)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "root", Path(self.root))
-        object.__setattr__(self, "clones_dir", Path(self.clones_dir))
-        object.__setattr__(self, "registry_path", Path(self.registry_path))
+        # Every path is made ABSOLUTE here, once, at the boundary. A relative path in
+        # this config is handed to processes that do not share this one's CWD — the
+        # gated proxy, the MCP server's allowed-directory argv, and `git -C <clone>
+        # worktree add`, which resolves a relative target against `-C` and so silently
+        # built the worktree inside the bare clone (found by running the live Stage-1
+        # mint with `--root eval/mint/stage1-remint`).
+        object.__setattr__(self, "root", Path(self.root).resolve())
+        object.__setattr__(self, "clones_dir", Path(self.clones_dir).resolve())
+        object.__setattr__(self, "registry_path", Path(self.registry_path).resolve())
         object.__setattr__(
             self,
             "checkpoint_path",
-            Path(self.checkpoint_path)
+            Path(self.checkpoint_path).resolve()
             if self.checkpoint_path is not None
             else self.root / "checkpoint.json",
         )
         if self.server_root is not None:
-            object.__setattr__(self, "server_root", Path(self.server_root))
+            object.__setattr__(self, "server_root", Path(self.server_root).resolve())
 
         if self.provider not in PROVIDERS:
             raise MintConfigError(

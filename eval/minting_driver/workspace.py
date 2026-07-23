@@ -13,8 +13,11 @@ startup if the snapshot root equals the scope or sits under it, because then tur
 clone turn 0's snapshot into itself and every later turn would carry all the ones before —
 recording a pre-state the agent never had, and grounding every verdict on a tree that
 never existed (`src/belay/sandbox/gate.py:303-315`). `layout_for` places the three paths so
-that refusal can never trigger; it is a pure function of `(instance_id, root)` — no clock,
-no randomness — and is tested directly.
+that refusal can never trigger; it is a plain function of `(instance_id, root)` — no clock,
+no randomness — and is tested directly. It also **resolves `root` to an absolute path**:
+the three paths are handed to child processes that do not share this process's CWD, and
+`git -C <bare_clone> worktree add <relative>` resolves the target against `-C`, so a
+relative root silently built the worktree inside the bare clone.
 
 `prepare_workspace` composes `layout_for` with git acquisition. All git/network I/O goes
 through an injectable `runner` seam (default `subprocess.run`) so the tests substitute a
@@ -72,13 +75,22 @@ class WorkspaceLayout:
 
 
 def layout_for(instance_id: str, root: StrPath) -> WorkspaceLayout:
-    """The per-instance directory layout under `root` — pure, deterministic.
+    """The per-instance directory layout under `root` — pure, deterministic, ABSOLUTE.
 
     A plain function of `(instance_id, root)`: `<root>/<instance_id>/{workspace,traces,
     snapshots}`. `snapshots` is a sibling of `workspace`, so the gate's snapshot-inside-
     scope refusal can never trigger. Reads no clock, draws no randomness.
+
+    `root` is resolved to an absolute path here, at the boundary, so a `WorkspaceLayout`
+    *always* carries absolute paths for every caller rather than only for the CLI. These
+    three paths are handed to child processes with a CWD of their own —
+    `BELAY_SANDBOX_SCOPE`, `BELAY_TRACE_DIR`, `BELAY_SNAPSHOT_DIR`, and the filesystem
+    server's `allowed_dir` argv — and, worse, to `git -C <bare_clone> worktree add`,
+    which resolves a relative target against `-C` rather than against the process CWD.
+    A relative root therefore silently created the worktree *inside the bare clone* and
+    left the intended workspace nonexistent (found by running the live Stage-1 mint).
     """
-    instance_root = Path(root) / instance_id
+    instance_root = Path(root).resolve() / instance_id
     return WorkspaceLayout(
         work_dir=instance_root / "workspace",
         trace_dir=instance_root / "traces",
@@ -151,7 +163,9 @@ def prepare_workspace(
     """
     layout = layout_for(record.instance_id, root)
 
-    clones = Path(clones_dir)
+    # Absolute for the same reason `layout_for` resolves `root`: this path becomes git's
+    # `-C` argument, and `git -C X worktree add Y` resolves a relative Y against X.
+    clones = Path(clones_dir).resolve()
     clones.mkdir(parents=True, exist_ok=True)
     bare_clone = clones / f"{_repo_slug(record.repo)}.git"
 
@@ -182,6 +196,19 @@ def prepare_workspace(
         record=record,
         what="checking out the worktree",
     )
+
+    # Fail closed on a zero-exit git that nonetheless left no workspace. Without this the
+    # next step spawns the filesystem MCP server with a nonexistent `allowed_dir`; the
+    # server exits at once and the operator reads "server's stdout closed before a
+    # matching reply arrived" — a message about the transport, for a bug in the
+    # workspace. Name the intended path instead.
+    if not layout.work_dir.is_dir():
+        raise WorkspacePrepError(
+            f"workspace prep for instance {record.instance_id!r} reported success at "
+            f"base_commit {record.base_commit!r} but no workspace exists at "
+            f"{layout.work_dir}. Nothing can be minted from a missing workspace: the "
+            f"filesystem server would be handed it as its allowed-directory and exit."
+        )
 
     # The trace and snapshot dirs are the gate's to write into; create them so the proxy
     # never has to. Both are siblings of work_dir, never inside it.
