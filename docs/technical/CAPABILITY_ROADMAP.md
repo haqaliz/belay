@@ -214,9 +214,19 @@ the line between us and Langfuse/Phoenix.
   the server argv root token and any argument whose *whole value* is an in-root absolute path
   are rewritten to the scratch (content fields are never touched), and the reply comparison
   substring-normalizes both roots (comparison-only). A trace lacking a recorded root that
-  needs relocation is **UNVERIFIED** (named cause), never guessed. Servers that embed paths
-  *inside* command strings (a shell server's `command_line`) are **not yet** relocated —
-  tracked as the `replay-relocation-shell` follow-up.
+  needs relocation is **UNVERIFIED** (named cause), never guessed.
+- **Embedded-command paths: detected and abstained (added 2026-07-24,
+  `replay-relocation-shell` aspect 1).** A path embedded *inside* a shell server's
+  **executed-command** fields (`run_process`'s `command_line`/`argv`) is not a whole-value
+  argument, so the whole-value rule above is blind to it — and such a turn was silently
+  replayed against the *original* workspace. `command_embeds_in_root_path` now **detects** an
+  in-root path embedded in those fields and the gate abstains with a named cause
+  (`EMBEDDED_PATH_UNRELOCATABLE`, UNVERIFIED) — closing the silent miss. Detection is
+  **field-shaped** (keyed on the executed-command fields, not on inert content or whole-value
+  paths — a content field that merely *mentions* the root is preserved, as before). **Actually
+  relocating** the whole-token path inside the command string (so the turn earns a real
+  PASS/FAIL instead of abstaining) is aspect 2 (`shell-command-string-remap`), the tracked
+  follow-up.
 - **The same contract across a heterogeneous batch (added 2026-07-23,
   `replay-batch-server-rooting`).** `belay phase0 run` verifies a whole directory of captures
   from **one** `--server` command, but every trace in it carries its **own** recorded
