@@ -30,12 +30,12 @@ lands, every detected shell turn abstains.)
    reverted because it regressed the filesystem content-mention case; the executed-command danger
    is inherently field-shaped. The whole-value `cwd` field continues to be handled by the existing
    rule — this branch is only for the embedded-in-command case.
-3. **New named cause** `SHELL_COMMAND_UNRELOCATABLE` — sibling constant in `engine.py` near
+3. **New named cause** `EMBEDDED_PATH_UNRELOCATABLE` — sibling constant in `engine.py` near
    `:101-114`, exported in `__all__` (`:574-578`), with a stable short bucket label in
    `report.py` `_PREFIX_LABELS` (`:92-98`).
 4. **Route detected shell turns to abstain** in `_relocation_decision` (`engine.py:290-324`):
    with a recorded `source_root` and a detected embedded in-root path, return
-   `(None, SHELL_COMMAND_UNRELOCATABLE)` **until aspect 2 provides relocation**. Decided before
+   `(None, EMBEDDED_PATH_UNRELOCATABLE)` **until aspect 2 provides relocation**. Decided before
    restore/spawn.
 5. **Gate-wiring correctness (must-have 6).** The shell server has no argv root token; ensure the
    detected shell turn does **not** wrongly hit `UNROOTABLE_SERVER_COMMAND` (which keys on an
@@ -53,13 +53,13 @@ lands, every detected shell turn abstains.)
 1. **Detection fires:** a `run_process` turn with `command_line` embedding an in-root absolute
    path is detected as needing relocation (unit test on the detector).
 2. **Honest abstain, not silent miss:** with a recorded root, that turn yields **UNVERIFIED** with
-   cause `SHELL_COMMAND_UNRELOCATABLE` — asserted at the `_relocation_decision` / replay level,
+   cause `EMBEDDED_PATH_UNRELOCATABLE` — asserted at the `_relocation_decision` / replay level,
    decided before spawn. Never PASS/FAIL.
 3. **No UNROOTABLE misfire:** the root-less shell server command does **not** produce
    `UNROOTABLE_SERVER_COMMAND` for a shell turn gated on the manifest root (wiring test).
 4. **`cwd`-only turn untouched:** a `run_process` turn addressing files via the whole-value `cwd`
    field (no embedded path) is handled by the existing rule and is **not** forced to abstain.
-5. **Report bucket:** `SHELL_COMMAND_UNRELOCATABLE` maps to a stable bucket label in the Phase-0
+5. **Report bucket:** `EMBEDDED_PATH_UNRELOCATABLE` maps to a stable bucket label in the Phase-0
    report (unit test on `report.py`).
 6. **No regression:** all existing relocate/relocation tests stay green.
 7. **Determinism / offline:** unit + wiring tests are pure; any real-Seatbelt e2e is darwin-gated

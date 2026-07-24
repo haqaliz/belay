@@ -30,7 +30,7 @@ earning a real PASS/FAIL. Anything not provably a clean whole-token path falls b
      flags, non-path tokens — are byte-identical.
    - `argv`-list form: same per-element whole-value rule (an element that is a whole in-root path
      → remap; else leave / trigger abstain per below).
-2. **Abstain boundary (must-have 5).** Return the aspect-1 cause `SHELL_COMMAND_UNRELOCATABLE`
+2. **Abstain boundary (must-have 5).** Return the aspect-1 cause `EMBEDDED_PATH_UNRELOCATABLE`
    (UNVERIFIED) when any in-root path occurrence is **not** a clean whole token — substring of a
    token (`--file=/root/x`, `/root/x:/y`), inside a quoted blob the lexer keeps as one token, or
    the string is un-lexable. Decided before spawn. Conservative by design; no gate pressure to
@@ -63,7 +63,7 @@ earning a real PASS/FAIL. Anything not provably a clean whole-token path falls b
 4. **No false positive:** a benign correct shell edit via a relocatable whole-token path does
    **not** FLAG.
 5. **Whole-token vs substring:** a whole-token in-root path is remapped; an in-root path embedded
-   as a token substring → **UNVERIFIED** (`SHELL_COMMAND_UNRELOCATABLE`), not a partial rewrite
+   as a token substring → **UNVERIFIED** (`EMBEDDED_PATH_UNRELOCATABLE`), not a partial rewrite
    (unit tests on the primitive).
 6. **Byte-precision:** relocating one path token leaves every other byte of the command string
    (quoting, spacing, other tokens) identical (unit test).
@@ -79,7 +79,7 @@ earning a real PASS/FAIL. Anything not provably a clean whole-token path falls b
 ## Dependencies & sequencing
 
 - **Blocked by** `shell-detect-abstain` (needs the fixture, the detector, and the
-  `SHELL_COMMAND_UNRELOCATABLE` cause). Build second.
+  `EMBEDDED_PATH_UNRELOCATABLE` cause). Build second.
 
 ## Open questions / risks
 
