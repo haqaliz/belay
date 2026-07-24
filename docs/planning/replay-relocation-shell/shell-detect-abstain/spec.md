@@ -20,12 +20,14 @@ lands, every detected shell turn abstains.)
    - One `run_process` tool accepting `command_line` (string, path embedded), `argv` (list), and
      `cwd` (whole-value path); **deterministic** reply that carries the path (isolates the
      workspace-state variable). No annotations (matches the real server, `eval/README.md`).
-2. **Content-shaped (server-agnostic) detection.** Extend detection so an in-root root string
-   appearing as a **substring of a string argument that is not itself a whole-value path** is
-   recognized as an embedded path — for **any** server, **not** keyed on the tool name (resolves
-   PRD Gap 2). This closes the silent miss generally, like the parent whole-value rule; the
-   `/bin/sh`-specific relocation logic is deferred to aspect 2. The whole-value `cwd` field
-   continues to be handled by the existing rule — this branch is only for the embedded case.
+2. **Field-shaped detection of executed-command paths.** `command_embeds_in_root_path` recognizes
+   an in-root path embedded in the shell server's **executed-command fields** — `command_line`
+   (string) and `argv` (an element embedding a path that is not itself whole-value). It does NOT
+   inspect inert content fields or whole-value paths (those are already correct). **As-built note
+   (`1f44cf2`):** the earlier "substring anywhere, server-agnostic" form (PRD Gap 2) was built and
+   reverted because it regressed the filesystem content-mention case; the executed-command danger
+   is inherently field-shaped. The whole-value `cwd` field continues to be handled by the existing
+   rule — this branch is only for the embedded-in-command case.
 3. **New named cause** `SHELL_COMMAND_UNRELOCATABLE` — sibling constant in `engine.py` near
    `:101-114`, exported in `__all__` (`:574-578`), with a stable short bucket label in
    `report.py` `_PREFIX_LABELS` (`:92-98`).

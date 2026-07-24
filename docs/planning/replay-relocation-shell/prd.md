@@ -94,13 +94,18 @@ or is honestly UNVERIFIED.
    `command_line` (embedded path), `argv` (list), and `cwd`, with a **deterministic** reply that
    carries the path (so tests isolate the workspace-state variable). Its absence is why the gap
    survived the suite. *(Aspect 1.)*
-2. **Content-shaped (server-agnostic) detection.** `turn_needs_relocation` (and its `arguments`
-   scan) gains a branch that recognizes an in-root root string appearing as a **substring of a
-   string argument that is not itself a whole-value path** — i.e. an embedded path — for **any**
-   server, not keyed on the tool name. (Resolves self-critique Gap 2: the miss-closing detector
-   stays general like the parent whole-value rule; only the *relocation primitive* in aspect 2 is
-   `/bin/sh`-shaped.) A detected turn is routed to relocation or abstain — **never silently
-   un-relocated**. *(Aspect 1.)*
+2. **Field-shaped detection of executed-command paths.** A new predicate
+   `command_embeds_in_root_path` recognizes an in-root path embedded inside the shell server's
+   **executed-command fields** — `command_line` (string) and `argv` (list element that embeds a
+   path but is not itself a whole-value path). It does **not** inspect inert content fields
+   (`new_content`/`newText`/`content`) or whole-value path args — those are already correct
+   (whole-value paths anywhere, incl. `argv` elements, are relocated by the existing
+   `remap_arguments`; content mentioning the root is preserved by the shipped v0.4.0
+   content-boundary rule). A detected turn is routed to relocation or abstain — **never silently
+   un-relocated**. *(Aspect 1.)* — **See self-critique Gap 2: the "server-agnostic substring
+   anywhere" idea was BUILT AND REVERTED (`1f44cf2`); it regressed the filesystem content-mention
+   case. The executed-command danger is inherently field/tool-shaped and cannot be inferred from
+   annotations.**
 3. **A new named UNVERIFIED cause** (e.g. `SHELL_COMMAND_UNRELOCATABLE`) as a sibling constant in
    `engine.py` (near `:101-114`), exported in `__all__` (`:574-578`), with a stable Phase-0 bucket
    label in `report.py` `_PREFIX_LABELS` (`:92-98`). Returned whenever a detected shell turn
@@ -207,7 +212,19 @@ replace — and tokenize-and-rejoin reintroduces re-quoting drift the PRD forbid
 isn't cheap, B ships as "relocate the easy whole-`argv` case, abstain the `command_line` case" and
 still beats today.
 
-### 🟡 Gap 2 — tool-name-keyed detection is brittle; prefer a content-shaped detector — ✅ RESOLVED (2026-07-24): adopted the content-shaped detector; must-have 2 updated
+### 🟡 Gap 2 — tool-name-keyed detection is brittle; prefer a content-shaped detector — ⚠️ REVERSED at build (2026-07-24, `1f44cf2`)
+
+**The content-shaped "substring anywhere, any server" detector was built (`0470499`) and then
+reverted.** It over-fired: a filesystem `edit` whose `new_content` merely *mentions* the workspace
+root was flagged embedded → abstained (UNVERIFIED), regressing the shipped v0.4.0 content-boundary
+case (relocate the `path`, preserve content) and violating must-have 7 / honesty property #5. The
+lesson: the embedded-path danger is about paths the server will **execute/resolve**, which no MCP
+annotation exposes — so detection must key on the known executed-command fields (`command_line`,
+`argv`), reverting toward the spec's original field/tool-shaped intent. The narrowed detector
+`command_embeds_in_root_path` restores the filesystem case with no test change. **Documented
+limitation:** a *different* shell server using differently-named executed-command fields would not
+be detected (its whole-value paths are still caught by the existing rule); extensible when one
+appears, and honest rather than an over-broad false-abstain on working cases.
 
 Must-have 2 keys the shell branch on the tool name `run_process`. That reintroduces
 server-specificity the parent design deliberately avoided (the whole-value rule is
