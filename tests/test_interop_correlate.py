@@ -117,6 +117,36 @@ def test_building_the_index_twice_over_the_same_records_is_deterministic(tmp_pat
     assert first == second
 
 
+def test_a_duplicate_response_to_one_tools_call_does_not_silently_pick_the_wrong_ordinal(
+    tmp_path,
+):
+    """A non-conforming server replying TWICE to the same id (`index.py`'s own
+    `duplicate-response` fact) produces two `tool_calls` entries sharing ONE
+    `request_seq` — the original answered call, and the duplicate-response entry that
+    inherits its method — but different ordinals `n`. A naive `{request_seq: n}` dict
+    comprehension is last-write-wins and would silently point this traceparent's turn
+    at the WRONG ordinal: the exact "attach a verdict to the wrong span" failure this
+    capability must never produce. The honest outcome mirrors the existing
+    `(traceId, id)` key-collision handling: AMBIGUOUS, never a guessed pick.
+    """
+    duplicate_reply = b'{"jsonrpc":"2.0","id":5,"result":{"content":[{"type":"text","text":"ok"}]}}'
+    records = trace_of(
+        tmp_path,
+        [
+            ("c2s", TRACE_CONTEXT_META),
+            ("s2c", duplicate_reply),
+            ("s2c", duplicate_reply),
+        ],
+    )
+
+    index = build_turn_index(records)
+
+    assert index[(TRACE_ID, SPAN_ID)] is AMBIGUOUS
+
+    span = _span(TRACE_ID, SPAN_ID)
+    assert match_span(span, index) == Ambiguous()
+
+
 def test_malformed_traceparent_is_skipped_without_crashing(tmp_path):
     """A short/garbled traceparent string is defensively parsed: no crash, no entry."""
     bad = (

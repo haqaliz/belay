@@ -118,11 +118,26 @@ def build_turn_index(records: list[dict]) -> TurnIndex:
     calling it twice over the same records yields equal results.
     """
     calls = tool_calls(derive_correlation(records))
-    turn_of_request_seq: dict[int, int] = {
-        entry["request_seq"]: n
-        for n, entry in enumerate(calls)
-        if entry["request_seq"] is not None
-    }
+    # A dict-comprehension `{request_seq: n}` would be last-write-wins. That is unsafe:
+    # a non-conforming server that replies TWICE to one `tools/call` id makes
+    # `derive_correlation` emit a `duplicate-response` entry that INHERITS the original
+    # request's `method` (still "tools/call") and `request_seq`, so `tool_calls` yields
+    # two entries sharing one `request_seq` at two different ordinals. Last-write-wins
+    # would silently point that `request_seq` at the WRONG turn — the very "attach a
+    # verdict to the wrong span" failure this whole module exists to prevent. So a
+    # `request_seq` seen with a *second, different* `n` is recorded as AMBIGUOUS here,
+    # mirroring the `(traceId, id)` key-collision handling below.
+    turn_of_request_seq: dict[int, Union[int, _Ambiguous]] = {}
+    for n, entry in enumerate(calls):
+        request_seq = entry["request_seq"]
+        if request_seq is None:
+            continue
+        existing = turn_of_request_seq.get(request_seq)
+        if existing is None:
+            turn_of_request_seq[request_seq] = n
+        elif existing is not AMBIGUOUS and existing != n:
+            turn_of_request_seq[request_seq] = AMBIGUOUS
+        # else: the same (request_seq, n) seen twice, or already AMBIGUOUS — no change.
 
     index: TurnIndex = {}
     for record in derive_connection_context(records):
