@@ -461,24 +461,24 @@ def test_rootless_manifest_with_abs_path_is_unverified(tmp_path) -> None:
 
 
 @darwin_only
-def test_content_containing_the_root_is_not_corrupted(tmp_path) -> None:
-    """An edit whose NEW CONTENT contains the workspace path string replays without rewrite.
+def test_content_containing_the_root_conservatively_abstains(tmp_path) -> None:
+    """An edit whose NEW CONTENT contains the workspace path string is conservatively UNVERIFIED.
 
-    The relocation rule remaps only a whole-value path ARGUMENT (`path`), never a `new_content`
-    field. So an edit whose body legitimately embeds the workspace root string is written to
-    the relocated scratch BYTE-FOR-BYTE, root string intact — the delta reflects the true
-    content. If content were substring-remapped, the original root would be gone and the scratch
-    root injected; this asserts neither happens.
+    The whole-value rule alone would remap only the `path` ARGUMENT and leave `new_content`
+    intact, so a content-preserving relocation is *possible* here. But the content-shaped
+    embedded-path detector (aspect 1) cannot distinguish a workspace path embedded in file
+    content from one embedded in a shell command at DETECTION time — both are an in-root path
+    inside a string value — so the honesty floor abstains for the whole turn rather than risk a
+    silent miss on the command case. The verdict is decided BEFORE any restore or spawn:
+    `UNVERIFIED` with cause `EMBEDDED_PATH_UNRELOCATABLE`, never a fabricated verdict and never a
+    corrupted content write. (Aspect 2 narrows this via tokenization so such a turn relocates.)
     """
-    holder = {}
 
     def frames_for(root: str):
         new_content = (
             f"BANNER = '{root}/config'  # the workspace path lives INSIDE file content\n"
             "assert authenticate('user', 'wrong') is False\n"
         )
-        holder["new_content"] = new_content
-        holder["root"] = root
         call = _call(EDIT_TOOL, {"path": _abs_path(root), "new_content": new_content, "reply_format": "plain"})
         return call, _reply(EDIT_REPLY)
 
@@ -487,12 +487,10 @@ def test_content_containing_the_root_is_not_corrupted(tmp_path) -> None:
     reply = engine.replay_turn(
         records, 0, server_command=_server_cmd(root), manifest_dir=manifest_dir, timeout=20.0,
     )
-    assert reply.status == engine.REPLAYED, reply
-    written = (Path(reply.workspace) / SEED_REL_PATH).read_text(encoding="utf-8")
-
-    assert written == holder["new_content"], "the edit body must be written byte-for-byte"
-    assert holder["root"] in written, "the original workspace root string must survive in content"
-    assert reply.workspace not in written, "the scratch root must NOT be injected into content"
+    assert reply.status == engine.UNVERIFIED, reply
+    assert reply.cause == engine.EMBEDDED_PATH_UNRELOCATABLE, reply.cause
+    assert reply.reinvoked is False, "the honest abstain must NOT re-invoke the server"
+    assert reply.replayed_reply is None
 
 
 # --- 8. No regression: cwd-relative fixtures replay exactly as before ------------------

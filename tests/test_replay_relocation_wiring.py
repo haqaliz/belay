@@ -28,7 +28,14 @@ from pathlib import Path
 
 from belay.replay import engine
 from belay.replay.client import _relocate_frame
-from belay.replay.engine import ROOTLESS_RELOCATION, UNVERIFIED, _equivalence, _relocation_decision
+from belay.replay.engine import (
+    EMBEDDED_PATH_UNRELOCATABLE,
+    ROOTLESS_RELOCATION,
+    UNROOTABLE_SERVER_COMMAND,
+    UNVERIFIED,
+    _equivalence,
+    _relocation_decision,
+)
 from belay.snapshot.substrate import ClonefileBackend, FIDELITY_GAPS
 from belay.trace import TraceWriter
 
@@ -120,6 +127,67 @@ def test_relocation_decision_gates_on_in_root_paths() -> None:
         "a rootless cwd-relative turn must be UNCHANGED even though argv holds an absolute "
         "python path"
     )
+
+
+# --- 2b. Embedded in-root path in a string argument -> honest abstain ---------
+
+
+def test_relocation_decision_abstains_for_embedded_in_root_path() -> None:
+    """A turn embedding an in-root path in a string value abstains (EMBEDDED_PATH_UNRELOCATABLE).
+
+    The shell surface: a `run_process`-shaped turn buries the in-root workspace path inside a
+    `command_line` string. The server itself is root-less by launch (`["node", "srv.js"]` — no
+    argv token under the recorded root), so the naive gate would either miss it (whole-value
+    blind) or, if it reached the argv check, misfire `UNROOTABLE_SERVER_COMMAND`. Instead the
+    embedded detector runs FIRST and returns the honest abstain, decided before any spawn.
+    """
+    reloc_root, fallback = _relocation_decision(
+        "/root/w", {"command_line": "python /root/w/x.py"}, ["node", "srv.js"]
+    )
+    assert reloc_root is None
+    assert fallback == EMBEDDED_PATH_UNRELOCATABLE
+    assert fallback != UNROOTABLE_SERVER_COMMAND, (
+        "a root-less shell server command must NOT be reported as UNROOTABLE when the real "
+        "cause is an embedded in-root path"
+    )
+
+
+def test_relocation_decision_whole_value_only_still_relocates() -> None:
+    """Regression: a whole-value-only in-root path is still relocated, not diverted to abstain.
+
+    The embedded route must be purely additive — a turn whose only in-root path is a whole
+    `path` argument (and whose server argv is rooted under the recorded root) relocates exactly
+    as before. If the embedded detector stole this case the existing filesystem relocation
+    would silently break.
+    """
+    reloc_root, fallback = _relocation_decision(
+        "/root/w", {"path": "/root/w/x"}, ["srv", "/root/w"]
+    )
+    assert reloc_root == "/root/w" and fallback is None
+
+
+def test_relocation_decision_abstains_when_both_whole_and_embedded() -> None:
+    """A turn carrying BOTH a whole-value path and an embedded path abstains — never partial.
+
+    Relocating only the whole-value path while leaving the embedded one pointing at the
+    original workspace would half-relocate the turn and manufacture a false delta. The
+    conservative floor abstains for the whole turn.
+    """
+    reloc_root, fallback = _relocation_decision(
+        "/root/w",
+        {"path": "/root/w/x", "command_line": "python /root/w/y.py"},
+        ["srv", "/root/w"],
+    )
+    assert reloc_root is None
+    assert fallback == EMBEDDED_PATH_UNRELOCATABLE
+
+
+def test_relocation_decision_cwd_relative_unaffected_by_embedded_route() -> None:
+    """A cwd-relative turn (no in-root anything) is still `(None, None)` — unchanged."""
+    reloc_root, fallback = _relocation_decision(
+        "/root/w", {"command_line": "python x.py", "path": "src/x.py"}, ["node", "srv.js"]
+    )
+    assert reloc_root is None and fallback is None
 
 
 # --- 3. Honest fallback: rootless manifest + an in-root absolute path ---------

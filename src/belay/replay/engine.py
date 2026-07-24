@@ -65,7 +65,12 @@ from belay.index import derive_correlation, tool_calls
 from belay.replay.client import ANSWERED, DEFAULT_TIMEOUT, FrameOutcome
 from belay.replay.client import replay_turn as _client_replay_turn
 from belay.replay.persist import load_snapshot
-from belay.replay.relocate import canonicalize_obj, is_under, turn_needs_relocation
+from belay.replay.relocate import (
+    arguments_hold_embedded_root,
+    canonicalize_obj,
+    is_under,
+    turn_needs_relocation,
+)
 from belay.snapshot.bth1 import FieldDiff, diff_records, scan_tree
 from belay.snapshot.substrate import guarded_restore
 
@@ -111,6 +116,20 @@ ROOTLESS_RELOCATION = (
 #: opposite gap: there the root was never recorded at all.
 UNROOTABLE_SERVER_COMMAND = (
     "server command is not rooted at the recorded workspace; cannot relocate"
+)
+
+#: The honesty floor for an EMBEDDED in-root path: the manifest recorded a root, but the
+#: turn buries an in-root absolute path *inside* a string argument (a shell `command_line`,
+#: a nested argv element) rather than as a whole-value `path`. The whole-value relocation
+#: rule cannot safely rewrite it — a substring remap of an argument would corrupt content
+#: written to the scratch and manufacture a false delta — so the turn abstains here, before
+#: any restore or spawn, rather than replaying un-relocated against the original workspace
+#: (a contaminated verdict). Distinct from `UNROOTABLE_SERVER_COMMAND` (a mis-rooted server
+#: command) and `ROOTLESS_RELOCATION` (no root recorded at all): here the root is known and
+#: the path is present, but embedded, so relocation of the command string is the follow-up
+#: aspect's job; until it lands, every embedded-path turn is honestly UNVERIFIED.
+EMBEDDED_PATH_UNRELOCATABLE = (
+    "an in-root path is embedded in an argument value; cannot safely relocate"
 )
 
 #: The literal argv token an operator writes where the server's workspace allow-root
@@ -294,11 +313,16 @@ def _relocation_decision(
 
     - `relocation_root` is the root to hand the client, or `None` to keep today's
       byte-for-byte cwd-relative replay.
-    - `fallback_cause` is set (with `relocation_root` `None`) for the two honest fallbacks:
+    - `fallback_cause` is set (with `relocation_root` `None`) for the honest fallbacks:
       `ROOTLESS_RELOCATION` — a turn that carries an absolute-path argument but whose
-      manifest recorded no root; and `UNROOTABLE_SERVER_COMMAND` — a turn that needs
+      manifest recorded no root; `UNROOTABLE_SERVER_COMMAND` — a turn that needs
       relocation, whose root WAS recorded, but whose server command holds no token under
-      that root, so the command cannot be relocated with it.
+      that root, so the command cannot be relocated with it; and
+      `EMBEDDED_PATH_UNRELOCATABLE` — a recorded root IS present but the turn buries an
+      in-root path *inside* a string argument (a shell `command_line`), which the
+      whole-value rule cannot safely rewrite. The embedded check runs FIRST, before the
+      whole-value relocation, so an embedded turn never reaches (nor misfires) the argv
+      rooting check — relocating the command string is the follow-up aspect's job.
 
     With a recorded root, the whole-value/in-root rule (`turn_needs_relocation`) decides
     exactly, so an out-of-root abs path (`/etc/hosts`) and a cwd-relative turn are both
@@ -314,6 +338,8 @@ def _relocation_decision(
     too, which is a false abstention, never a false verdict.
     """
     if source_root is not None:
+        if arguments_hold_embedded_root(arguments, source_root):
+            return None, EMBEDDED_PATH_UNRELOCATABLE
         if turn_needs_relocation(arguments, list(argv), source_root):
             if not any(is_under(token, source_root) for token in argv):
                 return None, UNROOTABLE_SERVER_COMMAND
@@ -568,6 +594,7 @@ def _gather_frames(
 
 __all__ = [
     "DIVERGED",
+    "EMBEDDED_PATH_UNRELOCATABLE",
     "EQUAL",
     "NOT_VERIFIABLE",
     "REPLAYED",
