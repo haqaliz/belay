@@ -178,23 +178,41 @@ def test_relocation_decision_gates_on_in_root_paths() -> None:
 # --- 2b. Embedded in-root path in a string argument -> honest abstain ---------
 
 
-def test_relocation_decision_abstains_for_embedded_in_root_path() -> None:
-    """A turn embedding an in-root path in a string value abstains (EMBEDDED_PATH_UNRELOCATABLE).
+def test_relocation_decision_relocatable_command_line_relocates() -> None:
+    """Aspect 2 lift: a `command_line` whose embedded in-root path is a clean whole token relocates.
 
-    The shell surface: a `run_process`-shaped turn buries the in-root workspace path inside a
-    `command_line` string. The server itself is root-less by launch (`["node", "srv.js"]` — no
-    argv token under the recorded root), so the naive gate would either miss it (whole-value
-    blind) or, if it reached the argv check, misfire `UNROOTABLE_SERVER_COMMAND`. Instead the
-    embedded detector runs FIRST and returns the honest abstain, decided before any spawn.
+    A `run_process`-shaped turn buries the in-root workspace path inside a `command_line` string
+    as a whole shell token (`python /root/w/x.py`). Aspect 1 abstained on ALL such turns; aspect 2
+    asks "is the embedding relocatable?" and — because this one is a clean whole token — returns
+    `(source_root, None)` to RELOCATE it. The server is root-less by launch (`["node", "srv.js"]`,
+    no argv token under the recorded root), and that is fine: a shell serves any absolute path, so
+    the argv-rooting `UNROOTABLE` guard (which assumes an argv-rooted server) does NOT apply to a
+    relocatable command_line. This is the one place aspect 1's unconditional abstain is lifted.
     """
     reloc_root, fallback = _relocation_decision(
         "/root/w", {"command_line": "python /root/w/x.py"}, ["node", "srv.js"]
+    )
+    assert reloc_root == "/root/w" and fallback is None, (
+        "a relocatable whole-token command_line path must relocate, not abstain"
+    )
+
+
+def test_relocation_decision_abstains_for_embedded_residue_in_command_line() -> None:
+    """A `command_line` whose in-root path is FUSED into a token still abstains (residue).
+
+    The abstain floor aspect 2 keeps: a `--file=/root/w/x`-shaped path is substring-fused into a
+    token, not a clean whole token, so `relocate_command_line` ABSTAINs and the gate returns
+    `EMBEDDED_PATH_UNRELOCATABLE` — never a partial rewrite. The server is root-less by launch,
+    so the cause must be EMBEDDED (an un-relocatable embedded path), never `UNROOTABLE`.
+    """
+    reloc_root, fallback = _relocation_decision(
+        "/root/w", {"command_line": "python --file=/root/w/x"}, ["node", "srv.js"]
     )
     assert reloc_root is None
     assert fallback == EMBEDDED_PATH_UNRELOCATABLE
     assert fallback != UNROOTABLE_SERVER_COMMAND, (
         "a root-less shell server command must NOT be reported as UNROOTABLE when the real "
-        "cause is an embedded in-root path"
+        "cause is an un-relocatable embedded in-root path"
     )
 
 
@@ -227,16 +245,17 @@ def test_relocation_decision_filesystem_content_mentioning_root_relocates() -> N
     assert reloc_root == "/root/w" and fallback is None
 
 
-def test_relocation_decision_abstains_when_both_whole_and_embedded() -> None:
-    """A turn carrying BOTH a whole-value path and an embedded path abstains — never partial.
+def test_relocation_decision_abstains_when_whole_value_plus_unrelocatable_residue() -> None:
+    """A turn with a relocatable whole-value path AND an un-relocatable command residue abstains.
 
-    Relocating only the whole-value path while leaving the embedded one pointing at the
-    original workspace would half-relocate the turn and manufacture a false delta. The
-    conservative floor abstains for the whole turn.
+    The half-relocation guard aspect 2 must preserve: relocating the whole-value `path` while
+    leaving the fused command residue (`--file=/root/w/y`) pointing at the original workspace
+    would half-relocate the turn and manufacture a false delta. Because the residue is NOT
+    relocatable, the conservative floor abstains for the WHOLE turn — never partially.
     """
     reloc_root, fallback = _relocation_decision(
         "/root/w",
-        {"path": "/root/w/x", "command_line": "python /root/w/y.py"},
+        {"path": "/root/w/x", "command_line": "python --file=/root/w/y"},
         ["srv", "/root/w"],
     )
     assert reloc_root is None
