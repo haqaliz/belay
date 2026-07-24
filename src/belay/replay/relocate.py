@@ -44,6 +44,7 @@ import os
 from typing import Any
 
 __all__ = [
+    "arguments_hold_embedded_root",
     "canonicalize_obj",
     "canonicalize_reply",
     "is_under",
@@ -210,4 +211,30 @@ def _contains_in_root_string(obj: object, root: str) -> bool:
         return any(_contains_in_root_string(item, root) for item in obj)
     if isinstance(obj, str):
         return is_under(obj, root)
+    return False
+
+
+def arguments_hold_embedded_root(obj: object, root: str) -> bool:
+    """True iff any string in `obj` **embeds** the recorded root without being it whole-value.
+
+    The content-shaped, server-agnostic companion to `turn_needs_relocation`. The whole-value
+    rule is blind to an in-root absolute path buried **inside** a string leaf — a shell
+    `command_line` (`"python /root/w/x.py"`), a nested `argv` element — so such a turn is today
+    replayed un-relocated against the original workspace and silently contaminates the verdict.
+    This predicate closes that miss: a `str` leaf holds an embedded root iff `root` (normalized
+    the module's lexical way) is a **substring** of it AND the leaf is **not** itself a
+    whole-value `is_under(leaf, root)` path — that whole-value case is `remap_arguments`'s to
+    *relocate*, and must not be stolen into the abstain route here.
+
+    Pure, no I/O; recurses `dict`/`list`, every non-string scalar is False. Deliberately
+    **conservative**: a `newText`/`content` field that merely *mentions* the root as a substring
+    is flagged too, because at detection time content is indistinguishable from a command — the
+    honesty floor abstains rather than under-detect. (Aspect 2 narrows this via tokenization.)
+    """
+    if isinstance(obj, dict):
+        return any(arguments_hold_embedded_root(value, root) for value in obj.values())
+    if isinstance(obj, list):
+        return any(arguments_hold_embedded_root(item, root) for item in obj)
+    if isinstance(obj, str):
+        return os.path.normpath(root) in obj and not is_under(obj, root)
     return False

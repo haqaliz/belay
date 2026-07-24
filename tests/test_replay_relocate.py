@@ -25,6 +25,7 @@ from __future__ import annotations
 import copy
 
 from belay.replay.relocate import (
+    arguments_hold_embedded_root,
     canonicalize_obj,
     canonicalize_reply,
     is_under,
@@ -236,6 +237,35 @@ def test_remap_functions_are_pure() -> None:
 
     turn_needs_relocation(args, argv, "/root")
     assert args == args_before and argv == argv_before
+
+
+def test_arguments_hold_embedded_root_detects_embedded_paths() -> None:
+    """THE embedded-path detector: an in-root path *inside* a string value is detected.
+
+    The whole-value rule (`turn_needs_relocation`/`remap_arguments`) is blind to a path
+    buried in a shell `command_line` or any other string leaf. This content-shaped predicate
+    closes that silent miss: an in-root root string that appears as a **substring** of a
+    string argument which is NOT itself a whole-value in-root path is an embedded path.
+
+    - embedded in a command string -> True.
+    - a whole-value in-root path (`is_under`) -> False (that is the whole-value rule's job,
+      handled and *relocated* elsewhere — this predicate must not steal it into abstain).
+    - an out-of-root embedded path -> False (relocation never covered it).
+    - a string that never mentions the root -> False.
+    - recursion reaches nested dicts/lists.
+    - a `content`/`newText` field that merely mentions the root as a substring -> True: at
+      DETECTION time content is indistinguishable from a command, so the conservative floor
+      MUST flag it (aspect 2 narrows this via tokenization; aspect 1 must not under-detect).
+    """
+    root = "/root/w"
+
+    assert arguments_hold_embedded_root({"command_line": "python /root/w/x.py"}, root) is True
+    assert arguments_hold_embedded_root({"path": "/root/w/x"}, root) is False
+    assert arguments_hold_embedded_root({"command_line": "python /other/x.py"}, root) is False
+    assert arguments_hold_embedded_root({"cmd": "echo hi"}, root) is False
+    assert arguments_hold_embedded_root({"a": [{"command_line": "cd /root/w && pytest"}]}, root) is True
+    # The conservative floor: a content field mentioning the root is flagged too (True).
+    assert arguments_hold_embedded_root({"newText": "path is /root/w/x"}, root) is True
 
 
 def test_remap_prefix_swaps_the_root() -> None:

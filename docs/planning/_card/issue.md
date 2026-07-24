@@ -1,80 +1,66 @@
-# Card: feat/phase0-mint-execution
+# feat/replay-relocation-shell
 
-**Type:** feat · **Slug:** phase0-mint-execution · **Owner:** aliz
-**Branch:** feat/phase0-mint-execution/aliz (off `master` @ 07890e7, v0.4.0)
-
-No GitHub issue (`gh issue list` returns empty — the tracker is unused). Task source: the
-inline brief below, produced by `belay-next` on 2026-07-23. This unit **resumes** the
-existing `phase0-live-mint` unit's `mint-execution` aspect, which Stage 1 halted on
-2026-07-22 with finding #3 (replay contamination), now fixed and merged as
-`replay-absolute-path-fidelity` (v0.4.0, `9a69fae`).
+**Type:** feat · **Owner:** aliz · **Source:** inline brief (no GitHub issue; tracked follow-up)
+**Base:** local `master` @ 603c75a (contains `replay-batch-server-rooting`: `{workspace}`
+placeholder + `UNROOTABLE_SERVER_COMMAND`/`ROOTLESS_RELOCATION` guards — the foundation this
+extends). Note: origin/master (07890e7, v0.4.0) is BEHIND local master; the dependency commits
+are unpushed.
 
 ## Brief
 
-Resume the Phase-0 live mint and publish **the number** — the per-instance violation rate
-with its denominator, false-positive rate, and UNVERIFIED-by-cause breakdown — then write
-the pre-registered PROCEED or PIVOT.
+Extend replay path-relocation to the **shell server** (`mcp-server-commands`), whose
+`command_line` / `argv` fields embed the workspace path *inside* command strings — the tracked
+follow-up that the shipped filesystem relocation fix (`replay-absolute-path-fidelity`, v0.4.0)
+deliberately deferred.
 
-This is **the Phase-0 gate itself** (`CAPABILITY_ROADMAP.md:323-328`), not a new
-capability. C1–C6 are shipped and merged; the gate sits between C5 and every Phase-1
-surface (C7 live console). Building the launch surface before the gate that decides
-whether there is a launch is out of order.
+**Why now (moat + gate):** The filesystem relocation fix shipped, but its own spec split shell
+out openly (`docs/planning/replay-absolute-path-fidelity/replay-relocation/spec.md:34`): shell
+embeds paths inside command strings, so *"the Phase-0 number's shell batch is
+known-contaminated, not silently so."* The Phase-0 mint runs a shell batch
+(`eval/minting_driver/batch.py:25` — "once per server (filesystem, shell)";
+`eval/minting_driver/servers.py:165` `shell_server_command()` takes no root), so shell turns
+today replay with their embedded absolute paths pointing at the *original* workspace — a
+false-verdict risk (R5, the worst outcome this engine can produce) or an excluded-from-the-number
+coverage loss. This is core **A2 replay-moat** work; the parent spec labels it *"The core-engine
+fix. Highest care."*
 
-The one thing that blocked it is fixed. `docs/planning/phase0-live-mint/mint-execution/
-STAGE1_FINDINGS.md` finding #3 recorded that driving `pallets__flask-4045` through the
-harness produced `VERIFIED_FLAGGED 1/1 = 100%` on a **correct** edit — a false positive
-caused by replay reading the *live* workspace instead of the restored scratch, for servers
-that take an absolute root at launch. `replay-absolute-path-fidelity` (merged) relocates the
-recorded `source_root` into the scratch. **That fix is proven in fixtures, not in the
-wild** — re-minting the same instance is the cheapest possible confirmation.
+**Axis:** A2 (deterministic replay: result-equivalence + effect-conformance). No A1/A3 change.
 
-### Staged execution (from `phase0-live-mint/prd.md`, requirement 17)
+## The hard part (caveat — R5)
 
-- **Stage 1 (re-mint, ~1 instance):** confirm the false positive is gone in the wild.
-- **Stage 2 (~10):** measure attrition + cost; answer the open `npx`/TCC/multi-instance
-  questions; generate `selected.json`.
-- **Stage 3 (~65–70, incl. 2–3 clean controls):** the mint proper.
-- **Audit → fill `docs/technical/PHASE0_RESULTS.md` (18 fields + decision) → fix the
-  stale RUNBOOK.**
+The filesystem case uses a **whole-value** remap rule: rewrite a string iff its *entire value*
+is an absolute path under the recorded root. That rule deliberately **cannot** touch a path
+buried inside a shell command string (`python /abs/x.py`), and a naive **substring** remap of a
+*mutated* command string reopens the exact content-corruption risk the whole-value rule was
+built to avoid (`spec.md:30-38`). Faithful shell replay needs **command-string-aware**
+relocation — a distinct, harder design. The guardrail is the parent spec's asymmetry insight:
+*arguments* are mutated → remap **conservatively**; *replies* are only compared → normalize
+**liberally**. Where a command string can't be safely relocated, the turn must fall to **honest
+UNVERIFIED with a named cause — never a false verdict** (UNVERIFIED-never-PASS).
 
-### Acceptance (written first, before any spend)
+## Acceptance tests (test-first — adapt the parent spec's, shell-specific)
 
-1. Re-minting `pallets__flask-4045` no longer reports `VERIFIED_FLAGGED 1/1`; the
-   known-correct edit reads clean.
-2. Re-running that same trace + manifests against a **mutated or deleted** original
-   workspace yields an **identical** verdict (the relocation guarantee, in the wild).
-3. A 2-instance batch verifies through **one** `belay phase0 run --server` invocation with
-   heterogeneous `source_root`s — or the multi-instance limitation is fixed/named before
-   Stage 2 spend.
-4. `selected.json` generated by the stratified draw, including 2–3 clean controls. A
-   FAILing control **voids the mint**.
-5. The pre-registered gate criteria are copied into `PHASE0_RESULTS.md` **before** Stage 3
-   executes (non-negotiable ordering).
-6. `PHASE0_RESULTS.md`: 18/18 fields + the PROCEED/PIVOT line. RUNBOOK corrected.
+1. **Contamination core (falsifiable):** a shell capture embedding the workspace path in
+   `command_line`, replayed with the original workspace **pristine / mutated / deleted**, yields
+   the **same** verdict (invariant to live workspace state).
+2. **No content corruption:** a command string that legitimately *contains* the path as data is
+   not rewritten; the observed delta reflects true content.
+3. **`cwd` whole-value already works:** a shell turn addressing files via the clean `cwd` field
+   (whole-value path) is relocated correctly today and stays green — this feature is about the
+   *embedded-in-command-string* case, not `cwd`.
+4. **Honest fallback:** a shell turn that needs relocation but cannot be safely
+   command-string-relocated → **UNVERIFIED** with a named cause, never PASS/FAIL.
+5. **No regression:** every existing cwd-relative + filesystem-relocation replay test stays
+   green (esp. the scratch-copy isolation test).
+6. **Determinism:** relocated shell replay is a pure function of (trace, snapshot); no clock, no
+   network, no ambient-FS dependence. Offline, CI-safe; darwin-gate only for real Seatbelt replay.
 
-### Known caveats (carried in, not discovered later)
+## Key references
 
-- **Multi-instance replay-server is untested.** `STAGE1_FINDINGS.md` §5: *"Multi-instance
-  replay-server with one `--server` and heterogeneous per-instance `work_dir`s was never
-  reached."* `belay phase0 run` takes a single `--server` command for a whole batch dir.
-  Whether the new argv root-token relocation makes that work across instances with
-  different `source_root`s is unverified. **Verify at n=2 before Stage 2.**
-- **The shell batch is known-contaminated.** `replay-relocation/spec.md:30-35`: shell
-  servers embed paths *inside* `command_line`, which relocation deliberately does not
-  touch. The mint runs **filesystem-only** and states the shell exclusion; building
-  command-string-aware relocation (`replay-relocation-shell`) first is the wrong order
-  because the filesystem batch alone carries the ≥50 denominator.
-- **R1 is Fatal-impact and PIVOT is a legitimate outcome.** The pre-registered criteria
-  (`phase0-live-mint/prd.md`): PROCEED iff ≥3 *independent* hand-audited TPs AND
-  denominator ≥50 AND no `INSTRUMENT SUSPECT`. A FAILing control voids the mint. The FP
-  rate is stated, never omitted.
-- **Still open from Stage 1:** `selected.json` ungenerated; the RUNBOOK is wrong in five
-  places (incl. the invalid `--server -- <cmd>` form).
-
-## Relationship to the existing `phase0-live-mint` unit
-
-That unit's PRD, aspect specs, and `STAGE1_FINDINGS.md` are **already written and merged**
-and remain authoritative on gate criteria, stratification, and the honesty guards. This
-unit does not rewrite them — it executes the `mint-execution` aspect that was blocked, and
-adds only what the blocker's removal makes newly necessary (re-validation of the fix in the
-wild, the multi-instance `--server` question, and the results/RUNBOOK write-up).
+- `docs/planning/replay-absolute-path-fidelity/replay-relocation/spec.md` (§ shell-server
+  determination, task 1, DONE 2026-07-22 — the schema read + the split rationale)
+- `src/belay/replay/engine.py` (`WORKSPACE_PLACEHOLDER`, `UNROOTABLE_SERVER_COMMAND`,
+  `ROOTLESS_RELOCATION`, `turn_needs_relocation`, relocation dispatch)
+- `mcp-server-commands@0.8.2` `run_process` schema: `command_line` | `argv` (paths embedded),
+  optional `cwd` (clean path field), `stdin_text`, `timeout_ms`
+- `eval/minting_driver/{batch,servers}.py` (the shell batch that consumes this)
