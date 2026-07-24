@@ -169,3 +169,7 @@ def test_the_guard_actually_sees_the_imports_the_layer_makes() -> None:
     # And corpus/ is genuinely in scope: it imports its own case/verify machinery, so seeing
     # a belay.corpus import proves the guard walks corpus/, not just verify/.
     assert any(name.startswith("belay.corpus") for name in seen), seen
+    # And interop/ is genuinely in scope too: only interop/attach.py imports belay.interop.*
+    # (correlate.py's Matched/Unmatched/Ambiguous, otlp.py's Span), so seeing one proves the
+    # walk reads interop/ itself, not just verify/ and corpus/.
+    assert any(name.startswith("belay.interop") for name in seen), seen

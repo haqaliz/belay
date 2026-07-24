@@ -466,6 +466,21 @@ boundary). This number decides whether the Phase-2 second surface is needed.
 
 **Dependencies:** C1–C4.
 
+**As built (first slice — `belay interop correlate`, `src/belay/interop/`):** ingest
+(`otlp.py`, stdlib-only OTLP/JSON parsing — **no OTel SDK dependency**, zero-dep preserved) →
+correlate (`correlate.py`) → attach (`attach.py`) → report (`report.py`), wired into the CLI as
+`belay interop correlate <otlp> <trace> [--server -- CMD…] [--json]`. Correlation is
+**deterministic**, not a time-window heuristic: a span matches turn `n` iff its `(traceId,
+spanId)` names EXACTLY the W3C `traceparent` C1 already captured on that turn's request frame
+(`trace_context`, via `belay.connection.derive_connection_context`) — a re-used span id across
+turns is `ambiguous-correlation`, never a guess. A span with no matching turn, no `--server`
+given (so nothing was replayed), or an unrestorable pre-state is reported `UNVERIFIED` with a
+named cause (`no-matching-mcp-turn` / `ambiguous-correlation` / `not-replayed-no-server` /
+`unrestorable-pre-state`) — **never PASS**. The command's own eval data is the correlation rate
+`matched/total`, printed with its denominator (the R6 number). **Deferred to a second aspect:**
+exporting verdicts back into a collector, multi-trace-directory aggregation (single trace file
+only for now), and the `NOT_COVERED` reclassification.
+
 ---
 
 ## Guardrails (restated so the engine doesn't drift)
@@ -503,4 +518,4 @@ built.
 | C6 | Failure corpus | Wk 5 | 1 | No — moat #2 |
 | C7 | Live console | Wk 5–6 | 1 | No — the launch surface |
 | C8 | Claim re-derivation (A3) | Wk 7 | 1 | **Yes — cut first** |
-| C9 | Observability interop | Wk 8 | 1 | Yes — cut second |
+| C9 | Observability interop | Wk 8 | 1 | 🟡 **FIRST SLICE SHIPPED** (ingest+correlate+attach; export-back deferred) |
