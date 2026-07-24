@@ -4,6 +4,13 @@
 **Sequencing:** SECOND. Depends on `shell-detect-abstain` (fixture, detector, cause constant).
 **The core-engine fix — highest care. The content-corruption trap lives here.**
 **Axis:** A2 (result-equivalence + effect-conformance).
+**Status:** ✅ BUILT & merged (2026-07-24) — `relocate_command_line` (conservative, abstain-on-
+doubt), the `_relocate_frame` / `_relocation_decision` wiring, and the darwin e2e. Full
+`command_line` whole-token scope shipped (the Phase-0 spike proved it reliably safe).
+**Accepted residual (path-as-data):** a whole-token in-root path used as command *data* (e.g. a
+`grep` pattern) is relocated like an address and could make the replayed result diverge — rare,
+a divergence at worst (never a corrupting rewrite), documented not silent; substring-fused data
+already abstains. See the PRD's Out of Scope / Honesty Property 4.
 
 ## Problem slice & outcome
 

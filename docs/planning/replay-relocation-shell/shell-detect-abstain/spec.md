@@ -3,6 +3,8 @@
 **Parent PRD:** `docs/planning/replay-relocation-shell/prd.md` (must-haves 1–3, 6, 7)
 **Sequencing:** FIRST. The honesty floor + the keystone fixture that both aspects use.
 **Axis:** A2. Strengthens UNVERIFIED-never-PASS.
+**Status:** ✅ BUILT & merged (2026-07-24) — fixture, `command_embeds_in_root_path`,
+`EMBEDDED_PATH_UNRELOCATABLE`.
 
 ## Problem slice & outcome
 

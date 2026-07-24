@@ -7,6 +7,17 @@
 **Parent:** `replay-absolute-path-fidelity` (v0.4.0) — this is its openly-filed shell follow-up
 **Capability:** hardens **C3** (deterministic replay) + the **A2** verdict axis. A2 only.
 
+> **Status (2026-07-24): BOTH aspects BUILT.** Aspect 1 (`shell-detect-abstain`) — the fixture,
+> the `command_embeds_in_root_path` detector, and the `EMBEDDED_PATH_UNRELOCATABLE` abstain —
+> merged. Aspect 2 (`shell-command-string-remap`) — `relocate_command_line` (conservative,
+> abstain-on-doubt whole-token relocation), the `_relocate_frame` / `_relocation_decision`
+> wiring, and the darwin e2e — merged. **Accepted residual (path-as-data):** the lexer cannot
+> distinguish a whole-token path used as a filesystem *address* from one used as a command's
+> *data* argument (e.g. a `grep` pattern that is itself an in-root path); such a data path is
+> relocated too and could make the replayed result diverge. Rare in the corpus, a divergence at
+> worst (never a content-corrupting rewrite), documented not silent, and a substring-fused data
+> path already abstains. See Out of Scope and Honesty Property 4.
+
 ---
 
 ## Problem Statement
@@ -185,6 +196,14 @@ restores determinism for relocatable turns and abstains for the rest.
 - **Reply-normalization changes** (already substring-folds; confirm only).
 - **A1 / A3 axes, the capture byte-pump, any model-in-the-loop.**
 - **The Stage-2 mint and the Phase-0 number itself** (resumes in `phase0-live-mint`).
+- **Distinguishing a path used as an address from a path used as command DATA (accepted
+  residual, BUILT).** A whole-token in-root path that is a command's *data* argument (a `grep`
+  pattern, an `echo` operand that happens to be an in-root path) is relocated exactly like an
+  address, because POSIX lexing exposes no address-vs-data intent. Consequence: at worst the
+  replayed *result* diverges (never a content-corrupting rewrite; substring-fused data already
+  abstains). Rare in the Phase-0 corpus (paths appear overwhelmingly as addresses), so this is
+  documented as a known residual rather than closed — tightening it would require command
+  semantics the whole-token rule deliberately avoids.
 
 ## Self-Critique (Phase 4)
 
@@ -263,5 +282,7 @@ the honest move is to ship A now and gate B on that evidence. One `grep` over th
    named cause, never guessed.
 3. No silent miss: a detected embedded in-root path is always either relocated or abstained.
 4. The fix must not trade the silent miss for a content-corruption false verdict — both the
-   relocatable-catch (B3) and the content-not-corrupted (B2) tests are required.
+   relocatable-catch (B3) and the content-not-corrupted (B2) tests are required. **Held even for
+   the accepted path-as-data residual: a data path is *relocated* (a whole-token substitution),
+   never *corrupted*; the worst case is a divergent replayed result, not a false-clean write.**
 5. No behavior change for the cwd-relative / filesystem cases that already work.
