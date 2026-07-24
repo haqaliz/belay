@@ -8,8 +8,9 @@ recorded tool call again and comparing state. A single stray `import openai` ins
 `src/belay/verify/` would quietly turn the verdict into exactly the thing the project
 exists to replace, and every other test would stay green while it did.
 
-So this walks every module under `src/belay/verify/` AND `src/belay/corpus/` with `ast`
-— never importing them, for the same reason `test_import_guard` does not: importing runs side effects and
+So this walks every module under `src/belay/verify/`, `src/belay/corpus/`, AND
+`src/belay/interop/` with `ast` — never importing them, for the same reason
+`test_import_guard` does not: importing runs side effects and
 reports on the venv rather than on the source that ships — and asserts that none of
 them imports an inference client (a model SDK, a local-inference runtime, or an
 LLM-orchestration framework), and that none reaches for a first-party module whose
@@ -32,10 +33,12 @@ from pathlib import Path
 
 SRC = Path(__file__).parent.parent / "src" / "belay"
 #: The layers whose verdict/measurement must be grounded in re-execution and diffing,
-#: never a model: `verify/` (the A1/A2 verdict) AND `corpus/` (C6 — it stores and scores
+#: never a model: `verify/` (the A1/A2 verdict), `corpus/` (C6 — it stores and scores
 #: those verdicts, and an inference client there would smuggle a judge into the metric or
-#: a re-labeler into the corpus). Both are walked by the same guard.
-GUARDED_ROOTS = (SRC / "verify", SRC / "corpus")
+#: a re-labeler into the corpus), and `interop/` (C9 — it ingests spans from OTHER tools'
+#: tracing and must stay a parser, never a place a foreign trace gets "interpreted" by a
+#: model). All three are walked by the same guard.
+GUARDED_ROOTS = (SRC / "verify", SRC / "corpus", SRC / "interop")
 
 #: Third-party inference clients: hosted model SDKs, local-inference runtimes, and
 #: LLM-orchestration frameworks. None of these may enter the verdict path. The set is

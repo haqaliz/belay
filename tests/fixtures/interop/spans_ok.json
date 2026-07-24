@@ -1,0 +1,38 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          { "key": "service.name", "value": { "stringValue": "belay-agent" } }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": { "name": "belay.interop.test", "version": "1.0.0" },
+          "spans": [
+            {
+              "traceId": "0af7651916cd43dd8448eb211c80319c",
+              "spanId": "00f067aa0ba902b7",
+              "name": "mcp.tools/call",
+              "startTimeUnixNano": "1700000000000000000",
+              "attributes": [
+                { "key": "mcp.tool.name", "value": { "stringValue": "echo" } },
+                { "key": "mcp.request.id", "value": { "intValue": "5" } }
+              ]
+            },
+            {
+              "traceId": "5b8aa5a2d2c872e8321cf37308d69df2",
+              "spanId": "051581bf3cb55c13",
+              "name": "mcp.tools/list",
+              "startTimeUnixNano": "1700000001000000000",
+              "attributes": [
+                { "key": "mcp.request.id", "value": { "intValue": "6" } },
+                { "key": "belay.sandboxed", "value": { "boolValue": true } }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
