@@ -1150,7 +1150,7 @@ def _correlate_without_server(records: list[dict], spans) -> list:
     `correlate_and_attach`'s `verify=` seam.
     """
     from belay.interop.attach import AMBIGUOUS_CORRELATION, NO_MATCHING_MCP_TURN, CorrelatedSpan
-    from belay.interop.correlate import Matched, Unmatched, build_turn_index, match_span
+    from belay.interop.correlate import Ambiguous, Matched, Unmatched, build_turn_index, match_span
 
     index = build_turn_index(records)
     results = []
@@ -1168,6 +1168,7 @@ def _correlate_without_server(records: list[dict], spans) -> list:
                 CorrelatedSpan(span_id=span.span_id, turn_index=None, verdict=None, cause=NO_MATCHING_MCP_TURN)
             )
         else:
+            assert isinstance(match, Ambiguous), f"unhandled match result: {match!r}"
             results.append(
                 CorrelatedSpan(span_id=span.span_id, turn_index=None, verdict=None, cause=AMBIGUOUS_CORRELATION)
             )

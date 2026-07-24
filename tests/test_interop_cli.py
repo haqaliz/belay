@@ -380,3 +380,54 @@ def test_ac5_end_to_end_matched_turn_replays_and_attaches_a_real_pass(tmp_path, 
     assert payload["correlation"] == {"matched": 1, "total": 1, "uncorrelated": {}}
     assert payload["spans"][0]["status"] == "PASS"
     assert payload["spans"][0]["cause"] is None
+
+
+@_REQUIRES_SEATBELT
+def test_default_manifest_dir_resolves_to_a_real_verdict_without_the_flag(tmp_path, capsys):
+    """`--server` given, `--manifest-dir` OMITTED: `_cmd_interop_correlate`'s fallback
+    (`args.manifest_dir is None -> default_manifest_dir_for(trace_path)`) has to be the
+    thing that finds the manifest, not the explicit flag -- no existing test exercises
+    that wiring with a real replay. Reuses AC5's own real trace + real snapshot +
+    conforming-server fixture, but persists the manifest at exactly the path
+    `default_manifest_dir_for` computes (the trace's `<stem>.manifests` sibling, the
+    mint convention `eval/minting_driver/bridge.py` also relies on) instead of the
+    `tmp_path / "manifests"` AC5 uses. If it lands anywhere else, the matched span
+    reports UNVERIFIED (manifest not found) rather than a real PASS -- exactly the
+    silent mis-wire this test exists to catch.
+    """
+    from belay.phase0.runner import default_manifest_dir_for
+
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "keep.txt").write_text("untouched\n", encoding="utf-8")
+    snap = take_snapshot(work, tmp_path / "snap")
+    handle = present_handle(snap)
+
+    trace_path = _write_trace(
+        tmp_path,
+        _tools_list_frames()
+        + [
+            ("c2s", _call_with_traceparent(5, MATCHED_TRACE_ID, MATCHED_SPAN_ID), handle),
+            ("s2c", _reply(5), None),
+        ],
+    )
+    otlp_path = _write_otlp(tmp_path, [_otlp_span(MATCHED_TRACE_ID, MATCHED_SPAN_ID)])
+
+    manifest_dir = default_manifest_dir_for(trace_path)
+    manifest_dir.mkdir(parents=True, exist_ok=True)
+    persist_snapshot(snap, manifest_dir / f"{snap.manifest.handle}.json")
+
+    rc = cli.main(
+        [
+            "interop", "correlate", str(otlp_path), str(trace_path),
+            "--server", *CONFORMING_SERVER,
+        ]
+    )
+    out = capsys.readouterr().out
+
+    # A real PASS, not UNVERIFIED -- proves the default manifest dir was found and
+    # used, not merely computed and ignored.
+    assert "correlation rate = 1/1" in out, out
+    assert "PASS" in out, out
+    assert "UNVERIFIED" not in out, out
+    assert rc == 0, out
