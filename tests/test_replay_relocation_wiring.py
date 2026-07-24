@@ -166,6 +166,21 @@ def test_relocation_decision_whole_value_only_still_relocates() -> None:
     assert reloc_root == "/root/w" and fallback is None
 
 
+def test_relocation_decision_filesystem_content_mentioning_root_relocates() -> None:
+    """THE regression fix: a filesystem edit whose CONTENT mentions the root still relocates.
+
+    An `edit`-shaped turn moves the whole-value `path` and carries a `new_content` field that
+    merely *mentions* the workspace root as a substring. The narrowed detector keys only on
+    `command_line`/`argv`, so a content mention does NOT fire the embedded route — the turn
+    relocates (whole-value `path`), exactly as the shipped v0.4.0 filesystem fix intended. The
+    too-broad detector wrongly abstained (UNVERIFIED) here; this pins that it does not.
+    """
+    reloc_root, fallback = _relocation_decision(
+        "/root/w", {"path": "/root/w/x", "new_content": "see /root/w/x"}, ["srv", "/root/w"]
+    )
+    assert reloc_root == "/root/w" and fallback is None
+
+
 def test_relocation_decision_abstains_when_both_whole_and_embedded() -> None:
     """A turn carrying BOTH a whole-value path and an embedded path abstains — never partial.
 
@@ -188,6 +203,24 @@ def test_relocation_decision_cwd_relative_unaffected_by_embedded_route() -> None
         "/root/w", {"command_line": "python x.py", "path": "src/x.py"}, ["node", "srv.js"]
     )
     assert reloc_root is None and fallback is None
+
+
+def test_relocation_decision_rootless_server_with_whole_value_cwd_is_unrootable() -> None:
+    """A root-less shell server whose turn carries a WHOLE-VALUE in-root `cwd` -> UNROOTABLE.
+
+    The embedded detector keys only on `command_line`/`argv`; a relative `command_line`
+    (`pytest -q`) does NOT fire it. But the whole-value `cwd` (`/root/w`) makes
+    `turn_needs_relocation` True, and the server argv (`["node", "srv.js"]`) holds no token
+    under the recorded root, so the existing whole-value path hits `UNROOTABLE_SERVER_COMMAND`.
+    This pins that the narrowed embedded check does NOT interfere with (nor pre-empt) that
+    existing UNROOTABLE semantics.
+    """
+    reloc_root, fallback = _relocation_decision(
+        "/root/w", {"command_line": "pytest -q", "cwd": "/root/w"}, ["node", "srv.js"]
+    )
+    assert reloc_root is None
+    assert fallback == UNROOTABLE_SERVER_COMMAND
+    assert fallback != EMBEDDED_PATH_UNRELOCATABLE
 
 
 # --- 3. Honest fallback: rootless manifest + an in-root absolute path ---------

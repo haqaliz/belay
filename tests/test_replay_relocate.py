@@ -25,9 +25,9 @@ from __future__ import annotations
 import copy
 
 from belay.replay.relocate import (
-    arguments_hold_embedded_root,
     canonicalize_obj,
     canonicalize_reply,
+    command_embeds_in_root_path,
     is_under,
     remap_argv,
     remap_arguments,
@@ -239,33 +239,40 @@ def test_remap_functions_are_pure() -> None:
     assert args == args_before and argv == argv_before
 
 
-def test_arguments_hold_embedded_root_detects_embedded_paths() -> None:
-    """THE embedded-path detector: an in-root path *inside* a string value is detected.
+def test_command_embeds_in_root_path_is_field_shaped() -> None:
+    """THE embedded-path detector: an in-root path embedded in an EXECUTED-command field only.
 
-    The whole-value rule (`turn_needs_relocation`/`remap_arguments`) is blind to a path
-    buried in a shell `command_line` or any other string leaf. This content-shaped predicate
-    closes that silent miss: an in-root root string that appears as a **substring** of a
-    string argument which is NOT itself a whole-value in-root path is an embedded path.
+    The whole-value rule (`turn_needs_relocation`/`remap_arguments`) is blind to a path buried
+    *inside* a string — but the danger is only about paths the server will **execute/resolve**:
+    the shell server's `command_line` (a string) and `argv` (a list). Inert content fields and
+    whole-value path arguments are NOT the concern — a whole-value path anywhere (including an
+    `argv` element) is already relocated by `remap_arguments`/`turn_needs_relocation`. So the
+    detector keys ONLY on `command_line`/`argv`.
 
-    - embedded in a command string -> True.
-    - a whole-value in-root path (`is_under`) -> False (that is the whole-value rule's job,
-      handled and *relocated* elsewhere — this predicate must not steal it into abstain).
-    - an out-of-root embedded path -> False (relocation never covered it).
-    - a string that never mentions the root -> False.
-    - recursion reaches nested dicts/lists.
-    - a `content`/`newText` field that merely mentions the root as a substring -> True: at
-      DETECTION time content is indistinguishable from a command, so the conservative floor
-      MUST flag it (aspect 2 narrows this via tokenization; aspect 1 must not under-detect).
+    - `command_line` embedding an in-root path -> True.
+    - `command_line` with no in-root path -> False.
+    - `command_line` with an out-of-root path -> False.
+    - `argv` with an in-root path embedded in a token (not whole-value) -> True.
+    - `argv` with a whole-value in-root element -> False (the whole-value rule relocates it;
+      this predicate must not steal it into abstain).
+    - a `path` + `new_content` content field mentioning the root, with NO command field ->
+      False (the regression fix: a content mention must not fire).
+    - a bare non-command field -> False.
     """
     root = "/root/w"
 
-    assert arguments_hold_embedded_root({"command_line": "python /root/w/x.py"}, root) is True
-    assert arguments_hold_embedded_root({"path": "/root/w/x"}, root) is False
-    assert arguments_hold_embedded_root({"command_line": "python /other/x.py"}, root) is False
-    assert arguments_hold_embedded_root({"cmd": "echo hi"}, root) is False
-    assert arguments_hold_embedded_root({"a": [{"command_line": "cd /root/w && pytest"}]}, root) is True
-    # The conservative floor: a content field mentioning the root is flagged too (True).
-    assert arguments_hold_embedded_root({"newText": "path is /root/w/x"}, root) is True
+    assert command_embeds_in_root_path({"command_line": "python /root/w/x.py"}, root) is True
+    assert command_embeds_in_root_path({"command_line": "pytest -q"}, root) is False
+    assert command_embeds_in_root_path({"command_line": "python /other/x.py"}, root) is False
+    assert command_embeds_in_root_path({"argv": ["python", "--file=/root/w/x"]}, root) is True
+    assert command_embeds_in_root_path({"argv": ["python", "/root/w/x.py"]}, root) is False
+    assert (
+        command_embeds_in_root_path(
+            {"path": "/root/w/x", "new_content": "the path is /root/w/x"}, root
+        )
+        is False
+    )
+    assert command_embeds_in_root_path({"cmd": "echo hi"}, root) is False
 
 
 def test_remap_prefix_swaps_the_root() -> None:

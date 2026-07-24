@@ -66,8 +66,8 @@ from belay.replay.client import ANSWERED, DEFAULT_TIMEOUT, FrameOutcome
 from belay.replay.client import replay_turn as _client_replay_turn
 from belay.replay.persist import load_snapshot
 from belay.replay.relocate import (
-    arguments_hold_embedded_root,
     canonicalize_obj,
+    command_embeds_in_root_path,
     is_under,
     turn_needs_relocation,
 )
@@ -338,7 +338,7 @@ def _relocation_decision(
     too, which is a false abstention, never a false verdict.
     """
     if source_root is not None:
-        if arguments_hold_embedded_root(arguments, source_root):
+        if command_embeds_in_root_path(arguments, source_root):
             return None, EMBEDDED_PATH_UNRELOCATABLE
         if turn_needs_relocation(arguments, list(argv), source_root):
             if not any(is_under(token, source_root) for token in argv):
