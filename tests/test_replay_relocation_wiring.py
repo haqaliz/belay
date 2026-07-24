@@ -81,6 +81,52 @@ def test_relocated_frame_preserves_jsonrpc_id() -> None:
     )
 
 
+# --- 1b. A run_process command_line's whole-token path is relocated (aspect 2) --------
+
+
+def test_relocated_frame_remaps_command_line_whole_token() -> None:
+    """A `run_process` `command_line`'s whole-token in-root path is relocated to the scratch.
+
+    The whole-value rule (`remap_arguments`) cannot reach a path embedded INSIDE the command
+    string; the aspect-2 `command_line` branch does. Only the path token's bytes move to the
+    scratch root — the `id`, method, tool `name`, and surrounding command bytes survive.
+    """
+    frame = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "tools/call",
+            "params": {
+                "name": "run_process",
+                "arguments": {"command_line": "cat /root/proj/tests/x.py"},
+            },
+        }
+    ).encode()
+
+    relocated = _relocate_frame(frame, "/root/proj", "/scratch/proj")
+    decoded = json.loads(relocated)
+
+    assert decoded["id"] == 9, "the JSON-RPC id must survive re-serialization"
+    assert decoded["params"]["name"] == "run_process"
+    assert decoded["params"]["arguments"]["command_line"] == "cat /scratch/proj/tests/x.py", (
+        "the whole-token in-root path inside command_line must be relocated to the scratch"
+    )
+
+
+def test_relocated_frame_leaves_abstaining_command_line_byte_unchanged() -> None:
+    """A `command_line` whose in-root path is fused into a token (residue) is byte-identical.
+
+    `relocate_command_line` ABSTAINs on a `--file=/root/x`-shaped residue, and `_relocate_frame`
+    honours that by leaving the frame as the EXACT input bytes — no half-relocation. Such a turn
+    is abstained upstream by the gate; this pins that even if reached, the bytes are untouched.
+    """
+    frame = (
+        b'{"jsonrpc":"2.0","id":4,"method":"tools/call",'
+        b'"params":{"name":"run_process","arguments":{"command_line":"python --file=/root/proj/x"}}}'
+    )
+    assert _relocate_frame(frame, "/root/proj", "/scratch/proj") is frame
+
+
 # --- 2. Gating: a cwd-relative / path-free frame is passed through untouched --
 
 
