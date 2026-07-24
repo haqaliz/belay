@@ -152,7 +152,11 @@ def parse_otlp(json_text: str) -> list[Span]:
     `scope` siblings, if present, are accepted and ignored — only `spans` matter
     to this parser. Raises `OtlpParseError` for anything that is not valid
     OTLP/JSON; a document with no spans at all (`{"resourceSpans":[]}`) is valid
-    and returns `[]`.
+    and returns `[]`. Because OTLP/JSON is proto3-JSON, empty repeated fields are
+    omitted by default: `scopeSpans` missing from a `resourceSpans` entry, and
+    `spans` missing from a `scopeSpans` entry, are each treated as `[]` rather
+    than raising — a spec-valid sparse export must not be rejected as malformed.
+    A *present* value that is not a list is still malformed and still raises.
     """
     try:
         doc = json.loads(json_text)
@@ -171,18 +175,20 @@ def parse_otlp(json_text: str) -> list[Span]:
     for ri, resource_span in enumerate(resource_spans):
         if not isinstance(resource_span, dict):
             raise _fail(f"resourceSpans[{ri}] must be an object")
-        if "scopeSpans" not in resource_span:
-            raise _fail(f"resourceSpans[{ri}] missing 'scopeSpans'")
-        scope_spans = resource_span["scopeSpans"]
+        # proto3-JSON omits empty repeated fields by default, so an absent
+        # `scopeSpans` is a spec-valid sparse export (no scopes for this resource),
+        # not malformed input — symmetric with how `attributes` already defaults to
+        # `{}` below. A *present* non-list value is still malformed and still raises.
+        scope_spans = resource_span.get("scopeSpans") or []
         if not isinstance(scope_spans, list):
             raise _fail(f"resourceSpans[{ri}].scopeSpans must be a list")
 
         for si, scope_span in enumerate(scope_spans):
             if not isinstance(scope_span, dict):
                 raise _fail(f"resourceSpans[{ri}].scopeSpans[{si}] must be an object")
-            if "spans" not in scope_span:
-                raise _fail(f"resourceSpans[{ri}].scopeSpans[{si}] missing 'spans'")
-            raw_spans = scope_span["spans"]
+            # Same proto3-JSON omission one level down: `spans` all sampled out (or
+            # never populated) is spec-valid and legitimately absent from the wire.
+            raw_spans = scope_span.get("spans") or []
             if not isinstance(raw_spans, list):
                 raise _fail(f"resourceSpans[{ri}].scopeSpans[{si}].spans must be a list")
 

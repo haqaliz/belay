@@ -35,6 +35,7 @@ from belay.interop.otlp import OtlpParseError, Span, parse_otlp
 FIXTURES = Path(__file__).parent / "fixtures" / "interop"
 SPANS_OK = (FIXTURES / "spans_ok.json").read_text()
 SPANS_MALFORMED = (FIXTURES / "spans_malformed.json").read_text()
+SPANS_SPARSE = (FIXTURES / "spans_sparse.json").read_text()
 
 # The exact ids from Belay's canonical traceparent fixture
 # (tests/fixtures/connection_frames.py::TRACE_CONTEXT_META), so a later correlation
@@ -98,6 +99,37 @@ def test_span_is_a_frozen_dataclass() -> None:
 def test_empty_but_well_formed_document_returns_empty_list_not_an_error() -> None:
     """An OTLP doc with no resource spans at all is valid — distinct from malformed."""
     assert parse_otlp('{"resourceSpans":[]}') == []
+
+
+def test_resource_span_with_omitted_scope_spans_is_valid_empty_not_an_error() -> None:
+    """proto3-JSON omits empty repeated fields by default: a `ResourceSpans` with no
+    `ScopeSpans` at all is a spec-valid sparse export, not malformed input."""
+    assert parse_otlp('{"resourceSpans":[{}]}') == []
+
+
+def test_scope_span_with_omitted_spans_is_valid_empty_not_an_error() -> None:
+    """Same proto3-JSON omission one level down: a `ScopeSpans` whose `spans` were
+    all sampled out is spec-valid and omits the (empty) `spans` key entirely."""
+    assert parse_otlp('{"resourceSpans":[{"scopeSpans":[{}]}]}') == []
+
+
+def test_sparse_fixture_with_omitted_scope_spans_and_spans_returns_empty_list() -> None:
+    """A real-shaped sparse export: one resourceSpans entry omits `scopeSpans`
+    entirely, another's scopeSpans entry omits `spans` entirely. Both are
+    proto3-JSON-valid empties, not malformed input, so this must return `[]`."""
+    assert parse_otlp(SPANS_SPARSE) == []
+
+
+def test_non_list_scope_spans_still_raises_otlp_parse_error() -> None:
+    """Absence is empty; a present-but-wrong-typed value is still malformed."""
+    with pytest.raises(OtlpParseError):
+        parse_otlp('{"resourceSpans":[{"scopeSpans":"not-a-list"}]}')
+
+
+def test_non_list_spans_still_raises_otlp_parse_error() -> None:
+    """Absence is empty; a present-but-wrong-typed value is still malformed."""
+    with pytest.raises(OtlpParseError):
+        parse_otlp('{"resourceSpans":[{"scopeSpans":[{"spans":"not-a-list"}]}]}')
 
 
 def test_invalid_json_raises_otlp_parse_error() -> None:

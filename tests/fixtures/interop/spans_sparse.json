@@ -1,0 +1,23 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          { "key": "service.name", "value": { "stringValue": "belay-agent" } }
+        ]
+      }
+    },
+    {
+      "resource": {
+        "attributes": [
+          { "key": "service.name", "value": { "stringValue": "belay-agent-2" } }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": { "name": "belay.interop.test", "version": "1.0.0" }
+        }
+      ]
+    }
+  ]
+}
