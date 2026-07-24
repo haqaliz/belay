@@ -122,10 +122,10 @@ def _is_inference_import(dotted: str) -> bool:
 
 
 def test_no_module_in_the_verify_layer_imports_an_inference_client() -> None:
-    """The verdict path imports no model SDK, no inference runtime, no LLM framework.
+    """No guarded package (verify, corpus, interop) imports a model SDK, inference runtime, or LLM framework.
 
     THE positioning, in code. A2's PASS/FAIL is re-execution and a state diff; if any
-    verify module imported an inference client, the verdict would be — at least in
+    guarded module imported an inference client, the verdict would be — at least in
     part — a model's opinion, which is the "up-to-35%-false-positive LLM-as-judge" this
     project refuses to be. Watched FAIL against a planted `import openai` in turn.py
     before it was reverted, so this has teeth rather than passing by luck.
@@ -137,7 +137,9 @@ def test_no_module_in_the_verify_layer_imports_an_inference_client() -> None:
         if _is_inference_import(dotted)
     ]
     assert not offenders, (
-        "an inference client is imported inside src/belay/verify or src/belay/corpus:\n  "
+        "an inference client is imported inside a guarded package ("
+        + ", ".join(f"src/belay/{root.name}" for root in GUARDED_ROOTS)
+        + "):\n  "
         + "\n  ".join(offenders)
         + "\n\nWHY THIS IS A FAILURE: Belay's verdict is grounded in RE-EXECUTION and a"
         " state diff — it replays the recorded tool call and compares observed state to"
