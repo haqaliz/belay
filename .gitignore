@@ -37,3 +37,5 @@ dist/
 # Dashboard
 node_modules/
 .next/
+/eval/.mint_key
+/eval/resume_mint.sh
