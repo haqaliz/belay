@@ -143,7 +143,7 @@ The headline verdict is deterministic. A3 corroborates; it never carries the dem
 | Corpus | Every caught failure becomes a labeled, replayable case (C6) |
 | Console | Local-first live run feed + per-turn verdicts, streaming (C7) |
 | Claim axis | A3 shipped, subordinated, and refutable via `--no-claim-axis` (C8) |
-| Interop | Ingest OTel/OpenLLMetry spans; sit beside Langfuse/Phoenix (C9) |
+| Interop | Ingest OTel/OpenLLMetry spans; sit beside Langfuse/Phoenix (C9 — first slice built: ingest+correlate+attach, export-back deferred) |
 | Packaging | `docker run` self-host; BYOK / local-model friendly for A3; never a vendor key |
 | License | Apache-2.0 (permissive + explicit patent/trademark grant) |
 | Docs | Honest coverage statement: what Belay verifies, and what it does **not** |
@@ -224,7 +224,7 @@ The phases above are *what we earn*. The sequenced, one-at-a-time backlog of *ho
 | **C6** | Failure corpus | Week 5 | Moat #2; must compound with every feature |
 | **C7** | Live console | Weeks 5–6 | The launch surface; "watch and steer" |
 | **C8** | Claim re-derivation — axis A3 | Week 7 | Gets better as models improve; **cuttable if the calendar slips** |
-| **C9** | Observability interop | Week 8 | Makes "we complement Langfuse/Phoenix" shipped, not rhetorical |
+| **C9** | Observability interop | Week 8 | Makes "we complement Langfuse/Phoenix" shipped, not rhetorical — **first slice built** (ingest+correlate+attach; export-back deferred) |
 
 **C1–C5 is the engine and the Phase-0 gate. C6–C7 is the launch. C8 is deliberately last** — a slipped month must cut the LLM axis, never the deterministic spine.
 

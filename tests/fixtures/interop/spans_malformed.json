@@ -1,0 +1,18 @@
+{
+  "resourceSpans": [
+    {
+      "scopeSpans": [
+        {
+          "spans": [
+            {
+              "traceId": "0af7651916cd43dd8448eb211c80319c",
+              "name": "mcp.tools/call",
+              "startTimeUnixNano": "1700000000000000000",
+              "attributes": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -8,8 +8,9 @@ recorded tool call again and comparing state. A single stray `import openai` ins
 `src/belay/verify/` would quietly turn the verdict into exactly the thing the project
 exists to replace, and every other test would stay green while it did.
 
-So this walks every module under `src/belay/verify/` AND `src/belay/corpus/` with `ast`
-— never importing them, for the same reason `test_import_guard` does not: importing runs side effects and
+So this walks every module under `src/belay/verify/`, `src/belay/corpus/`, AND
+`src/belay/interop/` with `ast` — never importing them, for the same reason
+`test_import_guard` does not: importing runs side effects and
 reports on the venv rather than on the source that ships — and asserts that none of
 them imports an inference client (a model SDK, a local-inference runtime, or an
 LLM-orchestration framework), and that none reaches for a first-party module whose
@@ -32,10 +33,12 @@ from pathlib import Path
 
 SRC = Path(__file__).parent.parent / "src" / "belay"
 #: The layers whose verdict/measurement must be grounded in re-execution and diffing,
-#: never a model: `verify/` (the A1/A2 verdict) AND `corpus/` (C6 — it stores and scores
+#: never a model: `verify/` (the A1/A2 verdict), `corpus/` (C6 — it stores and scores
 #: those verdicts, and an inference client there would smuggle a judge into the metric or
-#: a re-labeler into the corpus). Both are walked by the same guard.
-GUARDED_ROOTS = (SRC / "verify", SRC / "corpus")
+#: a re-labeler into the corpus), and `interop/` (C9 — it ingests spans from OTHER tools'
+#: tracing and must stay a parser, never a place a foreign trace gets "interpreted" by a
+#: model). All three are walked by the same guard.
+GUARDED_ROOTS = (SRC / "verify", SRC / "corpus", SRC / "interop")
 
 #: Third-party inference clients: hosted model SDKs, local-inference runtimes, and
 #: LLM-orchestration frameworks. None of these may enter the verdict path. The set is
@@ -119,10 +122,10 @@ def _is_inference_import(dotted: str) -> bool:
 
 
 def test_no_module_in_the_verify_layer_imports_an_inference_client() -> None:
-    """The verdict path imports no model SDK, no inference runtime, no LLM framework.
+    """No guarded package (verify, corpus, interop) imports a model SDK, inference runtime, or LLM framework.
 
     THE positioning, in code. A2's PASS/FAIL is re-execution and a state diff; if any
-    verify module imported an inference client, the verdict would be — at least in
+    guarded module imported an inference client, the verdict would be — at least in
     part — a model's opinion, which is the "up-to-35%-false-positive LLM-as-judge" this
     project refuses to be. Watched FAIL against a planted `import openai` in turn.py
     before it was reverted, so this has teeth rather than passing by luck.
@@ -134,7 +137,9 @@ def test_no_module_in_the_verify_layer_imports_an_inference_client() -> None:
         if _is_inference_import(dotted)
     ]
     assert not offenders, (
-        "an inference client is imported inside src/belay/verify or src/belay/corpus:\n  "
+        "an inference client is imported inside a guarded package ("
+        + ", ".join(f"src/belay/{root.name}" for root in GUARDED_ROOTS)
+        + "):\n  "
         + "\n  ".join(offenders)
         + "\n\nWHY THIS IS A FAILURE: Belay's verdict is grounded in RE-EXECUTION and a"
         " state diff — it replays the recorded tool call and compares observed state to"
@@ -164,3 +169,7 @@ def test_the_guard_actually_sees_the_imports_the_layer_makes() -> None:
     # And corpus/ is genuinely in scope: it imports its own case/verify machinery, so seeing
     # a belay.corpus import proves the guard walks corpus/, not just verify/.
     assert any(name.startswith("belay.corpus") for name in seen), seen
+    # And interop/ is genuinely in scope too: only interop/attach.py imports belay.interop.*
+    # (correlate.py's Matched/Unmatched/Ambiguous, otlp.py's Span), so seeing one proves the
+    # walk reads interop/ itself, not just verify/ and corpus/.
+    assert any(name.startswith("belay.interop") for name in seen), seen
