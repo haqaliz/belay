@@ -27,7 +27,9 @@ import copy
 from belay.replay.relocate import (
     canonicalize_obj,
     canonicalize_reply,
+    command_embeds_in_root_path,
     is_under,
+    relocate_command_line,
     remap_argv,
     remap_arguments,
     remap_prefix,
@@ -236,6 +238,158 @@ def test_remap_functions_are_pure() -> None:
 
     turn_needs_relocation(args, argv, "/root")
     assert args == args_before and argv == argv_before
+
+
+def test_command_embeds_in_root_path_is_field_shaped() -> None:
+    """THE embedded-path detector: an in-root path embedded in an EXECUTED-command field only.
+
+    The whole-value rule (`turn_needs_relocation`/`remap_arguments`) is blind to a path buried
+    *inside* a string — but the danger is only about paths the server will **execute/resolve**:
+    the shell server's `command_line` (a string) and `argv` (a list). Inert content fields and
+    whole-value path arguments are NOT the concern — a whole-value path anywhere (including an
+    `argv` element) is already relocated by `remap_arguments`/`turn_needs_relocation`. So the
+    detector keys ONLY on `command_line`/`argv`.
+
+    - `command_line` embedding an in-root path -> True.
+    - `command_line` with no in-root path -> False.
+    - `command_line` with an out-of-root path -> False.
+    - `argv` with an in-root path embedded in a token (not whole-value) -> True.
+    - `argv` with a whole-value in-root element -> False (the whole-value rule relocates it;
+      this predicate must not steal it into abstain).
+    - a `path` + `new_content` content field mentioning the root, with NO command field ->
+      False (the regression fix: a content mention must not fire).
+    - a bare non-command field -> False.
+    """
+    root = "/root/w"
+
+    assert command_embeds_in_root_path({"command_line": "python /root/w/x.py"}, root) is True
+    assert command_embeds_in_root_path({"command_line": "pytest -q"}, root) is False
+    assert command_embeds_in_root_path({"command_line": "python /other/x.py"}, root) is False
+    assert command_embeds_in_root_path({"argv": ["python", "--file=/root/w/x"]}, root) is True
+    assert command_embeds_in_root_path({"argv": ["python", "/root/w/x.py"]}, root) is False
+    assert (
+        command_embeds_in_root_path(
+            {"path": "/root/w/x", "new_content": "the path is /root/w/x"}, root
+        )
+        is False
+    )
+    assert command_embeds_in_root_path({"cmd": "echo hi"}, root) is False
+
+
+# --------------------------------------------------------------------------- #
+# Phase 0 spike: `relocate_command_line` — the conservative, abstain-on-doubt  #
+# whole-token relocation of a shell `command_line` STRING. The A2 moat: any    #
+# doubt → ABSTAIN, never a false (content-corrupting) rewrite. These tests pin #
+# the tricky-string boundary the spike must survive.                           #
+# --------------------------------------------------------------------------- #
+
+
+def test_relocate_command_line_quoted_whole_token_relocates() -> None:
+    """A quoted whole-token in-root path is relocated; the quotes are preserved.
+
+    The lexer token is `/root/w/x` (quotes stripped by shlex); the boundary-anchored
+    span in the ORIGINAL string sits between the two `"` bytes, so only the path bytes
+    move and the surrounding quoting is byte-identical.
+    """
+    new_cmd, outcome = relocate_command_line('cat "/root/w/x"', "/root/w", "/scratch")
+    assert outcome == "RELOCATED"
+    assert new_cmd == 'cat "/scratch/x"'
+
+
+def test_relocate_command_line_prefix_collision_both_move_correctly() -> None:
+    """`/root/w/x` and `/root/w/xy` both present → each moves to its OWN scratch path.
+
+    The prefix-collision trap: a naive string replace of `/root/w/x` would corrupt the
+    inside of `/root/w/xy`. Boundary-anchoring plus longest-token-first keeps them
+    distinct — `xy` stays `xy`, `x` stays `x`.
+    """
+    new_cmd, outcome = relocate_command_line(
+        "cat /root/w/x /root/w/xy", "/root/w", "/scratch"
+    )
+    assert outcome == "RELOCATED"
+    assert new_cmd == "cat /scratch/x /scratch/xy"
+
+
+def test_relocate_command_line_clean_multi_path_relocates_only_paths() -> None:
+    """A clean two-path command relocates both paths and changes no other byte."""
+    new_cmd, outcome = relocate_command_line(
+        "cp /root/w/a.py /root/w/b.py", "/root/w", "/scratch"
+    )
+    assert outcome == "RELOCATED"
+    assert new_cmd == "cp /scratch/a.py /scratch/b.py"
+
+
+def test_relocate_command_line_byte_precision_preserves_spacing_and_flags() -> None:
+    """Relocating one path token leaves quoting, runs of spaces, flags, redirects intact.
+
+    THE byte-precision guarantee (acceptance criterion 6): only the path's exact byte
+    span is rewritten; the doubled spaces, the `-n` flag, and the `> out.txt` redirect
+    are byte-for-byte identical.
+    """
+    new_cmd, outcome = relocate_command_line(
+        "grep -n foo   /root/w/x   > out.txt", "/root/w", "/scratch"
+    )
+    assert outcome == "RELOCATED"
+    assert new_cmd == "grep -n foo   /scratch/x   > out.txt"
+
+
+def test_relocate_command_line_flag_fused_path_abstains() -> None:
+    """A path fused into a flag token (`--file=/root/w/x`) → ABSTAIN, never a partial rewrite.
+
+    The in-root path is a token SUBSTRING (embedded residue), not a whole value. Rewriting
+    only its bytes would leave a half-relocated token; the safe direction is to abstain and
+    let the gate emit UNVERIFIED. The command is returned unchanged.
+    """
+    new_cmd, outcome = relocate_command_line(
+        "python --file=/root/w/x", "/root/w", "/scratch"
+    )
+    assert outcome == "ABSTAIN"
+    assert new_cmd == "python --file=/root/w/x"
+
+
+def test_relocate_command_line_escaped_space_abstains() -> None:
+    """An escaped-space path whose lexer token != its raw byte span → ABSTAIN.
+
+    The lexer folds `a\\ b` into the token `a b` (a literal space, no backslash), so a
+    regex built from the token cannot match the backslashed raw bytes: match count (0) ≠
+    lexer occurrence count (1) → ABSTAIN. Any quoting/escaping the algorithm cannot
+    faithfully round-trip to a byte span falls to the safe side.
+    """
+    new_cmd, outcome = relocate_command_line(
+        "cat /root/w/a\\ b", "/root/w", "/scratch"
+    )
+    assert outcome == "ABSTAIN"
+    assert new_cmd == "cat /root/w/a\\ b"
+
+
+def test_relocate_command_line_unlexable_abstains() -> None:
+    """An un-lexable command (unbalanced quote) → ABSTAIN, returned unchanged."""
+    new_cmd, outcome = relocate_command_line('cat "unbalanced', "/root/w", "/scratch")
+    assert outcome == "ABSTAIN"
+    assert new_cmd == 'cat "unbalanced'
+
+
+def test_relocate_command_line_out_of_root_path_untouched_relocates() -> None:
+    """An out-of-root absolute path is left verbatim; the command is still a clean RELOCATE.
+
+    `/etc/hosts` is neither under the root nor embedded residue (it does not contain the
+    root string), so it is inert. With one relocatable in-root path present, the outcome is
+    RELOCATED and only the in-root path moves.
+    """
+    new_cmd, outcome = relocate_command_line(
+        "diff /etc/hosts /root/w/x", "/root/w", "/scratch"
+    )
+    assert outcome == "RELOCATED"
+    assert new_cmd == "diff /etc/hosts /scratch/x"
+
+
+def test_relocate_command_line_is_pure() -> None:
+    """The primitive never mutates its inputs (they are plain strings — sanity anchor)."""
+    cmd = "cp /root/w/a /root/w/b"
+    new_cmd, outcome = relocate_command_line(cmd, "/root/w", "/scratch")
+    assert cmd == "cp /root/w/a /root/w/b"
+    assert new_cmd == "cp /scratch/a /scratch/b"
+    assert outcome == "RELOCATED"
 
 
 def test_remap_prefix_swaps_the_root() -> None:

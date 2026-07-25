@@ -161,7 +161,7 @@ The reduction is worst-status-wins across A1 and A2. **A1 and A2 are not redunda
 Belay's entire value is an honest verdict, so its limits are documented as precisely as its claims. **Read this before trusting any output.**
 
 ### Belay sees what crosses the MCP boundary, and nothing else
-An agent's **built-in** tools do not traverse MCP and are invisible to Belay. Claude Code's `Bash` and `Edit` are in-process; they never reach a stdio transport, so no proxy on that transport can see them. Read a trace as *"here is what went over MCP"*, never as *"here is what the agent did"*. The sandbox's limit is the same limit: Belay contains the processes it spawns (the MCP servers it proxies) — not tools it never launched. An OpenTelemetry/OpenLLMetry ingestion path (C9) will let Belay sit beside existing observability.
+An agent's **built-in** tools do not traverse MCP and are invisible to Belay. Claude Code's `Bash` and `Edit` are in-process; they never reach a stdio transport, so no proxy on that transport can see them. Read a trace as *"here is what went over MCP"*, never as *"here is what the agent did"*. The sandbox's limit is the same limit: Belay contains the processes it spawns (the MCP servers it proxies) — not tools it never launched. An OpenTelemetry/OpenLLMetry ingestion path (C9's first slice, `belay interop correlate` — see below) lets Belay sit beside existing observability, joining only the spans that carry the trace context Belay itself captured.
 
 ### A `PASS` excludes the network dimension
 **Belay has no network instrument.** It observes the filesystem — a `PASS` means the replay reproduced the recorded reply and the observed *filesystem* effect conformed to the tool's declared contract and to your invariants. It does **not** mean the tool made no network call, reached no host, and sent nothing out; Belay never looked. When a tool declares `openWorldHint: false` (the reference `@modelcontextprotocol/server-filesystem` does), that promise is recorded as a `NOT_COVERED` sub-verdict — *"this tool promised a closed network posture and Belay does not observe egress"* — which is kept distinct from *"nothing was promised"*, and which is printed alongside the status on every surface: per-turn, in the aggregate, in the always-on coverage banner, in `phase0 run`/`report`, in the ledger, and on every corpus case. Read a `PASS` as **"passed on what Belay checks"**, and read the coverage line to see what that excluded.
@@ -183,6 +183,9 @@ Capture is lossless by design, so everything crossing the boundary — **API key
 ### Content-neutral, not latency-neutral
 The turn gate holds each `tools/call` while it snapshots the pre-state — measured at ~5 ms per turn on a 400-file tree; the cost scales with the tree, so a large workspace pays more. The bytes are never altered; the turn just waits, because a snapshot must complete before the call reaches the server or it is not a pre-state.
 
+### Observability interop correlates only spans that carry trace context
+`belay interop correlate <otlp-spans.json> <trace-file>` joins a third-party OTel span to a Belay-recorded MCP turn by the **W3C `traceparent`** the client propagated into MCP `_meta` — the exact string Belay already captured as `trace_context` (C1) — never a time-window or name-based heuristic. A span whose `(traceId, spanId)` names no recorded turn, names more than one (an `ambiguous-correlation`), or was matched but never replayed (no `--server` given, or an unrestorable pre-state) is reported **uncorrelated / `UNVERIFIED`, never `PASS`**, with the exact named cause. Interop is OTLP/JSON parsed with the standard library — **no OpenTelemetry SDK dependency** (zero-dep preserved). This first slice is ingest + correlate + attach over a **single trace file**; exporting verdicts back into a collector, and aggregating a directory of traces, are planned follow-ups. The correlation rate (`matched/total`, denominator always shown) measures how much of the agent's recorded activity actually crossed the MCP boundary — the R6 number.
+
 ---
 
 ## Develop
@@ -202,7 +205,7 @@ The engine is strictly test-first, and its honesty properties are guarded by tes
 
 ## Status & roadmap
 
-**Alpha.** The full record → sandbox → replay → verdict spine plus the failure corpus (C1–C6) is built and merged; the live console (C7), the A3 claim-re-derivation axis (C8, cuttable), and observability interop (C9, cuttable) are ahead. The [roadmap](docs/ROADMAP.md) and [capability backlog](docs/technical/CAPABILITY_ROADMAP.md) are authoritative on sequencing; [VISION.md](VISION.md) is the thesis.
+**Alpha.** The full record → sandbox → replay → verdict spine plus the failure corpus (C1–C6) is built and merged; observability interop (C9)'s first slice — `belay interop correlate` (ingest + correlate + attach over a single trace, export-back deferred) — is also built. The live console (C7) and the A3 claim-re-derivation axis (C8, cuttable) are ahead. The [roadmap](docs/ROADMAP.md) and [capability backlog](docs/technical/CAPABILITY_ROADMAP.md) are authoritative on sequencing; [VISION.md](VISION.md) is the thesis.
 
 ## License
 

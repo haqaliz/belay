@@ -9,6 +9,46 @@ All notable changes to Belay are documented here. The format follows
 
 _Nothing yet._
 
+## [0.6.0] — 2026-07-25
+
+### Fixed
+
+- **Faithful replay for shell servers that embed the workspace path inside command strings**
+  (`src/belay/replay`). Replay relocation was faithful only for **whole-value** path arguments
+  (the v0.4.0 filesystem fix); a shell server (`mcp-server-commands`, tool `run_process`) embeds the
+  path *inside* `command_line`/`argv`, which the whole-value rule cannot see — so such turns were
+  **undetected**, replayed against the **original** workspace, and **silently contaminated the
+  verdict**, making shell-based cheating (e.g. `printf CORRUPT > tests/foo`) invisible. Now a
+  field-shaped detector (`command_embeds_in_root_path`) recognises an in-root path in the
+  executed-command fields (`command_line`/`argv`), and the turn is either **relocated whole-token**
+  (`relocate_command_line` — `shlex`-tokenise, relocate only clean whole-token in-root paths
+  span-precisely, **abstain on any doubt**) for a real PASS/FAIL, or reported **`UNVERIFIED`**
+  (`EMBEDDED_PATH_UNRELOCATABLE`, a named cause) — **never a silent miss**. **A2 only**; strengthens
+  UNVERIFIED-never-PASS; no new dependencies (stdlib `shlex`/`re`). Accepted, documented residual: an
+  untyped whole-token path used as command *data* (a `grep` pattern) is relocated like an address and
+  could diverge — rare, a divergence at worst, never a content-corrupting rewrite. 29 new tests incl.
+  a darwin-gated e2e proving the verdict is invariant to live workspace state (pristine / mutated /
+  deleted).
+
+## [0.5.0] — 2026-07-25
+
+### Added
+
+- **Observability interop — first slice** (`src/belay/interop/`, `belay interop correlate`). Belay can
+  now ingest a third-party OpenTelemetry span set (OTLP/JSON, parsed with the standard library — **no
+  OpenTelemetry SDK**, zero runtime dependencies preserved), correlate each span to the MCP `tools/call`
+  turn Belay recorded, and attach the existing replayed verdict — turning *"we complement observability,
+  we don't compete"* into shipped code and producing the first direct measurement of how much agent
+  activity actually crosses the MCP boundary (risk R6). Correlation is **deterministic**: it joins on the
+  W3C `traceparent` Belay already captures per turn (C1's `trace_context` fact), by string-equality on
+  `(traceId, spanId)`, never a time-window heuristic. C9 **changes no verdict axis** — it re-emits the
+  unmodified `verify_turn` result (proven by an end-to-end test asserting a field-identical `TurnVerdict`).
+  A span with no matching turn, an ambiguous match, no `--server`, or an unrestorable pre-state is reported
+  **`UNVERIFIED`, never `PASS`**, each with a named cause; the command reports the correlation rate
+  `matched/total` with its denominator, and `--json` emits a machine-readable result. Scope is a single
+  trace file; exporting verdicts back into a collector, multi-trace aggregation, and the `NOT_COVERED`
+  reclassification are named follow-ups. The zero-LLM import guard now covers `src/belay/interop/`.
+
 ## [0.4.0] — 2026-07-22
 
 ### Fixed
