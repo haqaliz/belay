@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -511,3 +512,86 @@ def test_interop_render_still_shows_unverified_as_the_literal_word() -> None:
 
     assert "UNVERIFIED" in out.upper()
     assert "PASS" not in out.replace("PASS)", "").upper() or "UNVERIFIED" in out.upper()
+
+
+# ------------------------------- surface 6: belay verify, per TURN (not the aggregate)
+
+
+def test_verify_per_turn_renders_the_not_covered_sub_verdict_with_its_message(
+    capsys,
+) -> None:
+    """The per-turn body, not just the aggregate tally.
+
+    `_emit_verdict` already prints every sub-verdict with its message, so this pins
+    behaviour rather than changing it — which is the point: the unit's own rule was
+    "a test per surface, not by review", and a reader who scrolls the per-turn output
+    of a PASSing turn must still see what that PASS excluded.
+    """
+    cli._emit_verdict(_covered_turn(0))
+    out = capsys.readouterr().out
+
+    assert "PASS" in out, out
+    assert NETWORK_KIND in out, "the per-turn body dropped the NOT_COVERED dimension"
+    assert "NOT_COVERED" in out, out
+    assert "DECLARED" in out, (
+        "the per-turn body dropped the message, losing the declared-vs-not-declared "
+        "distinction that is the whole point of the status"
+    )
+
+
+# ---------------------------------------------------- surface 7: belay corpus show
+
+
+def test_corpus_show_renders_the_sub_verdict_message(tmp_path: Path, capsys) -> None:
+    """`belay corpus show` printed axis/kind/status and dropped the message.
+
+    On this surface that erases exactly the distinction NOT_COVERED exists to draw: a
+    stored case whose network dimension was NOT_COVERED renders identically whether the
+    tool DECLARED a closed posture Belay could not check, or declared nothing at all.
+    The corpus is the regression suite — a case a human cannot read correctly is a case
+    that cannot be adjudicated.
+    """
+    import json as _json
+
+    case_dir = tmp_path / "case-001"
+    (case_dir).mkdir(parents=True)
+    (case_dir / "case.json").write_text(
+        _json.dumps(
+            {
+                "id": "case-001",
+                "target_turn_index": 0,
+                "human_label": "pending",
+                "expected": {
+                    "reduced_status": "PASS",
+                    "sub_verdicts": [
+                        {
+                            "axis": "A2",
+                            "kind": NETWORK_KIND,
+                            "status": "NOT_COVERED",
+                            "message": NETWORK_MESSAGE,
+                        }
+                    ],
+                },
+                "server_command": ["some-server"],
+                "invariants": [],
+                "replays": 3,
+                "timeout": 30.0,
+                "provenance": "test",
+                "capture_platform": "darwin",
+                "capture_capabilities": ["seatbelt"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    args = SimpleNamespace(case_id="case-001", corpus_dir=str(tmp_path))
+    rc = cli._cmd_corpus_show(args)
+    out = capsys.readouterr().out
+
+    assert rc == 0, out
+    assert NETWORK_KIND in out, out
+    assert "NOT_COVERED" in out, out
+    assert "DECLARED" in out, (
+        "corpus show drops the sub-verdict message, so a reader cannot tell a declared "
+        "promise from silence"
+    )

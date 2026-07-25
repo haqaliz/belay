@@ -1050,7 +1050,15 @@ def _cmd_corpus_show(args: argparse.Namespace) -> int:
         axis = sub.get("axis", "?")
         kind = sub.get("kind", "?")
         status = sub.get("status", "?")
-        _emit(f"    {axis} {kind:<12}{status}")
+        _emit(f"    {axis} {kind:<16}{status}")
+        # The message, not just the triple. A NOT_COVERED sub-verdict rendered as
+        # axis/kind/status alone reads identically whether the tool DECLARED a closed
+        # posture Belay could not check or declared nothing at all -- the exact
+        # distinction this status exists to draw. The corpus is the regression suite, so
+        # a case a human cannot read correctly is a case that cannot be adjudicated.
+        message = sub.get("message")
+        if message:
+            _emit(f"      {message}")
     _emit(f"  server_command        {' '.join(case.server_command)}")
     _emit("  invariants")
     if case.invariants:
