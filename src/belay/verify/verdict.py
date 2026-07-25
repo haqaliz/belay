@@ -32,18 +32,40 @@ from typing import Any, Optional, Sequence
 
 
 class Status(str, Enum):
-    """The four honest verdict statuses. `str` mixin so a Status serializes as its name."""
+    """The honest verdict statuses. `str` mixin so a Status serializes as its name.
+
+    The first four are the scored statuses — the ones a turn can reduce to, ordered by
+    `_RANK` below. `NOT_COVERED` is different in kind and is deliberately listed apart.
+    """
 
     PASS = "PASS"
     WARN = "WARN"
     FAIL = "FAIL"
     UNVERIFIED = "UNVERIFIED"
 
+    #: **Sub-verdict only.** A dimension Belay structurally cannot observe — not an
+    #: abstention but a coverage boundary. UNVERIFIED says "we tried to check this and
+    #: could not"; NOT_COVERED says "this was never inside what Belay claims to check",
+    #: and folding the second into worst-status-wins would let one unobservable dimension
+    #: (a tool's `openWorldHint: false` network promise) permanently sink every turn that
+    #: Belay verified perfectly. `reduce` therefore filters it out before ranking, and a
+    #: turn's reduced status can never be NOT_COVERED — downstream readers depend on that
+    #: (see `reduce`). It is never rendered as PASS: a surface that shows a status must
+    #: also show what was outside coverage.
+    NOT_COVERED = "NOT_COVERED"
+
 
 # Worst-status-wins severity. FAIL > UNVERIFIED > WARN > PASS. UNVERIFIED outranking PASS
 # and WARN is the load-bearing choice — see the module docstring. Change this and you
 # change the honesty contract.
+#
+# NOT_COVERED carries a rank only so a future caller that ranks a status without filtering
+# first raises nothing mysterious — it is never reached through `reduce`, which drops it
+# beforehand. The value is a floor, NOT a "loses to everything" ordering that would make
+# `reduce([NOT_COVERED])` return it; that shape is precisely the false PASS this status
+# must not create, and it is why the filter, not the rank, is the mechanism.
 _RANK: dict[Status, int] = {
+    Status.NOT_COVERED: -1,
     Status.PASS: 0,
     Status.WARN: 1,
     Status.UNVERIFIED: 2,
@@ -74,9 +96,19 @@ class Verdict:
 def reduce(verdicts: Sequence[Verdict]) -> Status:
     """Fold sub-check verdicts into one status by worst-status-wins.
 
-    An empty set reduces to UNVERIFIED, not PASS: a turn with no applicable checks verified
+    NOT_COVERED sub-verdicts are dropped BEFORE ranking. They state a coverage boundary,
+    not a finding, so they must not lower (or raise) a turn — and this filter, rather than
+    a losing rank, is what guarantees the reduced status is never NOT_COVERED. That
+    guarantee is load-bearing downstream: `corpus/metrics.py` folds any not-FAIL status
+    into a decided non-detection, `corpus/case.py` is fail-closed on unknown reduced
+    statuses, and `phase0/ledger.py`'s `total_turns()` sums every value into its
+    denominator. A leaked NOT_COVERED would read as a verified clean turn in all three.
+
+    An empty set — including one that is empty only AFTER the filter — reduces to
+    UNVERIFIED, not PASS and not NOT_COVERED: a turn with no applicable checks verified
     nothing, and nothing-verified is never a pass.
     """
-    if not verdicts:
+    scored = [v.status for v in verdicts if v.status is not Status.NOT_COVERED]
+    if not scored:
         return Status.UNVERIFIED
-    return max((v.status for v in verdicts), key=lambda s: _RANK[s])
+    return max(scored, key=lambda s: _RANK[s])

@@ -2,7 +2,7 @@
 
 This file orients a coding agent working in this repository. Read it first.
 
-> **Status: C1–C6 are built and merged; the Phase-0 corpus runner is built** (463 tests, 1 platform-skip; zero runtime dependencies).
+> **Status: C1–C6 are built and merged; the Phase-0 corpus runner is built** (832 tests, 1 platform-skip; zero runtime dependencies).
 > The full record → sandbox → snapshot/restore → replay → verdict spine exists: the byte-transparent
 > stdio MCP proxy + trace format (C1), the Seatbelt sandbox with snapshot/restore (C2), deterministic
 > replay with a real before/after delta (C3), and the grounded verdict — **A2** result-equivalence +
@@ -59,8 +59,14 @@ This file orients a coding agent working in this repository. Read it first.
 > an honest **`UNVERIFIED`** (`EMBEDDED_PATH_UNRELOCATABLE`) — never a silent miss. Accepted residual:
 > a whole-token path used as command *data* (a `grep` pattern) is relocated like an address and could
 > diverge — rare, documented not silent. See `docs/planning/replay-relocation-shell/`.
-> **Next: re-mint the Stage-1 instance to confirm the false positive is gone in the wild, then run the
-> staged live mint and publish the number.** Gate criteria are pre-registered in
+> **The Stage-1 confirmation is DONE, on real captures.** Re-verifying the three Stage-1 captures
+> against this tree discriminates correctly: `s1` and `s1b` (no `tests/` mutation) are
+> `VERIFIED_CLEAN`, 0 FAIL; `s1p` (the corrupt success — `test_dotted_names` rewritten, 12+/4−) is
+> **`VERIFIED_FLAGGED`, 1/11 FAIL**. Every run reports **0 UNVERIFIED** with its coverage line, so
+> the 12/12-UNVERIFIED → `NO_VERIFIABLE_TURNS` → `INSTRUMENT SUSPECT` failure that made the
+> denominator zero is gone, and no false positive appears on either clean capture. `belay corpus
+> run` is 6/6 MATCH, 0 REGRESSION.
+> **Next: run the staged live mint and publish the number.** Gate criteria are pre-registered in
 > `docs/planning/phase0-live-mint/prd.md`: PROCEED iff ≥3 *independent* hand-audited TPs AND denominator ≥50
 > AND no INSTRUMENT SUSPECT; a FAILing control voids the mint. Stage 2 (~10, measure attrition + cost, fix
 > `selected.json`) → Stage 3 (~65–70, incl. 3 controls) → audit → fill `docs/technical/PHASE0_RESULTS.md` →
@@ -75,9 +81,22 @@ This file orients a coding agent working in this repository. Read it first.
 > `matched/total` with its denominator, plus every uncorrelated/unreplayed span bucketed by named
 > cause. A span with no matching turn, no `--server` given, or an unrestorable pre-state is
 > `UNVERIFIED`, never `PASS`. Scope is a single trace file; exporting verdicts back into a
-> collector, multi-trace-directory aggregation, and the `NOT_COVERED` reclassification are deferred
-> follow-ups, not gaps papered over. This is a Phase-1 first slice, not a gate change — C1–C6 remain
-> the built spine above.
+> collector and multi-trace-directory aggregation are deferred follow-ups, not gaps papered over.
+> This is a Phase-1 first slice, not a gate change — C1–C6 remain the built spine above.
+> **The interop `NOT_COVERED` follow-up is no longer deferred — it was a merge hazard, and it is
+> fixed** (`interop-merge-repair`): C9 merged *after* `verdict-coverage-status` forked, so landing
+> the coverage boundary broke two things in it, neither caught by any test. (1) `attach.py` inferred
+> "nothing was re-invoked" from `TurnVerdict.cause is not None`, valid only while the non-REPLAYED
+> branch was that field's sole setter — the release ends that deliberately, so interop labelled a
+> turn that **replayed fine** as `unrestorable-pre-state`, asserting a snapshot-restore failure that
+> never happened. It now discriminates on `_REPLAYED_CAUSES`, a closed vocabulary with a guard test.
+> (2) `belay interop correlate` printed a bare `PASS` for a turn whose network dimension is
+> `NOT_COVERED`; both `render()` and `--json` now carry the boundary. The pre-existing test that
+> looked like it covered (1) built its `TurnVerdict` through the `verify=` stub seam and was green
+> against the bug — **a green suite was not evidence here**, and the new tests drive the real
+> `verify_turn`. Two surfaces the coverage unit itself left unpinned are now pinned too (`belay
+> verify` per-turn, and `belay corpus show`, which had dropped the sub-verdict *message* and with it
+> the declared-vs-not-declared distinction). See `docs/planning/phase0-gate-readiness/`.
 >
 > [`docs/ROADMAP.md`](docs/ROADMAP.md) (phased plan + gates) and
 > [`docs/technical/CAPABILITY_ROADMAP.md`](docs/technical/CAPABILITY_ROADMAP.md)
@@ -161,13 +180,34 @@ an LLM's opinion of itself.
 | Axis | Grounding | May emit | Catches |
 |------|-----------|----------|---------|
 | **A1 · Invariant** | Sandbox policy, violated during replay | PASS / WARN / FAIL / UNVERIFIED | **Corrupt success** (the 27–78%) |
-| **A2 · Replay** | Re-execution + state diff | PASS / WARN / FAIL / UNVERIFIED | **Trace infidelity** (fabricated/tampered results) |
+| **A2 · Replay** | Re-execution + state diff | PASS / WARN / FAIL / UNVERIFIED **· NOT_COVERED** (sub-verdict only) | **Trace infidelity** (fabricated/tampered results) |
 | **A3 · Claim re-derivation** | A model writes a check; **execution** decides | WARN / FAIL / UNVERIFIED — **never PASS** | **Intent drift** |
 
 Reduction: worst-status-wins across **A1 and A2 only**. A3 may downgrade, never promote, and
 never turns UNVERIFIED into PASS. `belay --no-claim-axis` disables A3 and every PASS/FAIL
 verdict must survive unchanged — that guarantee is enforced by a test, and it is the
 one-command refutation of "isn't this an LLM judge with extra steps?"
+
+**`NOT_COVERED` is a fifth status, and it is SUB-VERDICT-ONLY.** It marks a dimension Belay
+has no instrument for at all — today exactly one: a tool's `openWorldHint: false` network
+promise, which no filesystem delta can confirm or refute. `UNVERIFIED` means *"we tried to
+check this and could not"*; `NOT_COVERED` means *"this was never inside what Belay claims to
+check"*. `verdict.reduce` **drops it before ranking**, so it can never be a turn's reduced
+status, never lowers a turn, and never lifts one — the empty-after-filter case reduces to
+`UNVERIFIED`, never to `NOT_COVERED` and never to `PASS`. Folding it in was the old behavior
+and it made an honestly-declared closed posture strictly *worse* than silence (declare
+nothing → PASS; declare truthfully → UNVERIFIED forever), which pinned every turn of the
+reference filesystem server at UNVERIFIED.
+
+The honesty cost is real and named: a `PASS` now means *"passed on the dimensions Belay
+checks"*, so **the coverage line must travel with the status on every surface** — a PASS
+rendered without it is the failure mode this status creates. That rule is enforced by a test
+per surface, not by review.
+
+**The UNVERIFIED rate before and after this change is NOT COMPARABLE.** The population moved:
+turns that were UNVERIFIED only because of an unobservable network promise are now PASS with a
+`NOT_COVERED` sub-verdict. Any Phase-0 write-up quoting an UNVERIFIED-rate drop across this
+boundary must say so — the drop is a reclassification, **not** improved detection.
 
 **The axes are NOT redundant, and this is the easiest thing here to get wrong.** A2 cannot
 catch a cheating agent, because a cheater's trace is perfectly *faithful* — it really did

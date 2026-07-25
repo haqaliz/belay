@@ -94,7 +94,8 @@ _HINT = "readOnlyHint"
 #: The annotation the NETWORK dimension speaks to. `openWorldHint: false` declares the tool
 #: does not reach the open world (the network). Unlike `readOnlyHint`, Belay has NO grounded
 #: observation to confirm or refute it against — see `render_openworld_verdict` — so this
-#: dimension is an honest UNVERIFIED, never a network PASS and never a fabricated FAIL.
+#: dimension is `NOT_COVERED`: a coverage boundary, never a network PASS and never a
+#: fabricated FAIL.
 _HINT_OPENWORLD = "openWorldHint"
 
 
@@ -239,7 +240,7 @@ def _incoherence_note(incoherence: Sequence[dict]) -> str:
     )
 
 
-#: Why the network dimension is UNVERIFIED, stated once and reused. This is the honest
+#: Why the network dimension is outside coverage, stated once and reused. This is the honest
 #: bound the whole task turns on: unlike the filesystem, there is no observation to ground
 #: a network verdict on. Successful egress under `allow-all` is uncaptured (Belay records
 #: no outbound bytes/hosts anywhere), and a denial under `deny-all` cannot be attributed to
@@ -255,23 +256,43 @@ _NETWORK_UNOBSERVABLE = (
 
 
 def _openworld_verdict(ann: TurnAnnotation) -> Verdict:
-    """The network-dimension Verdict for one turn's `openWorldHint` — ALWAYS UNVERIFIED.
+    """The network-dimension Verdict for one turn's `openWorldHint` — ALWAYS `NOT_COVERED`.
 
     It NEVER emits PASS (we verified nothing about the network) and NEVER a fabricated FAIL
     (we observed no violation): a grounded network FAIL would require reliably identifying an
     egress denial, and the child's stderr does not distinguish one from a filesystem denial.
-    So whatever the tool declared — `openWorldHint` false, true, non-boolean, or absent — the
-    verdict is UNVERIFIED, with a message that names the declared state and why it is
-    unobservable. `kind` is `_KIND_NETWORK` so it reads as the network dimension, apart from
-    the filesystem `effect` verdict it is composed beside.
+    That guarantee is unchanged. What changed is the NAME of the non-finding.
+
+    **This verdict used to be UNVERIFIED for every state; it is now `NOT_COVERED` for every
+    state.** UNVERIFIED means *"we tried to check this and could not"* — an abstention about
+    THIS run. The network dimension is not that: Belay has no network instrument at all, so
+    the non-answer is identical for every trace ever recorded. That is a **coverage
+    boundary**, and `NOT_COVERED` is its name. `reduce` drops it before ranking, so an
+    unobservable dimension no longer sinks a turn Belay verified perfectly — while
+    `Status.NOT_COVERED` remains a distinct, never-PASS status that every rendering surface
+    must show alongside the status it accompanies.
+
+    **All four `openWorldHint` states get the same status, deliberately.** The observation
+    (none) is the same whatever the tool said, so giving the same non-observation two
+    different status names purely on the strength of the tool's own declaration would be
+    incoherent — and it would let a server's self-declared hint change Belay's *coverage*,
+    which is a property of Belay, not of the server. The declaration still shows up where it
+    belongs: in the MESSAGE (see below) and in `network_subverdict`'s decision to fold or not.
+
+    **The declared-false vs not-declared distinction survives in the message**, which is the
+    direct answer to the counter-argument this change builds over. A reader must still be able
+    to tell *"this tool made a network promise and we did not check it"* from *"nothing was
+    promised"*; only the reduction stopped caring, not the record. `kind` is `_KIND_NETWORK`
+    so it reads as the network dimension, apart from the filesystem `effect` verdict it is
+    composed beside.
     """
     state = ann.openworld["state"]
     contract = {"openWorldHint": ann.openworld}
 
     if state == DECLARED_FALSE:
         detail = (
-            f"tool {ann.tool!r} declared openWorldHint: false (it does not reach the open "
-            f"world), but that contract cannot be verified"
+            f"tool {ann.tool!r} DECLARED openWorldHint: false (it does not reach the open "
+            f"world) — a promise this run did not check"
         )
     elif state == DECLARED_TRUE:
         detail = (
@@ -280,29 +301,34 @@ def _openworld_verdict(ann: TurnAnnotation) -> Verdict:
         )
     elif state == DECLARED_NON_BOOLEAN:
         detail = (
-            f"tool {ann.tool!r} declared openWorldHint as a non-boolean "
-            f"({ann.openworld.get('declared_value')!r}); no network contract can be read off it"
+            f"tool {ann.tool!r} DECLARED openWorldHint as a non-boolean "
+            f"({ann.openworld.get('declared_value')!r}); no network contract can be read off "
+            f"it, and none was checked"
         )
     else:  # NOT_DECLARED
-        detail = f"tool {ann.tool!r} did not declare openWorldHint"
+        detail = f"tool {ann.tool!r} did not declare openWorldHint — nothing was promised"
 
     return Verdict(
-        _AXIS, _KIND_NETWORK, Status.UNVERIFIED,
+        _AXIS, _KIND_NETWORK, Status.NOT_COVERED,
         observed=None, expected=contract,
         message=(
-            f"openWorldHint conformance UNVERIFIED: {detail}. {_NETWORK_UNOBSERVABLE} — "
+            f"openWorldHint conformance NOT_COVERED: {detail}. {_NETWORK_UNOBSERVABLE} — "
             f"never PASS, never a fabricated FAIL"
         ),
     )
 
 
 def render_openworld_verdict(records: Sequence[dict], n: int) -> Verdict:
-    """The Nth turn's network-dimension verdict — always UNVERIFIED. See `_openworld_verdict`.
+    """The Nth turn's network-dimension verdict — always `NOT_COVERED`. See `_openworld_verdict`.
 
     The standalone surface: it returns a Verdict for EVERY `openWorldHint` state (including
-    not-declared), which is the crisp "we never emit a network PASS" guarantee. It is NOT what
-    a turn folds in unconditionally — that is `network_subverdict`, which stays silent unless a
-    network RESTRICTION was actually declared, so an un-annotated turn is not dragged down.
+    not-declared and the permissive declared-true), which is the crisp "we never emit a
+    network PASS" guarantee. **Decided explicitly: not-declared and declared-true return
+    `NOT_COVERED` here too, exactly like the other two states** — this function reports what
+    Belay's network coverage IS, and that is nil regardless of what the tool declared. It is
+    NOT what a turn folds in unconditionally — that is `network_subverdict`, which stays
+    silent for those two states, so a turn's sub-verdict list is not padded with a boundary
+    nobody asked about.
     """
     return _openworld_verdict(annotation_for_turn(records, n))
 
@@ -310,14 +336,34 @@ def render_openworld_verdict(records: Sequence[dict], n: int) -> Verdict:
 def network_subverdict(records: Sequence[dict], n: int) -> Optional[Verdict]:
     """The network sub-verdict to compose into the Nth turn's reduction, or `None`.
 
-    Returns the UNVERIFIED network verdict ONLY where the tool declared a network RESTRICTION
-    that Belay cannot verify — `openWorldHint` **declared-false** (a closed posture) or
-    **declared-non-boolean** (an unreadable one). For **not-declared** (no network claim at
+    Returns the `NOT_COVERED` network verdict ONLY where the tool declared a network
+    RESTRICTION Belay does not observe — `openWorldHint` **declared-false** (a closed posture)
+    or **declared-non-boolean** (an unreadable one). For **not-declared** (no network claim at
     all) and the permissive **declared-true** (it may egress — nothing to violate, the mirror
-    of `readOnlyHint: false`) it returns `None`, leaving the turn's status to the filesystem
-    and result checks. This asymmetry is load-bearing: folding an always-UNVERIFIED verdict
-    into EVERY turn would drag every un-annotated turn (the common case) to UNVERIFIED. A
-    turn is downgraded only when the tool made a network promise we genuinely could not check.
+    of `readOnlyHint: false`) it returns `None`. That asymmetry is UNCHANGED.
+
+    **What changed, and why — stated openly, because this docstring used to argue the
+    opposite.** It previously read:
+
+        "This asymmetry is load-bearing: folding an always-UNVERIFIED verdict into EVERY turn
+        would drag every un-annotated turn (the common case) to UNVERIFIED. A turn is
+        downgraded only when the tool made a network promise we genuinely could not check."
+
+    The first sentence is still true and still the reason `None` is returned above. The second
+    is the part that was reversed. Downgrading a turn *because the tool declared a closed
+    posture* made an honestly-declared `openWorldHint: false` server strictly WORSE off than a
+    silent one: declare nothing and your clean turn reads PASS; declare truthfully that you
+    stay off the network and the identical turn reads UNVERIFIED. That penalises the honest
+    declaration and, in practice, made every turn against the reference filesystem server
+    UNVERIFIED forever — a permanent 0% verified rate for a dimension Belay never claimed to
+    check in the first place.
+
+    The reclassification is the repair: a dimension Belay **structurally cannot observe** is a
+    **coverage boundary, not a failed attempt**. UNVERIFIED must keep meaning "we tried and
+    could not", or it stops carrying information. So the sub-verdict is still emitted (the
+    promise is still on the record, and every surface must render it), it still can never be a
+    PASS, and it still can never soften a real FAIL — but `reduce` filters `NOT_COVERED` out,
+    so it no longer decides the turn.
     """
     ann = annotation_for_turn(records, n)
     if ann.openworld["state"] in (DECLARED_FALSE, DECLARED_NON_BOOLEAN):

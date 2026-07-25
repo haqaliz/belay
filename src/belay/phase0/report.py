@@ -99,6 +99,49 @@ def _disposition_breakdown(ledger: RunLedger) -> str:
     return "\n".join(lines)
 
 
+#: Human wording for each sub-verdict `kind` that can be NOT_COVERED. A kind with no entry
+#: is still rendered, under its own name — a new coverage boundary must never be silently
+#: dropped from this section for want of a phrase.
+_COVERAGE_PROSE = {
+    "effect:network": (
+        "network egress is NOT observed, so openWorldHint conformance is NOT_COVERED"
+    ),
+}
+
+
+def _coverage_section(ledger: RunLedger) -> list[str]:
+    """The coverage boundary, read back from the ledger's stored `not_covered_turns`.
+
+    Nothing here is computed from verdicts: `belay phase0 report` re-renders a ledger file
+    and never replays anything, so a coverage statement that only existed at verification
+    time could not reach that surface — and a rate rendered without its coverage boundary
+    is the exact misreading (`PASS` == "the network was checked") this status exists to
+    prevent. `render_report` places this section OUTSIDE the INSTRUMENT SUSPECT branch:
+    the headline can be suppressed, the limits of what Belay looked at cannot.
+
+    An empty tally says so in those words. It must never read as "nothing was outside
+    coverage", because a ledger written before this field existed is indistinguishable
+    from one that recorded no boundary.
+    """
+    by_kind = ledger.not_covered_by_kind()
+    total = ledger.total_turns()
+    lines = [
+        "coverage (NOT_COVERED — dimensions Belay does not observe; never a PASS, "
+        "and outside every rate in this report):"
+    ]
+    if not by_kind:
+        lines.append(
+            "  no NOT_COVERED dimension recorded in this ledger — a ledger written "
+            "before coverage was recorded reads the same way; this is NOT a claim that "
+            "everything was inside coverage"
+        )
+        return lines
+    for kind in sorted(by_kind):
+        prose = _COVERAGE_PROSE.get(kind, "outside what Belay observes")
+        lines.append(f"  {kind}: NOT observed for {by_kind[kind]}/{total} turn(s) — {prose}")
+    return lines
+
+
 def render_report(ledger: RunLedger, metrics: Metrics) -> str:
     """Render the human-readable Phase-0 report, in this fixed order:
 
@@ -107,6 +150,11 @@ def render_report(ledger: RunLedger, metrics: Metrics) -> str:
        and NO violation-rate percentage headline at all. Otherwise, the violation rate
        with its denominator always visible (`n/a` if that denominator is 0, never a bare
        `0%` or `100%`).
+    2b. THE COVERAGE BOUNDARY, rendered from the ledger's stored `not_covered_turns` —
+       deliberately placed OUTSIDE the `instrument_suspect` branch above, which suppresses
+       the headline. A rate can be suppressed; what Belay does not observe never can, or a
+       reader sees a status with no statement of its limits. It is read back from the
+       ledger, never computed here, so `belay phase0 report` (a pure re-render) shows it.
     3. Per-turn FAIL rate (`fail_turns()/total_turns()`), same n/a discipline.
     4. UNVERIFIED rate by named cause (`unverified_by_cause()`), one line per bucket,
        plus the overall UNVERIFIED turn share.
@@ -131,6 +179,9 @@ def render_report(ledger: RunLedger, metrics: Metrics) -> str:
             f"violation rate = {ledger.violating_instances()}/"
             f"{ledger.violation_denominator()} = {_format_rate(rate)}"
         )
+    lines.append("")
+
+    lines.extend(_coverage_section(ledger))
     lines.append("")
 
     fail_rate = _ratio(ledger.fail_turns(), ledger.total_turns())
