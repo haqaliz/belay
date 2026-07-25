@@ -9,6 +9,25 @@ All notable changes to Belay are documented here. The format follows
 
 _Nothing yet._
 
+## [0.5.0] — 2026-07-25
+
+### Added
+
+- **Observability interop — first slice** (`src/belay/interop/`, `belay interop correlate`). Belay can
+  now ingest a third-party OpenTelemetry span set (OTLP/JSON, parsed with the standard library — **no
+  OpenTelemetry SDK**, zero runtime dependencies preserved), correlate each span to the MCP `tools/call`
+  turn Belay recorded, and attach the existing replayed verdict — turning *"we complement observability,
+  we don't compete"* into shipped code and producing the first direct measurement of how much agent
+  activity actually crosses the MCP boundary (risk R6). Correlation is **deterministic**: it joins on the
+  W3C `traceparent` Belay already captures per turn (C1's `trace_context` fact), by string-equality on
+  `(traceId, spanId)`, never a time-window heuristic. C9 **changes no verdict axis** — it re-emits the
+  unmodified `verify_turn` result (proven by an end-to-end test asserting a field-identical `TurnVerdict`).
+  A span with no matching turn, an ambiguous match, no `--server`, or an unrestorable pre-state is reported
+  **`UNVERIFIED`, never `PASS`**, each with a named cause; the command reports the correlation rate
+  `matched/total` with its denominator, and `--json` emits a machine-readable result. Scope is a single
+  trace file; exporting verdicts back into a collector, multi-trace aggregation, and the `NOT_COVERED`
+  reclassification are named follow-ups. The zero-LLM import guard now covers `src/belay/interop/`.
+
 ## [0.4.0] — 2026-07-22
 
 ### Fixed
