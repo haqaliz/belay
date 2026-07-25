@@ -9,6 +9,50 @@ All notable changes to Belay are documented here. The format follows
 
 _Nothing yet._
 
+## [0.7.0] - 2026-07-25
+
+### Added
+
+- **`NOT_COVERED`, a fifth verdict status — sub-verdict only.** It marks a dimension Belay has no
+  instrument for at all; today exactly one, a tool's `openWorldHint: false` network promise, which no
+  filesystem delta can confirm or refute. `UNVERIFIED` means *"we tried to check this and could not"*;
+  `NOT_COVERED` means *"this was never inside what Belay claims to check"*. `reduce` drops it before
+  ranking, so it can never be a turn's reduced status, never lowers a turn and never lifts one — an
+  empty-after-filter set still reduces to `UNVERIFIED`, never to `PASS`.
+- **A coverage line on every surface that renders a verdict**, enforced by a test per surface:
+  `belay verify` (aggregate, per-turn, and the always-on banner), `belay phase0 report` (persisted in
+  the ledger, so a pure re-render can still state it), `belay corpus show`, and
+  `belay interop correlate` (human and `--json`).
+- **Every `UNVERIFIED` turn names its cause, including turns that replayed.** Previously a turn that
+  replayed fine and only then reduced to `UNVERIFIED` carried no cause, so the Phase-0 report filed it
+  under a causeless catch-all — the Stage-1 re-mint published `unknown: 12`.
+
+### Fixed
+
+- **`belay interop correlate` no longer reports a snapshot-restore failure that never happened.** It
+  inferred "nothing was re-invoked" from the mere presence of `TurnVerdict.cause`, which held only
+  while the non-replayed branch was that field's sole setter. With causes now named on both paths, a
+  turn that replayed perfectly well was labelled `unrestorable-pre-state`. It now discriminates on a
+  closed cause vocabulary, with a guard test that fails loudly if that vocabulary grows.
+- **`belay corpus show` prints each sub-verdict's message**, not just axis/kind/status. Without it a
+  stored case read identically whether a tool *declared* a closed network posture Belay could not
+  check or declared nothing at all — the one distinction `NOT_COVERED` exists to draw.
+
+### Changed
+
+- An honestly-declared closed network posture is no longer punished. Before this, declaring
+  `openWorldHint: false` pinned **every** turn against the reference
+  `@modelcontextprotocol/server-filesystem` at `UNVERIFIED` regardless of agent behavior, making
+  truthful annotation strictly worse than silence.
+
+### Note on comparing rates across this release
+
+**The `UNVERIFIED` rate before and after is NOT comparable.** Turns that were `UNVERIFIED` only
+because of an unobservable network promise are now `PASS` carrying a `NOT_COVERED` sub-verdict. The
+drop is a **reclassification of a dimension Belay never had an instrument for, not improved
+detection.** A `PASS` now means *"passed on the dimensions Belay checks"*, which is why the coverage
+line is mandatory on every surface.
+
 ## [0.6.0] — 2026-07-25
 
 ### Fixed
