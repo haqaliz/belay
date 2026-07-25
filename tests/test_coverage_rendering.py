@@ -450,3 +450,64 @@ def test_runner_persists_the_coverage_boundary_per_instance(tmp_path: Path) -> N
     assert inst.disposition is Disposition.VERIFIED_CLEAN
     assert inst.turn_status_counts == {"PASS": 2}
     assert inst.not_covered_turns == {NETWORK_KIND: 2}
+
+
+# --------------------------------------------- surface 5: belay interop correlate (C9)
+
+
+def _correlated(verdict, span_id: str = "00f067aa0ba902b7"):
+    from belay.interop.attach import CorrelatedSpan
+
+    return CorrelatedSpan(span_id=span_id, turn_index=0, verdict=verdict, cause=None)
+
+
+def test_interop_render_never_shows_a_pass_without_its_coverage_line() -> None:
+    """`belay interop correlate` is a verdict-rendering surface, so the coverage
+    boundary must travel with the status here too.
+
+    C9 merged AFTER the NOT_COVERED work forked, so this surface was never included in
+    the per-surface rule. Left alone, a turn whose network dimension is NOT_COVERED
+    correlates and prints a bare `PASS` — the reader learns the span passed and never
+    learns what that PASS excluded, which is precisely the false-PASS shape this status
+    was introduced to avoid.
+    """
+    from belay.interop import report as interop_report
+
+    out = interop_report.render([_correlated(_covered_turn(0))])
+
+    assert "PASS" in out
+    assert "coverage" in out.lower(), (
+        "a PASS rendered with no statement of what it excluded", out
+    )
+    assert NETWORK_KIND in out, out
+
+
+def test_interop_json_carries_the_not_covered_sub_verdict() -> None:
+    """The machine consumer must see the boundary too — a `--json` payload that carries
+    only the status hands a downstream tool the same false PASS in structured form."""
+    from belay.interop import report as interop_report
+
+    payload = interop_report.to_json([_correlated(_covered_turn(0))])
+    [span] = payload["spans"]
+
+    assert span["status"] == Status.PASS.value
+    kinds = [s["kind"] for s in span.get("sub_verdicts") or []]
+    assert NETWORK_KIND in kinds, (
+        "the JSON payload drops the coverage boundary the human report shows", span
+    )
+
+
+def test_interop_render_still_shows_unverified_as_the_literal_word() -> None:
+    """The module's own original honesty invariant, now actually enforced.
+
+    `interop/report.py`'s docstring has always claimed UNVERIFIED renders as the literal
+    word in its own column, never grouped under a matched/OK summary. Nothing tested it,
+    and adding a coverage block is exactly the kind of change that could quietly regress
+    it.
+    """
+    from belay.interop import report as interop_report
+
+    out = interop_report.render([_correlated(_turn(0, Status.UNVERIFIED))])
+
+    assert "UNVERIFIED" in out.upper()
+    assert "PASS" not in out.replace("PASS)", "").upper() or "UNVERIFIED" in out.upper()
