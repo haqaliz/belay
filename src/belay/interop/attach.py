@@ -18,13 +18,28 @@ goes through — never a clean PASS hand-written down here.
 
 **The `cause` field.** For `Unmatched`/`Ambiguous` spans it names WHY nothing was
 attached (`no-matching-mcp-turn` / `ambiguous-correlation`). For a `Matched` span whose
-`verify_turn` call could not replay the turn at all — `TurnVerdict.cause` is set exactly
-when the turn was never REPLAYED (see `verify/turn.py`'s non-REPLAYED branch, covering
-both an unrestorable snapshot and a turn that was never snapshotted) — the
-`CorrelatedSpan.cause` is the named `unrestorable-pre-state`, derived structurally from
-the presence of `TurnVerdict.cause` rather than re-parsing its string. A REPLAYED turn's
-`TurnVerdict.cause` is always `None` (its `sub_verdicts` already explain it), so a matched,
-replayed span's `CorrelatedSpan.cause` is `None` too — Task 3 invents no cause for it.
+`verify_turn` call could not replay the turn at all — an unrestorable snapshot, or a turn
+that was never snapshotted — the `CorrelatedSpan.cause` is the named
+`unrestorable-pre-state`. A turn that DID replay gets `cause=None` here: its
+`sub_verdicts` already explain it, and Task 3 invents no cause of its own.
+
+**Why the discriminator is a cause vocabulary and not `cause is not None`.** This module
+originally read the mere *presence* of `TurnVerdict.cause` as "nothing was re-invoked",
+because the non-REPLAYED branch was the only one that set it. The `NOT_COVERED` release
+deliberately ended that: `verify/turn.py` now also names a cause on the REPLAYED path
+whenever such a turn reduces to `UNVERIFIED`, so that every unverified turn traces to a
+named cause. `_replayed_cause`'s own contract states the consequence — the cause is
+*"a stable LABEL on both paths and a consumer never has to know which path produced it."*
+Presence therefore no longer distinguishes anything, and reading it as though it did made
+this module report a **snapshot-restore failure that never happened** — Belay inventing a
+fact about its own execution, which is worse than saying nothing.
+
+So the test is membership in `_REPLAYED_CAUSES`, the closed set of buckets
+`_replayed_cause` can produce. It is closed by construction: that function always builds
+its string from the `REPLAYED_SUB_VERDICT` prefix, and `canonical_cause`'s prefix table
+ends in a catch-all mapping that prefix to `REPLAYED_UNVERIFIED`, so every replayed cause
+lands on one of these four labels. `test_replayed_cause_vocabulary_is_closed` fails loudly
+if a fifth is ever added.
 
 **The `verify=` seam.** `correlate_and_attach` takes an optional `verify` callable,
 defaulting to the real `verify_turn`, purely so the correlation/attach LOGIC can be unit
@@ -45,6 +60,12 @@ from typing import Any, Callable, Optional, Sequence
 from belay.interop.correlate import Ambiguous, Matched, Unmatched, build_turn_index, match_span
 from belay.interop.otlp import Span
 from belay.replay.client import DEFAULT_TIMEOUT
+from belay.replay.report import (
+    REPLAYED_EFFECT_UNVERIFIED,
+    REPLAYED_INVARIANT_UNVERIFIED,
+    REPLAYED_RESULT_UNVERIFIED,
+    REPLAYED_UNVERIFIED,
+)
 from belay.verify.invariants import Invariant
 from belay.verify.turn import TurnVerdict, verify_turn
 from belay.verify.verdict import Status, reduce
@@ -53,6 +74,18 @@ from belay.verify.verdict import Status, reduce
 #: (and a later report/CLI surface) can match on these exact strings.
 NO_MATCHING_MCP_TURN = "no-matching-mcp-turn"
 AMBIGUOUS_CORRELATION = "ambiguous-correlation"
+
+#: The closed set of `TurnVerdict.cause` values that mean "this turn REPLAYED and only
+#: then reduced to UNVERIFIED" — i.e. the pre-state WAS restored and the tool WAS
+#: re-invoked. A cause in this set must never be reported as `unrestorable-pre-state`.
+_REPLAYED_CAUSES = frozenset(
+    {
+        REPLAYED_RESULT_UNVERIFIED,
+        REPLAYED_EFFECT_UNVERIFIED,
+        REPLAYED_INVARIANT_UNVERIFIED,
+        REPLAYED_UNVERIFIED,
+    }
+)
 UNRESTORABLE_PRE_STATE = "unrestorable-pre-state"
 
 #: The signature `verify_turn` (and any injected stand-in) must satisfy.
@@ -131,12 +164,17 @@ def correlate_and_attach(
                 replays=replays,
                 invariants=invariants,
             )
-            # `TurnVerdict.cause` is set exactly on the non-REPLAYED branch of
-            # `verify_turn` (an unrestorable or never-snapshotted pre-state) and is
-            # ALWAYS `None` on a REPLAYED turn (verify/turn.py:212-218) — so its mere
-            # presence, not its string content, is the structural signal that nothing
-            # was actually re-invoked for this turn.
-            cause = UNRESTORABLE_PRE_STATE if turn_verdict.cause is not None else None
+            # Both branches of `verify_turn` can set `cause`, so presence alone says
+            # nothing about whether anything was re-invoked (see the module docstring).
+            # Only a cause OUTSIDE the replayed vocabulary means the pre-state could not
+            # be restored — anything else would assert a restore failure that never
+            # happened.
+            cause = (
+                UNRESTORABLE_PRE_STATE
+                if turn_verdict.cause is not None
+                and turn_verdict.cause not in _REPLAYED_CAUSES
+                else None
+            )
             results.append(
                 CorrelatedSpan(
                     span_id=span.span_id,

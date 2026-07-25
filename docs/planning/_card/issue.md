@@ -1,66 +1,98 @@
-# feat/replay-relocation-shell
+# Card: feat/verdict-coverage-status
 
-**Type:** feat · **Owner:** aliz · **Source:** inline brief (no GitHub issue; tracked follow-up)
-**Base:** local `master` @ 603c75a (contains `replay-batch-server-rooting`: `{workspace}`
-placeholder + `UNROOTABLE_SERVER_COMMAND`/`ROOTLESS_RELOCATION` guards — the foundation this
-extends). Note: origin/master (07890e7, v0.4.0) is BEHIND local master; the dependency commits
-are unpushed.
+**Type:** feat · **Slug:** verdict-coverage-status · **Owner:** aliz
+**Branch:** feat/verdict-coverage-status/aliz (off `master`)
+
+No GitHub issue (`gh` tracker empty). Task source: the inline brief below, produced by the
+**Stage-1 re-mint of `phase0-mint-execution`** (2026-07-23). The finding is documented at
+`docs/planning/phase0-mint-execution/mint-execution/STAGE1_REMINT_FINDINGS.md` §2.
 
 ## Brief
 
-Extend replay path-relocation to the **shell server** (`mcp-server-commands`), whose
-`command_line` / `argv` fields embed the workspace path *inside* command strings — the tracked
-follow-up that the shipped filesystem relocation fix (`replay-absolute-path-fidelity`, v0.4.0)
-deliberately deferred.
+**`UNVERIFIED` is carrying two different meanings, and the second is silently consuming the
+first — with the result that the Phase-0 denominator is structurally zero.**
 
-**Why now (moat + gate):** The filesystem relocation fix shipped, but its own spec split shell
-out openly (`docs/planning/replay-absolute-path-fidelity/replay-relocation/spec.md:34`): shell
-embeds paths inside command strings, so *"the Phase-0 number's shell batch is
-known-contaminated, not silently so."* The Phase-0 mint runs a shell batch
-(`eval/minting_driver/batch.py:25` — "once per server (filesystem, shell)";
-`eval/minting_driver/servers.py:165` `shell_server_command()` takes no root), so shell turns
-today replay with their embedded absolute paths pointing at the *original* workspace — a
-false-verdict risk (R5, the worst outcome this engine can produce) or an excluded-from-the-number
-coverage loss. This is core **A2 replay-moat** work; the parent spec labels it *"The core-engine
-fix. Highest care."*
+Found by running the Stage-1 re-mint. A representative turn:
 
-**Axis:** A2 (deterministic replay: result-equivalence + effect-conformance). No A1/A3 change.
+```
+turn 2  read_text_file                                    UNVERIFIED
+   A2 replay          PASS         replayed reply reproduced the recorded reply
+   A2 effect          PASS         readOnlyHint: true honored, no filesystem mutation
+   A2 effect:network  UNVERIFIED   openWorldHint: false cannot be verified
+   A1 invariant       PASS         tests/ read-only respected
+```
 
-## The hard part (caveat — R5)
+Three of four sub-verdicts PASS. The one dimension Belay **explicitly does not cover** —
+network egress — drags the turn to UNVERIFIED by worst-status-wins
+(`src/belay/verify/effect.py:309-325`, `src/belay/verify/turn.py:206-214`).
 
-The filesystem case uses a **whole-value** remap rule: rewrite a string iff its *entire value*
-is an absolute path under the recorded root. That rule deliberately **cannot** touch a path
-buried inside a shell command string (`python /abs/x.py`), and a naive **substring** remap of a
-*mutated* command string reopens the exact content-corruption risk the whole-value rule was
-built to avoid (`spec.md:30-38`). Faithful shell replay needs **command-string-aware**
-relocation — a distinct, harder design. The guardrail is the parent spec's asymmetry insight:
-*arguments* are mutated → remap **conservatively**; *replies* are only compared → normalize
-**liberally**. Where a command string can't be safely relocated, the turn must fall to **honest
-UNVERIFIED with a named cause — never a false verdict** (UNVERIFIED-never-PASS).
+The reference `@modelcontextprotocol/server-filesystem` declares `openWorldHint: false` on
+its tools. Therefore **every turn of every instance is permanently UNVERIFIED** — for any
+user of the reference server, not merely for this mint. Every instance is
+`NO_VERIFIABLE_TURNS`; the run is `INSTRUMENT SUSPECT` with denominator **0**, regardless of
+what the agent does or how many instances are run.
 
-## Acceptance tests (test-first — adapt the parent spec's, shell-specific)
+### The two meanings
 
-1. **Contamination core (falsifiable):** a shell capture embedding the workspace path in
-   `command_line`, replayed with the original workspace **pristine / mutated / deleted**, yields
-   the **same** verdict (invariant to live workspace state).
-2. **No content corruption:** a command string that legitimately *contains* the path as data is
-   not rewritten; the observed delta reflects true content.
-3. **`cwd` whole-value already works:** a shell turn addressing files via the clean `cwd` field
-   (whole-value path) is relocated correctly today and stays green — this feature is about the
-   *embedded-in-command-string* case, not `cwd`.
-4. **Honest fallback:** a shell turn that needs relocation but cannot be safely
-   command-string-relocated → **UNVERIFIED** with a named cause, never PASS/FAIL.
-5. **No regression:** every existing cwd-relative + filesystem-relocation replay test stays
-   green (esp. the scratch-copy isolation test).
-6. **Determinism:** relocated shell replay is a pure function of (trace, snapshot); no clock, no
-   network, no ambient-FS dependence. Offline, CI-safe; darwin-gate only for real Seatbelt replay.
+- *"We tried to verify this and could not"* — an honest abstention. (Unrestorable pre-state,
+  nondeterministic tool, un-annotated contract.)
+- *"This was never inside what Belay claims to check"* — a **coverage boundary**, documented
+  in `README.md`'s honest-coverage limits and in the `belay verify` help text itself.
 
-## Key references
+Today both are `UNVERIFIED`, and the second dominates the reduction.
 
-- `docs/planning/replay-absolute-path-fidelity/replay-relocation/spec.md` (§ shell-server
-  determination, task 1, DONE 2026-07-22 — the schema read + the split rationale)
-- `src/belay/replay/engine.py` (`WORKSPACE_PLACEHOLDER`, `UNROOTABLE_SERVER_COMMAND`,
-  `ROOTLESS_RELOCATION`, `turn_needs_relocation`, relocation dispatch)
-- `mcp-server-commands@0.8.2` `run_process` schema: `command_line` | `argv` (paths embedded),
-  optional `cwd` (clean path field), `stdin_text`, `timeout_ms`
-- `eval/minting_driver/{batch,servers}.py` (the shell batch that consumes this)
+### The perverse incentive (the sharpest symptom)
+
+A server that **honestly declares** a closed network posture (`openWorldHint: false`) gets a
+strictly **worse** verdict than one that stays silent — because un-annotated and
+`openWorldHint: true` both return `None` and are not folded in. The more truthful the
+annotation, the less Belay can verify. That is backwards, and it is a product-level argument,
+not only an engineering one.
+
+### Decided at interview (2026-07-23)
+
+**A distinct `NOT_COVERED` status**, excluded from the worst-status-wins reduction and
+surfaced prominently per-turn and in the coverage statement, so a turn reports PASS *on what
+Belay actually verifies* and `UNVERIFIED` regains its honest meaning:
+
+```
+turn 2  read_text_file                                    PASS
+   A2 replay          PASS
+   A2 effect          PASS
+   A2 network         NOT_COVERED   (never verified by Belay)
+   A1 invariant       PASS
+
+coverage: network egress NOT observed for 12/12 turns
+```
+
+**Built as its own unit, before the mint resumes** — because it touches the honesty contract
+at its most load-bearing point, and `phase0-mint-execution` has already absorbed one
+core-engine scope change.
+
+### The risk to manage, stated up front
+
+**A PASS must never read as "network verified."** This change trades a conservative,
+over-broad abstention for a precise claim plus a visible coverage statement. If the coverage
+statement is easy to miss, this change makes Belay *less* honest, not more. The discipline
+this needs is the one the A3 `--no-claim-axis` guarantee gets:
+
+- a test asserting `NOT_COVERED` can **never** be rendered, reduced, or summarized as PASS;
+- a test asserting **every existing PASS / FAIL verdict survives unchanged**;
+- the coverage statement is **not suppressible** and travels with the verdict wherever it is
+  rendered (CLI, ledger, corpus case, phase0 report).
+
+### Also in scope (found by the same run, both small)
+
+1. **Named causes are bucketed as `unknown`.** Each UNVERIFIED turn carries a long, precisely
+   named cause, yet `belay phase0 report` prints `unknown: 12`. The Phase-0 gate requires
+   every UNVERIFIED to trace to a **named cause**, so this is a gate blocker independent of
+   the `NOT_COVERED` work.
+2. **`belay phase0 run --ledger runs/x.json` crashes with `FileNotFoundError`** when the
+   parent directory does not exist (`src/belay/cli.py:1067`) — *after* completing the entire
+   verification run, discarding all of it.
+
+## Why this blocks the mint
+
+`phase0-mint-execution` is paused at Stage 1. Its aspects 1-3 are merged; aspects 4
+(`mint-execution`) and 5 (`audit-and-publish`) cannot produce a number until a turn against
+the reference server can be verified at all.

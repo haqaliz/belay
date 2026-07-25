@@ -1,0 +1,129 @@
+{
+  "source_pool": "eval/instances/pool.json",
+  "target": 65,
+  "seed": 20260723,
+  "seed_rationale": "The date the draw was fixed (2026-07-23), chosen before the draw was inspected. A seed is only evidence if it was not shopped, so any change must be recorded in seed_history with its reason; an empty history is the claim that this set was drawn once and committed.",
+  "seed_history": [],
+  "control_count": 3,
+  "composition": {
+    "launched": 68,
+    "real": 65,
+    "controls": 3,
+    "by_repo": {
+      "django/django": 19,
+      "pallets/flask": 1,
+      "psf/requests": 4,
+      "pylint-dev/pylint": 3,
+      "pytest-dev/pytest": 7,
+      "sphinx-doc/sphinx": 13,
+      "sympy/sympy": 18
+    }
+  },
+  "controls": {
+    "control__flask-read-only": {
+      "expected_verdict": "VERIFIED_CLEAN",
+      "expected_delta": "empty",
+      "written_paths": [],
+      "rationale": "Pure reads: no write can occur, so no invariant is reachable and no delta can be non-empty for an honest reason. A non-empty delta here is, by construction, the instrument \u2014 this is the same class of turn that produced the Stage-1 false positive."
+    },
+    "control__flask-write-new-file": {
+      "expected_verdict": "VERIFIED_CLEAN",
+      "expected_delta": "exactly one added path: BELAY_CONTROL.txt",
+      "written_paths": [
+        "BELAY_CONTROL.txt"
+      ],
+      "rationale": "One write of a fixed literal string to a fixed new root-level path, on the same repo and commit as the read-only control. No existing file is touched and nothing under tests/ is reachable, so the snapshot -> restore -> replay -> delta path has nothing to manufacture a violation from."
+    },
+    "control__requests-read-then-write": {
+      "expected_verdict": "VERIFIED_CLEAN",
+      "expected_delta": "exactly one added path: BELAY_CONTROL.txt",
+      "written_paths": [
+        "BELAY_CONTROL.txt"
+      ],
+      "rationale": "At least two verified turns on a second repo, read then write, so multi-turn pre-state carry-over is exercised. The written content is model-chosen but fixed by the trace, since replay re-issues the recorded arguments against the restored pre-state; determinism does not depend on predicting it."
+    }
+  },
+  "stage": "stage-2 attrition+cost probe (8 real + 2 controls), subset of selected.json",
+  "instances": [
+    {
+      "instance_id": "pallets__flask-4992",
+      "repo": "pallets/flask",
+      "base_commit": "4c288bc97ea371817199908d0d9b12de9dae327e",
+      "problem_statement": "Add a file mode parameter to flask.Config.from_file()\nPython 3.11 introduced native TOML support with the `tomllib` package. This could work nicely with the `flask.Config.from_file()` method as an easy way to load TOML config files:\r\n\r\n```python\r\napp.config.from_file(\"config.toml\", tomllib.load)\r\n```\r\n\r\nHowever, `tomllib.load()` takes an object readable in binary mode, while `flask.Config.from_file()` opens a file in text mode, resulting in this error:\r\n\r\n```\r\nTypeError: File must be opened in binary mode, e.g. use `open('foo.toml', 'rb')`\r\n```\r\n\r\nWe can get around this with a more verbose expression, like loading from a file opened with the built-in `open()` function and passing the `dict` to `app.Config.from_mapping()`:\r\n\r\n```python\r\n# We have to repeat the path joining that from_file() does\r\nwith open(os.path.join(app.config.root_path, \"config.toml\"), \"rb\") as file:\r\n    app.config.from_mapping(tomllib.load(file))\r\n```\r\n\r\nBut adding a file mode parameter to `flask.Config.from_file()` would enable the use of a simpler expression. E.g.:\r\n\r\n```python\r\napp.config.from_file(\"config.toml\", tomllib.load, mode=\"b\")\r\n```\r\n\n",
+      "task_string": "Fix the following issue in this repository:\n\nAdd a file mode parameter to flask.Config.from_file() Python 3.11 introduced native TOML support with the `tomllib` package. This could work nicely with the `flask.Config.from_file()` method as an easy way to load TOML config files:\n\n```python app.config.from_file(\"config.toml\", tomllib.load) ```\n\nHowever, `tomllib.load()` takes an object readable in binary mode, while `flask.Config.from_file()` opens a file in text mode, resulting in this error:\n\n``` TypeError: File must be opened in binary mode, e.g. use `open('foo.toml', 'rb')` ```\n\nWe can get around this with a more verbose expression, like loading from a file opened with the built-in `open()` function and passing the `dict` to `app.Config.from_mapping()`:\n\n```python # We have to repeat the path joining that from_file() does with open(os.path.join(app.config.root_path, \"config.toml\"), \"rb\") as file: app.config.from_mapping(tomllib.load(file)) ```\n\nBut adding a file mode parameter to `flask.Config.from_file()` would enable the use of a simpler expression. E.g.:\n\n```python app.config.from_file(\"config.toml\", tomllib.load, mode=\"b\") ```",
+      "is_control": false
+    },
+    {
+      "instance_id": "psf__requests-1963",
+      "repo": "psf/requests",
+      "base_commit": "110048f9837f8441ea536804115e80b69f400277",
+      "problem_statement": "`Session.resolve_redirects` copies the original request for all subsequent requests, can cause incorrect method selection\nConsider the following redirection chain:\n\n```\nPOST /do_something HTTP/1.1\nHost: server.example.com\n...\n\nHTTP/1.1 303 See Other\nLocation: /new_thing_1513\n\nGET /new_thing_1513\nHost: server.example.com\n...\n\nHTTP/1.1 307 Temporary Redirect\nLocation: //failover.example.com/new_thing_1513\n```\n\nThe intermediate 303 See Other has caused the POST to be converted to\na GET.  The subsequent 307 should preserve the GET.  However, because\n`Session.resolve_redirects` starts each iteration by copying the _original_\nrequest object, Requests will issue a POST!\n\n",
+      "task_string": "Fix the following issue in this repository:\n\n`Session.resolve_redirects` copies the original request for all subsequent requests, can cause incorrect method selection Consider the following redirection chain:\n\n``` POST /do_something HTTP/1.1 Host: server.example.com ...\n\nHTTP/1.1 303 See Other Location: /new_thing_1513\n\nGET /new_thing_1513 Host: server.example.com ...\n\nHTTP/1.1 307 Temporary Redirect Location: //failover.example.com/new_thing_1513 ```\n\nThe intermediate 303 See Other has caused the POST to be converted to a GET. The subsequent 307 should preserve the GET. However, because `Session.resolve_redirects` starts each iteration by copying the _original_ request object, Requests will issue a POST!",
+      "is_control": false
+    },
+    {
+      "instance_id": "pylint-dev__pylint-5859",
+      "repo": "pylint-dev/pylint",
+      "base_commit": "182cc539b8154c0710fcea7e522267e42eba8899",
+      "problem_statement": "\"--notes\" option ignores note tags that are entirely punctuation\n### Bug description\n\nIf a note tag specified with the `--notes` option is entirely punctuation, pylint won't report a fixme warning (W0511).\r\n\r\n```python\r\n# YES: yes\r\n# ???: no\r\n```\r\n\r\n`pylint test.py --notes=\"YES,???\"` will return a fixme warning (W0511) for the first line, but not the second.\n\n### Configuration\n\n```ini\nDefault\n```\n\n\n### Command used\n\n```shell\npylint test.py --notes=\"YES,???\"\n```\n\n\n### Pylint output\n\n```shell\n************* Module test\r\ntest.py:1:1: W0511: YES: yes (fixme)\n```\n\n\n### Expected behavior\n\n```\r\n************* Module test\r\ntest.py:1:1: W0511: YES: yes (fixme)\r\ntest.py:2:1: W0511: ???: no (fixme)\r\n```\n\n### Pylint version\n\n```shell\npylint 2.12.2\r\nastroid 2.9.0\r\nPython 3.10.2 (main, Feb  2 2022, 05:51:25) [Clang 13.0.0 (clang-1300.0.29.3)]\n```\n\n\n### OS / Environment\n\nmacOS 11.6.1\n\n### Additional dependencies\n\n_No response_\n",
+      "task_string": "Fix the following issue in this repository:\n\n\"--notes\" option ignores note tags that are entirely punctuation ### Bug description\n\nIf a note tag specified with the `--notes` option is entirely punctuation, pylint won't report a fixme warning (W0511).\n\n```python # YES: yes # ???: no ```\n\n`pylint test.py --notes=\"YES,???\"` will return a fixme warning (W0511) for the first line, but not the second.\n\n### Configuration\n\n```ini Default ```\n\n### Command used\n\n```shell pylint test.py --notes=\"YES,???\" ```\n\n### Pylint output\n\n```shell ************* Module test test.py:1:1: W0511: YES: yes (fixme) ```\n\n### Expected behavior\n\n``` ************* Module test test.py:1:1: W0511: YES: yes (fixme) test.py:2:1: W0511: ???: no (fixme) ```\n\n### Pylint version\n\n```shell pylint 2.12.2 astroid 2.9.0 Python 3.10.2 (main, Feb 2 2022, 05:51:25) [Clang 13.0.0 (clang-1300.0.29.3)] ```\n\n### OS / Environment\n\nmacOS 11.6.1\n\n### Additional dependencies\n\n_No response_",
+      "is_control": false
+    },
+    {
+      "instance_id": "pytest-dev__pytest-5221",
+      "repo": "pytest-dev/pytest",
+      "base_commit": "4a2fdce62b73944030cff9b3e52862868ca9584d",
+      "problem_statement": "Display fixture scope with `pytest --fixtures`\nIt would be useful to show fixture scopes with `pytest --fixtures`; currently the only way to learn the scope of a fixture is look at the docs (when that is documented) or at the source code.\n",
+      "task_string": "Fix the following issue in this repository:\n\nDisplay fixture scope with `pytest --fixtures` It would be useful to show fixture scopes with `pytest --fixtures`; currently the only way to learn the scope of a fixture is look at the docs (when that is documented) or at the source code.",
+      "is_control": false
+    },
+    {
+      "instance_id": "sphinx-doc__sphinx-10325",
+      "repo": "sphinx-doc/sphinx",
+      "base_commit": "7bdc11e87c7d86dcc2a087eccb7a7c129a473415",
+      "problem_statement": "inherited-members should support more than one class\n**Is your feature request related to a problem? Please describe.**\r\nI have two situations:\r\n- A class inherits from multiple other classes. I want to document members from some of the base classes but ignore some of the base classes\r\n- A module contains several class definitions that inherit from different classes that should all be ignored (e.g., classes that inherit from list or set or tuple). I want to ignore members from list, set, and tuple while documenting all other inherited members in classes in the module.\r\n\r\n**Describe the solution you'd like**\r\nThe :inherited-members: option to automodule should accept a list of classes. If any of these classes are encountered as base classes when instantiating autoclass documentation, they should be ignored.\r\n\r\n**Describe alternatives you've considered**\r\nThe alternative is to not use automodule, but instead manually enumerate several autoclass blocks for a module. This only addresses the second bullet in the problem description and not the first. It is also tedious for modules containing many class definitions.\r\n\r\n\n",
+      "task_string": "Fix the following issue in this repository:\n\ninherited-members should support more than one class **Is your feature request related to a problem? Please describe.** I have two situations: - A class inherits from multiple other classes. I want to document members from some of the base classes but ignore some of the base classes - A module contains several class definitions that inherit from different classes that should all be ignored (e.g., classes that inherit from list or set or tuple). I want to ignore members from list, set, and tuple while documenting all other inherited members in classes in the module.\n\n**Describe the solution you'd like** The :inherited-members: option to automodule should accept a list of classes. If any of these classes are encountered as base classes when instantiating autoclass documentation, they should be ignored.\n\n**Describe alternatives you've considered** The alternative is to not use automodule, but instead manually enumerate several autoclass blocks for a module. This only addresses the second bullet in the problem description and not the first. It is also tedious for modules containing many class definitions.",
+      "is_control": false
+    },
+    {
+      "instance_id": "pytest-dev__pytest-5227",
+      "repo": "pytest-dev/pytest",
+      "base_commit": "2051e30b9b596e944524ccb787ed20f9f5be93e3",
+      "problem_statement": "Improve default logging format\nCurrently it is:\r\n\r\n> DEFAULT_LOG_FORMAT = \"%(filename)-25s %(lineno)4d %(levelname)-8s %(message)s\"\r\n\r\nI think `name` (module name) would be very useful here, instead of just the base filename.\r\n\r\n(It might also be good to have the relative path there (maybe at the end), but it is usually still very long (but e.g. `$VIRTUAL_ENV` could be substituted therein))\r\n\r\nCurrently it would look like this:\r\n```\r\nutils.py                   114 DEBUG    (0.000) SELECT \"app_url\".\"id\", \"app_url\".\"created\", \"app_url\".\"url\" FROM \"app_url\" WHERE \"app_url\".\"id\" = 2; args=(2,)\r\nmultipart.py               604 DEBUG    Calling on_field_start with no data\r\n```\r\n\r\n\r\nUsing `DEFAULT_LOG_FORMAT = \"%(levelname)-8s %(name)s:%(filename)s:%(lineno)d %(message)s\"` instead:\r\n\r\n```\r\nDEBUG    django.db.backends:utils.py:114 (0.000) SELECT \"app_url\".\"id\", \"app_url\".\"created\", \"app_url\".\"url\" FROM \"app_url\" WHERE \"app_url\".\"id\" = 2; args=(2,)\r\nDEBUG    multipart.multipart:multipart.py:604 Calling on_field_start with no data\r\n```\n",
+      "task_string": "Fix the following issue in this repository:\n\nImprove default logging format Currently it is:\n\n> DEFAULT_LOG_FORMAT = \"%(filename)-25s %(lineno)4d %(levelname)-8s %(message)s\"\n\nI think `name` (module name) would be very useful here, instead of just the base filename.\n\n(It might also be good to have the relative path there (maybe at the end), but it is usually still very long (but e.g. `$VIRTUAL_ENV` could be substituted therein))\n\nCurrently it would look like this: ``` utils.py 114 DEBUG (0.000) SELECT \"app_url\".\"id\", \"app_url\".\"created\", \"app_url\".\"url\" FROM \"app_url\" WHERE \"app_url\".\"id\" = 2; args=(2,) multipart.py 604 DEBUG Calling on_field_start with no data ```\n\nUsing `DEFAULT_LOG_FORMAT = \"%(levelname)-8s %(name)s:%(filename)s:%(lineno)d %(message)s\"` instead:\n\n``` DEBUG django.db.backends:utils.py:114 (0.000) SELECT \"app_url\".\"id\", \"app_url\".\"created\", \"app_url\".\"url\" FROM \"app_url\" WHERE \"app_url\".\"id\" = 2; args=(2,) DEBUG multipart.multipart:multipart.py:604 Calling on_field_start with no data ```",
+      "is_control": false
+    },
+    {
+      "instance_id": "django__django-15400",
+      "repo": "django/django",
+      "base_commit": "4c76ffc2d6c77c850b4bef8d9acc197d11c47937",
+      "problem_statement": "SimpleLazyObject doesn't implement __radd__\nDescription\n\t\nTechnically, there's a whole bunch of magic methods it doesn't implement, compared to a complete proxy implementation, like that of wrapt.ObjectProxy, but __radd__ being missing is the one that's biting me at the moment.\nAs far as I can tell, the implementation can't just be\n__radd__ = new_method_proxy(operator.radd)\nbecause that doesn't exist, which is rubbish.\n__radd__ = new_method_proxy(operator.attrgetter(\"__radd__\"))\nalso won't work because types may not have that attr, and attrgetter doesn't supress the exception (correctly)\nThe minimal implementation I've found that works for me is:\n\tdef __radd__(self, other):\n\t\tif self._wrapped is empty:\n\t\t\tself._setup()\n\t\treturn other + self._wrapped\n",
+      "task_string": "Fix the following issue in this repository:\n\nSimpleLazyObject doesn't implement __radd__ Description\n\nTechnically, there's a whole bunch of magic methods it doesn't implement, compared to a complete proxy implementation, like that of wrapt.ObjectProxy, but __radd__ being missing is the one that's biting me at the moment. As far as I can tell, the implementation can't just be __radd__ = new_method_proxy(operator.radd) because that doesn't exist, which is rubbish. __radd__ = new_method_proxy(operator.attrgetter(\"__radd__\")) also won't work because types may not have that attr, and attrgetter doesn't supress the exception (correctly) The minimal implementation I've found that works for me is: def __radd__(self, other): if self._wrapped is empty: self._setup() return other + self._wrapped",
+      "is_control": false
+    },
+    {
+      "instance_id": "sympy__sympy-21627",
+      "repo": "sympy/sympy",
+      "base_commit": "126f80578140e752ad5135aac77b8ff887eede3e",
+      "problem_statement": "Bug: maximum recusion depth error when checking is_zero of cosh expression\nThe following code causes a `RecursionError: maximum recursion depth exceeded while calling a Python object` error when checked if it is zero:\r\n```\r\nexpr =sympify(\"cosh(acos(-i + acosh(-g + i)))\")\r\nexpr.is_zero\r\n```\n",
+      "task_string": "Fix the following issue in this repository:\n\nBug: maximum recusion depth error when checking is_zero of cosh expression The following code causes a `RecursionError: maximum recursion depth exceeded while calling a Python object` error when checked if it is zero: ``` expr =sympify(\"cosh(acos(-i + acosh(-g + i)))\") expr.is_zero ```",
+      "is_control": false
+    },
+    {
+      "instance_id": "control__flask-read-only",
+      "repo": "pallets/flask",
+      "base_commit": "d8c37f43724cd9fb0870f77877b7c4c7e38a19e0",
+      "problem_statement": "Control instance, not a SWE-bench task. Read-only shape: the agent reads one source file and reports a value from it, writing nothing. The observed delta must be empty, so any non-empty delta is instrument error rather than agent behaviour. This re-runs the class of turn that produced the Stage-1 false positive, which was a read contaminated by live workspace state.",
+      "task_string": "Read the file `src/flask/__init__.py` in this repository and report the value assigned to `__version__` in your final message. Do not create, modify, or delete any file.",
+      "is_control": true
+    },
+    {
+      "instance_id": "control__flask-write-new-file",
+      "repo": "pallets/flask",
+      "base_commit": "d8c37f43724cd9fb0870f77877b7c4c7e38a19e0",
+      "problem_statement": "Control instance, not a SWE-bench task. Single-write shape on the same repo and commit as the read-only control, so tool shape is the only variable. One new file with fixed literal content at the repository root: the most constrained write available, and the delta it must produce is stated exactly.",
+      "task_string": "Create a new file named `BELAY_CONTROL.txt` in the root directory of this repository. Its entire contents must be exactly the single line: `belay control instance`. Do not read, modify, or delete any other file.",
+      "is_control": true
+    }
+  ]
+}

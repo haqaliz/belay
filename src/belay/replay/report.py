@@ -86,9 +86,28 @@ REPLAY_DID_NOT_ANSWER = "replay did not answer target"
 #: report must never do — so it does not.
 _NO_RECORDED_CAUSE = "unrestorable (no recorded cause)"
 
+#: The prefix `belay.verify.turn` stamps on the cause of a turn that REPLAYED cleanly and
+#: only then reduced to UNVERIFIED (an un-annotated tool, an invariant that could not be
+#: evaluated, …). The rest of that string is `<axis>/<kind>: <verbatim sub-verdict
+#: message>`, which is per-turn detail — so the labels below collapse it to one bucket per
+#: DIMENSION. Without them `canonical_cause` would fall through and return the whole
+#: sentence, giving one bucket per turn: noisier than `unknown` and no more explanatory.
+REPLAYED_SUB_VERDICT = "replayed but unverified"
+
+#: The bucket a replayed-but-unverified turn is filed under, named by the dimension that
+#: DROVE the reduction. Not one label for all of them: "the reply could not be compared"
+#: and "the declared filesystem contract could not be checked" are different findings and
+#: an operator acts on them differently.
+REPLAYED_RESULT_UNVERIFIED = "replayed but result unverified"
+REPLAYED_EFFECT_UNVERIFIED = "replayed but effect unverified"
+REPLAYED_INVARIANT_UNVERIFIED = "replayed but invariant unverified"
+REPLAYED_UNVERIFIED = "replayed but sub-verdict unverified"
+
 #: Prefix-to-label map for the engine's other verbatim unverified causes. Kept short
 #: on purpose: the point is a stable bucket for the rate, not a second copy of the
-#: engine's wording.
+#: engine's wording. Order matters — `canonical_cause` returns the FIRST match, so the
+#: more specific replayed-dimension prefixes precede their catch-all (and `effect:network`
+#: precedes `effect`, of which it is a prefix).
 _PREFIX_LABELS: tuple[tuple[str, str], ...] = (
     ("no persisted snapshot manifest", MANIFEST_NOT_FOUND),
     (UNANSWERED_TARGET, REPLAY_DID_NOT_ANSWER),
@@ -96,6 +115,11 @@ _PREFIX_LABELS: tuple[tuple[str, str], ...] = (
     ("the tools/call frame could not be read", "unreadable target frame"),
     ("unrecognised state_handle status", "unrecognised state handle"),
     ("an in-root path is embedded in an argument value", "embedded path unrelocatable"),
+    (f"{REPLAYED_SUB_VERDICT} A2/replay", REPLAYED_RESULT_UNVERIFIED),
+    (f"{REPLAYED_SUB_VERDICT} A2/effect:network", REPLAYED_UNVERIFIED),
+    (f"{REPLAYED_SUB_VERDICT} A2/effect", REPLAYED_EFFECT_UNVERIFIED),
+    (f"{REPLAYED_SUB_VERDICT} A1/invariant", REPLAYED_INVARIANT_UNVERIFIED),
+    (REPLAYED_SUB_VERDICT, REPLAYED_UNVERIFIED),
 )
 
 

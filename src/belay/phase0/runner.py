@@ -31,6 +31,12 @@ must not die on trace #37; it must SAY #37 broke and keep going.
   siblings.
 - Else (zero `tools/call` turns, or every turn UNVERIFIED) -> `NO_VERIFIABLE_TURNS`: nothing
   was ever verified, so this instance must not silently read as "clean".
+- A turn whose status were `NOT_COVERED` counts as NEITHER replayed nor UNVERIFIED. It is
+  unreachable (`verdict.reduce` drops that status before ranking) but it is written as an
+  explicit branch rather than swept into the `else`, because sweeping it up would let a
+  coverage boundary promote an instance to `VERIFIED_CLEAN`. Separately, every turn's
+  NOT_COVERED SUB-verdicts are tallied by kind into `InstanceRecord.not_covered_turns`, so
+  the coverage boundary is persisted and survives into `belay phase0 report`.
 - `ERRORED` is reserved for the exception path above; it is never assigned by this rule.
 
 A flagged turn whose ingest raises `ValueError` (the corpus's "no restorable pre-state"
@@ -61,6 +67,7 @@ from belay.index import derive_correlation, tool_calls
 from belay.phase0.ledger import Disposition, InstanceRecord, RunLedger
 from belay.replay.client import DEFAULT_TIMEOUT
 from belay.replay.reader import read_trace
+from belay.replay.report import canonical_cause
 from belay.verify.invariants import Invariant
 from belay.verify.turn import TurnVerdict, verify_turn
 from belay.verify.verdict import Status
@@ -180,6 +187,7 @@ def _verify_one_trace(
 
     turn_status_counts: dict[str, int] = {}
     unverified_causes: dict[str, int] = {}
+    not_covered_turns: dict[str, int] = {}
     verdicts: dict[int, TurnVerdict] = {}
     replayed_any = False
 
@@ -195,9 +203,37 @@ def _verify_one_trace(
         )
         verdicts[n] = verdict
         turn_status_counts[verdict.status.name] = turn_status_counts.get(verdict.status.name, 0) + 1
+
+        # The coverage boundary, tallied per TURN (a kind is counted once however many
+        # sub-verdicts of that kind the turn carries) so `n/total_turns` reads as a
+        # fraction of turns. This is what makes the boundary reachable from a STORED
+        # ledger, i.e. from `belay phase0 report`, which re-renders JSON and computes
+        # nothing.
+        for kind in sorted({s.kind for s in verdict.sub_verdicts if s.status is Status.NOT_COVERED}):
+            not_covered_turns[kind] = not_covered_turns.get(kind, 0) + 1
+
         if verdict.status is Status.UNVERIFIED:
-            bucket = verdict.cause if verdict.cause is not None else _UNKNOWN_CAUSE
+            # Bucket by the CANONICAL name, as the runner spec says this table does
+            # (`phase0-runner/spec.md:48`) — it never actually called `canonical_cause`,
+            # it copied the field, so any caller handing over a verbatim engine string got
+            # its own per-turn row in the published breakdown. `verify_turn` already
+            # canonicalises on both of its paths, so for the real verifier this is a
+            # no-op; it is the seam that keeps every OTHER verifier honest. A `None` cause
+            # still goes to the catch-all rather than through `canonical_cause`, which
+            # would relabel it "unrestorable (no recorded cause)" and assert a restore
+            # failure nobody observed.
+            bucket = canonical_cause(verdict.cause) if verdict.cause is not None else _UNKNOWN_CAUSE
             unverified_causes[bucket] = unverified_causes.get(bucket, 0) + 1
+        elif verdict.status is Status.NOT_COVERED:
+            # DECIDED, not accidental. `verdict.reduce` filters NOT_COVERED out before
+            # ranking, so a turn's reduced status can never BE NOT_COVERED and this branch
+            # is unreachable through the real verifier. It is written anyway because the
+            # old `else` swept it up and set `replayed_any = True` BY ACCIDENT — a turn
+            # whose status said "outside what Belay checks" would have promoted the whole
+            # instance to VERIFIED_CLEAN, i.e. a coverage boundary manufacturing a clean
+            # denominator entry. A NOT_COVERED turn verified NOTHING, so it does not count
+            # as replayed; if every turn were one the instance is NO_VERIFIABLE_TURNS.
+            pass
         else:
             replayed_any = True
 
@@ -241,6 +277,7 @@ def _verify_one_trace(
         flagged_unaddable=flagged_unaddable,
         unverified_causes=unverified_causes,
         error=None,
+        not_covered_turns=not_covered_turns,
     )
 
 

@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pytest
 from conftest import trace_of
+from fixtures.annotation_frames import TOOLS_LIST_REQUEST, TOOLS_LIST_RESPONSE
 from fixtures.connection_frames import TRACE_CONTEXT_META
 
 from belay.interop.attach import (
@@ -49,6 +50,10 @@ SPAN_ID = "00f067aa0ba902b7"
 
 UNUSED_SERVER = ["unused-server"]
 UNUSED_MANIFEST_DIR = "/nonexistent"
+
+#: A tools/list exchange, so the trace carries real annotations. "echo" (the tool
+#: TRACE_CONTEXT_META calls) is absent from it, so that turn is un-annotated.
+LISTING = [("c2s", TOOLS_LIST_REQUEST), ("s2c", TOOLS_LIST_RESPONSE)]
 
 
 def _span(trace_id: str, span_id: str, name: str = "mcp.tools/call") -> Span:
@@ -353,3 +358,138 @@ def test_ac5_matched_replayable_turn_attaches_the_byte_identical_turnverdict(tmp
     # Non-vacuity: this really replayed and really produced a verdict, not a stub.
     assert direct.status is Status.PASS, direct
     assert direct.tool_name == "echo", direct
+
+
+# --- The merge hazard: a REPLAYED-but-UNVERIFIED turn is NOT an unrestorable pre-state -
+
+
+def _replayed_but_unverified_reply():
+    """A cleanly REPLAYED turn whose reply reproduced and whose delta shows a mutation.
+
+    With an un-annotated tool ("echo" is absent from the tools/list fixture) the EFFECT
+    dimension has no declared contract to check, so the turn replays fine and only then
+    reduces to UNVERIFIED — the exact population `verify.turn._replayed_cause` names.
+    """
+    from belay.replay.engine import EQUAL, REPLAYED, TurnReplay
+    from belay.snapshot.bth1 import FieldDiff
+
+    reply = (
+        b'{"jsonrpc":"2.0","id":5,"result":{"content":[{"type":"text",'
+        b'"text":"ok"}],"isError":false}}'
+    )
+    return TurnReplay(
+        turn_index=0,
+        status=REPLAYED,
+        reinvoked=True,
+        result_equivalence=EQUAL,
+        recorded_reply=reply,
+        replayed_reply=reply,
+        delta=[FieldDiff(path=b"x", field=None, left=None, right=b"content")],
+    )
+
+
+def test_replayed_but_unverified_turn_is_not_labelled_unrestorable_pre_state(
+    tmp_path, monkeypatch
+):
+    """A turn that REPLAYED fine and only then reduced to UNVERIFIED must not be
+    reported as an unrestorable pre-state — that asserts a snapshot-restore failure
+    which never happened, a fact Belay would be inventing about its own execution.
+
+    `attach.py` inferred "nothing was re-invoked" from `TurnVerdict.cause is not None`,
+    resting on the premise that a REPLAYED turn always carries `cause=None`. The
+    `NOT_COVERED` release invalidates that premise: `verify/turn.py` now names a cause
+    on the REPLAYED path too, deliberately, so the cause is "a stable LABEL on both
+    paths and a consumer never has to know which path produced it".
+
+    This test drives the REAL `verify_turn` (only `replay_turn` is stubbed, exactly as
+    `test_verify_turn.py` stubs it) precisely so it stays coupled to that contract. A
+    version of this test that hand-builds `TurnVerdict(..., cause=...)` through the
+    `verify=` seam would pass against the bug and prove nothing.
+    """
+    from belay.verify import turn as turn_module
+
+    records = trace_of(tmp_path, LISTING + [("c2s", TRACE_CONTEXT_META)])
+    monkeypatch.setattr(
+        turn_module, "replay_turn", lambda *a, **k: _replayed_but_unverified_reply()
+    )
+
+    direct = verify_turn(records, 0, server_command=UNUSED_SERVER, manifest_dir="/nonexistent")
+    # Non-vacuity: this really is the replayed-but-unverified population.
+    assert direct.status is Status.UNVERIFIED, direct
+    assert direct.cause is not None, direct
+
+    [result] = correlate_and_attach(
+        records, [_span(TRACE_ID, SPAN_ID)],
+        server_command=UNUSED_SERVER, manifest_dir="/nonexistent",
+    )
+
+    assert result.turn_index == 0
+    assert result.cause != UNRESTORABLE_PRE_STATE, (
+        "interop reported an unrestorable pre-state for a turn that replayed fine -- "
+        "a named cause asserting a restore failure that never happened"
+    )
+
+
+def test_a_genuinely_unrestorable_turn_still_reports_its_cause(tmp_path, monkeypatch):
+    """The inverse guard: narrowing the discriminator must not delete the signal.
+
+    A turn that truly never replayed still reports `unrestorable-pre-state`. Driven
+    through the REAL `verify_turn` (only `replay_turn` is stubbed) for the same reason
+    as the test above: `test_ac3_...` hand-builds its TurnVerdict, so it cannot notice
+    if the real non-REPLAYED branch stops producing a cause this module recognises.
+    """
+    from belay.replay.engine import NOT_VERIFIABLE, TurnReplay
+    from belay.snapshot.substrate import UnrestorableCause
+    from belay.verify import turn as turn_module
+
+    records = trace_of(tmp_path, LISTING + [("c2s", TRACE_CONTEXT_META)])
+    unrestorable = TurnReplay(
+        turn_index=0,
+        status=NOT_VERIFIABLE,
+        reinvoked=False,
+        result_equivalence=None,
+        recorded_reply=None,
+        replayed_reply=None,
+        delta=[],
+        cause=UnrestorableCause.UNRESTORABLE_FIFO.value,
+    )
+    monkeypatch.setattr(turn_module, "replay_turn", lambda *a, **k: unrestorable)
+
+    direct = verify_turn(records, 0, server_command=UNUSED_SERVER, manifest_dir="/nonexistent")
+    # Non-vacuity: this really is the non-replayed population.
+    assert direct.status is Status.UNVERIFIED, direct
+    assert direct.cause is not None, direct
+
+    [result] = correlate_and_attach(
+        records, [_span(TRACE_ID, SPAN_ID)],
+        server_command=UNUSED_SERVER, manifest_dir="/nonexistent",
+    )
+
+    assert result.cause == UNRESTORABLE_PRE_STATE, (
+        "a turn that genuinely never replayed lost its named cause -- the discriminator "
+        "was narrowed until the real signal disappeared"
+    )
+    assert result.status is Status.UNVERIFIED
+    assert result.status != Status.PASS
+
+
+def test_replayed_cause_vocabulary_is_closed(tmp_path, monkeypatch):
+    """`_REPLAYED_CAUSES` must stay exactly the set `canonical_cause` can produce for a
+    replayed-but-unverified turn. If a fifth `REPLAYED_*` bucket is ever added and not
+    registered here, interop silently starts reporting it as an unrestorable pre-state
+    again — the precise regression this module was just repaired for. Fail loudly.
+    """
+    from belay.interop.attach import _REPLAYED_CAUSES
+    from belay.replay import report as report_module
+
+    declared = {
+        value
+        for name, value in vars(report_module).items()
+        if name.startswith("REPLAYED_") and name != "REPLAYED_SUB_VERDICT"
+        and isinstance(value, str)
+    }
+
+    assert declared == set(_REPLAYED_CAUSES), (
+        "the replayed-cause vocabulary drifted from what interop recognises",
+        sorted(declared ^ set(_REPLAYED_CAUSES)),
+    )

@@ -21,7 +21,7 @@ belong to whatever later phase populates a `RunLedger` by actually verifying tra
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
@@ -54,6 +54,14 @@ _REQUIRED_INSTANCE_FIELDS = (
     "error",
 )
 
+#: `not_covered_turns` is deliberately NOT in `_REQUIRED_INSTANCE_FIELDS`. It is
+#: optional-with-default so every ledger written before coverage was recorded still loads
+#: — a fail-closed requirement here would turn "this ledger predates the field" into a
+#: corrupt-ledger error. An absent field means "coverage was not recorded", which the
+#: report says in those words rather than rendering an unearned "nothing was outside
+#: coverage".
+_DEFAULT_NOT_COVERED: dict[str, int] = {}
+
 
 @dataclass(frozen=True)
 class InstanceRecord:
@@ -65,6 +73,20 @@ class InstanceRecord:
     could not be (each `{"turn": int, "cause": str}`). `unverified_causes` buckets this
     instance's UNVERIFIED turns by canonical cause. `error` carries the failure message
     when `disposition is ERRORED`, and is `None` otherwise.
+
+    `not_covered_turns` is THE COVERAGE BOUNDARY, persisted. It maps a sub-verdict `kind`
+    (e.g. `"effect:network"`) to the number of this instance's turns that carried a
+    `NOT_COVERED` sub-verdict of that kind. It exists because `belay phase0 report` is a
+    pure re-render of stored JSON: a coverage statement that were merely computed at
+    verification time could never reach that surface, and a status rendered without its
+    coverage boundary is precisely the false-PASS this status was introduced to prevent.
+    It is PER-INSTANCE because the report renders per-instance facts and a run-level
+    aggregate derives from per-instance data, never the other way round. It is counted
+    per TURN, not per sub-verdict, so `n/total_turns` reads as a fraction of turns.
+
+    Note it is NOT part of `turn_status_counts`: a turn's reduced status can never be
+    NOT_COVERED (`verdict.reduce` drops it), so this is a second, orthogonal tally, and
+    `total_turns()` — which sums `turn_status_counts` blindly — stays correct.
     """
 
     trace_id: str
@@ -75,6 +97,7 @@ class InstanceRecord:
     flagged_unaddable: list[dict]
     unverified_causes: dict[str, int]
     error: Optional[str]
+    not_covered_turns: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -116,6 +139,20 @@ class RunLedger:
         """Sum of the `"FAIL"` count across all instances."""
         return sum(inst.turn_status_counts.get("FAIL", 0) for inst in self.instances)
 
+    def not_covered_by_kind(self) -> dict[str, int]:
+        """`not_covered_turns` merged across every instance, summed per sub-verdict kind.
+
+        The run-level coverage boundary, derived (like every other count here) from the
+        per-instance records rather than stored twice. An empty dict means no instance
+        RECORDED a coverage boundary — which includes a ledger written before the field
+        existed, and must therefore never be rendered as "nothing was outside coverage".
+        """
+        merged: dict[str, int] = {}
+        for inst in self.instances:
+            for kind, count in inst.not_covered_turns.items():
+                merged[kind] = merged.get(kind, 0) + count
+        return merged
+
     def unverified_by_cause(self) -> dict[str, int]:
         """`unverified_causes` merged across every instance, summed per bucket."""
         merged: dict[str, int] = {}
@@ -136,6 +173,7 @@ def _instance_to_json(inst: InstanceRecord) -> dict:
         "flagged_unaddable": [dict(entry) for entry in inst.flagged_unaddable],
         "unverified_causes": dict(inst.unverified_causes),
         "error": inst.error,
+        "not_covered_turns": dict(inst.not_covered_turns),
     }
 
 
@@ -149,9 +187,10 @@ def _instance_from_json(raw: object) -> InstanceRecord:
     if not isinstance(raw, dict):
         raise ValueError(f"instance record must be a JSON object, got {type(raw).__name__}")
 
-    for field in _REQUIRED_INSTANCE_FIELDS:
-        if field not in raw:
-            raise ValueError(f"instance record is missing required field {field!r}")
+    # `field_name`, not `field`: `dataclasses.field` is imported at module scope now.
+    for field_name in _REQUIRED_INSTANCE_FIELDS:
+        if field_name not in raw:
+            raise ValueError(f"instance record is missing required field {field_name!r}")
 
     disposition_name = raw["disposition"]
     try:
@@ -172,6 +211,10 @@ def _instance_from_json(raw: object) -> InstanceRecord:
         flagged_unaddable=[dict(entry) for entry in raw["flagged_unaddable"]],
         unverified_causes=dict(raw["unverified_causes"]),
         error=raw["error"],
+        # Optional-with-default, ON PURPOSE — see `_DEFAULT_NOT_COVERED`. Every other
+        # field here is fail-closed; this one must not be, or every ledger written before
+        # the coverage boundary was recorded becomes unreadable.
+        not_covered_turns=dict(raw.get("not_covered_turns", _DEFAULT_NOT_COVERED)),
     )
 
 
