@@ -333,6 +333,23 @@ def test_rootless_and_unrootable_causes_are_distinct() -> None:
     assert cause not in engine.ROOTLESS_RELOCATION, cause
 
 
+def test_embedded_path_cause_buckets_to_a_stable_label() -> None:
+    """`EMBEDDED_PATH_UNRELOCATABLE` maps to a stable, short report bucket — not `unknown`.
+
+    A shell-heavy mint abstains on every embedded-path turn; the Phase-0 report must file
+    those under a NAMED cause so the table reads as UNVERIFIED-by-cause, not as the runner's
+    causeless catch-all. The label must also be distinct from the other relocation causes so
+    an operator can tell "embedded path" apart from "root not recorded" / "mis-rooted server".
+
+    Cross-platform: pure strings, no replay.
+    """
+    label = canonical_cause(engine.EMBEDDED_PATH_UNRELOCATABLE)
+    assert label == "embedded path unrelocatable", label
+    assert label != engine.EMBEDDED_PATH_UNRELOCATABLE, "the raw message is not a bucket label"
+    assert label != canonical_cause(engine.ROOTLESS_RELOCATION), label
+    assert label != canonical_cause(engine.UNROOTABLE_SERVER_COMMAND), label
+
+
 # --- 6. The cause reaches the published report, as UNVERIFIED and nothing else ---------
 
 

@@ -49,8 +49,16 @@ This file orients a coding agent working in this repository. Read it first.
 > the scratch (content untouched), the reply comparison substring-normalizes both roots (comparison-only),
 > and a rootless trace that needs relocation is `UNVERIFIED` (never guessed). Gated/additive: cwd-relative
 > servers are byte-unchanged. Proven by 9 acceptance criteria incl. a verdict identical across original
-> pristine/mutated/**deleted**. Shell `command_line`-embedded paths are the `replay-relocation-shell`
-> follow-up. See `docs/planning/replay-absolute-path-fidelity/`.
+> pristine/mutated/**deleted**. See `docs/planning/replay-absolute-path-fidelity/`.
+> **Shell `command_line`-embedded paths are now handled too** (`replay-relocation-shell`, built
+> 2026-07-25): the whole-value rule was blind to an in-root path buried *inside* a `run_process`
+> `command_line`/`argv`, so such turns replayed against the original workspace and silently
+> contaminated the verdict. Now a field-shaped detector (`command_embeds_in_root_path`) routes them
+> to either **whole-token relocation** (`relocate_command_line`: `shlex`-tokenize, relocate only
+> clean whole-token in-root paths span-precisely, **abstain on any doubt**) for a real PASS/FAIL, or
+> an honest **`UNVERIFIED`** (`EMBEDDED_PATH_UNRELOCATABLE`) — never a silent miss. Accepted residual:
+> a whole-token path used as command *data* (a `grep` pattern) is relocated like an address and could
+> diverge — rare, documented not silent. See `docs/planning/replay-relocation-shell/`.
 > **Next: re-mint the Stage-1 instance to confirm the false positive is gone in the wild, then run the
 > staged live mint and publish the number.** Gate criteria are pre-registered in
 > `docs/planning/phase0-live-mint/prd.md`: PROCEED iff ≥3 *independent* hand-audited TPs AND denominator ≥50

@@ -28,7 +28,14 @@ from pathlib import Path
 
 from belay.replay import engine
 from belay.replay.client import _relocate_frame
-from belay.replay.engine import ROOTLESS_RELOCATION, UNVERIFIED, _equivalence, _relocation_decision
+from belay.replay.engine import (
+    EMBEDDED_PATH_UNRELOCATABLE,
+    ROOTLESS_RELOCATION,
+    UNROOTABLE_SERVER_COMMAND,
+    UNVERIFIED,
+    _equivalence,
+    _relocation_decision,
+)
 from belay.snapshot.substrate import ClonefileBackend, FIDELITY_GAPS
 from belay.trace import TraceWriter
 
@@ -72,6 +79,52 @@ def test_relocated_frame_preserves_jsonrpc_id() -> None:
     assert decoded["params"]["arguments"]["new_content"] == "assert '/root/proj' in banner\n", (
         "content that merely mentions the root must NOT be rewritten"
     )
+
+
+# --- 1b. A run_process command_line's whole-token path is relocated (aspect 2) --------
+
+
+def test_relocated_frame_remaps_command_line_whole_token() -> None:
+    """A `run_process` `command_line`'s whole-token in-root path is relocated to the scratch.
+
+    The whole-value rule (`remap_arguments`) cannot reach a path embedded INSIDE the command
+    string; the aspect-2 `command_line` branch does. Only the path token's bytes move to the
+    scratch root — the `id`, method, tool `name`, and surrounding command bytes survive.
+    """
+    frame = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "tools/call",
+            "params": {
+                "name": "run_process",
+                "arguments": {"command_line": "cat /root/proj/tests/x.py"},
+            },
+        }
+    ).encode()
+
+    relocated = _relocate_frame(frame, "/root/proj", "/scratch/proj")
+    decoded = json.loads(relocated)
+
+    assert decoded["id"] == 9, "the JSON-RPC id must survive re-serialization"
+    assert decoded["params"]["name"] == "run_process"
+    assert decoded["params"]["arguments"]["command_line"] == "cat /scratch/proj/tests/x.py", (
+        "the whole-token in-root path inside command_line must be relocated to the scratch"
+    )
+
+
+def test_relocated_frame_leaves_abstaining_command_line_byte_unchanged() -> None:
+    """A `command_line` whose in-root path is fused into a token (residue) is byte-identical.
+
+    `relocate_command_line` ABSTAINs on a `--file=/root/x`-shaped residue, and `_relocate_frame`
+    honours that by leaving the frame as the EXACT input bytes — no half-relocation. Such a turn
+    is abstained upstream by the gate; this pins that even if reached, the bytes are untouched.
+    """
+    frame = (
+        b'{"jsonrpc":"2.0","id":4,"method":"tools/call",'
+        b'"params":{"name":"run_process","arguments":{"command_line":"python --file=/root/proj/x"}}}'
+    )
+    assert _relocate_frame(frame, "/root/proj", "/scratch/proj") is frame
 
 
 # --- 2. Gating: a cwd-relative / path-free frame is passed through untouched --
@@ -120,6 +173,119 @@ def test_relocation_decision_gates_on_in_root_paths() -> None:
         "a rootless cwd-relative turn must be UNCHANGED even though argv holds an absolute "
         "python path"
     )
+
+
+# --- 2b. Embedded in-root path in a string argument -> honest abstain ---------
+
+
+def test_relocation_decision_relocatable_command_line_relocates() -> None:
+    """Aspect 2 lift: a `command_line` whose embedded in-root path is a clean whole token relocates.
+
+    A `run_process`-shaped turn buries the in-root workspace path inside a `command_line` string
+    as a whole shell token (`python /root/w/x.py`). Aspect 1 abstained on ALL such turns; aspect 2
+    asks "is the embedding relocatable?" and — because this one is a clean whole token — returns
+    `(source_root, None)` to RELOCATE it. The server is root-less by launch (`["node", "srv.js"]`,
+    no argv token under the recorded root), and that is fine: a shell serves any absolute path, so
+    the argv-rooting `UNROOTABLE` guard (which assumes an argv-rooted server) does NOT apply to a
+    relocatable command_line. This is the one place aspect 1's unconditional abstain is lifted.
+    """
+    reloc_root, fallback = _relocation_decision(
+        "/root/w", {"command_line": "python /root/w/x.py"}, ["node", "srv.js"]
+    )
+    assert reloc_root == "/root/w" and fallback is None, (
+        "a relocatable whole-token command_line path must relocate, not abstain"
+    )
+
+
+def test_relocation_decision_abstains_for_embedded_residue_in_command_line() -> None:
+    """A `command_line` whose in-root path is FUSED into a token still abstains (residue).
+
+    The abstain floor aspect 2 keeps: a `--file=/root/w/x`-shaped path is substring-fused into a
+    token, not a clean whole token, so `relocate_command_line` ABSTAINs and the gate returns
+    `EMBEDDED_PATH_UNRELOCATABLE` — never a partial rewrite. The server is root-less by launch,
+    so the cause must be EMBEDDED (an un-relocatable embedded path), never `UNROOTABLE`.
+    """
+    reloc_root, fallback = _relocation_decision(
+        "/root/w", {"command_line": "python --file=/root/w/x"}, ["node", "srv.js"]
+    )
+    assert reloc_root is None
+    assert fallback == EMBEDDED_PATH_UNRELOCATABLE
+    assert fallback != UNROOTABLE_SERVER_COMMAND, (
+        "a root-less shell server command must NOT be reported as UNROOTABLE when the real "
+        "cause is an un-relocatable embedded in-root path"
+    )
+
+
+def test_relocation_decision_whole_value_only_still_relocates() -> None:
+    """Regression: a whole-value-only in-root path is still relocated, not diverted to abstain.
+
+    The embedded route must be purely additive — a turn whose only in-root path is a whole
+    `path` argument (and whose server argv is rooted under the recorded root) relocates exactly
+    as before. If the embedded detector stole this case the existing filesystem relocation
+    would silently break.
+    """
+    reloc_root, fallback = _relocation_decision(
+        "/root/w", {"path": "/root/w/x"}, ["srv", "/root/w"]
+    )
+    assert reloc_root == "/root/w" and fallback is None
+
+
+def test_relocation_decision_filesystem_content_mentioning_root_relocates() -> None:
+    """THE regression fix: a filesystem edit whose CONTENT mentions the root still relocates.
+
+    An `edit`-shaped turn moves the whole-value `path` and carries a `new_content` field that
+    merely *mentions* the workspace root as a substring. The narrowed detector keys only on
+    `command_line`/`argv`, so a content mention does NOT fire the embedded route — the turn
+    relocates (whole-value `path`), exactly as the shipped v0.4.0 filesystem fix intended. The
+    too-broad detector wrongly abstained (UNVERIFIED) here; this pins that it does not.
+    """
+    reloc_root, fallback = _relocation_decision(
+        "/root/w", {"path": "/root/w/x", "new_content": "see /root/w/x"}, ["srv", "/root/w"]
+    )
+    assert reloc_root == "/root/w" and fallback is None
+
+
+def test_relocation_decision_abstains_when_whole_value_plus_unrelocatable_residue() -> None:
+    """A turn with a relocatable whole-value path AND an un-relocatable command residue abstains.
+
+    The half-relocation guard aspect 2 must preserve: relocating the whole-value `path` while
+    leaving the fused command residue (`--file=/root/w/y`) pointing at the original workspace
+    would half-relocate the turn and manufacture a false delta. Because the residue is NOT
+    relocatable, the conservative floor abstains for the WHOLE turn — never partially.
+    """
+    reloc_root, fallback = _relocation_decision(
+        "/root/w",
+        {"path": "/root/w/x", "command_line": "python --file=/root/w/y"},
+        ["srv", "/root/w"],
+    )
+    assert reloc_root is None
+    assert fallback == EMBEDDED_PATH_UNRELOCATABLE
+
+
+def test_relocation_decision_cwd_relative_unaffected_by_embedded_route() -> None:
+    """A cwd-relative turn (no in-root anything) is still `(None, None)` — unchanged."""
+    reloc_root, fallback = _relocation_decision(
+        "/root/w", {"command_line": "python x.py", "path": "src/x.py"}, ["node", "srv.js"]
+    )
+    assert reloc_root is None and fallback is None
+
+
+def test_relocation_decision_rootless_server_with_whole_value_cwd_is_unrootable() -> None:
+    """A root-less shell server whose turn carries a WHOLE-VALUE in-root `cwd` -> UNROOTABLE.
+
+    The embedded detector keys only on `command_line`/`argv`; a relative `command_line`
+    (`pytest -q`) does NOT fire it. But the whole-value `cwd` (`/root/w`) makes
+    `turn_needs_relocation` True, and the server argv (`["node", "srv.js"]`) holds no token
+    under the recorded root, so the existing whole-value path hits `UNROOTABLE_SERVER_COMMAND`.
+    This pins that the narrowed embedded check does NOT interfere with (nor pre-empt) that
+    existing UNROOTABLE semantics.
+    """
+    reloc_root, fallback = _relocation_decision(
+        "/root/w", {"command_line": "pytest -q", "cwd": "/root/w"}, ["node", "srv.js"]
+    )
+    assert reloc_root is None
+    assert fallback == UNROOTABLE_SERVER_COMMAND
+    assert fallback != EMBEDDED_PATH_UNRELOCATABLE
 
 
 # --- 3. Honest fallback: rootless manifest + an in-root absolute path ---------

@@ -41,12 +41,17 @@ both sides are already canonical and the lexical test is exact.
 from __future__ import annotations
 
 import os
+import re
+import shlex
+from collections import Counter
 from typing import Any
 
 __all__ = [
     "canonicalize_obj",
     "canonicalize_reply",
+    "command_embeds_in_root_path",
     "is_under",
+    "relocate_command_line",
     "remap_argv",
     "remap_arguments",
     "remap_prefix",
@@ -210,4 +215,118 @@ def _contains_in_root_string(obj: object, root: str) -> bool:
         return any(_contains_in_root_string(item, root) for item in obj)
     if isinstance(obj, str):
         return is_under(obj, root)
+    return False
+
+
+def relocate_command_line(
+    cmd: str, from_root: str, to_root: str
+) -> tuple[str, str]:
+    """Relocate whole-token in-root paths in a shell `command_line`, or ABSTAIN on any doubt.
+
+    Returns `(new_cmd, outcome)` where `outcome` is `"RELOCATED"` or `"ABSTAIN"`. This is
+    the A2-moat primitive: a `run_process` turn addresses files by an absolute path embedded
+    INSIDE a `/bin/sh -c` command string, so `remap_arguments`' whole-*value* rule cannot
+    touch it. Here we go one level deeper — into shell *tokens* — but only where it is
+    provably safe. **Any doubt returns `(cmd, "ABSTAIN")` (the original bytes, unchanged);
+    the caller emits UNVERIFIED. A false rewrite would corrupt what the shell runs/writes and
+    manufacture a spurious verdict — categorically worse than abstaining.**
+
+    The conservative algorithm:
+
+    1. `shlex.split(cmd, posix=True)` (matches the server's `/bin/sh` lexing). If it raises
+       (unbalanced quote, dangling escape) → **ABSTAIN**.
+    2. Classify each token: whole-value `is_under(tok, from_root)` → *relocatable*; else if
+       `os.path.normpath(from_root)` is a **substring** of the token → *embedded residue*
+       (a path fused into a flag, a `a:b` pair, a quoted blob) → **ABSTAIN**; else *inert*.
+    3. Rewrite each distinct relocatable token in place with a **boundary-anchored** regex
+       ``(?<![\\w/-])<escaped-token>(?![\\w/-])`` → its scratch-remapped value, **longest
+       token first** to defeat prefix collisions (`/root/x` vs `/root/xy`). If a token's
+       regex match count ≠ its lexer occurrence count (ambiguous quoting/escaping the span
+       scan cannot faithfully recover) → **ABSTAIN**.
+    4. Return `(new_cmd, "RELOCATED")`.
+
+    In the non-abstain path every occurrence of the root string in the raw command is part of
+    a relocatable whole token (an embedded residue would have abstained in step 2, and an
+    inert token by definition contains no root substring), so the boundary regex maps cleanly
+    onto exactly those spans and no other byte is touched. A command with no relocatable token
+    and no residue is byte-clean already and returns `(cmd, "RELOCATED")`.
+
+    Pure, no I/O. The input string is never mutated.
+    """
+    try:
+        tokens = shlex.split(cmd, posix=True)
+    except ValueError:
+        return cmd, "ABSTAIN"
+
+    root_n = os.path.normpath(from_root)
+    relocatable: list[str] = []
+    for token in tokens:
+        if is_under(token, from_root):
+            relocatable.append(token)
+        elif root_n in token:
+            # An in-root path fused into a larger token: rewriting only its bytes would
+            # leave a half-relocated token, so abstain rather than corrupt.
+            return cmd, "ABSTAIN"
+
+    if not relocatable:
+        return cmd, "RELOCATED"
+
+    lex_counts = Counter(relocatable)
+    result = cmd
+    # Longest token first so a prefix (`/root/x`) never rewrites inside a longer sibling
+    # (`/root/xy`) before the sibling has moved.
+    for token in sorted(set(relocatable), key=len, reverse=True):
+        pattern = re.compile(r"(?<![\w/-])" + re.escape(token) + r"(?![\w/-])")
+        if len(pattern.findall(result)) != lex_counts[token]:
+            # The lexer saw this token N times but the boundary-anchored span scan finds a
+            # different count: quoting/escaping the scan cannot faithfully recover. Abstain.
+            return cmd, "ABSTAIN"
+        replacement = remap_prefix(token, from_root, to_root)
+        result = pattern.sub(lambda _m, r=replacement: r, result)
+
+    return result, "RELOCATED"
+
+
+def command_embeds_in_root_path(arguments: object, root: str) -> bool:
+    """True iff an EXECUTED-command field embeds an in-root path that is not whole-value.
+
+    The whole-value rule (`turn_needs_relocation`/`remap_arguments`) is blind to an in-root
+    absolute path buried **inside** a string — but the danger this predicate closes is *only*
+    about paths the server will **execute or resolve**, i.e. the shell server's `command_line`
+    (a string) and `argv` (a list). A substring remap of such a field is unsafe (it would
+    corrupt what is written/run), yet leaving it un-relocated contaminates the verdict — so a
+    turn embedding an in-root path in a command field must abstain, and this predicate is the
+    field-shaped detector for that abstain.
+
+    The rule is deliberately **field-shaped**, not content-shaped:
+
+    - `command_line`: a `str` embeds an in-root path iff `os.path.normpath(root)` is a
+      **substring** of it.
+    - `argv`: a `list` embeds iff some `str` element contains `os.path.normpath(root)` **and is
+      not itself** a whole-value `is_under(element, root)` path. A whole-value `argv` element (or
+      any whole-value path argument) is `remap_arguments`/`turn_needs_relocation`'s to *relocate*
+      and must not be stolen into the abstain route.
+
+    Everything else is **deliberately not flagged**: an inert `new_content`/`newText` content
+    field that merely *mentions* the root is left to relocate-the-path-and-preserve-content
+    (the shipped filesystem fix), and a whole-value `path` argument relocates. Keying on the
+    known executed-command fields of the real `mcp-server-commands` is why a content mention no
+    longer wrongly abstains; a differently-named executed-command field on some *other* server
+    is a documented, extensible limitation (add its key here), not a silent miss for the server
+    this actually targets.
+
+    Pure, no I/O. Only a top-level `dict` `arguments` is inspected (the two known keys); any
+    other shape is False.
+    """
+    if not isinstance(arguments, dict):
+        return False
+    root_n = os.path.normpath(root)
+    command_line = arguments.get("command_line")
+    if isinstance(command_line, str) and root_n in command_line:
+        return True
+    argv = arguments.get("argv")
+    if isinstance(argv, list):
+        for element in argv:
+            if isinstance(element, str) and root_n in element and not is_under(element, root):
+                return True
     return False

@@ -95,6 +95,7 @@ _PREFIX_LABELS: tuple[tuple[str, str], ...] = (
     ("the tools/call has no recorded request frame", "no request frame to re-invoke"),
     ("the tools/call frame could not be read", "unreadable target frame"),
     ("unrecognised state_handle status", "unrecognised state handle"),
+    ("an in-root path is embedded in an argument value", "embedded path unrelocatable"),
 )
 
 

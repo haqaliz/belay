@@ -65,7 +65,13 @@ from belay.index import derive_correlation, tool_calls
 from belay.replay.client import ANSWERED, DEFAULT_TIMEOUT, FrameOutcome
 from belay.replay.client import replay_turn as _client_replay_turn
 from belay.replay.persist import load_snapshot
-from belay.replay.relocate import canonicalize_obj, is_under, turn_needs_relocation
+from belay.replay.relocate import (
+    canonicalize_obj,
+    command_embeds_in_root_path,
+    is_under,
+    relocate_command_line,
+    turn_needs_relocation,
+)
 from belay.snapshot.bth1 import FieldDiff, diff_records, scan_tree
 from belay.snapshot.substrate import guarded_restore
 
@@ -111,6 +117,20 @@ ROOTLESS_RELOCATION = (
 #: opposite gap: there the root was never recorded at all.
 UNROOTABLE_SERVER_COMMAND = (
     "server command is not rooted at the recorded workspace; cannot relocate"
+)
+
+#: The honesty floor for an EMBEDDED in-root path: the manifest recorded a root, but the
+#: turn buries an in-root absolute path *inside* a string argument (a shell `command_line`,
+#: a nested argv element) rather than as a whole-value `path`. The whole-value relocation
+#: rule cannot safely rewrite it — a substring remap of an argument would corrupt content
+#: written to the scratch and manufacture a false delta — so the turn abstains here, before
+#: any restore or spawn, rather than replaying un-relocated against the original workspace
+#: (a contaminated verdict). Distinct from `UNROOTABLE_SERVER_COMMAND` (a mis-rooted server
+#: command) and `ROOTLESS_RELOCATION` (no root recorded at all): here the root is known and
+#: the path is present, but embedded, so relocation of the command string is the follow-up
+#: aspect's job; until it lands, every embedded-path turn is honestly UNVERIFIED.
+EMBEDDED_PATH_UNRELOCATABLE = (
+    "an in-root path is embedded in an argument value; cannot safely relocate"
 )
 
 #: The literal argv token an operator writes where the server's workspace allow-root
@@ -287,6 +307,49 @@ def _arguments_hold_absolute_path(obj: object) -> bool:
     return False
 
 
+#: A sentinel destination root for the DECISION-time dry run of `relocate_command_line`
+#: (`_command_relocatable`). The RELOCATED/ABSTAIN outcome is a pure function of the command
+#: and the SOURCE root — the destination only supplies the rewritten bytes, which the decision
+#: discards — so any value works; a fixed sentinel keeps the probe pure and self-documenting.
+_RELOCATION_PROBE_ROOT = "/belay-relocation-probe"
+
+
+def _command_relocatable(arguments: object, root: str) -> bool:
+    """True iff every embedded in-root COMMAND path is a clean whole token (relocatable).
+
+    The follow-on question aspect 2 adds to `command_embeds_in_root_path`. **Precondition:**
+    `command_embeds_in_root_path(arguments, root)` is True — the turn buries an in-root path
+    inside a `command_line` string or an `argv` element. This asks whether that embedding can be
+    faithfully relocated, so the gate can LIFT aspect 1's unconditional abstain for exactly the
+    tractable case and keep abstaining on the rest.
+
+    Keyed on the SAME executed-command fields as `command_embeds_in_root_path`, so the abstain
+    detector and this relocatability question can never disagree:
+
+    - An `argv` element that contains the root but is NOT itself a whole-value path
+      (`--file=/root/x`) is substring-fused residue — `relocate_command_line` cannot touch an
+      argv token, so it is never relocatable → False.
+    - A `command_line` string is relocatable iff `relocate_command_line` returns RELOCATED (a dry
+      run against `_RELOCATION_PROBE_ROOT`; the outcome is independent of the destination root).
+
+    Pure, no I/O. Only a top-level `dict` is inspected; any other shape is False.
+    """
+    if not isinstance(arguments, dict):
+        return False
+    root_n = os.path.normpath(root)
+    argv = arguments.get("argv")
+    if isinstance(argv, list):
+        for element in argv:
+            if isinstance(element, str) and root_n in element and not is_under(element, root):
+                return False
+    command_line = arguments.get("command_line")
+    if isinstance(command_line, str) and root_n in command_line:
+        _new, outcome = relocate_command_line(command_line, root, _RELOCATION_PROBE_ROOT)
+        if outcome != "RELOCATED":
+            return False
+    return True
+
+
 def _relocation_decision(
     source_root: Optional[str], arguments: object, argv: Sequence[str]
 ) -> tuple[Optional[str], Optional[str]]:
@@ -294,11 +357,26 @@ def _relocation_decision(
 
     - `relocation_root` is the root to hand the client, or `None` to keep today's
       byte-for-byte cwd-relative replay.
-    - `fallback_cause` is set (with `relocation_root` `None`) for the two honest fallbacks:
+    - `fallback_cause` is set (with `relocation_root` `None`) for the honest fallbacks:
       `ROOTLESS_RELOCATION` — a turn that carries an absolute-path argument but whose
-      manifest recorded no root; and `UNROOTABLE_SERVER_COMMAND` — a turn that needs
+      manifest recorded no root; `UNROOTABLE_SERVER_COMMAND` — a turn that needs
       relocation, whose root WAS recorded, but whose server command holds no token under
-      that root, so the command cannot be relocated with it.
+      that root, so the command cannot be relocated with it; and
+      `EMBEDDED_PATH_UNRELOCATABLE` — a recorded root IS present but the turn buries an
+      in-root path *inside* a string argument (a shell `command_line`, a fused argv token)
+      that cannot be safely rewritten as a clean whole token. The embedded check runs FIRST,
+      before the whole-value relocation, so an embedded turn never reaches (nor misfires) the
+      argv rooting check.
+
+    **Aspect 2 lifts aspect 1's unconditional embedded abstain for the tractable case.** When
+    a turn embeds an in-root command path, `_command_relocatable` asks whether that embedding
+    is a clean whole shell token: if so, the turn RELOCATES (`(source_root, None)`) — and the
+    argv-rooting `UNROOTABLE` guard is deliberately bypassed for it, because a relocatable
+    `command_line` implies a shell server that serves ANY absolute path (it has no argv root to
+    be mis-rooted). Only a genuinely un-relocatable embedding (a `--file=/root/x` residue, an
+    un-lexable command) still abstains `EMBEDDED_PATH_UNRELOCATABLE`. A turn carrying a
+    relocatable whole-value path AND an un-relocatable residue abstains for the WHOLE turn —
+    never a partial rewrite.
 
     With a recorded root, the whole-value/in-root rule (`turn_needs_relocation`) decides
     exactly, so an out-of-root abs path (`/etc/hosts`) and a cwd-relative turn are both
@@ -314,6 +392,13 @@ def _relocation_decision(
     too, which is a false abstention, never a false verdict.
     """
     if source_root is not None:
+        if command_embeds_in_root_path(arguments, source_root):
+            if not _command_relocatable(arguments, source_root):
+                return None, EMBEDDED_PATH_UNRELOCATABLE
+            # A relocatable embedded command path -> relocate. The argv-rooting UNROOTABLE
+            # guard below assumes an argv-rooted server; a shell that serves any absolute
+            # path has no such root, so it does not apply here.
+            return source_root, None
         if turn_needs_relocation(arguments, list(argv), source_root):
             if not any(is_under(token, source_root) for token in argv):
                 return None, UNROOTABLE_SERVER_COMMAND
@@ -568,6 +653,7 @@ def _gather_frames(
 
 __all__ = [
     "DIVERGED",
+    "EMBEDDED_PATH_UNRELOCATABLE",
     "EQUAL",
     "NOT_VERIFIABLE",
     "REPLAYED",

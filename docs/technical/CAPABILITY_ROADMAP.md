@@ -214,9 +214,35 @@ the line between us and Langfuse/Phoenix.
   the server argv root token and any argument whose *whole value* is an in-root absolute path
   are rewritten to the scratch (content fields are never touched), and the reply comparison
   substring-normalizes both roots (comparison-only). A trace lacking a recorded root that
-  needs relocation is **UNVERIFIED** (named cause), never guessed. Servers that embed paths
-  *inside* command strings (a shell server's `command_line`) are **not yet** relocated —
-  tracked as the `replay-relocation-shell` follow-up.
+  needs relocation is **UNVERIFIED** (named cause), never guessed.
+- **Embedded-command paths: detected and abstained (added 2026-07-24,
+  `replay-relocation-shell` aspect 1).** A path embedded *inside* a shell server's
+  **executed-command** fields (`run_process`'s `command_line`/`argv`) is not a whole-value
+  argument, so the whole-value rule above is blind to it — and such a turn was silently
+  replayed against the *original* workspace. `command_embeds_in_root_path` now **detects** an
+  in-root path embedded in those fields and the gate abstains with a named cause
+  (`EMBEDDED_PATH_UNRELOCATABLE`, UNVERIFIED) — closing the silent miss. Detection is
+  **field-shaped** (keyed on the executed-command fields, not on inert content or whole-value
+  paths — a content field that merely *mentions* the root is preserved, as before).
+- **Embedded-command paths: relocated for the tractable case (added 2026-07-24,
+  `replay-relocation-shell` aspect 2, `shell-command-string-remap`).** The abstain above is now
+  **lifted** where it is provably safe: a `run_process` `command_line` whose in-root path is a
+  clean **whole shell token** is relocated to the scratch (`relocate_command_line`: POSIX-lex
+  the command, rewrite each whole-token in-root path in place with a boundary-anchored regex,
+  longest-token-first to defeat prefix collisions), so the turn replays against the restored
+  copy and earns a real PASS/FAIL. **Any doubt still abstains** (`EMBEDDED_PATH_UNRELOCATABLE`,
+  UNVERIFIED): a path fused into a token (`--file=/root/x`), an un-lexable command, or a
+  lexer/span count mismatch (ambiguous quoting) — and a turn mixing a relocatable whole-value
+  path with an un-relocatable residue abstains for the *whole* turn, never partially. Because
+  `run_process` declares **no** annotations, the A2 effect axis stays UNVERIFIED and a
+  **user-declared invariant (A1) is the load-bearing check** for shell — a relocated corrupt
+  write lands in the scratch, so A1 sees the real delta. **Honest coverage limit:** the lexer
+  cannot tell a path used as a filesystem *address* from a whole-token path used as a command's
+  **data** argument (e.g. a `grep` pattern that is itself an in-root path), so such a data path
+  is relocated too and *could* make the replayed result diverge. This is rare in the Phase-0
+  corpus (paths overwhelmingly appear as addresses), documented here rather than silent, and it
+  is a divergence at worst — never a content-corrupting rewrite. A path fused as a token
+  *substring* (data or not) already abstains.
 - **The same contract across a heterogeneous batch (added 2026-07-23,
   `replay-batch-server-rooting`).** `belay phase0 run` verifies a whole directory of captures
   from **one** `--server` command, but every trace in it carries its **own** recorded

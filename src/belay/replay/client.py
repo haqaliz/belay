@@ -63,7 +63,7 @@ from typing import Any, Optional, Sequence
 
 from belay.index import _id_key, classify
 from belay.replay.persist import load_snapshot
-from belay.replay.relocate import remap_argv, remap_arguments
+from belay.replay.relocate import relocate_command_line, remap_argv, remap_arguments
 from belay.sandbox.gate import _UntrackableTurn
 from belay.sandbox.launch import contained, network_policy
 from belay.snapshot.substrate import guarded_restore
@@ -294,14 +294,19 @@ def converse(
 def _relocate_frame(frame: bytes, from_root: str, to_root: str) -> bytes:
     """Remap in-root whole-value path arguments in a `tools/call` frame; else verbatim.
 
-    Only a `tools/call` frame's `params.arguments` are relocated, and only its **whole-value**
-    in-root path strings — `remap_arguments`' conservative rule, so a `path` moves while a
-    `content`/`newText` field that merely *mentions* the root is preserved byte-for-byte. The
-    frame is decoded, its argument paths swapped, and re-serialized **preserving the JSON-RPC
-    `id` and every non-path field**, so `converse`'s id-correlation still matches the reply.
-    A non-`tools/call` frame (an `initialize`, a notification), an unparseable frame, or a
-    `tools/call` with no in-root path is returned as the **exact input bytes** — nothing is
-    re-serialized, so a cwd-relative replay stays byte-identical.
+    Only a `tools/call` frame's `params.arguments` are relocated. Two conservative rules,
+    composed: (1) `remap_arguments`' **whole-value** rule swaps a `path`/`argv` element/`cwd`
+    that is *itself* an in-root absolute path, while a `content`/`newText` field that merely
+    *mentions* the root is preserved byte-for-byte; (2) the shell `run_process` `command_line`
+    STRING — which embeds an in-root path INSIDE a larger value the whole-value rule cannot
+    reach — has its whole-token in-root paths relocated by `relocate_command_line`, but ONLY
+    when it does so provably safely: a `command_line` that ABSTAINs (residue, un-lexable) is
+    left untouched, never half-relocated. The frame is decoded, its paths swapped, and
+    re-serialized **preserving the JSON-RPC `id` and every non-path field**, so `converse`'s
+    id-correlation still matches the reply. A non-`tools/call` frame (an `initialize`, a
+    notification), an unparseable frame, or a `tools/call` with nothing to safely relocate is
+    returned as the **exact input bytes** — nothing is re-serialized, so a cwd-relative replay
+    stays byte-identical.
     """
     try:
         message = json.loads(frame)
@@ -313,6 +318,15 @@ def _relocate_frame(frame: bytes, from_root: str, to_root: str) -> bytes:
     if not isinstance(params, dict) or "arguments" not in params:
         return frame
     new_arguments, changed = remap_arguments(params["arguments"], from_root, to_root)
+    # Shell `run_process`: relocate whole-token in-root paths inside the command_line STRING,
+    # which the whole-value rule above cannot reach. Leave `argv`/`cwd` to `remap_arguments`.
+    if isinstance(new_arguments, dict):
+        command_line = new_arguments.get("command_line")
+        if isinstance(command_line, str):
+            new_command_line, outcome = relocate_command_line(command_line, from_root, to_root)
+            if outcome == "RELOCATED" and new_command_line != command_line:
+                new_arguments = {**new_arguments, "command_line": new_command_line}
+                changed = True
     if not changed:
         # No in-root whole-value path moved: keep the original bytes rather than a
         # re-serialized copy, so a path-free frame is passed through untouched.
