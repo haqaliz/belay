@@ -57,7 +57,6 @@ from fixtures.shell_command_server import (
     TOOLS,
 )
 
-from belay.replay import engine
 from belay.replay.persist import persist_snapshot
 from belay.snapshot.substrate import present_handle, take_snapshot
 from belay.trace import TraceWriter
