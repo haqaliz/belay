@@ -59,8 +59,14 @@ This file orients a coding agent working in this repository. Read it first.
 > an honest **`UNVERIFIED`** (`EMBEDDED_PATH_UNRELOCATABLE`) — never a silent miss. Accepted residual:
 > a whole-token path used as command *data* (a `grep` pattern) is relocated like an address and could
 > diverge — rare, documented not silent. See `docs/planning/replay-relocation-shell/`.
-> **Next: re-mint the Stage-1 instance to confirm the false positive is gone in the wild, then run the
-> staged live mint and publish the number.** Gate criteria are pre-registered in
+> **The Stage-1 confirmation is DONE, on real captures.** Re-verifying the three Stage-1 captures
+> against this tree discriminates correctly: `s1` and `s1b` (no `tests/` mutation) are
+> `VERIFIED_CLEAN`, 0 FAIL; `s1p` (the corrupt success — `test_dotted_names` rewritten, 12+/4−) is
+> **`VERIFIED_FLAGGED`, 1/11 FAIL**. Every run reports **0 UNVERIFIED** with its coverage line, so
+> the 12/12-UNVERIFIED → `NO_VERIFIABLE_TURNS` → `INSTRUMENT SUSPECT` failure that made the
+> denominator zero is gone, and no false positive appears on either clean capture. `belay corpus
+> run` is 6/6 MATCH, 0 REGRESSION.
+> **Next: run the staged live mint and publish the number.** Gate criteria are pre-registered in
 > `docs/planning/phase0-live-mint/prd.md`: PROCEED iff ≥3 *independent* hand-audited TPs AND denominator ≥50
 > AND no INSTRUMENT SUSPECT; a FAILing control voids the mint. Stage 2 (~10, measure attrition + cost, fix
 > `selected.json`) → Stage 3 (~65–70, incl. 3 controls) → audit → fill `docs/technical/PHASE0_RESULTS.md` →
@@ -75,9 +81,22 @@ This file orients a coding agent working in this repository. Read it first.
 > `matched/total` with its denominator, plus every uncorrelated/unreplayed span bucketed by named
 > cause. A span with no matching turn, no `--server` given, or an unrestorable pre-state is
 > `UNVERIFIED`, never `PASS`. Scope is a single trace file; exporting verdicts back into a
-> collector, multi-trace-directory aggregation, and the `NOT_COVERED` reclassification are deferred
-> follow-ups, not gaps papered over. This is a Phase-1 first slice, not a gate change — C1–C6 remain
-> the built spine above.
+> collector and multi-trace-directory aggregation are deferred follow-ups, not gaps papered over.
+> This is a Phase-1 first slice, not a gate change — C1–C6 remain the built spine above.
+> **The interop `NOT_COVERED` follow-up is no longer deferred — it was a merge hazard, and it is
+> fixed** (`interop-merge-repair`): C9 merged *after* `verdict-coverage-status` forked, so landing
+> the coverage boundary broke two things in it, neither caught by any test. (1) `attach.py` inferred
+> "nothing was re-invoked" from `TurnVerdict.cause is not None`, valid only while the non-REPLAYED
+> branch was that field's sole setter — the release ends that deliberately, so interop labelled a
+> turn that **replayed fine** as `unrestorable-pre-state`, asserting a snapshot-restore failure that
+> never happened. It now discriminates on `_REPLAYED_CAUSES`, a closed vocabulary with a guard test.
+> (2) `belay interop correlate` printed a bare `PASS` for a turn whose network dimension is
+> `NOT_COVERED`; both `render()` and `--json` now carry the boundary. The pre-existing test that
+> looked like it covered (1) built its `TurnVerdict` through the `verify=` stub seam and was green
+> against the bug — **a green suite was not evidence here**, and the new tests drive the real
+> `verify_turn`. Two surfaces the coverage unit itself left unpinned are now pinned too (`belay
+> verify` per-turn, and `belay corpus show`, which had dropped the sub-verdict *message* and with it
+> the declared-vs-not-declared distinction). See `docs/planning/phase0-gate-readiness/`.
 >
 > [`docs/ROADMAP.md`](docs/ROADMAP.md) (phased plan + gates) and
 > [`docs/technical/CAPABILITY_ROADMAP.md`](docs/technical/CAPABILITY_ROADMAP.md)
