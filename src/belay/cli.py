@@ -1115,6 +1115,153 @@ def _cmd_phase0_report(args: argparse.Namespace) -> int:
     return 0
 
 
+# --- belay interop correlate: OTLP spans -> MCP turns -> the attached verdict ----------
+
+#: The named cause a matched span carries when `--server` was not given at all, so no
+#: turn was ever replayed. Deliberately NOT `attach.UNRESTORABLE_PRE_STATE`: that name
+#: means "a replay was attempted and its pre-state could not be restored", which would
+#: misdescribe "no --server was even given to attempt one". This cause lives here, not
+#: in `attach.py` (Task 3, not modified by this task), because it is not something
+#: `correlate_and_attach`'s `verify=` seam can express -- that seam always collapses any
+#: non-None `TurnVerdict.cause` into `UNRESTORABLE_PRE_STATE` (see attach.py:134-139), so
+#: producing a DISTINCT cause for this case means building the `CorrelatedSpan`s directly
+#: off Task 2's `build_turn_index`/`match_span`, not by injecting a stub into Task 3's seam.
+NOT_REPLAYED_NO_SERVER = "not-replayed-no-server"
+
+_INTEROP_CORRELATE_DESCRIPTION = (
+    "Correlate OTLP/JSON spans (Task 1's parser) to Belay's own recorded MCP tools/call "
+    "turns (the W3C traceparent join: a span matches turn N iff its (traceId, spanId) "
+    "names that turn's recorded trace_context on the REQUEST frame, and only if it "
+    "names EXACTLY one turn -- a re-used span id across turns is UNVERIFIED, "
+    "ambiguous-correlation, never a guess), then attach whatever verdict a real replay "
+    "of that turn produces. This command computes NO verdict of its own: it routes an "
+    "existing PASS/FAIL/WARN/UNVERIFIED to the span that names it, verbatim.\n\n"
+    "WITHOUT --server, correlation still runs and the rate is still reported, but no "
+    "turn is replayed: every matched span reports UNVERIFIED (not-replayed-no-server). "
+    "This is honest, not an error -- pass --server -- CMD... to actually replay matched "
+    "turns and attach a real A1/A2 verdict.\n\n"
+    "Single trace file only: the positional trace argument must be one .jsonl file. A "
+    "directory is rejected with a clear error -- multi-trace aggregation is a separate, "
+    "out-of-scope follow-up, not something this silently skips.\n\n"
+    "Manifests: a turn's snapshot manifest is written by the gate to a SIBLING of the "
+    "snapshot dir, e.g. BELAY_SNAPSHOT_DIR=./sn -> ./sn.manifests/. --manifest-dir "
+    "defaults to that convention for the given trace file; a present turn whose manifest "
+    "is not found is an honest UNVERIFIED, never a fabricated PASS."
+)
+
+
+def _correlate_without_server(records: list[dict], spans) -> list:
+    """Build every span's `CorrelatedSpan` WITHOUT replaying anything.
+
+    Mirrors `correlate_and_attach`'s join (Task 2's `build_turn_index`/`match_span`)
+    exactly, but never calls `verify_turn` (or any stand-in): a `Matched` span is
+    UNVERIFIED with `NOT_REPLAYED_NO_SERVER`, and an `Unmatched`/`Ambiguous` span keeps
+    its usual named cause. This is the CLI's own honest fallback for "no --server was
+    given" -- see `NOT_REPLAYED_NO_SERVER`'s docstring for why it does not go through
+    `correlate_and_attach`'s `verify=` seam.
+    """
+    from belay.interop.attach import AMBIGUOUS_CORRELATION, NO_MATCHING_MCP_TURN, CorrelatedSpan
+    from belay.interop.correlate import Ambiguous, Matched, Unmatched, build_turn_index, match_span
+
+    index = build_turn_index(records)
+    results = []
+    for span in spans:
+        match = match_span(span, index)
+        if isinstance(match, Matched):
+            results.append(
+                CorrelatedSpan(
+                    span_id=span.span_id, turn_index=match.n, verdict=None,
+                    cause=NOT_REPLAYED_NO_SERVER,
+                )
+            )
+        elif isinstance(match, Unmatched):
+            results.append(
+                CorrelatedSpan(span_id=span.span_id, turn_index=None, verdict=None, cause=NO_MATCHING_MCP_TURN)
+            )
+        else:
+            assert isinstance(match, Ambiguous), f"unhandled match result: {match!r}"
+            results.append(
+                CorrelatedSpan(span_id=span.span_id, turn_index=None, verdict=None, cause=AMBIGUOUS_CORRELATION)
+            )
+    return results
+
+
+def _cmd_interop_correlate(args: argparse.Namespace) -> int:
+    """`belay interop correlate <otlp> <trace>` — correlate, attach, and report the rate.
+
+    Reads the OTLP/JSON spans and the (single) trace file, joins each span to a
+    `tools/call` turn by W3C traceparent, replays matched turns (if `--server` was
+    given) and attaches the resulting verdict, then prints the honest correlation-rate
+    report (or `--json`). Exit is non-zero unless every attached span's status is
+    PASS -- an all-UNVERIFIED correlation (e.g. no `--server`) is not a clean exit.
+    """
+    from belay.interop import report as interop_report
+    from belay.interop.attach import correlate_and_attach
+    from belay.interop.otlp import OtlpParseError, parse_otlp
+    from belay.phase0.runner import default_manifest_dir_for
+    from belay.replay.reader import TraceCorrupt, read_trace
+    from belay.verify.verdict import Status
+
+    trace_path = Path(args.trace)
+    otlp_path = Path(args.otlp)
+
+    if trace_path.is_dir():
+        _emit(
+            f"belay: {trace_path} is a directory; pass a single trace file -- "
+            "directory aggregation is not yet supported"
+        )
+        return 2
+    if not trace_path.exists():
+        _emit(f"belay: trace not found: {trace_path}")
+        return 2
+    if not otlp_path.exists():
+        _emit(f"belay: OTLP spans file not found: {otlp_path}")
+        return 2
+
+    try:
+        read = read_trace(trace_path)
+    except TraceCorrupt as exc:
+        _emit(f"belay: {exc}")
+        return 2
+
+    try:
+        spans = parse_otlp(otlp_path.read_text(encoding="utf-8"))
+    except OtlpParseError as exc:
+        _emit(f"belay: {exc}")
+        return 2
+
+    records = list(read.records)
+    manifest_dir = (
+        Path(args.manifest_dir) if args.manifest_dir is not None else default_manifest_dir_for(trace_path)
+    )
+
+    if args.server:
+        results = correlate_and_attach(
+            records, spans,
+            server_command=args.server, manifest_dir=manifest_dir,
+            replays=args.replays, timeout=args.timeout,
+        )
+    else:
+        results = _correlate_without_server(records, spans)
+
+    if args.json:
+        payload = {"trace": str(trace_path), **interop_report.to_json(results)}
+        _emit(json.dumps(payload))
+    else:
+        _emit(f"belay interop correlate {trace_path}")
+        _emit(f"  otlp spans            {otlp_path}")
+        _emit(f"  manifest-dir          {manifest_dir}")
+        if not args.server:
+            _emit()
+            _emit("  no --server given: correlation ran, but no turn was replayed --")
+            _emit("  every matched span reports UNVERIFIED, never a guessed PASS.")
+        _emit()
+        _emit(interop_report.render(results))
+
+    worst = _worst(results, Status)
+    return 0 if worst is Status.PASS else 1
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="belay", description="The agent harness.")
     subcommands = parser.add_subparsers(dest="group", required=True)
@@ -1529,6 +1676,58 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     phase0_report.set_defaults(func=_cmd_phase0_report)
+
+    interop = subcommands.add_parser(
+        "interop", help="observability interop: correlate OTLP spans to MCP turns and attach the verdict"
+    ).add_subparsers(dest="action", required=True)
+
+    interop_correlate = interop.add_parser(
+        "correlate",
+        help="correlate OTLP/JSON spans to a trace's MCP turns and report the correlation rate",
+        description=_INTEROP_CORRELATE_DESCRIPTION,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    interop_correlate.add_argument("otlp", help="the OTLP/JSON spans document to correlate")
+    interop_correlate.add_argument(
+        "trace", help="the trace file (.jsonl) to correlate against -- a single file, not a directory"
+    )
+    interop_correlate.add_argument(
+        "--manifest-dir",
+        default=None,
+        help=(
+            "where the gate persisted this run's snapshot manifests; default: the "
+            "trace's <stem>.manifests sibling (the mint convention C2/C3 already use)"
+        ),
+    )
+    interop_correlate.add_argument(
+        "--replays",
+        type=_verify_replays,
+        default=3,
+        help="on a DIVERGED reply, re-invoke this many times to classify determinism (default: 3, minimum: 3)",
+    )
+    interop_correlate.add_argument(
+        "--timeout",
+        type=float,
+        default=DEFAULT_TIMEOUT,
+        help=f"per-replay timeout in seconds (default: {DEFAULT_TIMEOUT:g})",
+    )
+    interop_correlate.add_argument(
+        "--server",
+        nargs=argparse.REMAINDER,
+        default=[],
+        metavar="cmd ...",
+        help=(
+            "the MCP server to REPLAY matched turns against; everything after --server "
+            "is its command. Without --server, correlation still runs but nothing is "
+            "replayed and every matched span reports UNVERIFIED (not-replayed-no-server)"
+        ),
+    )
+    interop_correlate.add_argument(
+        "--json",
+        action="store_true",
+        help="emit the machine-readable result (trace/correlation/spans) to stdout instead of the human report",
+    )
+    interop_correlate.set_defaults(func=_cmd_interop_correlate)
 
     return parser
 

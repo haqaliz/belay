@@ -1,80 +1,72 @@
-# Card: feat/phase0-mint-execution
+# Card — feat/observability-interop
 
-**Type:** feat · **Slug:** phase0-mint-execution · **Owner:** aliz
-**Branch:** feat/phase0-mint-execution/aliz (off `master` @ 07890e7, v0.4.0)
+**Type:** feat · **Slug:** `observability-interop` · **Owner:** aliz
+**Branch:** `feat/observability-interop/aliz` (off `origin/master`)
+**Source:** no GitHub issue — inline brief (from the `belay-next` handoff, 2026-07-24)
 
-No GitHub issue (`gh issue list` returns empty — the tracker is unused). Task source: the
-inline brief below, produced by `belay-next` on 2026-07-23. This unit **resumes** the
-existing `phase0-live-mint` unit's `mint-execution` aspect, which Stage 1 halted on
-2026-07-22 with finding #3 (replay contamination), now fixed and merged as
-`replay-absolute-path-fidelity` (v0.4.0, `9a69fae`).
+---
 
 ## Brief
 
-Resume the Phase-0 live mint and publish **the number** — the per-instance violation rate
-with its denominator, false-positive rate, and UNVERIFIED-by-cause breakdown — then write
-the pre-registered PROCEED or PIVOT.
+Build **C9 — Observability interop** (`docs/technical/CAPABILITY_ROADMAP.md:462-489`): ingest
+OpenTelemetry / OpenLLMetry-style spans so Belay can attach verdicts to traces a team already
+collects, and export verdicts back as span attributes/events so a Belay `FAIL` is visible inside
+the dashboard the team already watches (Langfuse / Phoenix / any OTel collector).
 
-This is **the Phase-0 gate itself** (`CAPABILITY_ROADMAP.md:323-328`), not a new
-capability. C1–C6 are shipped and merged; the gate sits between C5 and every Phase-1
-surface (C7 live console). Building the launch surface before the gate that decides
-whether there is a launch is out of order.
+This turns the strategic claim *"we complement observability, we don't compete"* into a shipped
+fact rather than positioning (`CLAUDE.md` constraint #4). Deps **C1–C4 are merged**; this is
+deterministic, offline-testable engine work on the moat-**protecting** side — no LLM, no agent
+framework.
 
-The one thing that blocked it is fixed. `docs/planning/phase0-live-mint/mint-execution/
-STAGE1_FINDINGS.md` finding #3 recorded that driving `pallets__flask-4045` through the
-harness produced `VERIFIED_FLAGGED 1/1 = 100%` on a **correct** edit — a false positive
-caused by replay reading the *live* workspace instead of the restored scratch, for servers
-that take an absolute root at launch. `replay-absolute-path-fidelity` (merged) relocates the
-recorded `source_root` into the scratch. **That fix is proven in fixtures, not in the
-wild** — re-minting the same instance is the cheapest possible confirmation.
+### Why this, now (from `belay-next`)
 
-### Staged execution (from `phase0-live-mint/prd.md`, requirement 17)
+- The roadmap explicitly flags C9 to **move earlier than week 8**: the MCP **2026-07-28**
+  revision reserves `traceparent`/`tracestate`/`baggage` in `_meta` citing the **OTel semantic
+  conventions for MCP**, and deprecates Logging with OTel as its migration path — trace context
+  is becoming *protocol-native* (`CAPABILITY_ROADMAP.md:62-68`).
+- Unblocked (deps C1–C4 merged, `CAPABILITY_ROADMAP.md:489`), low-regret, and TDD's cleanly on
+  macOS (fixture-based, no network) — unlike the Linux sandbox slice.
+- Retires **R9** (incumbents add replay → make them distribution, not competitors) and
+  **measures R6** (its eval data is the correlation rate between third-party spans and MCP turns,
+  which decides whether the Phase-2 second surface is needed — `CAPABILITY_ROADMAP.md:485-487`).
 
-- **Stage 1 (re-mint, ~1 instance):** confirm the false positive is gone in the wild.
-- **Stage 2 (~10):** measure attrition + cost; answer the open `npx`/TCC/multi-instance
-  questions; generate `selected.json`.
-- **Stage 3 (~65–70, incl. 2–3 clean controls):** the mint proper.
-- **Audit → fill `docs/technical/PHASE0_RESULTS.md` (18 fields + decision) → fix the
-  stale RUNBOOK.**
+### Acceptance (test-first — `CAPABILITY_ROADMAP.md:479-483`)
 
-### Acceptance (written first, before any spend)
+1. A fixture OTel span set ingests and **correlates to the matching MCP turns**.
+2. A **non-replayable ingested span yields `UNVERIFIED`, never `PASS`** — asserted explicitly.
+   Interop is exactly where over-claiming is easiest and most damaging (**R5**).
+3. **Exported verdicts round-trip** into a fixture collector with the axis and status intact.
+4. Deterministic, no network.
 
-1. Re-minting `pallets__flask-4045` no longer reports `VERIFIED_FLAGGED 1/1`; the
-   known-correct edit reads clean.
-2. Re-running that same trace + manifests against a **mutated or deleted** original
-   workspace yields an **identical** verdict (the relocation guarantee, in the wild).
-3. A 2-instance batch verifies through **one** `belay phase0 run --server` invocation with
-   heterogeneous `source_root`s — or the multi-instance limitation is fixed/named before
-   Stage 2 spend.
-4. `selected.json` generated by the stratified draw, including 2–3 clean controls. A
-   FAILing control **voids the mint**.
-5. The pre-registered gate criteria are copied into `PHASE0_RESULTS.md` **before** Stage 3
-   executes (non-negotiable ordering).
-6. `PHASE0_RESULTS.md`: 18/18 fields + the PROCEED/PIVOT line. RUNBOOK corrected.
+### Eval data captured
 
-### Known caveats (carried in, not discovered later)
+The **correlation rate** between third-party (OTel) spans and MCP turns — a direct measurement
+of **R6** (how much of a real agent's activity actually crosses the MCP boundary).
 
-- **Multi-instance replay-server is untested.** `STAGE1_FINDINGS.md` §5: *"Multi-instance
-  replay-server with one `--server` and heterogeneous per-instance `work_dir`s was never
-  reached."* `belay phase0 run` takes a single `--server` command for a whole batch dir.
-  Whether the new argv root-token relocation makes that work across instances with
-  different `source_root`s is unverified. **Verify at n=2 before Stage 2.**
-- **The shell batch is known-contaminated.** `replay-relocation/spec.md:30-35`: shell
-  servers embed paths *inside* `command_line`, which relocation deliberately does not
-  touch. The mint runs **filesystem-only** and states the shell exclusion; building
-  command-string-aware relocation (`replay-relocation-shell`) first is the wrong order
-  because the filesystem batch alone carries the ≥50 denominator.
-- **R1 is Fatal-impact and PIVOT is a legitimate outcome.** The pre-registered criteria
-  (`phase0-live-mint/prd.md`): PROCEED iff ≥3 *independent* hand-audited TPs AND
-  denominator ≥50 AND no `INSTRUMENT SUSPECT`. A FAILing control voids the mint. The FP
-  rate is stated, never omitted.
-- **Still open from Stage 1:** `selected.json` ungenerated; the RUNBOOK is wrong in five
-  places (incl. the invalid `--server -- <cmd>` form).
+### Caveats to carry into the dig
 
-## Relationship to the existing `phase0-live-mint` unit
+1. **Past the uncleared Phase-0 gate.** C9 is Phase-1 and marked *"cut second"*
+   (`CAPABILITY_ROADMAP.md:528`). If the Stage-3 mint PIVOTs, this is wasted like any Phase-1
+   work. It is the *lowest-regret* parallel build — durable infra the protocol is moving toward —
+   but it is **not** the critical path. The number still is (separate track).
+2. **Verdict-status design question.** The C9 spec says a non-replayable ingested span →
+   `UNVERIFIED` (`CAPABILITY_ROADMAP.md:481`). But `NOT_COVERED` (built on the *unmerged*
+   `feat/verdict-coverage-status` branch) arguably fits better — an ingested non-MCP span is
+   *"never inside what Belay checks,"* not *"tried and could not."* This branch forks from
+   `master`, where `NOT_COVERED` does **not** exist, so **follow the `UNVERIFIED` spec for now**
+   and flag the interaction; resolve it if/when coverage-status merges.
 
-That unit's PRD, aspect specs, and `STAGE1_FINDINGS.md` are **already written and merged**
-and remain authoritative on gate criteria, stratification, and the honesty guards. This
-unit does not rewrite them — it executes the `mint-execution` aspect that was blocked, and
-adds only what the blocker's removal makes newly necessary (re-validation of the fix in the
-wild, the multi-instance `--server` question, and the results/RUNBOOK write-up).
+### Guardrails (must hold)
+
+- No agent framework; no bare LLM judge. C9 ingests/exports and correlates — it does not score.
+- No raw-data egress: interop runs on the user's infra; exported verdicts carry axis/status,
+  not raw state.
+- **`UNVERIFIED` is never rendered as `PASS`** — the honesty contract is most fragile exactly on
+  the interop surface (R5).
+
+### Related in-flight work (avoid collision — confirmed non-overlapping)
+
+- `feat/replay-relocation-shell/aliz` — another session; touches `src/belay/replay/`. No overlap.
+- `feat/verdict-coverage-status/aliz` — built, unmerged; touches `src/belay/verify/` (adds
+  `NOT_COVERED`). Interaction noted in caveat #2; no direct file collision expected.
+- `feat/phase0-mint-execution/aliz` — the mint; touches `eval/`. No overlap.

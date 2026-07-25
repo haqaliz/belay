@@ -58,6 +58,18 @@ This file orients a coding agent working in this repository. Read it first.
 > `selected.json`) → Stage 3 (~65–70, incl. 3 controls) → audit → fill `docs/technical/PHASE0_RESULTS.md` →
 > fix the stale RUNBOOK; then C7 (live console — first UI). C8 (A3 claim re-derivation) and C9
 > (observability interop) are cuttable, last.
+> **C9's first slice is built** (`src/belay/interop/`, `belay interop correlate <otlp-spans.json>
+> <trace-file> [--server -- CMD…] [--json]`): it ingests OTLP/JSON spans with the standard library
+> only (no OTel SDK — zero-dep preserved), correlates each span to a recorded MCP `tools/call` turn
+> by the **captured W3C `traceparent`** (C1's `trace_context` fact) — deterministic string-equality
+> on `(traceId, spanId)`, never a time-window heuristic — attaches the existing replayed verdict
+> unchanged (this capability computes NO verdict of its own), and reports the correlation rate
+> `matched/total` with its denominator, plus every uncorrelated/unreplayed span bucketed by named
+> cause. A span with no matching turn, no `--server` given, or an unrestorable pre-state is
+> `UNVERIFIED`, never `PASS`. Scope is a single trace file; exporting verdicts back into a
+> collector, multi-trace-directory aggregation, and the `NOT_COVERED` reclassification are deferred
+> follow-ups, not gaps papered over. This is a Phase-1 first slice, not a gate change — C1–C6 remain
+> the built spine above.
 >
 > [`docs/ROADMAP.md`](docs/ROADMAP.md) (phased plan + gates) and
 > [`docs/technical/CAPABILITY_ROADMAP.md`](docs/technical/CAPABILITY_ROADMAP.md)
