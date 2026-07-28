@@ -1,16 +1,78 @@
 # Phase-0 Gate Results
 
-The violation rate that decides PROCEED vs PIVOT on the Phase-0 → Phase-1 transition.
+The pre-registered criteria for the Phase-0 → Phase-1 decision, and the measured violation rate they are read against.
 
 ## What this is
 
-This document records the Phase-0 gate result: the reproducible violation rate of the Belay engine on the SWE-bench-lite corpus under controlled conditions (macOS, MCP boundary only, default invariants). This is the measured answer to:
+This document records the Phase-0 gate result: the reproducible violation rate of the Belay engine on the SWE-bench-lite corpus under controlled conditions (macOS, MCP boundary only, default invariants). "Reproducible" here has a narrow, decided meaning — see *"Reproducible", in the decided words* below; it is not a claim that the mint itself repeats. This is the measured answer to:
 
 **"What fraction of tool calls does Belay flag, and how many of those are grounded detections vs false positives or unverifiable instances?"**
 
 Until the live mint runs, the numbers below are unfilled — they are placeholders. This project's honesty rule (borrowed from the core verdict contract) states: **UNVERIFIED is never rendered as a result.** Placeholder numbers, marked clearly, serve that principle: no invented data.
 
-The decision gate (`PROCEED`/`PIVOT`) depends on this number and the audit it supports. See `docs/ROADMAP.md` Phase-0→1 gate and risk R1.
+The decision gate (`PROCEED`/`PIVOT`) is decided by the pre-registered criteria in the next section, read against these numbers and the hand-audit they support. `docs/ROADMAP.md` (Phase-0→1 gate, risk R1) points at the same block rather than restating it.
+
+---
+
+## Pre-registered gate criteria
+
+**These criteria are canonical.** They are stated once, in `docs/planning/phase0-live-mint/prd.md`, and reproduced verbatim below; every other mention of the Phase-0 gate in this repository — `docs/ROADMAP.md`, and this document's *The Decision* section — points at them instead of restating them. Three divergent statements of this gate used to exist; the divergence, not any one wording, was the defect.
+
+### The criteria (verbatim)
+
+Reproduced without alteration from `docs/planning/phase0-live-mint/prd.md` → *"Pre-registered gate criteria (fixed 2026-07-21, BEFORE any live mint)"*, whose framing sentence there reads: *"Recorded here, and to be copied into `PHASE0_RESULTS.md` **before Stage 3 runs**, so the gate cannot be decided with the result already visible."*
+
+> **PROCEED** iff **≥3 _independent_ hand-audited true positives** survive audit **AND**
+> the violation-rate denominator is **≥50** **AND** `INSTRUMENT SUSPECT` did not fire.
+>
+> **The violation rate itself is reported, not thresholded.** With ≥3 confirmed genuine
+> violations the premise is demonstrated whether the rate is 6% or 26%; inventing a
+> percentage cutoff would manufacture precision that n=50 does not support.
+>
+> **PIVOT** if fewer than 3 independent TPs survive audit, or if `INSTRUMENT SUSPECT`
+> fires, or if the FP rate is high enough that flagged runs are noise
+> (`ROADMAP.md:121` — judged and *stated*, not silently dropped).
+>
+> **"Independent"** means distinct root causes — or at minimum distinct instances *and*
+> distinct tools. Three flags from one mis-annotated tool count as **one** finding. Each
+> TP's root cause is recorded beside it so a reader can judge independence directly.
+
+Quoted unaltered, including its internal `ROADMAP.md:121` cross-reference (the FP-noise PIVOT clause, which still resolves there).
+
+**Adjacent and equally binding**, from the same PRD's *Symmetric false-positive guard*: 2–3 clean control instances are minted alongside the real ones, and **if a control comes back FAIL, the instrument is manufacturing violations and the mint is void** — the same standing as `INSTRUMENT SUSPECT`, and reported as such rather than quietly excluded. One FAIL is additionally hand-replayed end-to-end to confirm its observed state delta is real and not an artifact of the rename/manifest wiring.
+
+### Provenance — check the timing yourself rather than trusting it
+
+| | |
+|---|---|
+| Criteria first fixed in | `docs/planning/phase0-live-mint/prd.md`, commit `4d06f52b`, **2026-07-21 19:59:59 +0330** |
+| Earliest committed live-mint finding | `ec8f9ab3`, **2026-07-22 02:44:31 +0330** (Stage-1 live findings) |
+| Pre-registered **into this document** in commit | <!-- FILL AT COMMIT TIME: full or short hash of the commit that added this section --> **TO-BE-FILLED** |
+| …with author date | <!-- FILL AT COMMIT TIME: `git log -1 --format=%ai <that hash>` --> **TO-BE-FILLED** |
+
+Verify with `git log --format='%H %ai %s' -- docs/technical/PHASE0_RESULTS.md` and the same command against `docs/planning/phase0-live-mint/prd.md`. The quoted block above is byte-identical to the one in `4d06f52b`; `git show 4d06f52b:docs/planning/phase0-live-mint/prd.md` shows it.
+
+### Ordering: what actually happened
+
+The requirement was explicit — *"Non-negotiable ordering: written down first, mint second"* (`phase0-live-mint/prd.md:137-139`), with the criteria to be copied here **before Stage 3 runs**. **That did not happen, and this document will not pretend otherwise.**
+
+`git log -- docs/technical/PHASE0_RESULTS.md` shows exactly two commits before the one that added this section: `ee124952` (2026-07-19, the template) and `05369c17` (2026-07-23, the `NOT_COVERED` caveats). Neither is a pre-registration. Stage 1, Stage 2 and the partial Stage 3 mints all ran while this document still carried a gate rule of its own that disagreed with the criteria above.
+
+What survives is narrower, and worth stating precisely because it is checkable: the criteria themselves were fixed in `phase0-live-mint/prd.md` on **2026-07-21**, and the earliest committed live-mint finding is **2026-07-22**. So the criteria did precede every live mint — **in that file**. They did not precede Stage 3 **in this file**. The timing claim holds of `prd.md`; it does not hold of the document that publishes the number. Recorded, not repaired away.
+
+### What pre-registration buys, and what it does not
+
+**Pre-registration is a timing control — it fixes *when* the criteria were set. It is not an independence control.** This is a solo project: the same person writes the criteria, runs the mint, hand-audits the flags, and publishes the result. Nothing here makes the audit independent, and nothing in this document should be read as claiming that it does. The commit hashes above let a reader check the ordering for themselves instead of taking it on trust; establishing that ordering is the whole of what they buy.
+
+### "Reproducible", in the decided words
+
+From `phase0-live-mint/prd.md:187-194`, which settles the word for this gate:
+
+> The **mint** is a fresh observation each time and is not reproducible. The
+> **ledger → report path is fully reproducible** from fixed traces: anyone given the trace
+> set reproduces the identical number. That is what "reproducible" means at this gate.
+
+There is a boundary inside that, and blurring it would be the over-claim this document exists to refuse. The **number** is genuinely re-derivable by a stranger from a committed ledger — `belay phase0 report <ledger.json>` is a pure re-render, with no replay, no re-verification and no clock. The **individual cases** are not: `/traces/`, `/runs/`, `/corpus/local/`, `/eval/mint/` and `/eval/clones/` are all gitignored, correctly, under the no-raw-data-egress guardrail. Claiming full case-level auditability from this repository would be false; reproducing a case means re-running the mint.
 
 ---
 
@@ -20,7 +82,7 @@ The decision gate (`PROCEED`/`PIVOT`) depends on this number and the audit it su
 
 **Headline:** <!-- FILL AT LIVE GATE: e.g., "15 / 63 instances (24%)" --> **TO-BE-FILLED**
 
-The numerator is FAILing instances (tool calls that Belay flagged as a structural violation). The denominator is instances evaluated in the run. This is the top-line metric the gate reads.
+The numerator is FAILing instances (tool calls that Belay flagged as a structural violation). The denominator is instances evaluated in the run (`VERIFIED_CLEAN + VERIFIED_FLAGGED`), and the pre-registered criteria require it to be **≥50**: a rate published on a smaller denominator does not meet the gate, however it reads. The rate itself is reported, not thresholded.
 
 **Breakdown by verdict status (all instances):**
 - Instances verified as PASS: <!-- FILL: count --> **TO-BE-FILLED**
@@ -64,13 +126,13 @@ After the live run completes, a human audits every flagged turn and labels it:
 
 The false-positive rate is `FP / (TP + FP)` — precision, with coverage always stated beside it. See the runbook (Audit step) for how to label.
 
-**Gate requirement:** ≥3 hand-audited true positives, and a stated false-positive rate (never undeclared).
+**Gate requirement:** ≥3 **independent** hand-audited true positives (independence as defined in the pre-registered block above — distinct root causes, or at minimum distinct instances *and* distinct tools), and a stated false-positive rate (never undeclared).
 
 ### Hand-Audited True Positives
 
-**Count:** <!-- FILL: count, e.g., "7 TP" --> **TO-BE-FILLED**
+**Count:** <!-- FILL: count, e.g., "7 TP; 4 independent" — state the independent count, not just the raw count --> **TO-BE-FILLED**
 
-Each true-positive is a violation Belay detected that a human confirmed reflects a structural failure in the agent's trace or state. The gate requires ≥3 audited TPs for PROCEED.
+Each true-positive is a violation Belay detected that a human confirmed reflects a structural failure in the agent's trace or state. The gate requires ≥3 **independent** audited TPs for PROCEED, so each TP is listed here with its **root cause beside it** — a reader judges independence directly rather than taking the count on trust. Three flags sharing one root cause are one finding.
 
 ---
 
@@ -96,23 +158,17 @@ Each true-positive is a violation Belay detected that a human confirmed reflects
 
 ### Gate Rule
 
-**PROCEED if:**
-1. The violation rate is non-zero (at least one real violation detected), AND
-2. The corpus includes ≥3 hand-audited true positives, AND
-3. The false-positive rate is measured and stated (never omitted).
+**The rule is the pre-registered block above.** It is not restated here in different words — that divergence is exactly what this section used to be. Read against that block, in one line: **PROCEED** iff ≥3 *independent* hand-audited true positives survive audit **AND** the denominator is ≥50 **AND** `INSTRUMENT SUSPECT` did not fire, with the false-positive rate measured and stated; **PIVOT** on fewer than 3 independent TPs, on `INSTRUMENT SUSPECT` (see runbook, Run step, for the guard), or on an FP rate high enough that flagged runs are noise. A FAILing clean control voids the mint outright. Where this summary and the block differ, the block wins.
 
-**PIVOT if:**
-1. The violation rate is ~0 (no violations, or all UNVERIFIED → no measurable signal), OR
-2. The corpus does not reach ≥3 audited TPs, OR
-3. An instrument-suspect mint is observed (see runbook, Run step, for the guard).
+**Two things this section used to say, and why they are gone.** It carried *"the violation rate is non-zero"* as a PROCEED condition; the pre-registered block deliberately removed any rate threshold, because inventing a cutoff would manufacture precision that n=50 does not support — and ≥3 confirmed true positives cannot coexist with a zero rate anyway, so the clause added nothing but a second, weaker rule. It also **omitted** both the ≥50 denominator and the *independence* requirement, the two conditions most likely to be quietly missed by the person running the mint. Both are restored by deferring to the canonical block.
 
 ### Decision
 
 <!-- FILL: choose one line below -->
 **TO-BE-FILLED**
 
-<!-- Example PROCEED line:
-**PROCEED.** Violation rate 15/63 (24%), 7 audited TPs, 2 FPs (87% precision, 100% coverage on decided instances).
+<!-- Example PROCEED line (shape only — the independent-TP count and the denominator must both appear):
+**PROCEED.** Violation rate 15/63 (24%), 7 audited TPs of which 4 independent, 2 FPs (87% precision, 100% coverage on decided instances), no INSTRUMENT SUSPECT, both controls clean.
 -->
 
 <!-- Example PIVOT line:

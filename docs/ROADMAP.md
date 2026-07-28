@@ -91,7 +91,7 @@ Building A2 alone and expecting it to catch cheating is the single most likely w
 
 An honesty note that must not be papered over: **public MCP trace archives do not meaningfully exist.** We cannot "audit traces found in the wild" — that framing would be a lie.
 
-Instead Phase 0 **mints** its corpus: run an open MCP-speaking agent against open tasks (SWE-bench-lite instances) through the Belay proxy, using off-the-shelf MCP filesystem + shell servers. We give up "found in the wild." We keep the property that actually matters: **anyone can re-run the harness and reproduce the number.** Reproducibility, not provenance, is what makes the number credible.
+Instead Phase 0 **mints** its corpus: run an open MCP-speaking agent against open tasks (SWE-bench-lite instances) through the Belay proxy, using off-the-shelf MCP filesystem + shell servers. We give up "found in the wild." We keep the property that actually matters: **anyone given the recorded trace set re-derives the identical number**, on an open harness. Reproducibility, not provenance, is what makes the number credible — read in the exact sense decided at the gate below: the *mint* is a fresh observation each time and is not reproducible; the *ledger → report path* is.
 
 ### Milestones
 
@@ -109,16 +109,20 @@ Instead Phase 0 **mints** its corpus: run an open MCP-speaking agent against ope
 ### Phase 0 Success Metrics
 
 - **Violation rate:** measured and reported with its denominator (not a headline percentage without one).
-- **True positives:** ≥3 flagged violations hand-audited and confirmed as genuine.
+- **True positives:** ≥3 flagged violations hand-audited and confirmed as genuine, and **independent** of one another — distinct root causes, or at minimum distinct instances *and* distinct tools (definition in the pre-registered block; three flags from one mis-annotated tool are **one** finding).
 - **False-positive rate:** **stated, not hidden.** A high FP rate is a fixable engineering problem; an unstated one is a credibility problem we never recover from.
 - **UNVERIFIED rate:** measured and *explained* — every UNVERIFIED must trace to a named cause (nondeterministic tool, unrestorable state, missing pre-state).
 - **Replay fidelity:** a clean run replays with 100% result-equivalence.
 
 ### 🚦 Phase 0 → Phase 1 Gate
 
-- **PROCEED** if the harness produces a **reproducible, quantified violation rate** with **≥3 hand-audited true positives** and a **stated false-positive rate** we're willing to publish.
-- **PIVOT** if the violation rate is ~0 on real runs. That is not a bug — it is the premise failing, and it is worth finding out in week 4. Re-examine: wrong task set (too easy to cheat-proof)? wrong surface (the interesting failures don't cross MCP)? are the failures real but *unverifiable* by replay?
-- **PIVOT** if the false-positive rate is so high that flagged runs are noise. Do **not** launch and hope.
+**The gate criteria are pre-registered and canonical in [`docs/planning/phase0-live-mint/prd.md`](planning/phase0-live-mint/prd.md) → *Pre-registered gate criteria* (fixed 2026-07-21, before any live mint), reproduced verbatim in [`docs/technical/PHASE0_RESULTS.md`](technical/PHASE0_RESULTS.md).** This section deliberately does **not** restate them in its own words: three divergent statements of this gate used to exist, and the divergence — not any one wording — was the defect.
+
+Summarised, non-authoritatively: **PROCEED** iff ≥3 ***independent*** hand-audited true positives survive audit **AND** the violation-rate denominator is **≥50** **AND** `INSTRUMENT SUSPECT` did not fire, with the false-positive rate **stated, never omitted**. The violation rate itself is **reported, not thresholded**. **PIVOT** on fewer than 3 independent TPs, on `INSTRUMENT SUSPECT`, or on a false-positive rate so high that flagged runs are noise — judged and stated, not silently dropped. A FAILing clean control voids the mint outright. Where this summary and the canonical block differ, the block wins.
+
+**"Reproducible" — the decided meaning** (`phase0-live-mint/prd.md:187-194`): the **mint** is a fresh observation each time and is **not** reproducible; the **ledger → report path is fully reproducible** from fixed traces — anyone given the trace set reproduces the identical number. That is what "reproducible" means at this gate. There is a boundary inside it that must not be blurred: the *number* is re-derivable by a stranger from a committed ledger (`belay phase0 report` is a pure re-render), but the *individual cases* are not, because `/traces/`, `/runs/`, `/corpus/local/`, `/eval/mint/` and `/eval/clones/` are gitignored under the no-raw-data-egress guardrail. Full case-level auditability from this repository would be an over-claim.
+
+**Why a ~0 rate is still the thing to watch (risk R1).** The canonical block carries no rate threshold, but the reasoning that used to live here stands. If real runs contain ~no detectable violations, that is not a bug — it is the premise failing, and it is worth finding out in week 4. Re-examine: wrong task set (too easy to cheat-proof)? wrong surface (the interesting failures don't cross MCP)? are the failures real but *unverifiable* by replay? Mechanically such a run cannot reach ≥3 independent audited TPs and therefore PIVOTs under the canonical rule; the questions above are how to read that PIVOT, not a separate criterion. Do **not** launch and hope.
 
 ---
 
