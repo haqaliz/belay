@@ -10,12 +10,18 @@ those paths; `prepare_workspace` composes it with git acquisition behind an inje
 Every test here fakes the `runner`: nothing runs git, nothing spawns a process, nothing
 reaches the network. The one place a real `subprocess.run` is referenced is an assertion
 about the *default* — never a call.
+
+The same rule governs the clone retry: `sleep` is an injected seam and every backoff
+assertion is on the recorded **sequence of requested delays**. No test here sleeps, and
+none measures elapsed wall time — a timing-based assertion would be both slow and flaky,
+and it would not actually pin the backoff schedule.
 """
 
 from __future__ import annotations
 
 import inspect
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -71,6 +77,54 @@ class _FakeRunner:
             # the commit-ish (the final token).
             Path(argv[-2]).mkdir(parents=True, exist_ok=True)
         return subprocess.CompletedProcess(argv, returncode=0, stdout="", stderr="")
+
+
+class _FlakyCloneRunner(_FakeRunner):
+    """Fails the bare clone its first `failures` times, then behaves like `_FakeRunner`.
+
+    Models the Stage-2 attrition case verbatim: `django__django-15400` exited 128 at
+    `git clone --bare` and *"the same clone succeeded on retry"*
+    (`docs/planning/phase0-mint-execution/mint-execution/STAGE2_FINDINGS.md:44-52`).
+    Only the clone is made flaky — every other git shape is inherited unchanged, so a
+    test that sees a repeated `worktree add` is seeing the code retry it, not the fake.
+    """
+
+    def __init__(self, *, failures: int, raise_failure: bool = True) -> None:
+        super().__init__()
+        self._remaining_failures = failures
+        self._raise_clone_failure = raise_failure
+
+    def __call__(self, argv, **kwargs):
+        argv = list(argv)
+        if "clone" in argv and self._remaining_failures > 0:
+            self._remaining_failures -= 1
+            self.calls.append(argv)
+            if self._raise_clone_failure:
+                raise subprocess.CalledProcessError(returncode=128, cmd=argv)
+            return subprocess.CompletedProcess(argv, returncode=128, stdout="", stderr="boom")
+        return super().__call__(argv, **kwargs)
+
+
+class _RecordingSleep:
+    """A `time.sleep` stand-in that records each requested delay and returns at once.
+
+    Every backoff assertion in this file reads `.delays`. Nothing here ever blocks, so
+    the retry tests cost no wall time and assert the *schedule* rather than its effect.
+    """
+
+    def __init__(self) -> None:
+        self.delays: list[float] = []
+
+    def __call__(self, seconds: float) -> None:
+        self.delays.append(seconds)
+
+
+def _clone_calls(runner: _FakeRunner) -> list[list[str]]:
+    return [call for call in runner.calls if "clone" in call]
+
+
+def _worktree_calls(runner: _FakeRunner) -> list[list[str]]:
+    return [call for call in runner.calls if "worktree" in call and "add" in call]
 
 
 def test_snapshot_dir_is_a_sibling_of_the_scope_never_inside_it(tmp_path: Path) -> None:
@@ -286,3 +340,193 @@ def test_prepare_surfaces_a_returned_failure_as_a_named_error(tmp_path: Path) ->
             clones_dir=tmp_path / "clones",
             runner=runner,
         )
+
+
+def test_a_transient_clone_failure_is_retried_and_succeeds(tmp_path: Path) -> None:
+    """The Stage-2 attrition case: one flaky clone must cost a retry, not the instance.
+
+    `django__django-15400` exited 128 at `git clone --bare` with 362 GB free and GitHub
+    reachable throughout, and the identical clone succeeded when re-run by hand
+    (`STAGE2_FINDINGS.md:44-52`). Without this the instance is recorded `failed` — an
+    observation that never happened — and the denominator quietly shrinks by one.
+    """
+    runner = _FlakyCloneRunner(failures=1)
+    sleep = _RecordingSleep()
+
+    layout = workspace.prepare_workspace(
+        _record(),
+        root=tmp_path / "root",
+        clones_dir=tmp_path / "clones",
+        runner=runner,
+        sleep=sleep,
+    )
+
+    # The clone really was re-issued, and the workspace really was prepared.
+    assert len(_clone_calls(runner)) == 2
+    assert len(_worktree_calls(runner)) == 1
+    assert layout.work_dir.is_dir()
+    # One retry, one backoff — asserted on the requested delay, never on elapsed time.
+    assert sleep.delays == [workspace.CLONE_RETRY_BASE_DELAY_SECONDS]
+
+
+def test_a_returned_nonzero_clone_is_retried_too(tmp_path: Path) -> None:
+    # A runner that reports failure by *returning* non-zero (rather than raising) is the
+    # other half of `_run`'s two failure conventions; the retry must cover both, or the
+    # convention a caller happens to use decides whether the mint is resilient.
+    runner = _FlakyCloneRunner(failures=1, raise_failure=False)
+    sleep = _RecordingSleep()
+
+    layout = workspace.prepare_workspace(
+        _record(),
+        root=tmp_path / "root",
+        clones_dir=tmp_path / "clones",
+        runner=runner,
+        sleep=sleep,
+    )
+
+    assert len(_clone_calls(runner)) == 2
+    assert layout.work_dir.is_dir()
+    assert sleep.delays == [workspace.CLONE_RETRY_BASE_DELAY_SECONDS]
+
+
+def test_a_persistent_clone_failure_still_raises_the_same_named_error(tmp_path: Path) -> None:
+    """Retrying must not change what a *real* clone failure looks like to the caller.
+
+    `run_mint` records the instance `failed` with `str(exc)`; if the retry reworded or
+    re-wrapped the message, the batch's containment path would start reporting something
+    other than the git invocation that actually failed. The message is compared against
+    the un-retried spelling byte-for-byte rather than pattern-matched.
+    """
+    retried = _FlakyCloneRunner(failures=99)
+    once = _FlakyCloneRunner(failures=99)
+    sleep = _RecordingSleep()
+
+    # Identical `root`/`clones_dir` for both: the message embeds the clone's destination,
+    # so anything else would make this a comparison of paths rather than of wording. A
+    # failing clone creates nothing, so the second call is not served from a cache.
+    root = tmp_path / "root"
+    clones = tmp_path / "clones"
+
+    with pytest.raises(workspace.WorkspacePrepError) as retried_exc:
+        workspace.prepare_workspace(
+            _record(),
+            root=root,
+            clones_dir=clones,
+            runner=retried,
+            clone_attempts=3,
+            sleep=sleep,
+        )
+    with pytest.raises(workspace.WorkspacePrepError) as once_exc:
+        workspace.prepare_workspace(
+            _record(),
+            root=root,
+            clones_dir=clones,
+            runner=once,
+            clone_attempts=1,
+            sleep=sleep,
+        )
+
+    assert str(retried_exc.value) == str(once_exc.value)
+    assert "django__django-12345" in str(retried_exc.value)
+    assert "cloning the bare repo" in str(retried_exc.value)
+    # Every attempt was spent, and the backoff doubled between them.
+    assert len(_clone_calls(retried)) == 3
+    assert sleep.delays == [
+        workspace.CLONE_RETRY_BASE_DELAY_SECONDS,
+        workspace.CLONE_RETRY_BASE_DELAY_SECONDS * 2,
+    ]
+    # A persistent failure never reaches the worktree step.
+    assert _worktree_calls(retried) == []
+
+
+def test_worktree_add_is_never_retried(tmp_path: Path) -> None:
+    """`git worktree add` is local and deterministic — retrying it would hide a bug.
+
+    The retry exists for ONE observed failure mode: a network-bound `git clone --bare`
+    (`STAGE2_FINDINGS.md:44-52`). `worktree add` touches no network; it fails on a bad
+    `base_commit`, a dirty target dir, or a corrupt clone — conditions the identical
+    second invocation reproduces exactly. Retrying it would spend attempts to arrive at
+    the same error, and, worse, would make a genuine data bug look intermittent.
+    """
+    runner = _FakeRunner(fail_on="worktree", raise_failure=True)
+    sleep = _RecordingSleep()
+
+    with pytest.raises(workspace.WorkspacePrepError):
+        workspace.prepare_workspace(
+            _record(base_commit="badc0ffee"),
+            root=tmp_path / "root",
+            clones_dir=tmp_path / "clones",
+            runner=runner,
+            clone_attempts=5,
+            sleep=sleep,
+        )
+
+    # Exactly one attempt, despite `clone_attempts=5` — and no backoff was ever waited.
+    assert len(_worktree_calls(runner)) == 1
+    assert sleep.delays == []
+
+
+def test_a_cached_bare_clone_skips_the_clone_and_never_sleeps(tmp_path: Path) -> None:
+    # Stage 3 pre-caches all seven bare clones, so it performs no clone at all
+    # (`STAGE2_FINDINGS.md:50-52`). The retry must be inert on that path: no clone call,
+    # and above all no backoff — a sleep here would tax the common case for nothing.
+    clones = tmp_path / "clones"
+    (clones / "django__django.git").mkdir(parents=True)
+    runner = _FakeRunner(fail_on="clone", raise_failure=True)
+    sleep = _RecordingSleep()
+
+    layout = workspace.prepare_workspace(
+        _record(),
+        root=tmp_path / "root",
+        clones_dir=clones,
+        runner=runner,
+        sleep=sleep,
+    )
+
+    assert _clone_calls(runner) == []
+    assert len(_worktree_calls(runner)) == 1
+    assert layout.work_dir.is_dir()
+    assert sleep.delays == []
+
+
+def test_clone_attempts_of_one_disables_the_retry(tmp_path: Path) -> None:
+    # The escape hatch: an operator who wants a cold clone failure to surface immediately
+    # (a wrong repo name, say) gets exactly one attempt and no wait.
+    runner = _FlakyCloneRunner(failures=1)
+    sleep = _RecordingSleep()
+
+    with pytest.raises(workspace.WorkspacePrepError):
+        workspace.prepare_workspace(
+            _record(),
+            root=tmp_path / "root",
+            clones_dir=tmp_path / "clones",
+            runner=runner,
+            clone_attempts=1,
+            sleep=sleep,
+        )
+
+    assert len(_clone_calls(runner)) == 1
+    assert sleep.delays == []
+
+
+def test_clone_attempts_below_one_is_refused(tmp_path: Path) -> None:
+    # A zero/negative budget would fall out of the attempt loop having run NO clone, and
+    # the failure would surface much later as "git reported success but no workspace
+    # exists" — a misleading message for a caller-side mistake. Refuse it at the door.
+    with pytest.raises(ValueError):
+        workspace.prepare_workspace(
+            _record(),
+            root=tmp_path / "root",
+            clones_dir=tmp_path / "clones",
+            runner=_FakeRunner(),
+            clone_attempts=0,
+        )
+
+
+def test_retry_defaults_are_one_retry_and_the_real_sleep(tmp_path: Path) -> None:
+    # The default is a single retry — enough for the observed one-off, few enough that a
+    # genuinely unreachable host is not waited on repeatedly for every instance in the
+    # batch. And the default sleep is the real one; this suite never calls it.
+    parameters = inspect.signature(workspace.prepare_workspace).parameters
+    assert parameters["clone_attempts"].default == 2
+    assert parameters["sleep"].default is time.sleep
