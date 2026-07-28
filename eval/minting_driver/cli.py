@@ -10,8 +10,8 @@ substitutes a fake transport is a flag that can silently mint nothing.
 `[project.scripts]`, and never import `belay` at module level (`CLAUDE.md` guardrail #1);
 the optional in-process `--verify` imports it lazily, inside the call.
 
-Two argument decisions are load-bearing, and both exist to make an expensive mistake
-impossible rather than merely unlikely:
+Three argument decisions are load-bearing, and all three exist to make an expensive
+mistake impossible rather than merely unlikely:
 
 * **`--root` is required with no default.** A default root is how two mints silently
   share one batch directory: the second bridge either collides or contaminates the
@@ -19,6 +19,13 @@ impossible rather than merely unlikely:
 * **`--provider` and `--model` are explicit arguments.** No branch anywhere reads a
   vendor key to decide *what* to build. Credentials come from the environment; the
   choice never does, or the published number names the wrong model.
+* **`--model` is required with no default, for the same reason `--root` is.** The
+  default used to be `gemini-flash-latest`; `STAGE2_FINDINGS.md:25-39` measured
+  flash-class models reading and searching to the step cap without ever editing, which
+  publishes a **0% violation rate that means "the agent did nothing"** — worse than
+  `INSTRUMENT SUSPECT`, because it looks like a result. Missing, it is argparse's own
+  exit 2, before a workspace is prepped or a token is spent — the same code the other
+  setup errors below use.
 """
 
 from __future__ import annotations
@@ -33,7 +40,6 @@ from eval.minting_driver.entrypoint import (
     DEFAULT_CORPUS_DIR,
     DEFAULT_LEDGER_PATH,
     DEFAULT_MAX_STEPS,
-    DEFAULT_MODEL,
     DEFAULT_PROVIDER,
     DEFAULT_REGISTRY_PATH,
     DEFAULT_REQUEST_TIMEOUT,
@@ -103,9 +109,19 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--model",
-        default=DEFAULT_MODEL,
+        required=True,
         metavar="name",
-        help=f"the model id to mint with (default: {DEFAULT_MODEL})",
+        # `%%` because argparse `%`-expands every help string against its own params;
+        # a bare `%` here makes `--help` die with `unsupported format character`.
+        help=(
+            "the model id to mint with. REQUIRED and never defaulted: the old default "
+            "was `gemini-flash-latest`, and two flash-class models hit the step cap "
+            "doing only reads and searches, editing nothing "
+            "(STAGE2_FINDINGS.md:25-39) — an agent that never mutates publishes a 0%% "
+            "violation rate that means 'the agent did nothing', which LOOKS like a "
+            "result. Pro-class is required, and the published number records which "
+            "model minted which instance"
+        ),
     )
     parser.add_argument(
         "--request-timeout",

@@ -291,3 +291,196 @@ def test_a_malformed_history_is_a_named_load_error(tmp_path):
     )
     with pytest.raises(ValueError):
         load_checkpoint(not_objects)
+
+
+# --------------------------------------------------------------------------------------
+# `accounting` (run-accounting, Phase 3)
+#
+# What a mint COSTS was recorded nowhere: `record` stored exactly
+# `{status, reason, trace_path, history}`, so no stop-loss could be expressed and the
+# write-up could not state the cost of the number. The entry gains one more optional
+# field — `{wall_clock_seconds, model_requests, retry_count, input_tokens, output_tokens,
+# model, provider}` — and `_validate_entry` has to NAME it, exactly as it had to name
+# `history`, or the loader's fixed key set drops it silently on every load.
+# --------------------------------------------------------------------------------------
+
+
+def test_accounting_round_trips(tmp_path):
+    path = tmp_path / "checkpoint.json"
+    cp = load_checkpoint(path)
+    cp.record(
+        "inst-a",
+        "captured",
+        trace_path="/batch/trace-inst-a.jsonl",
+        accounting={
+            "wall_clock_seconds": 12.5,
+            "model_requests": 4,
+            "retry_count": 1,
+            "input_tokens": 900,
+            "output_tokens": 120,
+            "model": "gemini-flash-latest",
+            "provider": "openai-compat",
+        },
+    )
+    cp.save(path)
+
+    reloaded = load_checkpoint(path)
+    assert reloaded.accounting("inst-a") == {
+        "wall_clock_seconds": 12.5,
+        "model_requests": 4,
+        "retry_count": 1,
+        "input_tokens": 900,
+        "output_tokens": 120,
+        "model": "gemini-flash-latest",
+        "provider": "openai-compat",
+    }
+
+
+def test_accounting_is_none_when_unrecorded_and_for_an_unknown_instance(tmp_path):
+    """Absent, not an empty dict: "this instance has no accounting" and "its accounting
+    was all zeroes" are different facts and must stay so."""
+    cp = load_checkpoint(tmp_path / "cp.json")
+    cp.record("inst", "captured")
+    assert cp.accounting("inst") is None
+    assert cp.accounting("never-seen") is None
+
+
+def test_absent_token_fields_are_omitted_not_nulled(tmp_path):
+    """D3 at the ledger boundary: a provider that reported no usage leaves NO key.
+
+    A `"input_tokens": 0` written for a provider that never reported usage would be a
+    fabricated measurement, and any later total over the column would silently absorb it.
+    """
+    path = tmp_path / "cp.json"
+    cp = load_checkpoint(path)
+    cp.record(
+        "inst",
+        "captured",
+        accounting={"wall_clock_seconds": 3.0, "model_requests": 2, "retry_count": 0},
+    )
+    cp.save(path)
+
+    stored = json.loads(path.read_text(encoding="utf-8"))["inst"]["accounting"]
+    assert "input_tokens" not in stored
+    assert "output_tokens" not in stored
+    assert stored == {"wall_clock_seconds": 3.0, "model_requests": 2, "retry_count": 0}
+
+
+def test_a_legacy_entry_without_accounting_still_loads(tmp_path):
+    """Backward compatibility, same shape the `history` change had to keep working."""
+    path = tmp_path / "legacy.json"
+    path.write_text(
+        json.dumps(
+            {
+                "django__django-11039": {
+                    "status": "captured",
+                    "reason": None,
+                    "trace_path": "/mint/s3/trace-django__django-11039.jsonl",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    cp = load_checkpoint(path)
+    assert cp.status("django__django-11039") == "captured"
+    assert cp.accounting("django__django-11039") is None
+
+
+def test_a_malformed_accounting_is_a_named_load_error(tmp_path):
+    """Fail-closed extends to the new field, as it did to `history`.
+
+    An accounting that cannot be read is spend that cannot be audited, and coercing it
+    would hide exactly the loss the field exists to prevent.
+    """
+    path = tmp_path / "bad-accounting.json"
+    path.write_text(
+        json.dumps({"inst": {"status": "captured", "accounting": "12 seconds"}}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError):
+        load_checkpoint(path)
+
+
+def test_a_re_record_carries_the_prior_accounting_into_history(tmp_path):
+    """A re-armed instance's earlier spend is superseded, never erased.
+
+    The quota-stopped attempt really did consume requests; dropping its accounting on
+    re-arm would under-report the cost of the number by exactly the attempts that failed.
+    """
+    path = tmp_path / "cp.json"
+    cp = load_checkpoint(path)
+    cp.record(
+        "inst",
+        "no_observation",
+        reason="quota exhausted",
+        accounting={"wall_clock_seconds": 2.0, "model_requests": 1, "retry_count": 0},
+    )
+    cp.record(
+        "inst",
+        "captured",
+        trace_path="/batch/trace-inst.jsonl",
+        accounting={"wall_clock_seconds": 40.0, "model_requests": 6, "retry_count": 0},
+    )
+    cp.save(path)
+
+    reloaded = load_checkpoint(path)
+    assert reloaded.history("inst") == [
+        {
+            "status": "no_observation",
+            "reason": "quota exhausted",
+            "accounting": {
+                "wall_clock_seconds": 2.0,
+                "model_requests": 1,
+                "retry_count": 0,
+            },
+        }
+    ]
+    assert reloaded.accounting("inst") == {
+        "wall_clock_seconds": 40.0,
+        "model_requests": 6,
+        "retry_count": 0,
+    }
+
+
+def test_a_history_entry_omits_accounting_entirely_when_there_was_none(tmp_path):
+    """No `"accounting": null` noise on the ledger written by a pre-accounting record.
+
+    Also what keeps every history assertion written before this aspect true, rather than
+    quietly needing a third key added to each of them.
+    """
+    cp = load_checkpoint(tmp_path / "cp.json")
+    cp.record("inst", "no_observation", reason="quota exhausted")
+    cp.record("inst", "captured")
+
+    assert cp.history("inst") == [{"status": "no_observation", "reason": "quota exhausted"}]
+
+
+def test_no_currency_field_can_enter_the_ledger_unnoticed(tmp_path):
+    """D4, pinned at the durable boundary: nothing money-shaped is written.
+
+    Under a subscription there is no per-token price; a dollar figure would be fabricated
+    precision. If a metered key is ever used, price is applied at REPORT time from a
+    stated rate — never baked into the ledger.
+    """
+    path = tmp_path / "cp.json"
+    cp = load_checkpoint(path)
+    cp.record(
+        "inst",
+        "captured",
+        accounting={
+            "wall_clock_seconds": 3.0,
+            "model_requests": 2,
+            "retry_count": 0,
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "model": "gemini-flash-latest",
+            "provider": "openai-compat",
+        },
+    )
+    cp.save(path)
+
+    text = path.read_text(encoding="utf-8")
+    assert "$" not in text
+    for word in ("cost", "price", "usd", "dollar"):
+        assert word not in text.lower()

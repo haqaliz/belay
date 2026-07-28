@@ -126,12 +126,28 @@ The proxy (driven by these env vars) will:
 
 ### Verification Before Scaling
 
+> ### `--model` is REQUIRED — there is no default
+>
+> Stage 2 measured why: two flash-class models hit the step cap doing **only reads and
+> searches** and never edited anything. An agent that never mutates produces turns that all
+> verify clean, so the mint publishes a **0% violation rate that means "the agent did
+> nothing"** — which is worse than `INSTRUMENT SUSPECT`, because it *looks like a result* and
+> the pre-registered gate would read it as a PIVOT on a premise that was never tested.
+> `gemini-3.1-pro-preview` edited on its first try in 11 turns
+> (`docs/planning/phase0-mint-execution/mint-execution/STAGE2_FINDINGS.md:25-39`).
+>
+> So the driver refuses to guess: omitting `--model` is an argparse exit 2, before anything is
+> prepped or spent. **The published number must name the model**, and if a resumed mint uses a
+> different one from the instances already banked, the write-up must record which model minted
+> which instance — they are no longer one population.
+
 **Start with ONE instance.** Never open a batch against an unproven setup:
 
 ```bash
 # Run a single instance through the driver
 uv run python -m eval.minting_driver one pallets__flask-4045 \
-  --root eval/mint/stage1 --registry eval/instances/stage1.json
+  --root eval/mint/stage1 --registry eval/instances/stage1.json \
+  --model gemini-3.1-pro-preview
 
 # Verify a trace was captured and bridged into the batch layout
 ls -lh eval/mint/stage1/batch/trace-*.jsonl
@@ -165,7 +181,8 @@ denominator of **≥50** captured instances (not 300 — see Prerequisite 2); `s
 
 ```bash
 uv run python -m eval.minting_driver batch \
-  --root eval/mint/stage3 --registry eval/instances/selected.json
+  --root eval/mint/stage3 --registry eval/instances/selected.json \
+  --model gemini-3.1-pro-preview
 ```
 
 > ### 🛑 The mint is SEQUENTIAL BY DESIGN. Do not parallelise it.

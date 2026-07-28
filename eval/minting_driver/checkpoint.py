@@ -3,7 +3,7 @@
 A Phase-0 mint drives dozens of instances sequentially, each an expensive live model
 session. If the run dies at instance 37, re-running must skip the 36 already dealt with,
 not re-spend on them. This module is that memory: a small JSON ledger mapping each
-`instance_id` to its `{status, reason, trace_path, history}`, where `status` is
+`instance_id` to its `{status, reason, trace_path, accounting, history}`, where `status` is
 `"captured"` (a trace was produced and bridged), `"failed"` (the instance errored —
 recorded, not silently retried; re-running failures is an explicit choice, not automatic),
 or `"no_observation"` (the instance was never actually driven — see below).
@@ -26,6 +26,17 @@ overwrites. `--force` is banned for losing "the record of what already ran"; the
 must not lose it either. `_validate_entry` therefore names `history` explicitly — it
 rebuilds entries from a fixed key set, so a field it does not name is silently dropped on
 every load and the append-only guarantee would hold only in memory.
+
+Each entry also carries an optional `accounting` — what that attempt COST
+(`{wall_clock_seconds, model_requests, retry_count, input_tokens, output_tokens, model,
+provider}`) — which is what makes a stop-loss expressible and lets the write-up state the
+cost of the number. Two rules travel with it. **Absent is not zero**: a field the provider
+never reported is OMITTED, never written as `0`, because an unmeasured quantity rendered
+as a measured one is the same dishonesty as rendering `UNVERIFIED` as `PASS`. And **no
+dollar amount is ever stored**: under a subscription there is no per-token price, so a
+price would be invented precision; if a metered key is used later, price is applied at
+report time from a stated rate. `_validate_entry` names `accounting` for exactly the same
+reason it names `history`.
 
 Loading is FAIL-CLOSED, mirroring `belay.phase0.ledger.from_json`: a corrupt ledger must
 never read as "nothing done yet", or the mint would silently re-run and double-spend, or
@@ -88,6 +99,7 @@ class Checkpoint:
         *,
         reason: Optional[str] = None,
         trace_path: Optional[object] = None,
+        accounting: Optional[dict] = None,
     ) -> None:
         """Record one instance's disposition, superseding any prior entry for that id.
 
@@ -104,6 +116,17 @@ class Checkpoint:
         `eval/README.md` precisely for losing "the record of what already ran" — so this
         keeps it. `trace_path` is deliberately NOT carried into history: a re-armed instance
         by definition produced no trace, so there is never one to lose.
+
+        `accounting` is what THIS attempt cost — `{wall_clock_seconds, model_requests,
+        retry_count, input_tokens, output_tokens, model, provider}`, with **absent fields
+        omitted rather than nulled**: a provider that reported no token usage must not be
+        recorded as having reported zero, exactly as `UNVERIFIED` is never rendered as
+        `PASS`. It is stored verbatim (this ledger does not interpret it) and, like the
+        prior `{status, reason}`, it is carried into `history` on a re-record — the
+        quota-stopped attempt really did consume requests, and dropping its accounting on
+        re-arm would under-report the cost of the number by exactly the attempts that
+        failed. It is carried ONLY when there was one, so a pre-accounting entry produces
+        the same two-key history item it always did.
         """
         if status not in _VALID_STATUSES:
             allowed = ", ".join(sorted(_VALID_STATUSES))
@@ -112,14 +135,16 @@ class Checkpoint:
         if prior is None:
             history: list[dict] = []
         else:
-            history = [
-                *prior.get("history", []),
-                {"status": prior["status"], "reason": prior.get("reason")},
-            ]
+            superseded = {"status": prior["status"], "reason": prior.get("reason")}
+            prior_accounting = prior.get("accounting")
+            if prior_accounting is not None:
+                superseded["accounting"] = prior_accounting
+            history = [*prior.get("history", []), superseded]
         self._entries[instance_id] = {
             "status": status,
             "reason": reason,
             "trace_path": trace_path,
+            "accounting": accounting,
             "history": history,
         }
 
@@ -154,6 +179,21 @@ class Checkpoint:
         """The recorded `trace_path` for `instance_id`, or `None` if unrecorded or unset."""
         entry = self._entries.get(instance_id)
         return None if entry is None else entry.get("trace_path")
+
+    def accounting(self, instance_id: str) -> Optional[dict]:
+        """What this instance's recorded attempt cost, or `None` if none was recorded.
+
+        `None` — not `{}` — for both an unrecorded instance and one recorded before this
+        field existed: "no accounting was captured" and "its accounting was all zeroes"
+        are different facts, and a summary that totalled them together would be reporting
+        a measurement nobody made. A copy is returned so a reader cannot mutate the ledger
+        by holding onto it.
+        """
+        entry = self._entries.get(instance_id)
+        if entry is None:
+            return None
+        accounting = entry.get("accounting")
+        return None if accounting is None else dict(accounting)
 
     def history(self, instance_id: str) -> list[dict]:
         """The superseded `{status, reason}` dispositions, oldest first; `[]` if none.
@@ -247,6 +287,12 @@ def _validate_entry(instance_id: object, raw: object) -> dict:
             f"checkpoint entry for {instance_id!r} has status {status!r}; "
             f"must be one of: {allowed}"
         )
+    accounting = raw.get("accounting")
+    if accounting is not None and not isinstance(accounting, dict):
+        raise ValueError(
+            f"checkpoint entry for {instance_id!r} has an 'accounting' that is not a "
+            f"JSON object, got {type(accounting).__name__}"
+        )
     history = raw.get("history", [])
     if not isinstance(history, list):
         raise ValueError(
@@ -263,6 +309,11 @@ def _validate_entry(instance_id: object, raw: object) -> dict:
         "status": status,
         "reason": raw.get("reason"),
         "trace_path": raw.get("trace_path"),
+        # NAMED, for the same reason `history` is: this function rebuilds the entry from a
+        # fixed key set, so an accounting it did not name would be dropped on every load —
+        # the spend would survive in memory and evaporate on the next resume, which is
+        # precisely the silent loss the field exists to prevent.
+        "accounting": None if accounting is None else dict(accounting),
         # Copied, not aliased: the parsed JSON is discarded by the caller, but sharing the
         # list would let a single loaded entry be mutated through two references.
         "history": list(history),

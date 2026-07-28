@@ -290,6 +290,11 @@ class RetryingModel:
 
     `sleep` is injected so tests assert on the recorded *sequence* of requested delays
     rather than on elapsed wall time. It is the only nondeterminism this module has.
+
+    Being the one object that sees every attempt, it is also where `run-accounting`'s
+    per-instance `retry_count` and `request_count` live; token usage lives one layer down
+    on the client, reachable through `inner`. No clock is read here — wall-clock is the
+    batch layer's, behind an injected clock (`batch.run_mint`).
     """
 
     def __init__(
@@ -307,6 +312,35 @@ class RetryingModel:
         self._base_delay = base_delay
         self._sleep = sleep
         self._retry_count = 0
+        self._request_count = 0
+
+    @property
+    def inner(self) -> Model:
+        """The wrapped model — how `batch.py` reads client-level accounting.
+
+        Token usage originates in the concrete client (`clients/local_client.py`,
+        `clients/anthropic_client.py`), which is the only layer that sees
+        `response.usage`. Exposing the object it wraps is what lets `run_mint` read that
+        without a second protocol method: **`Model` stays a ONE-METHOD protocol** (D1). A
+        `usage`/`request_count` pair proxied through here would make every `Model`
+        implementation — including the fakes — owe an accounting surface it has no way to
+        fill in honestly.
+        """
+        return self._inner
+
+    @property
+    def request_count(self) -> int:
+        """Attempts that reached the inner model across this instance's WHOLE session.
+
+        A retried call counts more than once, and that is the point: retries cost quota,
+        and the 250-requests-per-day cap that burned 56 instances on 2026-07-24 counts
+        attempts, not successes. Distinct from `retry_count` (which counts only the extra
+        attempts) so neither can be silently derived from the other.
+
+        Per-instance for the same reason `retry_count` is: one wrapper is built per
+        instance inside `entrypoint.make_model_factory`, never hoisted.
+        """
+        return self._request_count
 
     @property
     def retry_count(self) -> int:
@@ -322,6 +356,11 @@ class RetryingModel:
         last_transient: Optional[BaseException] = None
 
         for attempt in range(1, self._max_attempts + 1):
+            # Counted BEFORE the call, exactly as the clients count theirs: an attempt
+            # that comes back a 429 still spent a request against the day's cap, and a
+            # stop-loss that ignored failed attempts would under-count the spend it
+            # exists to bound.
+            self._request_count += 1
             try:
                 return self._inner.propose_next(messages)
             except Exception as exc:

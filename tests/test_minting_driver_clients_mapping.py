@@ -26,6 +26,13 @@ from eval.minting_driver.clients.anthropic_client import AnthropicModel
 from eval.minting_driver.clients.local_client import LocalOpenAICompatModel
 from eval.minting_driver.model import Done, Message, ToolCall
 
+#: Sentinel for "do not set this attribute at all", distinct from `None` (which a real
+#: SDK does sometimes send as a *value*). `run-accounting`'s whole honesty contract is
+#: that an unmeasured quantity stays distinguishable from a measured one, so the fakes
+#: have to be able to express "the attribute is not there" without ambiguity.
+_ABSENT = object()
+
+
 # ---------------------------------------------------------------------------
 # Fake Anthropic client
 # ---------------------------------------------------------------------------
@@ -40,9 +47,38 @@ def _anthropic_tool_use_block(*, id: str, name: str, input: dict) -> SimpleNames
 
 
 def _anthropic_response(
-    *, content: list[SimpleNamespace], stop_reason: str = "end_turn"
+    *,
+    content: list[SimpleNamespace],
+    stop_reason: str = "end_turn",
+    usage: SimpleNamespace | None = None,
 ) -> SimpleNamespace:
-    return SimpleNamespace(content=content, stop_reason=stop_reason)
+    """The response tree `AnthropicModel.propose_next` reads.
+
+    `usage` is attached ONLY when given, so the default response genuinely has **no
+    `usage` attribute at all** — that is the shape the absent-not-zero test needs, and a
+    `usage=None` attribute would be a different (and weaker) thing to assert against.
+    """
+    response = SimpleNamespace(content=content, stop_reason=stop_reason)
+    if usage is not None:
+        response.usage = usage
+    return response
+
+
+def _anthropic_usage(
+    *, input_tokens: object = _ABSENT, output_tokens: object = _ABSENT
+) -> SimpleNamespace:
+    """Anthropic's `response.usage` shape: `input_tokens` / `output_tokens`.
+
+    A field left at `_ABSENT` is not set at all, so a provider that reports only half of
+    the pair can be simulated exactly — `getattr(usage, "output_tokens", None)` is the
+    real code path, and a `None`-valued attribute would not exercise it.
+    """
+    usage = SimpleNamespace()
+    if input_tokens is not _ABSENT:
+        usage.input_tokens = input_tokens
+    if output_tokens is not _ABSENT:
+        usage.output_tokens = output_tokens
+    return usage
 
 
 class _FakeAnthropicMessages:
@@ -86,10 +122,32 @@ def _openai_response(
     content: str | None = None,
     tool_calls: list[SimpleNamespace] | None = None,
     finish_reason: str = "stop",
+    usage: SimpleNamespace | None = None,
 ) -> SimpleNamespace:
+    """Same `usage`-only-when-given rule as `_anthropic_response` — see there."""
     message = SimpleNamespace(content=content, tool_calls=tool_calls or None)
     choice = SimpleNamespace(message=message, finish_reason=finish_reason)
-    return SimpleNamespace(choices=[choice])
+    response = SimpleNamespace(choices=[choice])
+    if usage is not None:
+        response.usage = usage
+    return response
+
+
+def _openai_usage(
+    *, prompt_tokens: object = _ABSENT, completion_tokens: object = _ABSENT
+) -> SimpleNamespace:
+    """OpenAI's `response.usage` shape: `prompt_tokens` / `completion_tokens`.
+
+    Deliberately the OTHER provider's field names. The two shapes are what make the
+    normalization in the clients (`prompt_tokens` -> `input_tokens`) a real behavior with
+    a real test, rather than a pass-through nobody would notice breaking.
+    """
+    usage = SimpleNamespace()
+    if prompt_tokens is not _ABSENT:
+        usage.prompt_tokens = prompt_tokens
+    if completion_tokens is not _ABSENT:
+        usage.completion_tokens = completion_tokens
+    return usage
 
 
 class _FakeOpenAICompletions:
@@ -371,3 +429,184 @@ def test_local_raises_clear_error_on_tool_result_with_no_pending_tool_call_id() 
         model.propose_next(messages)
 
     assert client.chat.completions.calls == []
+
+
+# ---------------------------------------------------------------------------
+# 6. `run-accounting` Phase 1: usage + request counting on the client itself
+#
+# Nothing recorded what a mint cost. Both clients read `.choices` / `.content` off the
+# response and let `.usage` fall out of scope when `response` did
+# (`run-accounting/spec.md`: "present and **discarded when `response` goes out of
+# scope**"). These tests pin the accumulation, and — the load-bearing one — pin that a
+# provider which reports NO usage yields ABSENT, never a measured-looking `0`.
+# ---------------------------------------------------------------------------
+
+
+def test_local_accumulates_openai_shaped_usage_across_calls() -> None:
+    """Two calls SUM, and OpenAI's field names are normalized to the recorded ones.
+
+    Summed, not overwritten: one client lives for exactly one instance
+    (`entrypoint.make_model_factory` builds a fresh one per instance), so its `usage` is
+    that instance's whole token bill, not its last turn's.
+    """
+    client = FakeOpenAIClient(
+        [
+            _openai_response(
+                tool_calls=[
+                    _openai_tool_call(id="call_1", name="read_file", arguments="{}")
+                ],
+                finish_reason="tool_calls",
+                usage=_openai_usage(prompt_tokens=100, completion_tokens=20),
+            ),
+            _openai_response(
+                content="done",
+                finish_reason="stop",
+                usage=_openai_usage(prompt_tokens=150, completion_tokens=5),
+            ),
+        ]
+    )
+    model = LocalOpenAICompatModel(model="local-x", tools=[], client=client)
+
+    messages = [Message(role="system", content="sys"), Message(role="user", content="go")]
+    model.propose_next(messages)
+    messages.append(Message(role="tool", content="ok", tool_result={"ok": True}))
+    model.propose_next(messages)
+
+    assert model.usage == {"input_tokens": 250, "output_tokens": 25}
+    assert model.request_count == 2
+
+
+def test_anthropic_accumulates_anthropic_shaped_usage_across_calls() -> None:
+    client = FakeAnthropicClient(
+        [
+            _anthropic_response(
+                content=[
+                    _anthropic_tool_use_block(id="toolu_1", name="read_file", input={})
+                ],
+                usage=_anthropic_usage(input_tokens=100, output_tokens=20),
+            ),
+            _anthropic_response(
+                content=[_anthropic_text_block("done")],
+                usage=_anthropic_usage(input_tokens=150, output_tokens=5),
+            ),
+        ]
+    )
+    model = AnthropicModel(model="claude-x", tools=[], client=client)
+
+    messages = [Message(role="system", content="sys"), Message(role="user", content="go")]
+    model.propose_next(messages)
+    messages.append(Message(role="tool", content="ok", tool_result={"ok": True}))
+    model.propose_next(messages)
+
+    assert model.usage == {"input_tokens": 250, "output_tokens": 25}
+    assert model.request_count == 2
+
+
+def test_a_response_with_no_usage_field_yields_absent_usage_not_zero() -> None:
+    """**The absent-not-zero test.** The honesty contract in miniature.
+
+    A provider that reports no usage at all (`claude -p --output-format json` may well be
+    one) must leave `usage` at `None` — an unmeasured quantity rendered as a measured `0`
+    is the same mistake as rendering `UNVERIFIED` as `PASS`, and it would put a fake zero
+    into the published cost of the number. The request still happened, so `request_count`
+    still increments: *that* is a measured quantity.
+    """
+    openai_client = FakeOpenAIClient([_openai_response(content="done")])
+    local = LocalOpenAICompatModel(model="local-x", tools=[], client=openai_client)
+    local.propose_next([Message(role="user", content="go")])
+
+    assert local.usage is None
+    assert local.usage != {"input_tokens": 0, "output_tokens": 0}
+    assert local.request_count == 1
+
+    anthropic_client = FakeAnthropicClient(
+        [_anthropic_response(content=[_anthropic_text_block("done")])]
+    )
+    claude = AnthropicModel(model="claude-x", tools=[], client=anthropic_client)
+    claude.propose_next([Message(role="user", content="go")])
+
+    assert claude.usage is None
+    assert claude.request_count == 1
+
+
+def test_a_partial_usage_records_the_present_field_and_omits_the_missing_one() -> None:
+    """Half-reported usage is half-recorded, not half-invented and not an exception.
+
+    Same rule one level down: the KEY is omitted for the field the provider did not send,
+    so a later total over `output_tokens` cannot silently absorb a zero that was never
+    measured.
+    """
+    client = FakeOpenAIClient(
+        [_openai_response(content="done", usage=_openai_usage(prompt_tokens=42))]
+    )
+    model = LocalOpenAICompatModel(model="local-x", tools=[], client=client)
+
+    model.propose_next([Message(role="user", content="go")])
+
+    assert model.usage == {"input_tokens": 42}
+    assert "output_tokens" not in model.usage
+
+
+def test_usage_that_is_not_a_number_is_ignored_rather_than_raising() -> None:
+    """A hostile / unexpected usage shape degrades to absent; it never breaks a live mint.
+
+    Everything here is read with `getattr` for this reason: accounting is bookkeeping
+    beside the mint, and a bookkeeping error must never be what ends an instance that was
+    otherwise about to produce an observation.
+    """
+    client = FakeOpenAIClient(
+        [
+            _openai_response(
+                content="done",
+                usage=_openai_usage(prompt_tokens="lots", completion_tokens=7),
+            )
+        ]
+    )
+    model = LocalOpenAICompatModel(model="local-x", tools=[], client=client)
+
+    model.propose_next([Message(role="user", content="go")])
+
+    assert model.usage == {"output_tokens": 7}
+
+
+def test_request_count_starts_at_zero_and_counts_a_request_that_failed() -> None:
+    """A request that errored still consumed the provider's quota, so it still counts.
+
+    This is the 2026-07-24 lesson as a counter: the 56 burned instances each spent a real
+    request and got a 429 back. An accounting that only counted *successful* calls would
+    under-report exactly the spend a stop-loss exists to bound.
+    """
+
+    class _Boom:
+        def create(self, **kwargs: object) -> object:
+            raise RuntimeError("429 rate limited")
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=_Boom()))
+    model = LocalOpenAICompatModel(model="local-x", tools=[], client=client)
+
+    assert model.request_count == 0
+    with pytest.raises(RuntimeError):
+        model.propose_next([Message(role="user", content="go")])
+    assert model.request_count == 1
+    assert model.usage is None
+
+
+def test_each_client_names_its_own_model_and_provider() -> None:
+    """Per-instance provenance (PRD must-have 16), read off the client itself.
+
+    The 12 banked instances ran on one model and the remainder will not, so the published
+    number has to be able to say which model minted which instance. Recorded from the
+    object that actually made the calls rather than from the config, so a mint whose
+    config and wiring disagree cannot report the config's answer.
+    """
+    local = LocalOpenAICompatModel(
+        model="gemini-flash-latest", tools=[], client=FakeOpenAIClient([])
+    )
+    claude = AnthropicModel(
+        model="claude-x", tools=[], client=FakeAnthropicClient([])
+    )
+
+    assert local.model == "gemini-flash-latest"
+    assert local.provider == "openai-compat"
+    assert claude.model == "claude-x"
+    assert claude.provider == "anthropic"

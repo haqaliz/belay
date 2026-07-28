@@ -12,6 +12,14 @@ loop, no retries, no memory beyond the running conversation the caller passes in
 turn plus the tool-use bookkeeping (`tool_use_id` correlation) needed to keep the
 Anthropic conversation well-formed across turns. See the `_ingest_new_messages`
 docstring for why that bookkeeping has to live here rather than in `model.Message`.
+
+**It also keeps this instance's accounting** (`run-accounting`): `request_count` and a
+running `usage` total, previously discarded with the response object. The rules are
+identical to `local_client.py`'s — one client per instance, so these are the per-instance
+totals; **absent is not zero**, so `usage` stays `None` until a response reports it; and
+**no dollar amount is ever computed or stored**. See that module's docstring for the full
+reasoning; only the provider's field names differ, and Anthropic's happen to already be
+the names recorded.
 """
 
 from __future__ import annotations
@@ -26,6 +34,58 @@ from eval.minting_driver.model import Done, Message, ToolCall
 #: tool-selection decisions, not long-form generation, so a conservative default is
 #: fine and callers can override it.
 DEFAULT_MAX_TOKENS = 4096
+
+#: The provider name recorded alongside this instance's accounting; the twin of
+#: `local_client.PROVIDER_NAME`, and one of the two strings `entrypoint.PROVIDERS` names.
+PROVIDER_NAME = "anthropic"
+
+#: Anthropic's `response.usage` field names -> the recorded ones. Identity here, unlike
+#: the OpenAI twin (`prompt_tokens`/`completion_tokens`), and written out anyway so the
+#: recorded vocabulary is stated in both places rather than implied by one of them.
+_USAGE_FIELDS = (
+    ("input_tokens", "input_tokens"),
+    ("output_tokens", "output_tokens"),
+)
+
+
+def _token_count(value: object) -> Optional[int]:
+    """A duck-typed token count -> `int`, or `None`. Twin of `local_client._token_count`.
+
+    `bool` excluded (an `int` subclass, but a flag is not a token), negatives refused (a
+    total that can go down is worse than one honestly missing a term), non-integral floats
+    refused rather than truncated.
+    """
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, float):
+        return int(value) if value >= 0 and value.is_integer() else None
+    return None
+
+
+def _accumulate_usage(
+    total: Optional[dict[str, int]], response: object
+) -> Optional[dict[str, int]]:
+    """Fold `response.usage` into `total`, per field, absent-preserving.
+
+    Twin of `local_client._accumulate_usage`; see there for why `total` is returned
+    unchanged (including `None`) when nothing usable is reported. Never raises.
+    """
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return total
+    folded = dict(total) if total is not None else {}
+    changed = False
+    for source_field, recorded_field in _USAGE_FIELDS:
+        count = _token_count(getattr(usage, source_field, None))
+        if count is None:
+            continue
+        folded[recorded_field] = folded.get(recorded_field, 0) + count
+        changed = True
+    if not changed:
+        return total
+    return folded
 
 
 def _anthropic_tool(mcp_tool: dict) -> dict:
@@ -86,6 +146,42 @@ class AnthropicModel:
         self._seen = 0
         self._pending_tool_use_id: Optional[str] = None
 
+        # This instance's accounting. `None`, not `{}` — see the `usage` property.
+        self._request_count = 0
+        self._usage: Optional[dict[str, int]] = None
+
+    @property
+    def provider(self) -> str:
+        """The provider recorded with this instance's accounting — see `PROVIDER_NAME`."""
+        return PROVIDER_NAME
+
+    @property
+    def model(self) -> str:
+        """The model id these requests actually name — per-instance provenance.
+
+        Read off the object that made the calls rather than from the config, so a mint
+        whose config and wiring disagree cannot report the config's answer.
+        """
+        return self._model
+
+    @property
+    def request_count(self) -> int:
+        """Requests ISSUED to the provider across this instance's whole session.
+
+        Incremented before the call: a request that comes back a 429 still consumed the
+        day's quota, and a stop-loss that ignored failed attempts would under-count spend.
+        """
+        return self._request_count
+
+    @property
+    def usage(self) -> Optional[dict[str, int]]:
+        """Accumulated `{input_tokens, output_tokens}`, or `None` if never reported.
+
+        A key is present only if some response reported that field; `None` means no
+        response reported usage at all — never a manufactured `0`.
+        """
+        return None if self._usage is None else dict(self._usage)
+
     def _ingest_new_messages(self, messages: list[Message]) -> None:
         """Fold every `Message` this instance hasn't seen yet into Anthropic-format
         conversation state.
@@ -144,6 +240,9 @@ class AnthropicModel:
     def propose_next(self, messages: list[Message]) -> ToolCall | Done:
         self._ingest_new_messages(messages)
 
+        # Counted BEFORE the call — a request that raises still cost quota. See
+        # `request_count`.
+        self._request_count += 1
         response = self._client.messages.create(
             model=self._model,
             max_tokens=self._max_tokens,
@@ -151,6 +250,7 @@ class AnthropicModel:
             messages=self._anthropic_messages,
             tools=self._tools,
         )
+        self._usage = _accumulate_usage(self._usage, response)
 
         tool_use_blocks = [block for block in response.content if getattr(block, "type", None) == "tool_use"]
         # Preserve the assistant turn (including any tool_use block) in the running
@@ -181,4 +281,4 @@ class AnthropicModel:
         return ToolCall(name=chosen.name, arguments=dict(chosen.input))
 
 
-__all__ = ["AnthropicModel", "DEFAULT_MAX_TOKENS"]
+__all__ = ["AnthropicModel", "DEFAULT_MAX_TOKENS", "PROVIDER_NAME"]

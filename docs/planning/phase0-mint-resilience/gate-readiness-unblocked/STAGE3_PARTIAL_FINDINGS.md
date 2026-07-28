@@ -185,8 +185,26 @@ question and is deliberately left open here**; the engine cannot answer it, beca
 
 ## 5. What is still owed
 
-- **0 of 10 corpus cases are labeled** (`human_label: "pending"` on all). Until they are, the
-  FP rate prints `n/a` and the gate's ≥3-TP criterion sits at **0 audited**.
+- **0 of 7 corpus cases are labeled** (`human_label: "pending"` on all seven). Until they are,
+  the FP rate prints `n/a` and the gate's ≥3-TP criterion sits at **0 audited**.
+
+  Verifying the full s3 batch produced 4 cases, but **3 of them already existed** — the
+  partial run had already ingested `flask-4992` turns 10, 12 and 19. Only
+  `pylint-dev__pylint-5859-turn6` was new. The consolidated corpus is therefore:
+
+  | case | source | instance |
+  |---|---|---|
+  | `trace-pallets__flask-4045-turn8` | s1p | flask-4045 *(not in the published denominator)* |
+  | `trace-pallets__flask-4992-turn10` | s3 | flask-4992 |
+  | `trace-pallets__flask-4992-turn12` | s3 | flask-4992 |
+  | `trace-pallets__flask-4992-turn14` | s2 | flask-4992 |
+  | `trace-pallets__flask-4992-turn19` | s3 | flask-4992 |
+  | `trace-pylint-dev__pylint-5859-turn11` | s2 | pylint-5859 |
+  | `trace-pylint-dev__pylint-5859-turn6` | s3 | pylint-5859 |
+
+  **Seven cases, three instances — and only two of those are in `selected.json`.** Every one
+  carries the same `A1/invariant FAIL` on `tests/` read-only. This is the independence
+  problem stated as plainly as it can be: the corpus is one root cause observed seven times.
 - **The hand-audit is the gate, and it is unblocked right now** — it needs no quota, no
   provider, and no further code.
 - `finding_kind` remains unbuilt, so the corrupt-success subset cannot be reported separately

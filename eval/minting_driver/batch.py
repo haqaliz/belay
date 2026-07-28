@@ -69,6 +69,31 @@ instance never aborts the whole mint. Tests inject a trivial stub and a `model_f
 ignores the tools, so CI never spawns a server. An integrator wanting per-instance discovery
 overrides the seam rather than editing this module.
 
+**Every terminal disposition also records what the instance COST** (`run-accounting`).
+Nothing recorded that before: the model was built inline at the `run_session` call and
+never bound, so there was nowhere to read accounting from even once the clients kept it,
+and `run_session`'s return value was discarded. Now the model is bound, and each recorded
+disposition carries `{wall_clock_seconds, model_requests, retry_count, input_tokens,
+output_tokens, model, provider}`. Three rules travel with it:
+
+- **The clock is INJECTED and lives here** (`clock`, default `time.monotonic`), never in
+  `entrypoint.py`, whose stated design rule is *"No clock, no randomness"*. It is
+  `monotonic` rather than `time.time` so an NTP step during a 15-minute instance cannot
+  produce a negative duration. It is started before `prepare` and read again after
+  `bridge_capture`: workspace prep and the bridge are real wall-clock a stop-loss has to
+  account for, so timing only the model session would under-report every instance.
+- **Absent is not zero.** A field nothing reported is OMITTED, never written as `0` — the
+  same contract as `UNVERIFIED` never rendering as `PASS`. The one measured zero is
+  `model_requests` when no model object was ever built (prep failed): nobody made a
+  request, and we know it.
+- **Accounting is recorded on `captured`, `failed` AND `no_observation` alike.** A
+  quota-stopped instance still consumed requests — the 2026-07-24 run spent one on each of
+  56 instances and observed nothing — so a stop-loss blind to failed attempts under-counts
+  spend by exactly the failures it exists to notice.
+
+**No dollar amount is computed or stored.** Under a subscription there is no per-token
+price; inventing one would be fabricated precision. Requests + tokens + wall-clock only.
+
 Eval-only. Touches nothing under `src/belay/`; composes `bridge`, `checkpoint`, `workspace`,
 `session`, `capture`, and the instance registry, and changes none of them.
 """
@@ -76,6 +101,7 @@ Eval-only. Touches nothing under `src/belay/`; composes `bridge`, `checkpoint`, 
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from typing import Callable, Optional, Sequence, Union
 
@@ -103,6 +129,12 @@ DiscoverTools = Callable[[list[str]], list[dict]]
 #: the module docstring. Callers pass `lambda layout: filesystem_server_command(layout.work_dir)`
 #: (fs) or `lambda layout: shell_server_command()` (shell — no per-instance arg).
 BuildServerCommand = Callable[[WorkspaceLayout], list[str]]
+
+#: Reads a monotonically-increasing number of seconds. The ONLY clock in the mint's
+#: config/drive path, injected so wall-clock is asserted against a scripted fake rather
+#: than against real elapsed time. See the module docstring for why it lives here and why
+#: it is `monotonic`.
+Clock = Callable[[], float]
 
 #: Materializes one instance's workspace; default `prepare_workspace`. Injected in tests so
 #: no git runs. Kept as `Callable[..., WorkspaceLayout]` because the default carries an extra
@@ -140,6 +172,73 @@ def _discover_tools(server_command: list[str]) -> list[dict]:
         transport.close()
 
 
+def _int_or_none(value: object) -> Optional[int]:
+    """A duck-typed counter -> `int`, or `None` if it is not one.
+
+    `bool` is excluded despite subclassing `int` (a flag is not a count), mirroring
+    `resilience._coerce_seconds` and the clients' `_token_count`. Anything unusable reads
+    as absent, so a model object with a surprising attribute yields a missing field rather
+    than a wrong one.
+    """
+    if isinstance(value, bool) or value is None:
+        return None
+    return value if isinstance(value, int) else None
+
+
+def _accounting_for(model: Optional[Model], wall_clock_seconds: float) -> dict:
+    """What this instance cost, read DUCK-TYPED off the model that actually ran.
+
+    Duck-typed on purpose: `run_mint` must stay usable with any `Model` — the protocol has
+    exactly one method (D1), and adding a second so accounting could be "properly" fetched
+    would make every implementation, fakes included, owe an accounting surface it cannot
+    fill in honestly. So a model that reports nothing yields an accounting with nothing but
+    the wall-clock this layer measured itself, which is the truthful answer.
+
+    `request_count` / `retry_count` are read off the OUTERMOST object (`RetryingModel`
+    counts every attempt, retries included); token usage and provenance come from
+    `.inner`, the concrete client that is the only layer that sees `response.usage`.
+
+    **A field is omitted, never zeroed.** The single exception is `model` being `None` —
+    prep failed before any model was built, so `model_requests: 0` is a measurement, not a
+    guess. What is still unknown then (which model, what tokens) stays absent.
+    """
+    accounting: dict = {"wall_clock_seconds": wall_clock_seconds}
+
+    if model is None:
+        accounting["model_requests"] = 0
+        accounting["retry_count"] = 0
+        return accounting
+
+    for recorded_field, attribute in (
+        ("model_requests", "request_count"),
+        ("retry_count", "retry_count"),
+    ):
+        count = _int_or_none(getattr(model, attribute, None))
+        if count is not None:
+            accounting[recorded_field] = count
+
+    # `getattr(model, "inner", model)` unwraps `RetryingModel` without importing it and
+    # without the caller having to know whether the breaker is installed: an unwrapped
+    # client is its own accounting source.
+    client = getattr(model, "inner", model)
+
+    usage = getattr(client, "usage", None)
+    if isinstance(usage, dict):
+        # Only the keys the client actually put there — a client that reported no usage
+        # exposes `None`, and one that reported half exposes half. Neither becomes a zero.
+        for token_field in ("input_tokens", "output_tokens"):
+            count = _int_or_none(usage.get(token_field))
+            if count is not None:
+                accounting[token_field] = count
+
+    for provenance_field in ("model", "provider"):
+        value = getattr(client, provenance_field, None)
+        if isinstance(value, str) and value:
+            accounting[provenance_field] = value
+
+    return accounting
+
+
 def run_mint(
     records: Sequence[InstanceRecord],
     *,
@@ -154,6 +253,7 @@ def run_mint(
     prepare: PrepareWorkspace = prepare_workspace,
     transport_factory: Optional[TransportFactory] = None,
     discover_tools: DiscoverTools = _discover_tools,
+    clock: Clock = time.monotonic,
 ) -> Checkpoint:
     """Drive `records` sequentially through the gated proxy, one instance at a time.
 
@@ -181,6 +281,14 @@ def run_mint(
     A short return is therefore normal and is NOT an error: the returned `Checkpoint` simply
     has fewer entries than `records`, and that visible absence is the honest signal. The
     signature and return type are unchanged.
+
+    Every recorded disposition — `captured`, `failed` and `no_observation` alike — carries
+    that instance's **accounting**: wall-clock measured with the injected `clock` from
+    before `prepare` to after `bridge_capture`, plus whatever the bound model reports
+    (requests, retries, tokens, model, provider). Fields nothing reported are OMITTED, not
+    zeroed. `clock` defaults to `time.monotonic` so an NTP step mid-instance cannot make a
+    duration negative, and it lives here rather than in `entrypoint.py`, whose design rule
+    is "no clock, no randomness".
 
     `build_server_command` names ONE raw server (per-instance workspace baked into its argv);
     `root/"batch"` is this call's single batch dir. Run once per server into distinct roots to
@@ -218,6 +326,15 @@ def run_mint(
         if checkpoint.is_done(record.instance_id):
             continue
 
+        # Started BEFORE `prepare`: a real `git worktree add` against a cached bare clone
+        # is wall-clock the operator pays for whether or not the model is ever reached.
+        started = clock()
+        # Bound so it is still in scope in the handlers below — an instance that failed
+        # mid-session still made the requests it made. `None` until built, which is what
+        # distinguishes "no model existed" (a measured 0 requests) from "the model
+        # reported nothing" (absent).
+        model: Optional[Model] = None
+
         try:
             layout = prepare(record, root=root, clones_dir=clones_dir)
             # This instance's raw command carries its own workspace boundary (fs server) or is
@@ -232,8 +349,14 @@ def run_mint(
                 scope=str(layout.work_dir),
                 snapshot_dir=layout.snapshot_dir,
             )
+            # BOUND, not inline. `run_session(model_factory(tools), ...)` constructed the
+            # model and discarded it, so the object that knows what this instance cost was
+            # unreachable the moment the call returned — which is why no mint has ever
+            # reported a spend figure. Still a FRESH model per instance: the binding is
+            # per-iteration, so no conversation state bleeds between instances.
+            model = model_factory(tools)
             run_session(
-                model_factory(tools),
+                model,
                 server_command=proxy_command(raw_command),
                 env=env,
                 system=system,
@@ -248,7 +371,12 @@ def run_mint(
                 snapshot_dir=layout.snapshot_dir,
                 batch_dir=batch_dir,
             )
-            checkpoint.record(record.instance_id, "captured", trace_path=str(trace_path))
+            checkpoint.record(
+                record.instance_id,
+                "captured",
+                trace_path=str(trace_path),
+                accounting=_accounting_for(model, clock() - started),
+            )
             checkpoint.save(checkpoint_path)
         except QuotaExhausted as exc:
             # Provider quota/period cap. The wait is HOURS (the observed retryDelay was
@@ -263,20 +391,42 @@ def run_mint(
             # -- not `failed`, not anything -- and therefore still eligible on the next
             # run. Do not "improve" this into a `continue` with a nicer status: any
             # recorded disposition is a disposition, and the resume rule reads the ledger.
-            checkpoint.record(record.instance_id, "no_observation", reason=str(exc))
+            #
+            # The accounting is recorded too: the rejected request was still SPENT. Each
+            # of the 56 burned instances cost one real request and produced nothing, and a
+            # stop-loss blind to those attempts under-counts by exactly the failures it
+            # exists to notice.
+            checkpoint.record(
+                record.instance_id,
+                "no_observation",
+                reason=str(exc),
+                accounting=_accounting_for(model, clock() - started),
+            )
             checkpoint.save(checkpoint_path)
             break
         except TransientExhausted as exc:
             # Retries were spent and nothing was observed. Re-armable (unlike `failed`),
-            # but not a reason to stop the batch.
-            checkpoint.record(record.instance_id, "no_observation", reason=str(exc))
+            # but not a reason to stop the batch. Its spent attempts are still recorded.
+            checkpoint.record(
+                record.instance_id,
+                "no_observation",
+                reason=str(exc),
+                accounting=_accounting_for(model, clock() - started),
+            )
             checkpoint.save(checkpoint_path)
             continue
         except Exception as exc:
             # Per-instance containment: one instance failing (a bad checkout, a ServerExited,
             # a bridge error) records `failed` and moves on. The mint of dozens of instances
-            # must not die on instance #37; it must SAY #37 broke and keep going.
-            checkpoint.record(record.instance_id, "failed", reason=str(exc))
+            # must not die on instance #37; it must SAY #37 broke and keep going. It cost
+            # wall-clock (and possibly requests) on the way to failing, so that is
+            # recorded too.
+            checkpoint.record(
+                record.instance_id,
+                "failed",
+                reason=str(exc),
+                accounting=_accounting_for(model, clock() - started),
+            )
             checkpoint.save(checkpoint_path)
             continue
 
@@ -285,6 +435,7 @@ def run_mint(
 
 __all__ = [
     "BuildServerCommand",
+    "Clock",
     "DiscoverTools",
     "ModelFactory",
     "PrepareWorkspace",

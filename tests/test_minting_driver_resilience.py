@@ -670,3 +670,92 @@ def test_retrying_model_wraps_any_model_including_a_bare_scripted_one() -> None:
 
     assert [model.propose_next([]) for _ in steps] == steps
     assert model.retry_count == 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.8 — `run-accounting`: the wrapper counts requests and exposes the client
+#
+# `retry_count` alone does not say what an instance cost. `request_count` does: it is the
+# number of attempts that actually reached the provider, retries included, which is the
+# quantity a daily cap is measured in. Token usage lives one layer down on the concrete
+# client, so the wrapper exposes the object it wraps rather than growing a second protocol
+# method — `Model` stays a ONE-METHOD protocol.
+# ---------------------------------------------------------------------------
+
+
+def test_request_count_counts_every_attempt_that_reached_the_provider() -> None:
+    """Two transients then a success is THREE requests, not one.
+
+    That is the entire point of counting here rather than counting turns: retries cost
+    quota, and the 250-per-day cap that burned the queue counts attempts, not successes.
+    """
+    inner = FlakyModel(
+        faults=[_transient(), _transient()],
+        inner=ScriptedModel([Done(reason="ok")]),
+    )
+    model = RetryingModel(inner, max_attempts=3, sleep=RecordingSleep())
+
+    model.propose_next([])
+
+    assert model.request_count == 3
+    assert model.retry_count == 2
+    assert inner.calls == 3
+
+
+def test_request_count_starts_at_zero_and_accumulates_across_the_session() -> None:
+    """Per-instance, like `retry_count`: one wrapper per instance, so this is the total."""
+    model = RetryingModel(
+        ScriptedModel([ToolCall(name="a", arguments={}), Done(reason="ok")]),
+        sleep=RecordingSleep(),
+    )
+
+    assert model.request_count == 0
+    model.propose_next([])
+    model.propose_next([])
+    assert model.request_count == 2
+
+
+def test_a_quota_stop_still_counts_the_request_that_hit_the_wall() -> None:
+    """The rejected request was spent. A stop-loss that ignored it would under-count.
+
+    `retry_count` stays 0 — nothing was retried — so the two counters stay honestly
+    different quantities rather than one being derivable from the other.
+    """
+    model = RetryingModel(FlakyModel(faults=[_quota()], inner=None), sleep=RecordingSleep())
+
+    with pytest.raises(QuotaExhausted):
+        model.propose_next([])
+
+    assert model.request_count == 1
+    assert model.retry_count == 0
+
+
+def test_the_wrapper_exposes_the_client_it_wraps() -> None:
+    """`inner` is how `batch.py` reads token usage without knowing the provider.
+
+    D1: accounting accumulates on the model object and `Model` stays a one-method
+    protocol. Token usage originates in the concrete client (only it sees `response.usage`),
+    so the wrapper hands the client over rather than proxying a second method for it.
+    """
+    client = LocalOpenAICompatModel(model="local-x", tools=[], client=object())
+    model = RetryingModel(client, sleep=RecordingSleep())
+
+    assert model.inner is client
+    assert model.inner.provider == "openai-compat"
+    assert model.inner.model == "local-x"
+
+
+def test_the_wrapper_reports_no_dollar_amount_of_any_kind() -> None:
+    """D4, pinned at the source: there is no price field anywhere in the accounting.
+
+    Under a subscription there is no per-token price, so a dollar figure would be
+    fabricated precision — the exact thing this project exists not to do. If a metered key
+    is ever used, price is applied at REPORT time from a stated rate, never baked into the
+    ledger. Asserted so a later change cannot quietly add one.
+    """
+    model = RetryingModel(ScriptedModel([Done(reason="ok")]), sleep=RecordingSleep())
+    model.propose_next([])
+
+    forbidden = ("cost", "price", "usd", "dollar", "spend_usd")
+    names = [name for name in dir(model) if not name.startswith("__")]
+    assert not [name for name in names if any(word in name.lower() for word in forbidden)]

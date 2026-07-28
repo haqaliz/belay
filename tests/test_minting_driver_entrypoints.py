@@ -21,6 +21,7 @@ mistake that produces an empty mint, which `belay phase0 run` reads as
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -60,6 +61,13 @@ from eval.minting_driver.workspace import layout_for
 ENTRYPOINT_SOURCE = (
     Path(__file__).parent.parent / "eval" / "minting_driver" / "entrypoint.py"
 )
+
+#: Every `MintConfig` below names its model explicitly, because there is no default any
+#: more: the removed `DEFAULT_MODEL` was `gemini-flash-latest`, which
+#: `STAGE2_FINDINGS.md:25-39` measured minting *nothing* (reads and searches to the step
+#: cap, no edit). A placeholder id is correct here — no test in this file makes a live
+#: call; what is under test is that the value must be *supplied*.
+TEST_MODEL = "test-pro-model"
 
 
 class FakeOpenAIClient:
@@ -136,20 +144,22 @@ def test_entrypoint_module_never_sniffs_the_anthropic_key() -> None:
 def test_entrypoint_requires_explicit_timeout(tmp_path: Path) -> None:
     """`None` and non-positive timeouts are refused; the default is not the 10s one."""
     with pytest.raises(MintConfigError, match="request_timeout"):
-        MintConfig(root=tmp_path / "mint", request_timeout=None)  # type: ignore[arg-type]
+        MintConfig(  # type: ignore[arg-type]
+            root=tmp_path / "mint", request_timeout=None, model=TEST_MODEL
+        )
 
     with pytest.raises(MintConfigError, match="request_timeout"):
-        MintConfig(root=tmp_path / "mint", request_timeout=0.0)
+        MintConfig(root=tmp_path / "mint", request_timeout=0.0, model=TEST_MODEL)
 
     with pytest.raises(MintConfigError, match="request_timeout"):
-        MintConfig(root=tmp_path / "mint", request_timeout=-1.0)
+        MintConfig(root=tmp_path / "mint", request_timeout=-1.0, model=TEST_MODEL)
 
     # Imported and compared, never hardcoded: if the transport default moves, this test
     # still asserts the real property ("the mint does not inherit it").
     assert DEFAULT_REQUEST_TIMEOUT != transport_module.DEFAULT_TIMEOUT
     assert DEFAULT_REQUEST_TIMEOUT > transport_module.DEFAULT_TIMEOUT
 
-    cfg = MintConfig(root=tmp_path / "mint")
+    cfg = MintConfig(root=tmp_path / "mint", model=TEST_MODEL)
     assert cfg.request_timeout == DEFAULT_REQUEST_TIMEOUT
 
 
@@ -238,10 +248,34 @@ def test_make_model_factory_without_an_injected_client_requires_credentials(
         make_model_factory(provider="openai-compat", model="gemini-flash-latest")
 
 
+def test_mint_config_has_no_default_model(tmp_path: Path) -> None:
+    """`model` is a REQUIRED field — the library cannot fall back to a known-bad id.
+
+    The default used to be `gemini-flash-latest`. `STAGE2_FINDINGS.md:25-39` measured two
+    flash-class models hitting the step cap on `pallets__flask-4045` doing only reads and
+    searches, editing nothing: an agent that never mutates produces turns that all verify
+    clean, so the mint publishes a **0% violation rate that means "the agent did
+    nothing"** — a fake result the pre-registered gate would read as a PIVOT.
+    `gemini-3.1-pro-preview` edited on the first try in 11 turns; pro-class is required
+    and the published number must name the model.
+
+    Asserted at the dataclass, not only at argparse: `MintConfig` is constructed directly
+    by `mint_one`/`mint_batch` callers too, and a default here would quietly re-arm the
+    hazard for every one of them.
+    """
+    with pytest.raises(TypeError, match="model"):
+        MintConfig(root=tmp_path / "mint")  # type: ignore[call-arg]
+
+    assert not hasattr(entrypoint_module, "DEFAULT_MODEL"), (
+        "a module-level default model is the same hazard wearing a different name"
+    )
+    assert MintConfig(root=tmp_path / "mint", model=TEST_MODEL).model == TEST_MODEL
+
+
 def test_unknown_provider_is_a_named_error(tmp_path: Path) -> None:
     """A typo'd provider is refused at config time, listing the known providers."""
     with pytest.raises(MintConfigError, match="provider"):
-        MintConfig(root=tmp_path / "mint", provider="openai")
+        MintConfig(root=tmp_path / "mint", provider="openai", model=TEST_MODEL)
 
 
 # --------------------------------------------------------------------------------------
@@ -339,7 +373,7 @@ def test_missing_servers_fail_fast_with_install_command(
     """An absent `eval/servers/` names the exact pinned `npm install` to run."""
     monkeypatch.setenv("BELAY_EVAL_SERVER_ROOT", str(tmp_path / "servers"))
 
-    cfg = MintConfig(root=tmp_path / "mint")
+    cfg = MintConfig(root=tmp_path / "mint", model=TEST_MODEL)
     with pytest.raises(MissingServerError) as excinfo:
         preflight_servers(cfg)
 
@@ -363,7 +397,7 @@ def test_preflight_runs_before_any_prep_or_model_construction(
     monkeypatch.setenv("OPENAI_BASE_URL", "https://example.invalid/v1")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
 
-    cfg = MintConfig(root=tmp_path / "mint")
+    cfg = MintConfig(root=tmp_path / "mint", model=TEST_MODEL)
     prepare = StubPrepare()
     factory = SpyModelFactory()
 
@@ -392,7 +426,7 @@ def test_preflight_passes_with_a_stub_entrypoint(
     monkeypatch.setenv("BELAY_EVAL_SERVER_ROOT", str(tmp_path / "elsewhere"))
 
     # `--server-root` (cfg.server_root) wins over the environment variable.
-    cfg = MintConfig(root=tmp_path / "mint", server_root=server_root)
+    cfg = MintConfig(root=tmp_path / "mint", server_root=server_root, model=TEST_MODEL)
     resolved = preflight_servers(cfg)
 
     assert resolved == entrypoint.resolve()
@@ -408,7 +442,7 @@ def test_mint_batch_runs_through_the_real_bridge_once_servers_are_present(
     monkeypatch.setenv("OPENAI_BASE_URL", "https://example.invalid/v1")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
 
-    cfg = MintConfig(root=tmp_path / "mint", server_root=server_root)
+    cfg = MintConfig(root=tmp_path / "mint", server_root=server_root, model=TEST_MODEL)
     prepare = StubPrepare()
     factory = SpyModelFactory()
 
@@ -639,6 +673,7 @@ def test_mint_batch_threads_the_retry_config_into_the_factory(
         server_root=server_root,
         max_attempts=5,
         retry_base_delay=0.25,
+        model=TEST_MODEL,
     )
     mint_batch([], cfg, prepare=StubPrepare(), discover_tools=lambda cmd: [])
 
@@ -675,7 +710,9 @@ def test_conversation_state_does_not_bleed_between_instances(
         )
     )
 
-    cfg = MintConfig(root=tmp_path / "mint", server_root=server_root, max_steps=4)
+    cfg = MintConfig(
+        root=tmp_path / "mint", server_root=server_root, max_steps=4, model=TEST_MODEL
+    )
     checkpoint = mint_batch(
         [
             _record("octo__repo-1", task="TASK-ONE"),
@@ -750,7 +787,8 @@ def test_single_instance_entrypoint_is_importable_and_wired(
     )
 
     cfg = MintConfig(
-        root=tmp_path / "mint", registry_path=registry, server_root=server_root
+        root=tmp_path / "mint", registry_path=registry, server_root=server_root,
+        model=TEST_MODEL,
     )
     prepare = StubPrepare()
     factory = SpyModelFactory()
@@ -786,7 +824,8 @@ def test_unknown_instance_id_is_a_named_error_listing_candidates(
     _install_stub_server(server_root)
     registry = _write_registry(tmp_path / "registry.json", ["octo__repo-1", "octo__repo-2"])
     cfg = MintConfig(
-        root=tmp_path / "mint", registry_path=registry, server_root=server_root
+        root=tmp_path / "mint", registry_path=registry, server_root=server_root,
+        model=TEST_MODEL,
     )
     prepare = StubPrepare()
 
@@ -811,6 +850,7 @@ def test_missing_registry_file_names_the_instance_pool_aspect(tmp_path: Path) ->
         root=tmp_path / "mint",
         registry_path=tmp_path / "nope" / "selected.json",
         server_root=server_root,
+        model=TEST_MODEL,
     )
 
     with pytest.raises(RegistryNotFoundError) as excinfo:
@@ -843,7 +883,8 @@ def test_verify_command_is_printed_with_the_workspace_placeholder(
     entrypoint = _install_stub_server(server_root)
     registry = _write_registry(tmp_path / "registry.json", ["octo__repo-1"])
     cfg = MintConfig(
-        root=tmp_path / "mint", registry_path=registry, server_root=server_root
+        root=tmp_path / "mint", registry_path=registry, server_root=server_root,
+        model=TEST_MODEL,
     )
 
     report = mint_one(
@@ -881,7 +922,8 @@ def test_batch_entrypoint_resumes_from_checkpoint(
         ["octo__repo-1", "octo__repo-2", "octo__repo-3", "octo__repo-4"],
     )
     cfg = MintConfig(
-        root=tmp_path / "mint", registry_path=registry, server_root=server_root
+        root=tmp_path / "mint", registry_path=registry, server_root=server_root,
+        model=TEST_MODEL,
     )
 
     # Two already done, seeded through the real Checkpoint writer.
@@ -923,7 +965,8 @@ def test_batch_error_containment_is_not_weakened(
         ["octo__repo-1", "octo__repo-2", "octo__repo-3", "octo__repo-4"],
     )
     cfg = MintConfig(
-        root=tmp_path / "mint", registry_path=registry, server_root=server_root
+        root=tmp_path / "mint", registry_path=registry, server_root=server_root,
+        model=TEST_MODEL,
     )
 
     def transport_factory(command: list[str], env: dict) -> object:
@@ -971,7 +1014,8 @@ def test_report_counts_match_the_checkpoint(
         tmp_path / "registry.json", ["octo__repo-1", "octo__repo-2", "octo__repo-3"]
     )
     cfg = MintConfig(
-        root=tmp_path / "mint", registry_path=registry, server_root=server_root
+        root=tmp_path / "mint", registry_path=registry, server_root=server_root,
+        model=TEST_MODEL,
     )
 
     def transport_factory(command: list[str], env: dict) -> object:
@@ -1006,6 +1050,7 @@ def test_missing_registry_file_is_named_for_the_batch_entry_point_too(
         root=tmp_path / "mint",
         registry_path=tmp_path / "nope" / "selected.json",
         server_root=server_root,
+        model=TEST_MODEL,
     )
 
     with pytest.raises(RegistryNotFoundError, match="instance-pool"):
@@ -1022,6 +1067,7 @@ def test_batch_preflight_runs_before_the_registry_is_read(tmp_path: Path) -> Non
         root=tmp_path / "mint",
         registry_path=tmp_path / "nope" / "selected.json",
         server_root=tmp_path / "servers",
+        model=TEST_MODEL,
     )
 
     with pytest.raises(MissingServerError):
@@ -1073,3 +1119,403 @@ def test_run_verify_on_a_missing_batch_dir_is_a_named_failure(tmp_path: Path) ->
     )
 
     assert run_verify(report, server_command=["node", "x"]) == 2
+
+
+# --------------------------------------------------------------------------------------
+# `run-accounting` Phase 4 — the summary reports all four buckets, and what it cost
+#
+# `render()` summarised only `captured`/`failed`. That was complete before the quota
+# circuit breaker and is not now: after a quota stop the stopping instance is
+# `no_observation` and the whole remainder is absent from the ledger, so both are in
+# `counts` and neither was on the summary line — a mint that stopped at instance 3 of 68
+# read as "minted 2 captured, 0 failed of 68", which under-reports by 66 instances.
+# --------------------------------------------------------------------------------------
+
+
+def _seeded_report(
+    tmp_path: Path,
+    *,
+    entries: list[tuple[str, str, dict | None]],
+    instance_ids: tuple[str, ...] | None = None,
+) -> MintReport:
+    """A `MintReport` over a hand-seeded ledger — deterministic, and no clock anywhere.
+
+    Built through the REAL `Checkpoint` writer and the same counting rule `_report_for`
+    uses, so what is asserted is the rendering, not a stand-in for it. `instance_ids` may
+    name more instances than were recorded: that is exactly the post-quota-stop shape,
+    where the remainder is deliberately absent from the ledger.
+    """
+    checkpoint = Checkpoint()
+    for instance_id, status, accounting in entries:
+        checkpoint.record(
+            instance_id,
+            status,
+            reason="a reason" if status != "captured" else None,
+            accounting=accounting,
+        )
+    ids = instance_ids or tuple(instance_id for instance_id, _, _ in entries)
+    counts: dict[str, int] = {"captured": 0, "failed": 0}
+    for instance_id in ids:
+        status = checkpoint.status(instance_id)
+        key = "unrecorded" if status is None else status
+        counts[key] = counts.get(key, 0) + 1
+    return MintReport(
+        batch_dir=tmp_path / "batch",
+        checkpoint_path=tmp_path / "checkpoint.json",
+        checkpoint=checkpoint,
+        instance_ids=ids,
+        counts=counts,
+        verify_command="belay phase0 run ...",
+    )
+
+
+def _accounting(**overrides: object) -> dict:
+    record = {
+        "wall_clock_seconds": 10.0,
+        "model_requests": 3,
+        "retry_count": 1,
+        "input_tokens": 900,
+        "output_tokens": 120,
+        "model": "gemini-flash-latest",
+        "provider": "openai-compat",
+    }
+    record.update(overrides)
+    return record
+
+
+def test_the_summary_reports_all_four_buckets(tmp_path: Path) -> None:
+    """captured / failed / no_observation / never-driven, all four, on the summary line.
+
+    The gap the quota circuit breaker opened: `no_observation` and the never-driven
+    remainder were already in `counts` and were simply not rendered, so the operator read
+    a number far smaller than the mint's real reach.
+    """
+    report = _seeded_report(
+        tmp_path,
+        entries=[
+            ("octo__repo-1", "captured", _accounting()),
+            ("octo__repo-2", "failed", _accounting()),
+            ("octo__repo-3", "no_observation", _accounting()),
+        ],
+        instance_ids=tuple(f"octo__repo-{n}" for n in range(1, 11)),
+    )
+
+    rendered = report.render()
+
+    assert report.no_observation == 1
+    assert report.never_driven == 7
+    summary = rendered.splitlines()[0]
+    assert "1 captured" in summary
+    assert "1 failed" in summary
+    assert "1 no_observation" in summary
+    assert "7 never-driven" in summary
+    assert "10 instance(s)" in summary
+
+
+def test_a_quota_stopped_batch_says_plainly_that_it_stopped_early(tmp_path: Path) -> None:
+    """"Stopped early" is stated, not left to be inferred from arithmetic.
+
+    Those instances are ABSENT from the ledger by design (that absence is what keeps them
+    eligible), so a summary that did not say so would read like a completed mint of 10
+    that captured 1 — a shrunken denominator presented as a finished measurement, which is
+    the R6 false-zero failure one layer up.
+    """
+    report = _seeded_report(
+        tmp_path,
+        entries=[
+            ("octo__repo-1", "captured", _accounting()),
+            ("octo__repo-2", "no_observation", _accounting(model_requests=1, retry_count=0)),
+        ],
+        instance_ids=tuple(f"octo__repo-{n}" for n in range(1, 11)),
+    )
+
+    rendered = report.render()
+
+    assert report.stopped_early is True
+    assert "STOPPED EARLY" in rendered
+    assert "8" in rendered  # the never-driven count is named
+    assert "eligible" in rendered.lower()
+
+
+def test_a_complete_batch_does_not_claim_to_have_stopped_early(tmp_path: Path) -> None:
+    """The other half: no false alarm on a mint that drove everything it was given."""
+    report = _seeded_report(
+        tmp_path,
+        entries=[
+            ("octo__repo-1", "captured", _accounting()),
+            ("octo__repo-2", "failed", _accounting()),
+        ],
+    )
+
+    assert report.stopped_early is False
+    assert "STOPPED EARLY" not in report.render()
+
+
+def test_the_summary_totals_accounting_with_its_denominator(tmp_path: Path) -> None:
+    """Totals, and the denominator they are totals OVER.
+
+    A total over partial data must say how partial: "3600 tokens" across an unknown
+    fraction of the batch is not a measurement anybody can set a stop-loss from.
+    """
+    report = _seeded_report(
+        tmp_path,
+        entries=[
+            ("octo__repo-1", "captured", _accounting(wall_clock_seconds=10.0)),
+            ("octo__repo-2", "captured", _accounting(wall_clock_seconds=30.0)),
+        ],
+        instance_ids=("octo__repo-1", "octo__repo-2", "octo__repo-3"),
+    )
+
+    rendered = report.render()
+
+    assert report.accounting_totals()["wall_clock_seconds"] == 40.0
+    assert report.accounting_totals()["model_requests"] == 6
+    assert report.accounting_totals()["retry_count"] == 2
+    assert report.accounting_totals()["input_tokens"] == 1800
+    assert report.accounting_totals()["instances_with_accounting"] == 2
+    assert report.accounting_totals()["instances_with_tokens"] == 2
+    assert "40.0" in rendered
+    assert "2 of 3" in rendered, "the denominator has to travel with the total"
+
+
+def test_instances_with_absent_usage_are_counted_and_stated_not_dropped(
+    tmp_path: Path,
+) -> None:
+    """**Absent is not zero, at the summary.**
+
+    One instance's provider reported no tokens. The total must be over the two that did,
+    and the summary must SAY the third is absent — silently excluding it would present a
+    partial total as a complete one, and silently zeroing it would fabricate a
+    measurement. Both are the same failure as rendering `UNVERIFIED` as `PASS`.
+    """
+    report = _seeded_report(
+        tmp_path,
+        entries=[
+            ("octo__repo-1", "captured", _accounting(input_tokens=900, output_tokens=120)),
+            ("octo__repo-2", "captured", _accounting(input_tokens=100, output_tokens=10)),
+            (
+                "octo__repo-3",
+                "captured",
+                {"wall_clock_seconds": 5.0, "model_requests": 2, "retry_count": 0},
+            ),
+        ],
+    )
+
+    rendered = report.render()
+
+    totals = report.accounting_totals()
+    assert totals["input_tokens"] == 1000
+    assert totals["instances_with_tokens"] == 2
+    assert totals["instances_with_accounting"] == 3
+    # The absent one is named as absent, in the honest vocabulary — not omitted, not zeroed.
+    assert "ABSENT" in rendered
+    assert "2 of 3" in rendered
+
+
+def test_a_mint_with_no_accounting_at_all_says_so_rather_than_showing_zeroes(
+    tmp_path: Path,
+) -> None:
+    """A ledger written before this aspect totals to nothing measured, not to zero."""
+    report = _seeded_report(
+        tmp_path,
+        entries=[("octo__repo-1", "captured", None), ("octo__repo-2", "failed", None)],
+    )
+
+    rendered = report.render()
+
+    assert report.accounting_totals()["instances_with_accounting"] == 0
+    assert "0 of 2" in rendered
+    assert "0.0s" not in rendered, "an unmeasured duration must not render as a measured 0"
+
+
+def test_the_summary_names_which_model_minted_how_many(tmp_path: Path) -> None:
+    """Per-instance provenance, surfaced: a mint may span two models (PRD must-have 16)."""
+    report = _seeded_report(
+        tmp_path,
+        entries=[
+            ("octo__repo-1", "captured", _accounting(model="gemini-3.1-pro-preview")),
+            ("octo__repo-2", "captured", _accounting(model="gemini-3.1-pro-preview")),
+            ("octo__repo-3", "captured", _accounting(model="claude-x")),
+        ],
+    )
+
+    rendered = report.render()
+
+    assert "gemini-3.1-pro-preview" in rendered
+    assert "claude-x" in rendered
+
+
+def test_the_summary_contains_no_currency_of_any_kind(tmp_path: Path) -> None:
+    """D4 at the last surface a human reads.
+
+    Under a subscription there is no per-token price, so any dollar figure here would be
+    invented precision presented as a measurement. Asserted so a later "helpful" estimate
+    cannot be added quietly.
+    """
+    report = _seeded_report(
+        tmp_path,
+        entries=[("octo__repo-1", "captured", _accounting())],
+        instance_ids=("octo__repo-1", "octo__repo-2"),
+    )
+
+    rendered = report.render().lower()
+
+    assert "$" not in rendered
+    for word in ("usd", "dollar", "price", "cost", "€", "£"):
+        assert word not in rendered
+
+
+def test_the_entry_point_still_reads_no_clock_for_accounting() -> None:
+    """The structural rule `run-accounting` must not break (D5).
+
+    `mint-entrypoints/plan_20260723.md:503` states this module's design rule as "No clock,
+    no randomness"; wall-clock therefore lives in `batch.py` behind an injected `clock`.
+    The single, documented exception is `run_verify`'s `datetime.now(timezone.utc)`, which
+    stamps `captured_at` on the phase-0 ledger and is called out in its own comment as
+    "the only clock read in the whole mint path" — so it is asserted to stay exactly one
+    occurrence rather than being waved through.
+    """
+    source = ENTRYPOINT_SOURCE.read_text(encoding="utf-8")
+
+    assert "import time" not in source
+    assert "time.monotonic" not in source
+    assert "time.time" not in source
+    assert source.count("datetime.now") == 1
+
+
+def test_a_real_quota_stopped_batch_renders_all_four_buckets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End to end through `mint_from_registry`, not a hand-built report.
+
+    The counting rule and the rendering are separate code; this is the test that they
+    agree on a real run whose model hit a provider cap on instance 2 of 5.
+    """
+    server_root = tmp_path / "servers"
+    _install_stub_server(server_root)
+    registry = _write_registry(
+        tmp_path / "registry.json", [f"octo__repo-{n}" for n in range(1, 6)]
+    )
+    cfg = MintConfig(
+        root=tmp_path / "mint", registry_path=registry, server_root=server_root,
+        model=TEST_MODEL,
+    )
+
+    class QuotaOnSecondInstance:
+        """A model factory whose SECOND model raises the provider's day-cap error."""
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def __call__(self, tools: object) -> Any:
+            # Imported lazily inside the factory, the same way `SpyModelFactory` does it
+            # (`:310-311`), so this module's import list keeps naming only the entry point's
+            # own surface.
+            from eval.minting_driver.fakes import FlakyModel, ScriptedModel
+            from eval.minting_driver.model import Done, ToolCall
+            from eval.minting_driver.resilience import QuotaExhausted
+
+            self.calls += 1
+            steps = [ToolCall(name="read_file"), Done(reason="done")]
+            model = ScriptedModel(steps)
+            if self.calls == 2:
+                return FlakyModel([QuotaExhausted("429 RESOURCE_EXHAUSTED")], model)
+            return model
+
+    report = mint_from_registry(
+        cfg,
+        model_factory=QuotaOnSecondInstance(),
+        prepare=StubPrepare(),
+        transport_factory=lambda cmd, env: OkTransport(),
+        discover_tools=lambda cmd: [],
+    )
+
+    assert report.counts == {
+        "captured": 1,
+        "failed": 0,
+        "no_observation": 1,
+        "unrecorded": 3,
+    }
+    rendered = report.render()
+    assert "1 captured" in rendered
+    assert "1 no_observation" in rendered
+    assert "3 never-driven" in rendered
+    assert "STOPPED EARLY" in rendered
+
+
+def test_accounting_flows_from_a_real_client_through_the_real_breaker_to_the_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The wiring test: REAL `make_model_factory` -> REAL `RetryingModel` -> REAL client.
+
+    Every other accounting test at this layer substitutes a model that reports accounting
+    by construction, which would stay green even if `entrypoint`'s factory and `batch`'s
+    reader disagreed about where the numbers live — a fake that agrees with itself is not
+    evidence. Here the only substitution is the OpenAI SDK client itself (`client=`, the
+    documented injection seam), so `RetryingModel.request_count`,
+    `LocalOpenAICompatModel.usage`, the `.inner` unwrap in `batch._accounting_for`, and
+    the checkpoint's `accounting` field all have to line up for real.
+    """
+    server_root = tmp_path / "servers"
+    _install_stub_server(server_root)
+    registry = _write_registry(tmp_path / "registry.json", ["octo__repo-1"])
+    cfg = MintConfig(
+        root=tmp_path / "mint",
+        registry_path=registry,
+        server_root=server_root,
+        model="gemini-3.1-pro-preview",
+    )
+
+    tool_call = SimpleNamespace(
+        id="call_1",
+        function=SimpleNamespace(name="read_file", arguments='{"path": "a.py"}'),
+    )
+    responses = [
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content=None, tool_calls=[tool_call]),
+                    finish_reason="tool_calls",
+                )
+            ],
+            usage=SimpleNamespace(prompt_tokens=1200, completion_tokens=40),
+        ),
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="done", tool_calls=None),
+                    finish_reason="stop",
+                )
+            ],
+            usage=SimpleNamespace(prompt_tokens=1400, completion_tokens=15),
+        ),
+    ]
+
+    class ScriptedCompletions:
+        def create(self, **kwargs: object) -> object:
+            return responses.pop(0)
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=ScriptedCompletions()))
+
+    report = mint_from_registry(
+        cfg,
+        model_factory=make_model_factory(
+            provider="openai-compat", model=cfg.model, client=client
+        ),
+        prepare=StubPrepare(),
+        transport_factory=lambda cmd, env: OkTransport(),
+        discover_tools=lambda cmd: [],
+    )
+
+    accounting = load_checkpoint(cfg.checkpoint_path).accounting("octo__repo-1")
+    assert accounting["model_requests"] == 2
+    assert accounting["retry_count"] == 0
+    assert accounting["input_tokens"] == 2600
+    assert accounting["output_tokens"] == 55
+    assert accounting["model"] == "gemini-3.1-pro-preview"
+    assert accounting["provider"] == "openai-compat"
+    # Wall-clock comes from the real default clock here, so only its shape is asserted —
+    # the VALUE is pinned against an injected fake in
+    # `tests/test_minting_driver_batch.py::test_wall_clock_is_measured_with_the_injected_clock`.
+    assert accounting["wall_clock_seconds"] >= 0.0
+    assert "2600 in / 55 out" in report.render()
