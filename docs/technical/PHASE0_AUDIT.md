@@ -234,7 +234,14 @@ adjudicated. The gate could not have been cleared here on any labeling.
 
 ## Decision
 
-**Do not resume the mint. Build `invariant-test-mutation-shape` next.**
+**Gate decision: PIVOT**, by the letter of the pre-registered rule — *"PIVOT if fewer
+than 3 independent TPs survive audit"*, and 0 survived. Recorded without
+reinterpretation; see [`PHASE0_RESULTS.md`](PHASE0_RESULTS.md) → *The Decision* for what
+that does and does not establish. In short: the label is earned, but it is **not**
+evidence for R1 (*the premise is wrong*) — a 0.00-precision detector cannot measure the
+base rate it was pointed at.
+
+**Action: do not resume the mint. Build `invariant-test-mutation-shape` next.**
 
 Minting the remaining ~34 instances under this invariant would buy more of the same: the
 corpus already shows the default fires on normal, correct SWE-bench behaviour — adding a

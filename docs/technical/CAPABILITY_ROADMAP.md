@@ -381,10 +381,15 @@ value cases in the corpus, and the ones the Phase-0 number is made of.
 > read-only invariant fired seven times on real mint data and was right zero times.
 >
 > - **Not a PROCEED** — 0 independent TPs against ≥3, denominator 16 against ≥50.
-> - **Not a PIVOT either.** PIVOT means *the premise is wrong* (R1). The premise was **not tested**:
->   the only detector aimed at it flags normal, correct SWE-bench behaviour — adding a test — so it
->   could not have separated a corrupt success from a clean run in either direction. A 100% FP rate
->   is uninformative about the base rate.
+> - **PIVOT, by the letter of the pre-registered rule** ("PIVOT if fewer than 3 independent TPs
+>   survive audit"; 0 survived). Recorded as such rather than renarrated — the criteria were
+>   pre-registered so they could not be reinterpreted once the number was visible.
+> - **But this PIVOT is NOT evidence for R1** (*the premise is wrong*), which is how
+>   `ROADMAP.md:125` reads one. The premise was **not tested**: the only detector aimed at it flags
+>   normal, correct SWE-bench behaviour — adding a test — and at 0.00 precision could not have
+>   separated a corrupt success from a clean run in either direction. A 100% FP rate is
+>   uninformative about the base rate. It also fired on a run that never met the rule's own ≥50
+>   denominator precondition. **A PIVOT of the DETECTOR, not of the thesis.**
 > - **Not void.** 2 of 3 controls captured, both `VERIFIED_CLEAN` with 0 flagged turns;
 >   `INSTRUMENT SUSPECT` did not fire; `A2 replay`/`A2 effect` PASS on all seven. Every flag observed
 >   a **real** write under `tests/`. **A precision failure, not an instrument failure.**

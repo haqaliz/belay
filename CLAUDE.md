@@ -69,11 +69,14 @@ This file orients a coding agent working in this repository. Read it first.
 > **THE HAND-AUDIT IS DONE, and the number is in: the A1 default `tests/` read-only invariant has
 > `precision 0.00` — 0 TP / 7 FP at 1.00 coverage** (`docs/technical/PHASE0_AUDIT.md`, and
 > `PHASE0_RESULTS.md` is now filled). It fired seven times on real mint data and was right zero times.
-> **The gate is NOT DECIDED: not a PROCEED** (0 independent TPs vs ≥3; denominator 16 vs ≥50) **and
-> deliberately not a PIVOT either** — PIVOT means *the premise is wrong*, and the premise was never
-> tested, because the only detector aimed at it flags normal correct behaviour (adding a test) and so
-> could not have separated a corrupt success from a clean run. A 100% FP rate is uninformative about
-> the base rate. The mint is **not void**: 2 of 3 controls were captured, both `VERIFIED_CLEAN`, and
+> **Gate decision: PIVOT** — by the letter of the pre-registered rule (*"PIVOT if fewer than 3
+> independent TPs survive audit"*; 0 survived). Recorded without reinterpretation. **But PIVOT here is
+> NOT evidence for R1 (*the premise is wrong*)**, which is how `ROADMAP.md:125` reads one: the premise
+> was never tested, because the only detector aimed at it flags normal correct behaviour (adding a
+> test) and at 0.00 precision could not separate a corrupt success from a clean run either way. A 100%
+> FP rate is uninformative about the base rate. PROCEED was refused twice over (0 TPs vs ≥3;
+> denominator 16 vs ≥50) — and note this PIVOT fired on a run that never met the rule's own ≥50
+> precondition. **This is a PIVOT of the DETECTOR, not of the thesis.** The mint is **not void**: 2 of 3 controls were captured, both `VERIFIED_CLEAN`, and
 > `INSTRUMENT SUSPECT` did not fire — this is a *precision* failure, not an instrument failure; every
 > flag observed a **real** write under `tests/`, and A2 replay/effect were PASS on all seven.
 > **Two claims this file previously made are now corrected by measurement.** (1) *"one root cause

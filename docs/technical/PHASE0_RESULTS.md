@@ -243,27 +243,49 @@ Each true-positive is a violation Belay detected that a human confirmed reflects
 
 ### Decision
 
-**NEITHER — the gate is NOT DECIDED, and this is not a PROCEED.**
+**PIVOT — by the letter of the pre-registered rule.**
 
-**PROCEED is refused** on two independent grounds: **0 independent hand-audited true
-positives** against a required ≥3, and a denominator of **16** against a required ≥50. Either
-alone is disqualifying.
+The canonical block says *"**PIVOT** if fewer than 3 independent TPs survive audit"*. **0
+independent TPs survived.** That is the recorded decision, and it is recorded without
+qualification-by-reinterpretation: the criteria were pre-registered precisely so they could
+not be renarrated once the number was visible, and declining the PIVOT here because the
+result is unflattering would be that renarration.
 
-**PIVOT is not claimed either**, and the distinction matters. PIVOT means *the premise is
-wrong — real agent runs contain ~no detectable violations* (risk R1). That is **not** what was
-measured. What was measured is that **one blunt default invariant has 0.00 precision**. The
-premise was never tested here, because the only detector pointed at it flags normal, correct
-SWE-bench behaviour — adding a test — and so could not have distinguished a corrupt success
-from a clean run either way. A 100% FP rate is uninformative about the base rate.
+**PROCEED was refused on two independent grounds** — 0 independent TPs against ≥3, and a
+denominator of **16** against ≥50. Either alone disqualifies.
 
-**The decision is therefore: fix the instrument, then re-measure.** Build
-`invariant-test-mutation-shape`; do not spend the remaining ~34 instances under a detector
-already known to be 0.00-precision. The seven cases are retained as its negative fixtures — a
-sharper invariant must go **7/7 clean** on this set before any further mint is worth buying.
+### What this PIVOT does and does not establish
+
+The rule fires on the TP count alone, so the label is earned. But `ROADMAP.md:125` reads a
+PIVOT as evidence for **R1 — *the premise is wrong, real agent runs contain ~no detectable
+violations***, and **the data does not support that reading**:
+
+- **The premise was not tested.** The only detector aimed at it — the default `tests/`
+  read-only invariant — flags normal, correct SWE-bench behaviour (adding a test). At 0.00
+  precision it could not have separated a corrupt success from a clean run in either
+  direction. A 100% FP rate is uninformative about the base rate.
+- **The mint never met the rule's own precondition.** The criteria presuppose a ≥50
+  denominator; this PIVOT is triggered on **16**. A rule evaluated on a run that did not
+  satisfy its own denominator clause is a weaker signal than the same rule at n=50, and
+  saying so is not softening the result — the ≥50 clause is part of the pre-registered text.
+
+So: **PIVOT is the recorded gate decision. "The premise is wrong" is not a supported
+conclusion.** Those are different claims, and `ROADMAP.md`'s R1 paragraph — written before
+any data existed — collapses them. The instrument, not the premise, is what this run
+measured.
+
+### The action
+
+**Fix the instrument, then re-measure.** Build `invariant-test-mutation-shape`; do not spend
+the remaining ~34 instances under a detector already known to be 0.00-precision. The seven
+cases are retained as its negative fixtures — a sharper invariant must go **7/7 clean** on
+this set before any further mint is worth buying. This is a PIVOT *of the detector*, which is
+what `ROADMAP.md:125` itself lists first among the questions to re-examine ("wrong task set?
+wrong surface? real but unverifiable?").
 
 **Not void.** No control FAILed (2 of 3 captured, both `VERIFIED_CLEAN`) and `INSTRUMENT
-SUSPECT` did not fire, so the mint stands as evidence; it is simply evidence about the
-invariant rather than about agents.
+SUSPECT` did not fire, so the mint stands as evidence — evidence about the invariant rather
+than about agents.
 
 **Open, and now first in line:** whether `tests/` read-only should remain **on by default**.
 It ships enabled and `README.md`'s coverage claims lean on it. A default with zero measured

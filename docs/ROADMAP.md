@@ -122,6 +122,30 @@ Summarised, non-authoritatively: **PROCEED** iff ≥3 ***independent*** hand-aud
 
 **"Reproducible" — the decided meaning** (`phase0-live-mint/prd.md:187-194`): the **mint** is a fresh observation each time and is **not** reproducible; the **ledger → report path is fully reproducible** from fixed traces — anyone given the trace set reproduces the identical number. That is what "reproducible" means at this gate. There is a boundary inside it that must not be blurred: the *number* is re-derivable by a stranger from a committed ledger (`belay phase0 report` is a pure re-render), but the *individual cases* are not, because `/traces/`, `/runs/`, `/corpus/local/`, `/eval/mint/` and `/eval/clones/` are gitignored under the no-raw-data-egress guardrail. Full case-level auditability from this repository would be an over-claim.
 
+> ### ✅ GATE RUN, 2026-07-29 — decision: **PIVOT**. Read the next paragraph with this in mind.
+>
+> The hand-audit is done ([`PHASE0_AUDIT.md`](technical/PHASE0_AUDIT.md); the number is published in
+> [`PHASE0_RESULTS.md`](technical/PHASE0_RESULTS.md)). **0 TP / 7 FP — the A1 default `tests/`
+> read-only invariant scored `precision 0.00` at 1.00 coverage.** Under the canonical rule
+> (*"PIVOT if fewer than 3 independent TPs survive audit"*) that is a **PIVOT**, recorded without
+> reinterpretation. PROCEED was refused twice over: 0 independent TPs against ≥3, and a denominator
+> of **16** against ≥50.
+>
+> **But this PIVOT is NOT the R1 reading the paragraph below describes**, and conflating them would
+> be the single most damaging misreading of Phase 0. R1 is *"the premise is wrong — real agent runs
+> contain ~no detectable violations."* That was **not measured**. The only detector aimed at the
+> premise flags normal, correct SWE-bench behaviour (adding a test); at 0.00 precision it could not
+> have separated a corrupt success from a clean run in either direction, so a 100% FP rate says
+> nothing about the base rate. The PIVOT also fired on a run that never satisfied the rule's own ≥50
+> denominator clause.
+>
+> **This is a PIVOT of the DETECTOR, not of the thesis** — and it is the first of the three
+> re-examination questions the paragraph below already lists ("wrong task set? wrong surface? real
+> but unverifiable?"). The action is to **fix the instrument and re-measure**: build
+> `invariant-test-mutation-shape`, and do not spend the remaining ~34 instances under a detector
+> known to be 0.00-precision. The mint is **not void** — 2 of 3 controls captured, both
+> `VERIFIED_CLEAN`, `INSTRUMENT SUSPECT` did not fire.
+
 **Why a ~0 rate is still the thing to watch (risk R1).** The canonical block carries no rate threshold, but the reasoning that used to live here stands. If real runs contain ~no detectable violations, that is not a bug — it is the premise failing, and it is worth finding out in week 4. Re-examine: wrong task set (too easy to cheat-proof)? wrong surface (the interesting failures don't cross MCP)? are the failures real but *unverifiable* by replay? Mechanically such a run cannot reach ≥3 independent audited TPs and therefore PIVOTs under the canonical rule; the questions above are how to read that PIVOT, not a separate criterion. Do **not** launch and hope.
 
 ---
@@ -238,7 +262,7 @@ The phases above are *what we earn*. The sequenced, one-at-a-time backlog of *ho
 
 | # | Risk / Assumption | Tied to | Likelihood | Impact | Mitigation / Test |
 |---|-------------------|---------|-----------|--------|-------------------|
-| R1 | **The premise is wrong** — real agent runs contain ~no detectable violations | Phase 0 gate | Low | Fatal | The entire Phase 0 corpus proof; pivot rule baked into the gate |
+| R1 | **The premise is wrong** — real agent runs contain ~no detectable violations | Phase 0 gate | Low | Fatal | **STILL OPEN, and NOT retired by the 2026-07-29 PIVOT** — that gate run measured a 0.00-precision *detector*, which cannot measure the base rate either way. R1 gets tested only once a detector with non-zero precision exists (`invariant-test-mutation-shape`). |
 | R2 | **C2 (snapshot/restore) is harder than budgeted** — it's week 2 and everything blocks on it | Phase 0, Wk 1–2 | **High** | **High** | Start with the narrowest restorable substrate (container FS overlay, one tool family); abstract late; if it slips, the whole calendar slips — treat as the schedule's critical path |
 | R3 | **Nobody authors the invariant** — A1 works but only if someone declares the policy | Phase 1 adoption | **High** | **High** | Infer from MCP annotations first (free, zero-friction); ship a library of common invariants; explicit Phase-2 experiment. **Named now, not discovered at launch** |
 | R4 | **"LLM judge with extra steps"** becomes the top launch comment | Phase 1 launch | Med | High | A3 structurally subordinated; `--no-claim-axis` refutation enforced by test; deterministic spine ships first and leads every demo |
