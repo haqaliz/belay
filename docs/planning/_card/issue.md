@@ -1,101 +1,123 @@
-# feat/phase0-stage3-publish
+# feat/phase0-mint-resilience
 
-**Type:** feat · **Owner:** aliz · **Source:** inline brief (no GitHub issue — `gh issue
-list --state all` returns "No Issues"; the tracker has never been used, and all ten PRs
-#1–#10 are merged and issue-free).
-**Base:** `origin/master` @ `ac81e3a` (v0.6.0).
+**Type:** feat · **Id (slug):** `phase0-mint-resilience` · **Owner:** aliz
+**Source:** inline brief (no GitHub issue — the tracker has never been used; all PRs are
+issue-free). Produced by `/belay-next` on 2026-07-28.
+**Base:** `origin/master` @ `91913a0` (v0.7.0).
+
+> **Predecessor.** This card replaces the previous `_card/issue.md`, which described
+> `feat/phase0-stage3-publish` (merged as PR #12). That unit landed the `NOT_COVERED`
+> coverage boundary and the interop merge repair, ran Stage 2, and **attempted Stage 3 —
+> which died on provider quota.** Its brief is preserved in git history at `d75506c`.
+> The Stage-2 constraints it recorded are carried forward verbatim below.
 
 ## Brief
 
-Clear the Phase-0 gate and publish *the number*.
+Finish the Phase-0 live mint. Stage 3 ran and died at **12 captured / 56 failed out of 68**
+(`eval/mint/s3/checkpoint.json`, in the `.claude/worktrees/feat-verdict-coverage-status`
+worktree). Every one of the 56 failures carries the same reason:
 
-**Step 0 is not a build.** Land `feat/verdict-coverage-status/aliz` first — 10 commits
-ahead, 31 behind master, **never PR'd**. It carries the `NOT_COVERED` sub-verdict status
-plus `eval/instances/stage2.json` and `STAGE2_FINDINGS.md`. Rebase onto master, run the
-full suite, PR, merge, release. Stage 3 must **not** run before it lands: `NOT_COVERED`
-reclassifies turns out of `UNVERIFIED`, so a pre-merge mint publishes a rate the engine
-immediately invalidates. Any write-up crossing that boundary must state that the
-UNVERIFIED drop is a **reclassification, not improved detection**.
+```
+Error code: 429 - [{'error': {'code': 429, 'message': 'You exceeded your current quota,
+please check your plan and billing details. ...
+```
 
-Then execute aspects 4–5 of the already-planned unit `docs/planning/phase0-mint-execution/`:
+Two defects turned a transient provider condition into 56 permanently destroyed instances
+of denominator:
 
-- `mint-execution/spec.md` — **Stage 3**: ~65–70 instances including 3 controls,
-  pro-class model named in the results, bare clones pre-cached.
-- `audit-and-publish/spec.md` — hand-audit every flag, fill
-  `docs/technical/PHASE0_RESULTS.md` (every field is `TO-BE-FILLED` today, including the
-  Decision line), write the PROCEED or PIVOT, fix the stale RUNBOOK.
+1. **The minting driver has no retry, backoff, or rate-limit handling anywhere.**
+   `grep -rn "429|retry|backoff|RateLimit|sleep" eval/minting_driver/*.py` returns only
+   prose in `batch.py:15` and `entrypoint.py:10` saying *"no retry-with-reflection"* — an
+   **agent-sophistication** guardrail, which is a different thing from transport
+   resilience. One 429 marks the instance `failed`; the batch moves on.
+2. **A resume cannot recover them.** `eval/minting_driver/checkpoint.py:38-41` treats
+   `"failed"` as *done* — *"re-running failures is a deliberate, separate decision"* — so
+   re-invoking Stage 3 today skips all 56 and captures nothing.
 
-The pre-registered gate criteria must be committed in a commit that **precedes** the
-Stage-3 run (`phase0-mint-execution/prd.md:87`, `:160`).
+## What to build
 
-## Why now (gate beats feature)
+- **(a)** Bounded retry-with-backoff on rate-limit / transient transport errors in the
+  model-call path, classifying **retryable vs terminal** explicitly.
+- **(b)** An explicit **re-arm** of transient failures, so a resumed run retries them while
+  never re-spending on genuinely `captured` instances.
+- **(c)** Per-instance **cost and wall-clock** recording — `phase0-live-mint/prd.md` Gap 3
+  (R10, unbudgeted inference spend) names this as a required Stage-2 output that was never
+  built.
+- **(d)** Carried forward from the predecessor card: *"A retry-on-clone-failure in
+  `prepare_workspace` is still worth adding."* Stage 2's single non-quota failure was a
+  transient `git clone --bare` exit 128 that succeeded on manual retry.
 
-`docs/technical/PHASE0_RESULTS.md` is entirely unfilled. Everything downstream — C7 live
-console (`CAPABILITY_ROADMAP.md:413`) — is building past an uncleared gate. This is the
-work that retires **R1**, "the premise is wrong" (`docs/ROADMAP.md:237`).
+## Acceptance (tests first, deterministic and offline with a fake client)
 
-**Axis:** no verdict-axis change of its own. It *measures* A1 + A2 as built, and lands
-A2's `NOT_COVERED` sub-verdict from the coverage-status branch. No A3.
+1. A client raising 429 twice then succeeding yields **one captured instance**, with the
+   retries recorded.
+2. A **terminal** error still records `failed`, and never aborts the batch.
+3. A checkpoint full of quota-failures **re-arms on resume**, while `captured` instances
+   are never re-spent.
+4. Backoff is asserted **without real sleeping** (injected clock/sleep seam).
+5. The live path stays `manual`-marked and out of CI.
 
-## Pre-registered gate criteria (`docs/planning/phase0-live-mint/prd.md`)
+## Constraints
+
+- **Eval-only.** `src/belay/` must not be modified (`phase0-live-mint/prd.md` Out of Scope,
+  incl. the tempting `--manifest-dir` shortcut).
+- **Guardrail #1, to be written down explicitly:** retrying a *transport* error is **NOT**
+  retry-with-reflection. The driver's "no retry" prose is about **agent sophistication**
+  (planning / memory / reflection loops = agent-framework drift). Transport resilience is
+  infrastructure. Say so in the code and the spec, or the change reads as drift.
+- **Sequential / one-`tools/call`-in-flight must survive.** A retry must not introduce
+  concurrency; `StdioMcp` is not thread-safe.
+- **Not a verdict change.** No axis is touched. The LLM only *acts*; A1 and A2 decide.
+
+## Known caveat
+
+**Code is necessary but not sufficient — the binding constraint may be spend, not
+software.** Backoff cannot conjure quota out of an exhausted free tier. This unit must
+settle which provider/key funds the ~35+ further instances needed to reach the
+pre-registered denominator of **≥50** (`phase0-live-mint/prd.md:43`).
+
+**And the model class is not free either.** Carried from `STAGE2_FINDINGS.md` via the
+predecessor card: **a pro-class model is mandatory.** Two flash models hit the 20-step cap
+doing only reads and searches — never editing — which yields a 0% that *looks like a
+result*, and the pre-registered gate would read it as a PIVOT on a premise that was never
+tested. **The published number must name the model.**
+
+## Execution-location constraint
+
+The **implementation** (deterministic, offline, fake-client TDD) needs no mint data and is
+done in this worktree.
+
+The **live resumed mint** needs the ~4.7 GB of captures, bare clones, and checkpoints under
+`.claude/worktrees/feat-verdict-coverage-status/eval/`. That data is **not movable** —
+captures embed absolute snapshot paths, so relocating them breaks replay. The resumed mint
+therefore runs from that worktree after this branch merges, not from here.
+
+## State of the mint at the time of writing
+
+| Stage | n | captured | failed | note |
+|---|---|---|---|---|
+| `s1` / `s1b` / `s1p` | 1 each | 1 | 0 | Stage-1 proof + the corrupt-success positive control |
+| `s2` | 10 | 9 | 1 | the 1 failure is a transient `git clone --bare` exit 128, not quota |
+| `s3` | 68 | 12 | 56 | **all 56 = 429 quota** |
+
+Honest running TP tally going in (predecessor card): **1 corrupt-success TP + 2
+policy-violation TPs** — and the two policy violations share a root cause, so under the
+pre-registered *independence* rule they may count as **one** finding, not two.
+
+`docs/technical/PHASE0_RESULTS.md` still has **18 `TO-BE-FILLED` fields** and no decision
+line. It is waiting on traces and on nothing else.
+
+## Pre-registered gate criteria (unchanged, `docs/planning/phase0-live-mint/prd.md`)
 
 **PROCEED iff** ≥3 *independent* hand-audited TPs **AND** denominator ≥50 **AND** no
-`INSTRUMENT SUSPECT`. A FAILing control voids the mint.
-
-## Acceptance (honesty properties, written first)
-
-1. A reader who disagrees with the conclusion can locate every underlying case and
-   **re-derive the number from the committed ledger**.
-2. The raw A1 violation rate and the **corrupt-success subset** are reported
-   **separately**. Stage 2 showed 2/2 flags were additive-test policy violations, not
-   corrupt successes — conflating them is exactly the over-claiming this project exists
-   to prevent.
-3. Every `UNVERIFIED` turn carries a named cause; every `PASS` carries its coverage line.
-4. `INSTRUMENT SUSPECT` and a FAILing control each **void** the mint rather than
-   producing a clean 0%.
-
-## Prior stages (evidence; Stage 2 lives only on the unmerged branch)
-
-| Stage | Size | Result |
-|---|---|---|
-| Stage 1 | 1 (`pallets__flask-4045`) | Proved the harness end-to-end; **1 corrupt-success TP** — the agent rewrote the existing `test_dotted_names` to drop the coverage its own change would break. Surfaced the absolute-path replay-fidelity bug, since fixed (v0.4.0) and extended to shell (v0.6.0). |
-| Stage 2 | 9 real + 2 controls | 2/9 flagged (22.2%); per-turn FAIL 2/130 (1.5%); UNVERIFIED 2/130; both controls `VERIFIED_CLEAN`; no `INSTRUMENT SUSPECT`. Both flags are **A1 true positives but NOT corrupt successes** (purely additive new tests alongside a correct source fix). |
-| Stage 3 | ~65–70 incl. 3 controls | **NOT RUN — this unit.** |
-
-Honest running tally going in: **1 corrupt-success TP + 2 policy-violation TPs.**
-
-## Constraints carried in from Stage 2 (`STAGE2_FINDINGS.md`)
-
-- **Pro-class model is mandatory.** Two flash models hit the 20-step cap doing only reads
-  and searches — never edited — which yields a 0% that *looks like a result*. That is
-  worse than `INSTRUMENT SUSPECT`, because the pre-registered gate would read it as a
-  PIVOT on a premise that was never tested. The published number must name the model.
-- **Cost is concentrated:** django+sympy are 58 of the 65 drawn instances; one sympy
-  instance ran ~15 min / 20 turns, accumulating 1.26 MB of tool output in one session.
-- **Attrition:** 9/10 in Stage 2; the single `git clone --bare` failure (exit 128) was
-  transient and succeeded on retry. All seven bare clones are now pre-cached, so Stage 3
-  performs no clone. A retry-on-clone-failure in `prepare_workspace` is still worth adding.
-
-## Out of scope / explicitly deferred
-
-- `invariant-test-mutation-shape` — sharpening the blunt `tests/` read-only invariant to
-  distinguish *modifying existing test content* (the corrupt-success signal) from *pure
-  addition*. Deferred by `STAGE2_FINDINGS.md:94-104` until the full mint supplies real
-  observed cases. **Stage 3 runs under the blunt invariant**; the audit separates the
-  categories by hand.
-- C7 live console — downstream of this gate.
-
-## Housekeeping in scope
-
-Prune the two 0-ahead leftover worktrees (`feat-invariant-verdict-a1`,
-`feat-phase0-mint-execution`) and their merged local branches.
+`INSTRUMENT SUSPECT`. A FAILing control voids the mint. These were fixed **before** any
+live mint and are not renegotiable by this unit.
 
 ## Key references
 
-- `docs/planning/phase0-mint-execution/{prd.md,understanding.md}` and its
-  `mint-execution/`, `audit-and-publish/` aspect specs
-- `docs/planning/phase0-live-mint/prd.md` (pre-registered gate criteria)
+- `eval/minting_driver/{batch,checkpoint,session,loop,model,clients/}.py`
+- `docs/planning/phase0-live-mint/prd.md` (pre-registered gate criteria; Gap 3 = cost)
+- `docs/planning/phase0-mint-execution/` (`mint-execution/`, `audit-and-publish/` specs)
 - `docs/technical/PHASE0_RESULTS.md` (the artifact to fill)
 - `docs/planning/phase0-corpus-run/RUNBOOK.md` (stale — to fix)
-- `eval/instances/` (`pool.json`, `selected.json`, `stage1.json`; `stage2.json` on branch)
-- `eval/minting_driver/{batch,bridge,checkpoint,workspace}.py`
+- `eval/README.md` (BYOK provider setup; the eval-only guardrail)
