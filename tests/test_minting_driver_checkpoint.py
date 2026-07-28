@@ -120,3 +120,151 @@ def test_corrupt_checkpoint_is_a_named_error(tmp_path):
     )
     with pytest.raises(ValueError):
         load_checkpoint(bad_status)
+
+
+# --------------------------------------------------------------------------------------
+# `no_observation` + history (quota-circuit-breaker, Phase 3)
+#
+# A quota/period cap produces NO observation: the instance was never actually driven, so
+# recording it `failed` — which `is_done` treats as done, permanently — is what stranded 56
+# instances on 2026-07-24. The ledger gains a third disposition that a resume RE-ARMS, and
+# an append-only `history` so the re-arm never erases the record of what already ran.
+# --------------------------------------------------------------------------------------
+
+
+def test_no_observation_round_trips(tmp_path):
+    path = tmp_path / "checkpoint.json"
+    cp = load_checkpoint(path)
+    cp.record("inst-q", "no_observation", reason="429 RESOURCE_EXHAUSTED")
+    cp.save(path)
+
+    reloaded = load_checkpoint(path)
+    assert reloaded.status("inst-q") == "no_observation"
+    assert reloaded.reason("inst-q") == "429 RESOURCE_EXHAUSTED"
+
+
+def test_is_done_is_false_for_no_observation(tmp_path):
+    """The re-arm rule, in one assertion: a no-observation instance is NOT done.
+
+    This is the whole mechanism — there is deliberately no flag and no `--force`. An
+    instance that produced an observation (`captured` or `failed`) stays done forever;
+    only one that produced none becomes eligible again.
+    """
+    cp = load_checkpoint(tmp_path / "cp.json")
+    cp.record("cap", "captured")
+    cp.record("fail", "failed", reason="boom")
+    cp.record("quota", "no_observation", reason="quota exhausted")
+    assert cp.is_done("cap")
+    assert cp.is_done("fail")
+    assert not cp.is_done("quota")
+
+
+def test_re_recording_appends_the_prior_disposition_to_history(tmp_path):
+    cp = load_checkpoint(tmp_path / "cp.json")
+    cp.record("inst", "no_observation", reason="quota exhausted")
+    cp.record("inst", "captured", trace_path="/batch/trace-inst.jsonl")
+
+    assert cp.status("inst") == "captured"
+    assert cp.history("inst") == [
+        {"status": "no_observation", "reason": "quota exhausted"}
+    ]
+
+
+def test_history_survives_a_save_load_round_trip(tmp_path):
+    """The `_validate_entry` drop-unknown-keys trap.
+
+    The loader rebuilds each entry from a fixed set of keys, so a `history` it does not
+    name is silently dropped on every load — which would make the append-only guarantee
+    hold only in memory, exactly the failure this history exists to prevent.
+    """
+    path = tmp_path / "checkpoint.json"
+    cp = load_checkpoint(path)
+    cp.record("inst", "no_observation", reason="quota exhausted")
+    cp.record("inst", "captured", trace_path="/batch/trace-inst.jsonl")
+    cp.save(path)
+
+    reloaded = load_checkpoint(path)
+    assert reloaded.history("inst") == [
+        {"status": "no_observation", "reason": "quota exhausted"}
+    ]
+
+
+def test_two_re_records_build_a_two_entry_history_in_order(tmp_path):
+    cp = load_checkpoint(tmp_path / "cp.json")
+    cp.record("inst", "no_observation", reason="first stop")
+    cp.record("inst", "no_observation", reason="second stop")
+    cp.record("inst", "captured", trace_path="/batch/trace-inst.jsonl")
+
+    assert cp.history("inst") == [
+        {"status": "no_observation", "reason": "first stop"},
+        {"status": "no_observation", "reason": "second stop"},
+    ]
+
+
+def test_history_is_empty_for_a_first_record_and_an_unknown_instance(tmp_path):
+    cp = load_checkpoint(tmp_path / "cp.json")
+    cp.record("inst", "captured")
+    assert cp.history("inst") == []
+    assert cp.history("never-seen") == []
+
+
+def test_a_legacy_checkpoint_without_history_still_loads(tmp_path):
+    """Backward compatibility: the real Stage-3 ledger's shape, which has no `history`.
+
+    68 entries were written before this vocabulary existed, in exactly the
+    `{status, reason, trace_path}` shape below. They must load, not raise, and read as
+    having no history rather than as having lost one.
+    """
+    path = tmp_path / "legacy.json"
+    path.write_text(
+        json.dumps(
+            {
+                "django__django-11039": {
+                    "status": "captured",
+                    "reason": None,
+                    "trace_path": "/mint/s3/trace-django__django-11039.jsonl",
+                },
+                "sympy__sympy-24152": {
+                    "status": "failed",
+                    "reason": "429 RESOURCE_EXHAUSTED",
+                    "trace_path": None,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    cp = load_checkpoint(path)
+    assert cp.status("django__django-11039") == "captured"
+    assert cp.status("sympy__sympy-24152") == "failed"
+    assert cp.history("django__django-11039") == []
+    assert cp.history("sympy__sympy-24152") == []
+
+
+def test_record_with_an_invalid_status_still_raises_immediately(tmp_path):
+    cp = load_checkpoint(tmp_path / "cp.json")
+    with pytest.raises(ValueError):
+        cp.record("inst", "no-observation")  # hyphen, not underscore
+    assert cp.status("inst") is None
+
+
+def test_a_malformed_history_is_a_named_load_error(tmp_path):
+    """Fail-closed extends to the new field: a history that is not a list of objects raises.
+
+    A ledger whose history cannot be read is a ledger whose re-arm record cannot be
+    audited, and silently coercing it would hide exactly the loss D3 forbids.
+    """
+    not_a_list = tmp_path / "history-scalar.json"
+    not_a_list.write_text(
+        json.dumps({"inst": {"status": "captured", "history": "nope"}}), encoding="utf-8"
+    )
+    with pytest.raises(ValueError):
+        load_checkpoint(not_a_list)
+
+    not_objects = tmp_path / "history-items.json"
+    not_objects.write_text(
+        json.dumps({"inst": {"status": "captured", "history": ["nope"]}}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError):
+        load_checkpoint(not_objects)
