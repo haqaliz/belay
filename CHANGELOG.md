@@ -7,7 +7,84 @@ All notable changes to Belay are documented here. The format follows
 
 ## [Unreleased]
 
-_Nothing yet._
+Everything below is confined to `eval/` — the Phase-0 minting harness. **No `src/belay/` change,
+no verdict-axis change, and nothing here alters what a verdict claims.** A Belay user's install is
+byte-unchanged.
+
+### Added
+
+- **A quota circuit breaker for the mint.** Provider errors are now classified as `quota` /
+  `transient` / `terminal`, and a **quota** error *stops the batch* rather than driving the rest of
+  the queue into the same wall. This is a real defect, measured: on 2026-07-24 a Stage-3 mint hit a
+  **per-day** request cap (`limit: 250`, `retryDelay: 39043s` ≈ 10h50m) on instance 3 of 68, and
+  per-instance containment — correct for a bad checkout — then burned the remaining **56 instances
+  in 3m48s**, one wasted request each, recording every one `failed`. Because `is_done` counted
+  `failed` as done, all 56 were skipped by every later resume. Nothing crashed; the denominator
+  simply vanished. Note this was **never a rate limit**: no bounded backoff reaches a 10-hour wait,
+  and both SDKs had already retried internally before raising.
+- **`no_observation`, a third checkpoint disposition — and it *is* the re-arm rule.** `is_done` is
+  `False` for it, so a resume re-drives exactly those instances: no new flag, no `--force`, and no
+  way to ask for anything broader. An instance that produced an observation is **never** re-armable,
+  which keeps "silently re-rolling until the number looks good" unaskable rather than merely
+  discouraged. Prior dispositions are appended to a `history` list, never overwritten.
+- **`eval/scripts/rearm_checkpoint.py`** — rescues entries stranded before that disposition existed.
+  Verified in `--dry-run` against the real ledger: exactly **56 to re-arm, 12 untouched**, file
+  byte-identical. Touches only `failed` entries that classify `quota`; `captured` is never touched.
+- **Bounded retry with backoff for genuinely transient errors**, and a transient retry for
+  `git clone --bare` (Stage 2's only attrition was a clone that succeeded on retry). The local
+  `git worktree add` is deliberately **not** retried — its failure is deterministic, so retrying it
+  would make a real bad-`base_commit` bug read as flaky.
+- **Per-instance run accounting** — wall-clock (via an injected `time.monotonic`, so an NTP step
+  during a 15-minute instance cannot yield a negative duration), model requests (counted *before*
+  the call, because a request that returns 429 still spent quota), retries, token usage, and
+  model/provider provenance. Recorded on `captured`, `failed` **and** `no_observation`, since a
+  stop-loss that ignores failed attempts under-counts spend by exactly the attempts that failed.
+  Token usage is **absent, never zero**, when a provider does not report it, and **no dollar figure
+  is computed or stored** — a subscription has no per-token price, so a currency field would be
+  fabricated precision.
+
+### Changed
+
+- **`--model` is now required; there is no default.** The former default, `gemini-flash-latest`, is
+  the model class Stage 2 measured as spending its whole step cap on reads and searches without ever
+  editing — which publishes *"a 0% violation rate that means the agent did nothing"*, worse than
+  `INSTRUMENT SUSPECT` because it *looks like a result*. Omitting `--model` now exits 2 before
+  anything is prepped or spent. This matches `--provider`, which was already an explicit choice that
+  is never sniffed, for the same reason: the published number must name the model.
+- **`MintReport.render()` reports all four buckets** — captured / failed / `no_observation` /
+  never-driven — and prints an explicit `STOPPED EARLY` line naming the remainder as still eligible.
+  The breaker made a short batch normal, and the old summary quietly under-reported one.
+
+### Fixed
+
+- **The Phase-0 gate criteria are now pre-registered in `docs/technical/PHASE0_RESULTS.md`**, with
+  the commit hash and author date published so a reader can check the timing rather than trust it —
+  and with the honest note that pre-registration **did not** precede Stage 3, plus the statement that
+  it is a *timing* control, not an *independence* control.
+- **Three divergent gate statements reconciled to one canonical block.** `PHASE0_RESULTS.md` had
+  gained a non-zero-rate PROCEED clause the pre-registered block deliberately removed, and had
+  dropped both the ≥50 denominator and the independence rule.
+- **`docs/planning/phase0-corpus-run/RUNBOOK.md`: six defects plus a stale BLOCKED banner.** The
+  dangerous one claimed *"Parallelism is allowed"* and supplied a `for … &` loop — which would
+  corrupt a resumed mint three independent ways (`StdioMcp` is not thread-safe, one-`tools/call`-in-
+  flight is R7 by construction, and concurrency breaks per-turn snapshot/restore).
+- `--help` crashed for every subcommand once a help string contained a literal `%` (argparse
+  `%`-expands them). No test rendered help, so the suite was green against it. There is one now.
+
+### Measured
+
+- **All 12 Stage-3 captures verified** — 7 had never been replayed against any engine: **10
+  VERIFIED_CLEAN, 2 VERIFIED_FLAGGED, 0 ERRORED**, no `INSTRUMENT SUSPECT`, and every UNVERIFIED
+  turn carrying a named cause (none bucketed `unknown`). Denominator **16 of 68**, so no gate
+  decision follows and none is offered.
+- **The gate's blocker is the audit, not the mint.** The corpus is **7 cases from 3 instances**,
+  every one the same `A1/invariant FAIL` on `tests/` read-only, and **none labeled**. Stage 3
+  re-minted the two instances Stage 2 had flagged and flagged them again, adding **zero** new
+  independent findings. Against a criterion of **≥3 _independent_** true positives, that is one root
+  cause observed seven times — an invariant problem, not a sample-size problem.
+- **Stage 3 had zero control coverage** — all three controls were among the 56 quota-killed
+  instances, so that run was uncontrolled and would have been even had the denominator held. A
+  resumed mint must drive the controls **first**.
 
 ## [0.7.0] - 2026-07-25
 

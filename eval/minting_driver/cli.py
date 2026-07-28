@@ -10,8 +10,8 @@ substitutes a fake transport is a flag that can silently mint nothing.
 `[project.scripts]`, and never import `belay` at module level (`CLAUDE.md` guardrail #1);
 the optional in-process `--verify` imports it lazily, inside the call.
 
-Two argument decisions are load-bearing, and both exist to make an expensive mistake
-impossible rather than merely unlikely:
+Three argument decisions are load-bearing, and all three exist to make an expensive
+mistake impossible rather than merely unlikely:
 
 * **`--root` is required with no default.** A default root is how two mints silently
   share one batch directory: the second bridge either collides or contaminates the
@@ -19,6 +19,13 @@ impossible rather than merely unlikely:
 * **`--provider` and `--model` are explicit arguments.** No branch anywhere reads a
   vendor key to decide *what* to build. Credentials come from the environment; the
   choice never does, or the published number names the wrong model.
+* **`--model` is required with no default, for the same reason `--root` is.** The
+  default used to be `gemini-flash-latest`; `STAGE2_FINDINGS.md:25-39` measured
+  flash-class models reading and searching to the step cap without ever editing, which
+  publishes a **0% violation rate that means "the agent did nothing"** — worse than
+  `INSTRUMENT SUSPECT`, because it looks like a result. Missing, it is argparse's own
+  exit 2, before a workspace is prepped or a token is spent — the same code the other
+  setup errors below use.
 """
 
 from __future__ import annotations
@@ -33,7 +40,6 @@ from eval.minting_driver.entrypoint import (
     DEFAULT_CORPUS_DIR,
     DEFAULT_LEDGER_PATH,
     DEFAULT_MAX_STEPS,
-    DEFAULT_MODEL,
     DEFAULT_PROVIDER,
     DEFAULT_REGISTRY_PATH,
     DEFAULT_REQUEST_TIMEOUT,
@@ -46,6 +52,10 @@ from eval.minting_driver.entrypoint import (
     preflight_servers,
     run_verify,
     verify_server_command,
+)
+from eval.minting_driver.resilience import (
+    DEFAULT_BASE_DELAY_SECONDS,
+    DEFAULT_MAX_ATTEMPTS,
 )
 from eval.minting_driver.servers import MissingServerError
 
@@ -99,9 +109,19 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--model",
-        default=DEFAULT_MODEL,
+        required=True,
         metavar="name",
-        help=f"the model id to mint with (default: {DEFAULT_MODEL})",
+        # `%%` because argparse `%`-expands every help string against its own params;
+        # a bare `%` here makes `--help` die with `unsupported format character`.
+        help=(
+            "the model id to mint with. REQUIRED and never defaulted: the old default "
+            "was `gemini-flash-latest`, and two flash-class models hit the step cap "
+            "doing only reads and searches, editing nothing "
+            "(STAGE2_FINDINGS.md:25-39) — an agent that never mutates publishes a 0%% "
+            "violation rate that means 'the agent did nothing', which LOOKS like a "
+            "result. Pro-class is required, and the published number records which "
+            "model minted which instance"
+        ),
     )
     parser.add_argument(
         "--request-timeout",
@@ -120,6 +140,28 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
         default=DEFAULT_MAX_STEPS,
         metavar="n",
         help=f"maximum agent steps per instance (default: {DEFAULT_MAX_STEPS})",
+    )
+    parser.add_argument(
+        "--max-attempts",
+        type=int,
+        default=DEFAULT_MAX_ATTEMPTS,
+        metavar="n",
+        help=(
+            f"attempts per model call, INCLUDING the first (default: "
+            f"{DEFAULT_MAX_ATTEMPTS}; 1 means no retries). Only TRANSIENT errors are "
+            f"retried: a provider quota cap stops the mint at any setting, because the "
+            f"observed retryDelay was 39043s and no bounded backoff reaches that"
+        ),
+    )
+    parser.add_argument(
+        "--retry-base-delay",
+        type=float,
+        default=DEFAULT_BASE_DELAY_SECONDS,
+        metavar="seconds",
+        help=(
+            f"the first backoff between transient retries, doubling each time "
+            f"(default: {DEFAULT_BASE_DELAY_SECONDS:g}s). 0 means retry immediately"
+        ),
     )
     parser.add_argument(
         "--server-root",
@@ -200,6 +242,8 @@ def config_from_args(args: argparse.Namespace) -> MintConfig:
         model=args.model,
         request_timeout=args.request_timeout,
         max_steps=args.max_steps,
+        max_attempts=args.max_attempts,
+        retry_base_delay=args.retry_base_delay,
         server_root=Path(args.server_root) if args.server_root else None,
     )
 

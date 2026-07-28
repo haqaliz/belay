@@ -66,12 +66,34 @@ This file orients a coding agent working in this repository. Read it first.
 > the 12/12-UNVERIFIED → `NO_VERIFIABLE_TURNS` → `INSTRUMENT SUSPECT` failure that made the
 > denominator zero is gone, and no false positive appears on either clean capture. `belay corpus
 > run` is 6/6 MATCH, 0 REGRESSION.
-> **Next: run the staged live mint and publish the number.** Gate criteria are pre-registered in
-> `docs/planning/phase0-live-mint/prd.md`: PROCEED iff ≥3 *independent* hand-audited TPs AND denominator ≥50
-> AND no INSTRUMENT SUSPECT; a FAILing control voids the mint. Stage 2 (~10, measure attrition + cost, fix
-> `selected.json`) → Stage 3 (~65–70, incl. 3 controls) → audit → fill `docs/technical/PHASE0_RESULTS.md` →
-> fix the stale RUNBOOK; then C7 (live console — first UI). C8 (A3 claim re-derivation) and C9
-> (observability interop) are cuttable, last.
+> **Next: HAND-AUDIT the corpus — the gate is blocked on the audit, not on the mint.** Gate criteria are
+> pre-registered in `docs/planning/phase0-live-mint/prd.md` and now also in
+> `docs/technical/PHASE0_RESULTS.md`: PROCEED iff ≥3 *independent* hand-audited TPs AND denominator ≥50
+> AND no INSTRUMENT SUSPECT; a FAILing control voids the mint. Stage 3 ran and was stopped by a provider
+> **daily** cap at **12 captured / 56 failed of 68**; all 12 are now verified (10 CLEAN, 2 FLAGGED, 0
+> UNVERIFIED-by-`unknown`, no INSTRUMENT SUSPECT). **The corpus is 7 cases from 3 instances — every one the
+> same `A1/invariant FAIL` on `tests/` read-only, and 0 are labeled.** That is one root cause observed seven
+> times, against a criterion of **≥3 _independent_** TPs, so more minting most likely yields more of the
+> same shape: **this is an invariant problem, not a sample-size problem** (the benign-flag skew
+> `phase0-gate-readiness/prd.md:209` called the likeliest failure). Audit first; only then decide between
+> `invariant-test-mutation-shape` and a bigger mint. Then fill `PHASE0_RESULTS.md`; then C7 (live console —
+> first UI). C8 (A3 claim re-derivation) and C9 (observability interop) are cuttable, last.
+> **The mint harness no longer burns its own queue** (`phase0-mint-resilience`, `eval/` only — no
+> `src/belay/` change): the 2026-07-24 stop was a **per-day** cap (`retryDelay` 39043s ≈ 10h50m), not a rate
+> limit, so no bounded backoff could have reached it — and containment, correct for one bad instance, fed
+> the remaining **56 into the same wall in 3m48s**, recording each `failed`, which `is_done` treated as done
+> forever. Now `classify_error` sorts provider errors into quota/transient/terminal (duck-typed — importing
+> an SDK would break the SDK-absent import contract, and the same function must work on a recorded reason
+> *string*); a **quota error stops the batch**, leaving later instances *absent* and therefore eligible; a
+> new `no_observation` status **is** the re-arm rule (`is_done` is False for it — no flag, no `--force`, and
+> an instance that produced an observation is never re-armable, which is the anti-re-roll contract in code);
+> history is appended, never overwritten; `eval/scripts/rearm_checkpoint.py` rescues the 56 already stranded
+> (dry-run verified 56/12). Plus per-instance accounting (wall-clock via injected `time.monotonic`, requests
+> counted *before* the call since a 429 still spends quota, tokens **absent-never-zero**, no dollar figures)
+> and **`--model` is now required** — the old `gemini-flash-latest` default is the model STAGE2 measured as
+> producing "a 0% violation rate that means the agent did nothing". Also: Stage 3 had **zero control
+> coverage** (all three controls were among the 56), so a resumed mint must drive controls FIRST.
+> See `docs/planning/phase0-mint-resilience/`.
 > **C9's first slice is built** (`src/belay/interop/`, `belay interop correlate <otlp-spans.json>
 > <trace-file> [--server -- CMD…] [--json]`): it ingests OTLP/JSON spans with the standard library
 > only (no OTel SDK — zero-dep preserved), correlates each span to a recorded MCP `tools/call` turn

@@ -49,6 +49,11 @@ from eval.minting_driver.batch import (
     run_mint,
 )
 from eval.minting_driver.checkpoint import Checkpoint
+from eval.minting_driver.resilience import (
+    DEFAULT_BASE_DELAY_SECONDS,
+    DEFAULT_MAX_ATTEMPTS,
+    RetryingModel,
+)
 from eval.minting_driver.servers import (
     filesystem_server_command,
     resolve_server_entrypoint,
@@ -64,10 +69,21 @@ StrPath = Union[str, "os.PathLike[str]"]
 #: that inherits that ceiling records `ReplyTimeout` failures for every instance.
 DEFAULT_REQUEST_TIMEOUT = 120.0
 
-#: The decided Phase-0 provider/model (`docs/planning/phase0-live-mint/prd.md`). Both are
-#: overridable per run, but neither is ever inferred from the environment.
+#: The decided Phase-0 provider (`docs/planning/phase0-live-mint/prd.md`). Overridable per
+#: run, but never inferred from the environment.
+#:
+#: **There is deliberately no `DEFAULT_MODEL`.** It used to be `gemini-flash-latest`, and
+#: `docs/planning/phase0-mint-execution/mint-execution/STAGE2_FINDINGS.md:25-39` measured
+#: what that buys: two flash-class models hit the step cap on `pallets__flask-4045` doing
+#: **only reads and searches**, editing nothing (tool results verified correct, so the
+#: harness was not at fault). An agent that never mutates produces turns that all verify
+#: clean, so the mint publishes a **0% violation rate that means "the agent did nothing"**
+#: — worse than `INSTRUMENT SUSPECT`, because it *looks like a result*, and the
+#: pre-registered gate would read it as a PIVOT on a premise that was never tested.
+#: `gemini-3.1-pro-preview` edited on the first try in 11 turns: **pro-class is required,
+#: and the published number must name the model.** So the model is named per run, exactly
+#: like the provider — a silent default here is a loaded gun aimed at the gate.
 DEFAULT_PROVIDER = "openai-compat"
-DEFAULT_MODEL = "gemini-flash-latest"
 
 #: Every provider the entry point knows how to build. A value outside this set is a
 #: config error, not a silent fallback.
@@ -151,18 +167,32 @@ class MintConfig:
     share one batch directory. `checkpoint_path` defaults to `<root>/checkpoint.json`,
     so a fresh `--root` is a genuinely fresh attempt with a fresh ledger and re-running
     the same root is an idempotent resume.
+
+    **`model` is required too, and has no default** — see the `DEFAULT_PROVIDER` note
+    above for the measurement (`STAGE2_FINDINGS.md:25-39`). It is declared here rather
+    than only enforced in `cli.py` because `mint_one`/`mint_batch` are called from
+    Python as well, and a default on the dataclass would re-arm the hazard for every
+    caller that is not argparse. Its position — second, ahead of every defaulted
+    field — is what makes it required in a frozen dataclass; construct `MintConfig` by
+    keyword, as every caller in the repo does.
     """
 
     root: Path
+    model: str
     clones_dir: Path = DEFAULT_CLONES_DIR
     registry_path: Path = DEFAULT_REGISTRY_PATH
     checkpoint_path: Optional[Path] = None
     provider: str = DEFAULT_PROVIDER
-    model: str = DEFAULT_MODEL
     request_timeout: float = DEFAULT_REQUEST_TIMEOUT
     max_steps: int = DEFAULT_MAX_STEPS
     system: str = DEFAULT_SYSTEM_PROMPT
     server_root: Optional[Path] = field(default=None)
+    #: The retry budget per model call, and its first backoff. Defaults IMPORTED from
+    #: `resilience.py` rather than restated, so "the documented default" and "the built
+    #: default" cannot drift. These tune only the transient ladder: a `quota` error is
+    #: never retried at any setting, because the observed wait was 39043s.
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS
+    retry_base_delay: float = DEFAULT_BASE_DELAY_SECONDS
 
     def __post_init__(self) -> None:
         # Every path is made ABSOLUTE here, once, at the boundary. A relative path in
@@ -194,6 +224,32 @@ class MintConfig:
         if not isinstance(self.max_steps, int) or self.max_steps <= 0:
             raise MintConfigError(
                 f"max_steps must be a positive int, got {self.max_steps!r}"
+            )
+        if (
+            isinstance(self.max_attempts, bool)
+            or not isinstance(self.max_attempts, int)
+            or self.max_attempts < 1
+        ):
+            # `1` is the honest way to spell "no retries" — `0` would mean the model is
+            # never called at all, which is a config typo that would mint nothing and
+            # read as INSTRUMENT SUSPECT. Refused here rather than in `RetryingModel`,
+            # so the CLI exits 2 with one line instead of a mid-mint traceback.
+            raise MintConfigError(
+                f"max_attempts must be an int >= 1 (1 means no retries), got "
+                f"{self.max_attempts!r}"
+            )
+        if (
+            self.retry_base_delay is None
+            or isinstance(self.retry_base_delay, bool)
+            or not isinstance(self.retry_base_delay, (int, float))
+            or self.retry_base_delay < 0
+        ):
+            # `0` is allowed and means "retry immediately" — legitimate against a local
+            # endpoint. Negative is not: `time.sleep` would raise, hours into a mint,
+            # from inside the very handler that exists to keep the mint alive.
+            raise MintConfigError(
+                f"retry_base_delay must be a number of seconds >= 0, got "
+                f"{self.retry_base_delay!r}"
             )
 
     @property
@@ -262,12 +318,14 @@ def resolve_credentials(provider: str) -> dict[str, str]:
 
 def make_model_factory(
     *,
+    model: str,
     provider: str = DEFAULT_PROVIDER,
-    model: str = DEFAULT_MODEL,
     client: Optional[Any] = None,
     max_tokens: Optional[int] = None,
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+    base_delay: float = DEFAULT_BASE_DELAY_SECONDS,
 ) -> ModelFactory:
-    """A `ModelFactory` for `provider`/`model` — a FRESH model on every call.
+    """A `ModelFactory` for `provider`/`model` — a FRESH breaker-wrapped model per call.
 
     `run_mint` calls the returned factory once per instance. It MUST construct a new
     model each time: the clients accumulate conversation state
@@ -276,10 +334,22 @@ def make_model_factory(
     "cache the client, it's the same config" is the obvious future refactor and it is
     wrong (`batch.py`'s `ModelFactory` docstring says the same).
 
+    **Both providers are wrapped in `RetryingModel`, and the wrapper is built INSIDE the
+    factory** — never hoisted out of it, for the same reason the client is not, plus one
+    of its own: a hoisted wrapper would accumulate `retry_count` across instances, so
+    `run-accounting` would bill instance 1's retries to instance 40. Wrapping only one
+    provider would be worse than wrapping neither, because the breaker would look
+    installed while `--provider anthropic` still fed the whole queue into a quota wall
+    (`resilience.py`, module docstring: 56 instances in 3m48s).
+
     Credentials are resolved ONCE, here, so a missing key fails before any instance is
     prepped or driven rather than once per instance. `client` is the test injection seam
     (`clients/local_client.py`): when given, no SDK is imported and no credentials are
     needed.
+
+    `model` is a REQUIRED keyword — there is no `DEFAULT_MODEL` to fall back to, for the
+    reason recorded next to `DEFAULT_PROVIDER` (`STAGE2_FINDINGS.md:25-39`: the old
+    flash-class default minted a 0% violation rate that meant "the agent did nothing").
     """
     if provider not in PROVIDERS:
         raise MintConfigError(
@@ -306,7 +376,13 @@ def make_model_factory(
                 kwargs.update(credentials)
             if max_tokens is not None:
                 kwargs["max_tokens"] = max_tokens
-            return LocalOpenAICompatModel(**kwargs)
+            # A NEW wrapper too, around a NEW client — see the docstring: hoisting
+            # either one leaks state across instances.
+            return RetryingModel(
+                LocalOpenAICompatModel(**kwargs),
+                max_attempts=max_attempts,
+                base_delay=base_delay,
+            )
 
         return openai_compat_factory
 
@@ -325,7 +401,13 @@ def make_model_factory(
             kwargs["client"] = client
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
-        return AnthropicModel(**kwargs)
+        # A NEW wrapper too, around a NEW client — see the docstring: hoisting either
+        # one leaks state across instances.
+        return RetryingModel(
+            AnthropicModel(**kwargs),
+            max_attempts=max_attempts,
+            base_delay=base_delay,
+        )
 
     return anthropic_factory
 
@@ -374,7 +456,12 @@ def mint_batch(
     preflight_servers(cfg)
 
     if model_factory is None:
-        model_factory = make_model_factory(provider=cfg.provider, model=cfg.model)
+        model_factory = make_model_factory(
+            provider=cfg.provider,
+            model=cfg.model,
+            max_attempts=cfg.max_attempts,
+            base_delay=cfg.retry_base_delay,
+        )
 
     if build_server_command is None:
 
@@ -476,11 +563,13 @@ def verify_command(
 
 @dataclass(frozen=True)
 class MintReport:
-    """What one mint produced: where the artifacts are, and how to score them.
+    """What one mint produced: where the artifacts are, what it cost, how to score them.
 
     Counts are derived from the `Checkpoint` (the durable ledger), never from a parallel
     tally kept alongside it — a second counter is free to drift from the file the resume
-    actually reads, and then the summary would describe a mint that did not happen.
+    actually reads, and then the summary would describe a mint that did not happen. The
+    accounting totals follow the same rule: they are summed off the ledger's per-instance
+    `accounting` records at render time, never accumulated during the run.
     """
 
     batch_dir: Path
@@ -498,14 +587,175 @@ class MintReport:
     def failed(self) -> int:
         return self.counts.get("failed", 0)
 
+    @property
+    def no_observation(self) -> int:
+        """Instances that were driven at (or into) a wall and observed NOTHING.
+
+        A quota cap rejected the request, or a transient blip outlived its retries. Not a
+        failure and not a success — and, before this was rendered, not on the summary line
+        at all.
+        """
+        return self.counts.get("no_observation", 0)
+
+    @property
+    def never_driven(self) -> int:
+        """Registry instances with NO recorded disposition — the post-quota-stop remainder.
+
+        `_report_for` counts these under `"unrecorded"`. That key used to be documented as
+        unreachable, and the quota circuit breaker made it the normal shape of a stopped
+        batch: every instance after the stop is deliberately ABSENT from the ledger, which
+        is exactly what keeps it eligible for the next run.
+        """
+        return self.counts.get("unrecorded", 0)
+
+    @property
+    def stopped_early(self) -> bool:
+        """True when the mint ended without driving every instance it was given.
+
+        Stated rather than left to arithmetic: a summary reading "minted 1 captured, 0
+        failed of 10" for a batch that stopped at instance 2 looks like a completed mint
+        with a small yield, when it is really a shrunken denominator — the R6 false-zero
+        failure one layer up.
+        """
+        return self.never_driven > 0
+
+    def accounting_totals(self) -> dict[str, object]:
+        """Sum the per-instance accounting off the ledger, WITH its denominators.
+
+        Two denominators, because two different things can be missing:
+
+        * `instances_with_accounting` — how many of `instance_ids` carry any accounting at
+          all (a ledger written before this aspect, or an instance never driven, carries
+          none);
+        * `instances_with_tokens` — how many of THOSE had a provider that reported token
+          usage.
+
+        Absent is never summed as zero. A total whose denominator is not stated beside it
+        is not a measurement anybody can set a stop-loss from, which is the whole reason
+        this aspect exists.
+        """
+        totals: dict[str, object] = {
+            "wall_clock_seconds": 0.0,
+            "model_requests": 0,
+            "retry_count": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "instances": len(self.instance_ids),
+            "instances_with_accounting": 0,
+            "instances_with_tokens": 0,
+            "models": {},
+        }
+        models: dict[str, int] = {}
+        for instance_id in self.instance_ids:
+            accounting = self.checkpoint.accounting(instance_id)
+            if not accounting:
+                continue
+            totals["instances_with_accounting"] = (
+                int(totals["instances_with_accounting"]) + 1
+            )
+            # `metric`, not `field`: `dataclasses.field` is imported at module level and
+            # a loop variable named `field` would shadow it (ruff F402).
+            for metric in ("wall_clock_seconds", "model_requests", "retry_count"):
+                value = accounting.get(metric)
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    totals[metric] = totals[metric] + value  # type: ignore[operator]
+            if "input_tokens" in accounting or "output_tokens" in accounting:
+                totals["instances_with_tokens"] = (
+                    int(totals["instances_with_tokens"]) + 1
+                )
+                for metric in ("input_tokens", "output_tokens"):
+                    value = accounting.get(metric)
+                    if isinstance(value, int) and not isinstance(value, bool):
+                        totals[metric] = totals[metric] + value  # type: ignore[operator]
+            model = accounting.get("model")
+            if isinstance(model, str) and model:
+                models[model] = models.get(model, 0) + 1
+        totals["models"] = models
+        return totals
+
+    def _accounting_lines(self) -> list[str]:
+        """The accounting block — every total beside the denominator it is a total over.
+
+        **No dollar amount appears here or anywhere else.** Under a subscription there is
+        no per-token price, so a currency figure would be fabricated precision presented as
+        a measurement. If a metered key is ever used, price is applied here from a stated
+        rate — read off the recorded tokens at report time, never baked into the ledger.
+        """
+        totals = self.accounting_totals()
+        recorded = int(totals["instances_with_accounting"])
+        instances = int(totals["instances"])
+        lines = [f"  accounting: {recorded} of {instances} instance(s) recorded"]
+        if recorded == 0:
+            # Deliberately NOT "0.0s / 0 requests": nothing was measured, and an
+            # unmeasured quantity rendered as a measured zero is the same dishonesty as
+            # rendering UNVERIFIED as PASS.
+            lines.append("    nothing measured — no instance carries an accounting record")
+            return lines
+
+        with_tokens = int(totals["instances_with_tokens"])
+        absent_tokens = recorded - with_tokens
+        # Rounded for DISPLAY only — `accounting_totals()` keeps the raw sum. A monotonic
+        # clock yields values like 12.482731…, and tenths of a second is already finer
+        # than any stop-loss anyone would set on a 15-minute instance.
+        lines.append(f"    wall-clock:     {round(float(totals['wall_clock_seconds']), 1)}s")
+        retries = int(totals["retry_count"])
+        # Requests and retries side by side because they are not the same quantity: a
+        # retried call spends the day's quota twice, which is what makes a retry ladder
+        # expensive rather than free.
+        lines.append(
+            f"    model requests: {totals['model_requests']} "
+            f"({retries} retr{'y' if retries == 1 else 'ies'})"
+        )
+        if with_tokens == 0:
+            lines.append(
+                f"    tokens:         ABSENT — no provider reported usage for any of the "
+                f"{recorded} recorded instance(s)"
+            )
+        else:
+            token_line = (
+                f"    tokens:         {totals['input_tokens']} in / "
+                f"{totals['output_tokens']} out, over {with_tokens} of {recorded} "
+                f"recorded instance(s)"
+            )
+            if absent_tokens:
+                # Named, not silently excluded: a partial total presented as a complete
+                # one is the failure this line exists to prevent.
+                token_line += f"; {absent_tokens} ABSENT (not zero)"
+            lines.append(token_line)
+        models = totals["models"]
+        if isinstance(models, dict) and models:
+            # Per-instance provenance surfaced: a mint may span two models, and the
+            # published number has to be able to say which minted which.
+            named = ", ".join(
+                f"{model} ({count})" for model, count in sorted(models.items())
+            )
+            lines.append(f"    models:         {named}")
+        return lines
+
     def render(self) -> str:
-        """The operator-facing summary, ending with the verify command."""
+        """The operator-facing summary, ending with the verify command.
+
+        **All four buckets, always.** Summarising only `captured`/`failed` was complete
+        before the quota circuit breaker and is not now: after a quota stop the stopping
+        instance is `no_observation` and the entire remainder is absent from the ledger, so
+        a two-bucket line under-reported a mint that stopped at instance 3 of 68 as
+        "2 captured, 0 failed of 68" — the two buckets that explain the other 66 were in
+        `counts` and simply were not printed.
+        """
         lines = [
-            f"minted {self.captured} captured, {self.failed} failed "
+            f"minted {self.captured} captured, {self.failed} failed, "
+            f"{self.no_observation} no_observation, {self.never_driven} never-driven "
             f"of {len(self.instance_ids)} instance(s)",
             f"  batch dir:  {self.batch_dir}",
             f"  checkpoint: {self.checkpoint_path}",
         ]
+        if self.stopped_early:
+            lines.append(
+                f"  STOPPED EARLY: {self.never_driven} of {len(self.instance_ids)} "
+                f"instance(s) were never driven — absent from the checkpoint, and "
+                f"therefore still eligible; re-run the same --root"
+            )
+        lines.extend(self._accounting_lines())
         failures = [
             (instance_id, self.checkpoint.reason(instance_id))
             for instance_id in self.instance_ids
@@ -533,9 +783,12 @@ def _report_for(
     for record in records:
         status = checkpoint.status(record.instance_id)
         if status is None:
-            # Should be unreachable: `run_mint` records every record it sees. Counted
-            # under its own key rather than dropped, because a silently-vanishing
-            # instance is exactly how a denominator shrinks unnoticed.
+            # NOT unreachable, and this comment used to say it was. The quota circuit
+            # breaker made it the normal shape of a stopped batch: on a quota cap
+            # `run_mint` breaks out of the loop, so every later record stays deliberately
+            # absent from the ledger — which is exactly what keeps it eligible. Counted
+            # under its own key and rendered as "never-driven", because a silently
+            # vanishing instance is how a denominator shrinks unnoticed.
             counts["unrecorded"] = counts.get("unrecorded", 0) + 1
         else:
             counts[status] = counts.get(status, 0) + 1
@@ -668,7 +921,6 @@ __all__ = [
     "DEFAULT_CORPUS_DIR",
     "DEFAULT_LEDGER_PATH",
     "DEFAULT_MAX_STEPS",
-    "DEFAULT_MODEL",
     "DEFAULT_PROVIDER",
     "DEFAULT_REGISTRY_PATH",
     "DEFAULT_REQUEST_TIMEOUT",

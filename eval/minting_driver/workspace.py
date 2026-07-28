@@ -33,11 +33,25 @@ A git failure — the runner raising `CalledProcessError` or returning a non-zer
 surfaces as a named `WorkspacePrepError` identifying the instance and its `base_commit`,
 never a silent partial workspace, mirroring the fail-closed idiom of
 `eval.minting_driver.servers.MissingServerError`.
+
+**Exactly one step is retried: the bare clone.** Stage 2's single attrition case was
+`django__django-15400` exiting 128 at `git clone --bare` — with 362 GB free and GitHub
+reachable throughout, and *"the same clone succeeded on retry"*
+(`docs/planning/phase0-mint-execution/mint-execution/STAGE2_FINDINGS.md:44-52`). That is
+the whole justification, and it is network-shaped, so it does not generalize: `git
+worktree add` is **deliberately not retried**. It touches no network and its failures —
+a bad `base_commit`, a non-empty target, a corrupt clone — are deterministic, so a second
+identical invocation reproduces the first one exactly. Retrying it would buy nothing,
+delay a real error by the backoff, and (the actual harm) make a genuine data bug read as
+intermittent flakiness. The asymmetry is intentional; `test_worktree_add_is_never_retried`
+guards it. Both the retry budget and the `sleep` used between attempts are injected, so
+the tests assert the *schedule* of requested delays and no test ever blocks.
 """
 
 from __future__ import annotations
 
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Union
@@ -49,6 +63,15 @@ StrPath = Union[str, "Path"]
 #: The acquisition seam: anything call-compatible with `subprocess.run`. Injected in
 #: tests so no git runs and nothing reaches the network.
 Runner = Callable[..., "subprocess.CompletedProcess"]
+
+#: The delay seam. Injected so a retry test asserts the *requested* delays rather than
+#: waiting them out — a suite that measures elapsed time is both slow and flaky.
+Sleeper = Callable[[float], None]
+
+#: The wait before a second clone attempt; each further attempt doubles it. A second or
+#: two is the right order for a transient network/handshake fault, and the whole schedule
+#: for the default two attempts is a single second — negligible against a 305 MB clone.
+CLONE_RETRY_BASE_DELAY_SECONDS = 1.0
 
 
 class WorkspacePrepError(RuntimeError):
@@ -141,12 +164,41 @@ def _run(
         )
 
 
+def _run_with_retry(
+    runner: Runner,
+    argv: list[str],
+    *,
+    record: InstanceRecord,
+    what: str,
+    attempts: int,
+    sleep: Sleeper,
+) -> None:
+    """`_run`, re-attempted up to `attempts` times with exponential backoff.
+
+    The last failure is re-raised **unchanged** (`raise`, not a new exception), so a
+    persistent failure is byte-identical to the un-retried one: `run_mint` records the
+    instance `failed` with `str(exc)`, and that string must still name the git invocation
+    that actually failed. Only the caller decides what gets this treatment — see the
+    module docstring on why that is the clone and nothing else.
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            _run(runner, argv, record=record, what=what)
+            return
+        except WorkspacePrepError:
+            if attempt >= attempts:
+                raise
+            sleep(CLONE_RETRY_BASE_DELAY_SECONDS * 2 ** (attempt - 1))
+
+
 def prepare_workspace(
     record: InstanceRecord,
     *,
     root: StrPath,
     clones_dir: StrPath,
     runner: Runner = subprocess.run,
+    clone_attempts: int = 2,
+    sleep: Sleeper = time.sleep,
 ) -> WorkspaceLayout:
     """Materialize `record`'s repo at `base_commit` in the gate's sibling layout.
 
@@ -160,7 +212,20 @@ def prepare_workspace(
     All git/network I/O goes through `runner` (default `subprocess.run`); tests inject a
     fake and never run git. Any git failure raises `WorkspacePrepError` — the workspace is
     never left silently partial. Returns the `WorkspaceLayout` on success.
+
+    Step 1 gets `clone_attempts` tries with exponential backoff (waited via the injected
+    `sleep`), because the one observed Stage-2 attrition was a transient exit-128 clone
+    that succeeded when re-run by hand. **Step 2 gets exactly one try, always** — see the
+    module docstring for why retrying a local, deterministic operation would hide a bug
+    rather than absorb a fault. `clone_attempts=1` disables the retry.
     """
+    if clone_attempts < 1:
+        # Guard, not politeness: a non-positive budget would leave the attempt loop
+        # having issued no clone at all, and the miss would surface much later as "git
+        # reported success but no workspace exists" — a message about the workspace, for
+        # a mistake in the call. Name it here.
+        raise ValueError(f"clone_attempts must be at least 1, got {clone_attempts!r}")
+
     layout = layout_for(record.instance_id, root)
 
     # Absolute for the same reason `layout_for` resolves `root`: this path becomes git's
@@ -174,13 +239,29 @@ def prepare_workspace(
     layout.work_dir.parent.mkdir(parents=True, exist_ok=True)
 
     if not bare_clone.exists():
-        _run(
+        # The one retried step. Note the retry is inert on the cached path above: Stage 3
+        # pre-caches every bare clone, so the common case issues no clone and therefore
+        # never waits a backoff.
+        #
+        # Nothing is cleaned up between attempts on purpose. A failed `git clone` removes
+        # the destination it created, so the retry normally starts from nothing; and if a
+        # partial dir somehow survives, the retry fails fast with git's own "destination
+        # path already exists" through the same named error. That is a worse outcome than
+        # an `rmtree` would give, and it is the right trade: this function must never
+        # recursively delete a path it did not watch itself create.
+        _run_with_retry(
             runner,
             ["git", "clone", "--bare", _repo_url(record.repo), str(bare_clone)],
             record=record,
             what="cloning the bare repo",
+            attempts=clone_attempts,
+            sleep=sleep,
         )
 
+    # Deliberately `_run`, not `_run_with_retry`. `git worktree add` is local and its
+    # failure is deterministic — a retry would re-derive the same error after a pointless
+    # wait, and turn a real bad-`base_commit` bug into something that looks intermittent.
+    # If you are here to "fix the inconsistency", read the module docstring first.
     _run(
         runner,
         [
@@ -219,7 +300,9 @@ def prepare_workspace(
 
 
 __all__ = [
+    "CLONE_RETRY_BASE_DELAY_SECONDS",
     "Runner",
+    "Sleeper",
     "WorkspaceLayout",
     "WorkspacePrepError",
     "layout_for",

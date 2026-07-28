@@ -10,6 +10,9 @@ what CANNOT happen by accident:
   live model turn plus a cold `node` start under Seatbelt does not fit into);
 * `--provider` is an explicit argument with an explicit default, so no key in the
   operator's shell can change which model mints;
+* `--model` has **no default at all** — the old `gemini-flash-latest` default was
+  measured minting nothing (`STAGE2_FINDINGS.md:25-39`), which publishes a 0% violation
+  rate that means "the agent did nothing";
 * a missing server install exits 2 with the `npm install` command on stderr, not a
   traceback and not an hour of contained per-instance failures; and
 * importing the CLI does **not** import `belay` — `eval/` is not a product surface, and
@@ -33,14 +36,23 @@ from eval.minting_driver.cli import build_config, build_parser, main
 from eval.minting_driver.entrypoint import (
     DEFAULT_CLONES_DIR,
     DEFAULT_MAX_STEPS,
-    DEFAULT_MODEL,
     DEFAULT_PROVIDER,
     DEFAULT_REGISTRY_PATH,
     DEFAULT_REQUEST_TIMEOUT,
+    MintConfigError,
+)
+from eval.minting_driver.resilience import (
+    DEFAULT_BASE_DELAY_SECONDS,
+    DEFAULT_MAX_ATTEMPTS,
 )
 from eval.minting_driver.servers import PINNED_SERVERS
 
 REPO_ROOT = Path(__file__).parent.parent
+
+#: Every argv below names a model, because `--model` is required and has no default.
+#: A placeholder id is right here — nothing in this file makes a live call; what is
+#: under test is that the operator must *say* which model mints.
+TEST_MODEL = "test-pro-model"
 
 
 def _install_stub_server(server_root: Path, name: str = "filesystem") -> Path:
@@ -57,8 +69,21 @@ def _install_stub_server(server_root: Path, name: str = "filesystem") -> Path:
 
 
 def test_cli_parses_into_a_mint_config(tmp_path: Path) -> None:
-    """The defaults an operator gets when they type the documented command."""
-    cfg = build_config(["one", "octo__repo-1", "--root", str(tmp_path / "stage1")])
+    """The defaults an operator gets when they type the documented command.
+
+    `--root` and `--model` are not among them: both are required, so the shortest legal
+    argv already names them.
+    """
+    cfg = build_config(
+        [
+            "one",
+            "octo__repo-1",
+            "--root",
+            str(tmp_path / "stage1"),
+            "--model",
+            TEST_MODEL,
+        ]
+    )
 
     assert cfg.root == tmp_path / "stage1"
     assert cfg.checkpoint_path == tmp_path / "stage1" / "checkpoint.json"
@@ -68,10 +93,16 @@ def test_cli_parses_into_a_mint_config(tmp_path: Path) -> None:
     assert cfg.registry_path == DEFAULT_REGISTRY_PATH.resolve()
     assert cfg.clones_dir == DEFAULT_CLONES_DIR.resolve()
     assert cfg.provider == DEFAULT_PROVIDER
-    assert cfg.model == DEFAULT_MODEL
+    # The model is whatever argv said — there is no `DEFAULT_MODEL` to compare against
+    # any more, and that absence is the point (see `test_cli_requires_an_explicit_model`).
+    assert cfg.model == TEST_MODEL
     assert cfg.request_timeout == DEFAULT_REQUEST_TIMEOUT
     assert cfg.max_steps == DEFAULT_MAX_STEPS
     assert cfg.server_root is None
+    # The retry budget defaults to `resilience.py`'s, IMPORTED not restated — a second
+    # copy of the number here would let the documented and the built default drift.
+    assert cfg.max_attempts == DEFAULT_MAX_ATTEMPTS
+    assert cfg.retry_base_delay == DEFAULT_BASE_DELAY_SECONDS
 
 
 def test_cli_overrides_every_config_field(tmp_path: Path) -> None:
@@ -95,6 +126,10 @@ def test_cli_overrides_every_config_field(tmp_path: Path) -> None:
             "90",
             "--max-steps",
             "6",
+            "--max-attempts",
+            "5",
+            "--retry-base-delay",
+            "0.25",
             "--server-root",
             str(tmp_path / "servers"),
         ]
@@ -108,6 +143,8 @@ def test_cli_overrides_every_config_field(tmp_path: Path) -> None:
     assert cfg.model == "claude-sonnet-4-5"
     assert cfg.request_timeout == 90.0
     assert cfg.max_steps == 6
+    assert cfg.max_attempts == 5
+    assert cfg.retry_base_delay == 0.25
     assert cfg.server_root == tmp_path / "servers"
 
 
@@ -128,6 +165,8 @@ def test_cli_resolves_every_path_flag_to_an_absolute_path(
             "batch",
             "--root",
             "mint/stage1",
+            "--model",
+            TEST_MODEL,
             "--registry",
             "reg/selected.json",
             "--clones-dir",
@@ -189,6 +228,8 @@ def test_cli_resolves_the_verify_output_paths(
             "octo__repo-1",
             "--root",
             "mint",
+            "--model",
+            TEST_MODEL,
             "--server-root",
             "servers",
             "--ledger",
@@ -207,7 +248,7 @@ def test_cli_resolves_the_verify_output_paths(
 def test_cli_default_request_timeout_is_not_the_transport_default() -> None:
     """The 10s ceiling is unreachable from the command line, and `None` is unspellable."""
     parser = build_parser()
-    args = parser.parse_args(["batch", "--root", "r"])
+    args = parser.parse_args(["batch", "--root", "r", "--model", TEST_MODEL])
 
     assert isinstance(args.request_timeout, float)
     assert args.request_timeout == DEFAULT_REQUEST_TIMEOUT
@@ -215,7 +256,9 @@ def test_cli_default_request_timeout_is_not_the_transport_default() -> None:
 
     # `--request-timeout none` is a parse error, not a silent fall-through to 10s.
     with pytest.raises(SystemExit):
-        parser.parse_args(["batch", "--root", "r", "--request-timeout", "none"])
+        parser.parse_args(
+            ["batch", "--root", "r", "--model", TEST_MODEL, "--request-timeout", "none"]
+        )
 
 
 def test_cli_requires_root(capsys: pytest.CaptureFixture[str]) -> None:
@@ -226,10 +269,134 @@ def test_cli_requires_root(capsys: pytest.CaptureFixture[str]) -> None:
     assert "--root" in capsys.readouterr().err
 
 
+def test_cli_requires_an_explicit_model(capsys: pytest.CaptureFixture[str]) -> None:
+    """No implicit `--model`: the default was `gemini-flash-latest`, and it is known-bad.
+
+    `STAGE2_FINDINGS.md:25-39` measured it: two flash-class models hit the step cap doing
+    **only reads and searches** on `pallets__flask-4045` and never edited anything. An
+    agent that never mutates produces turns that all verify clean, so the mint publishes a
+    **0% violation rate that means "the agent did nothing"** — worse than
+    `INSTRUMENT SUSPECT`, because it *looks like a result* and the pre-registered gate
+    would read it as a PIVOT on a premise that was never tested. Naming the model is also
+    what makes the published number attributable (`prd.md:153-155`).
+
+    Exit 2, from argparse itself, before a workspace is prepped or a token is spent —
+    the same code `MintConfigError` / `MissingCredentialsError` / `MissingServerError`
+    exit with in `main`.
+    """
+    for argv in (["batch", "--root", "r"], ["one", "octo__repo-1", "--root", "r"]):
+        with pytest.raises(SystemExit) as excinfo:
+            build_parser().parse_args(argv)
+        assert excinfo.value.code == 2
+        assert "--model" in capsys.readouterr().err
+
+
+def test_cli_help_renders_for_every_subcommand() -> None:
+    """`--help` must actually format — argparse `%`-expands every help string.
+
+    Not hypothetical: the `--model` help quotes Stage 2's *"0% violation rate"*, and a
+    bare `%` in a help string makes `--help` die with
+    `ValueError: unsupported format character` instead of printing. `--help` is the
+    documented authority on the flags (`eval/README.md`), and it is what an operator
+    reaches for at exactly the moment they are least able to debug argparse.
+    """
+    parser = build_parser()
+
+    for argv in (["one", "--help"], ["batch", "--help"], ["--help"]):
+        with pytest.raises(SystemExit) as excinfo:
+            parser.parse_args(argv)  # formats and prints the help, then exits 0
+        assert excinfo.value.code == 0
+
+
+def test_cli_retry_knobs_are_typed_and_bounded(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`--max-attempts` / `--retry-base-delay` are refused at config time, not mid-mint.
+
+    Both are consumed hours into a live run — `max_attempts` on the first 429,
+    `retry_base_delay` in a `time.sleep` inside the very handler that exists to keep the
+    mint alive. A bad value must fail before a byte is spent, and it must fail as a
+    named `MintConfigError` (exit 2, one line) rather than as a traceback.
+    """
+    parser = build_parser()
+
+    # Non-numeric is an argparse type error, like `--request-timeout none`.
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            ["batch", "--root", "r", "--model", TEST_MODEL, "--max-attempts", "lots"]
+        )
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            ["batch", "--root", "r", "--model", TEST_MODEL, "--retry-base-delay", "soon"]
+        )
+
+    # `1` is the honest spelling of "no retries"; `0` would never call the model at all.
+    with pytest.raises(MintConfigError, match="max_attempts"):
+        build_config(
+            [
+                "batch",
+                "--root",
+                str(tmp_path / "m"),
+                "--model",
+                TEST_MODEL,
+                "--max-attempts",
+                "0",
+            ]
+        )
+
+    # `0` seconds is legitimate (retry immediately); negative is not — `time.sleep`
+    # would raise from inside the quota handler, hours in.
+    zero_delay = build_config(
+        [
+            "batch",
+            "--root",
+            str(tmp_path / "m"),
+            "--model",
+            TEST_MODEL,
+            "--retry-base-delay",
+            "0",
+        ]
+    )
+    assert zero_delay.retry_base_delay == 0.0
+    with pytest.raises(MintConfigError, match="retry_base_delay"):
+        build_config(
+            [
+                "batch",
+                "--root",
+                str(tmp_path / "m"),
+                "--model",
+                TEST_MODEL,
+                "--retry-base-delay",
+                "-1",
+            ]
+        )
+
+    # And through `main`, a bad value is exit 2 with one legible line.
+    code = main(
+        [
+            "batch",
+            "--root",
+            str(tmp_path / "mint"),
+            "--model",
+            TEST_MODEL,
+            "--server-root",
+            str(tmp_path / "servers"),
+            "--max-attempts",
+            "0",
+        ]
+    )
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "max_attempts" in captured.err
+    assert "Traceback" not in captured.err
+
+
 def test_cli_rejects_an_unknown_provider(capsys: pytest.CaptureFixture[str]) -> None:
     """The provider is a closed set, checked by argparse before anything runs."""
     with pytest.raises(SystemExit):
-        build_parser().parse_args(["batch", "--root", "r", "--provider", "openai"])
+        build_parser().parse_args(
+            ["batch", "--root", "r", "--model", TEST_MODEL, "--provider", "openai"]
+        )
     assert "openai" in capsys.readouterr().err
 
 
@@ -248,6 +415,8 @@ def test_cli_missing_servers_exits_with_the_install_command(
             "batch",
             "--root",
             str(tmp_path / "mint"),
+            "--model",
+            TEST_MODEL,
             "--server-root",
             str(tmp_path / "servers"),
             "--registry",
@@ -273,6 +442,8 @@ def test_cli_missing_registry_exits_two_naming_the_instance_pool_aspect(
             "batch",
             "--root",
             str(tmp_path / "mint"),
+            "--model",
+            TEST_MODEL,
             "--server-root",
             str(tmp_path / "servers"),
             "--registry",
@@ -319,6 +490,8 @@ def test_cli_prints_the_verify_command_on_completion(
             "octo__repo-1",
             "--root",
             str(tmp_path / "mint"),
+            "--model",
+            TEST_MODEL,
             "--server-root",
             str(tmp_path / "servers"),
         ]
@@ -430,6 +603,8 @@ def test_verify_flag_runs_the_batch_in_process_with_the_placeholder_command(
             "octo__repo-1",
             "--root",
             str(tmp_path / "mint"),
+            "--model",
+            TEST_MODEL,
             "--server-root",
             str(tmp_path / "servers"),
             "--verify",

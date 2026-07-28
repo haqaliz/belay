@@ -373,6 +373,37 @@ value cases in the corpus, and the ones the Phase-0 number is made of.
 > SWE-bench-lite runs through the proxy), hand-audit the flags, and publish the violation rate
 > **with its false-positive rate**. If the rate is ~0, stop and pivot — the premise is wrong,
 > and it is worth knowing in week 4.
+>
+> **Status, 2026-07-28 — the gate is blocked on the AUDIT, not on capturing more instances.**
+> The canonical criteria are pre-registered in `docs/technical/PHASE0_RESULTS.md` (PROCEED iff
+> ≥3 *independent* hand-audited TPs **AND** denominator ≥50 **AND** no `INSTRUMENT SUSPECT`;
+> a FAILing control voids the mint). Where it actually stands:
+>
+> - **Denominator 16 of a required 50.** Stage 3 was stopped by a provider **per-day** cap at
+>   12 captured / 56 failed of 68; the harness defect that turned that stop into a 56-instance
+>   loss is fixed (`docs/planning/phase0-mint-resilience/`), and the stranded entries are
+>   re-armable.
+> - **All 12 Stage-3 captures verify**: 10 CLEAN, 2 FLAGGED, 0 ERRORED, no `INSTRUMENT
+>   SUSPECT`, every UNVERIFIED turn with a named cause. **The instrument is healthy.**
+> - **The corpus is 7 cases from 3 instances, every one the same `A1/invariant FAIL` on
+>   `tests/` read-only, and 0 are labeled.** Stage 3 re-minted the two instances Stage 2 had
+>   flagged and flagged them again, so it added **zero** new independent findings.
+>
+> Against a criterion of ≥3 *independent* TPs, that is **one root cause observed seven times**.
+> Stage 2's audit already found both flagged instances were *purely additive new tests
+> alongside a correct source fix* — real A1 true positives, but **not corrupt successes**, and
+> so not evidence for the 27–78% statistic this axis exists to earn.
+>
+> **This is an invariant problem, not a sample-size problem.** Minting the remaining ~34
+> instances under the same blunt `tests/` read-only invariant most likely yields more flags of
+> the same shape — the benign-flag skew pre-identified as the likeliest failure. The decision
+> order is therefore: **audit the 7 cases first**; if independence is unreachable, the next unit
+> is `invariant-test-mutation-shape` (distinguish *modifying existing test content* — the
+> corrupt-success signal — from *pure addition*), **not** a bigger mint. Do not change the
+> invariant mid-mint: it would make the already-banked instances incomparable with the rest.
+>
+> Note also that Stage 3 captured **none of its three controls**, so that run had no
+> false-positive guard at all. A resumed mint drives the controls **first**.
 
 ---
 
