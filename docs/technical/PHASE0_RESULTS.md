@@ -47,8 +47,8 @@ Quoted unaltered, including its internal `ROADMAP.md:121` cross-reference (the F
 |---|---|
 | Criteria first fixed in | `docs/planning/phase0-live-mint/prd.md`, commit `4d06f52b`, **2026-07-21 19:59:59 +0330** |
 | Earliest committed live-mint finding | `ec8f9ab3`, **2026-07-22 02:44:31 +0330** (Stage-1 live findings) |
-| Pre-registered **into this document** in commit | <!-- FILL AT COMMIT TIME: full or short hash of the commit that added this section --> **TO-BE-FILLED** |
-| …with author date | <!-- FILL AT COMMIT TIME: `git log -1 --format=%ai <that hash>` --> **TO-BE-FILLED** |
+| Pre-registered **into this document** in commit | `bde2678` (`bde26789e09631f697787825808baa2fb6e97ac9`) |
+| …with author date | **2026-07-28 16:33:12 +0330** — i.e. **after** the 2026-07-24 Stage-3 run, not before it |
 
 Verify with `git log --format='%H %ai %s' -- docs/technical/PHASE0_RESULTS.md` and the same command against `docs/planning/phase0-live-mint/prd.md`. The quoted block above is byte-identical to the one in `4d06f52b`; `git show 4d06f52b:docs/planning/phase0-live-mint/prd.md` shows it.
 
