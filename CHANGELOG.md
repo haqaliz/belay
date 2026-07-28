@@ -7,6 +7,10 @@ All notable changes to Belay are documented here. The format follows
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.9.0] - 2026-07-29
+
 ### The Phase-0 gate ran. Decision: **PIVOT**, on `precision 0.00`.
 
 The seven-case failure corpus is hand-audited: **0 TP / 7 FP, precision 0.00, coverage 1.00, 0
