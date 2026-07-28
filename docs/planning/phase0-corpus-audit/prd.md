@@ -106,10 +106,26 @@ TP (independent)          K   [distinct root-cause keys]
 TP (independent, strict)  M   [distinct instance+tool]
 ```
 The primary clause (distinct root causes) is the criteria's real rule; the strict clause is its
-stated minimum. **Both print**, because on this corpus they disagree sharply — every case is
-`edit_file`, so the strict reading collapses all 7 to **one** finding — and printing only the
-flattering one is the failure mode the pre-registration exists to prevent. A TP missing a
+stated minimum. **Both print**, because on this corpus they disagree and printing only the
+flattering one is the failure mode pre-registration exists to prevent. A TP missing a
 `root_cause` cannot occur (M2); a TP missing `target_tool` makes the strict count `n/a`.
+
+**The strict clause is ambiguous in the pre-registered text, and this is the reading we
+implement.** The criterion reads *"distinct instances **and** distinct tools"*, glossed *"three
+flags from one mis-annotated tool count as **one** finding"* (`PHASE0_RESULTS.md:38`). Those
+support two different computations on this corpus:
+
+| Reading | Computation | This corpus |
+|---|---|---|
+| **Distinct pairs** | count distinct `(instance, tool)` | **3** — `(4045, edit_file)`, `(4992, edit_file)`, `(5859, edit_file)` |
+| **Both dimensions must vary** ← *implemented* | a group is independent only if it differs in instance **and** tool | **1** — the tool never varies |
+
+**We implement the second**, because it is the reading the pre-registered *gloss* states outright
+and it is the harder bar — clearing it clears both. The criteria are pre-registered and may not
+be reinterpreted to taste once the data is visible; picking the more permissive reading *after*
+seeing that it triples the count is precisely the move pre-registration forbids. The chosen
+reading is named in the output, and `AUDIT.md` reports the other number too so a reader can see
+what the choice cost.
 
 **M5 · `score()` stays pure and stays honest.**
 It gains a third and fourth field to read but performs no I/O, consults no clock, and reads
@@ -208,6 +224,50 @@ The `feat-verdict-coverage-status` worktree must not be removed or relocated.
 
 ---
 
+## Anticipated outcomes — state the modal result BEFORE measuring it
+
+Pre-registering the expected result is the same discipline as pre-registering the criteria: it
+stops the write-up from being shaped by what the number turned out to be.
+
+**The modal outcome is `precision = 0.0`.** `flask-4045` t8 is adjudicated `false-positive`
+(understanding §6a). Shapes **B** and **C** — five of the remaining six — are additive or
+self-scratch edits with no plausible integrity violation. Only `pylint-5859` t6 is a live TP
+candidate, and it is contestable in both directions. So the likely landing is **TP=0, FP=7**:
+
+```
+precision = TP/(TP+FP) = 0/7 = 0.0
+recall    = TP/(TP+FN) = 0/0 = n/a
+TP (independent)         0
+TP (independent, strict) 0
+```
+
+That is a **defined, publishable number**, not a degenerate one — and it is the most consequential
+sentence this unit can produce: *the A1 default `tests/` read-only invariant has **zero measured
+precision** on the only real mint data Belay has.* If it lands, it must be reported plainly, in
+those terms.
+
+**What an all-FP corpus does to `corpus run` — the consequence most likely to be missed.**
+`belay corpus run` replays every case and asserts it still reaches its stored verdict, and the
+stored verdict for all 7 is `FAIL`. The corpus **is** the regression suite
+(`CAPABILITY_ROADMAP.md:420-422`). If all 7 are false positives, that suite is pinning behavior we
+believe to be **wrong**: a green `corpus run` would then certify only that Belay still
+mis-fires the same way, which is regression safety in the literal sense and evidence of
+correctness in no sense at all.
+
+This unit does **not** resolve that — deleting or re-storing the cases would destroy the very
+evidence the audit produced, and changing the invariant mid-corpus is forbidden
+(`CAPABILITY_ROADMAP.md:402-403`). What it must do is **say so**: `AUDIT.md` records that the
+regression suite's cases are human-labeled false positives, so the next reader of a green
+`corpus run` is not misled. Resolving it belongs to `invariant-test-mutation-shape`, which will
+need these cases as its *negative* fixtures — they are more valuable labeled-wrong than deleted.
+
+**If instead ≥1 TP survives** (t6 the only candidate), the tally is 1 TP against a required ≥3
+independent, and the conclusion is unchanged: not a PROCEED, and the next unit is the sharper
+invariant. **No adjudication of these 7 cases can produce a PROCEED**, because the denominator is
+16. Stating that in advance is what stops the audit from being run until it produces one.
+
+---
+
 ## Risks & Open Questions
 
 | Risk | R-id | Mitigation |
@@ -231,6 +291,11 @@ The `feat-verdict-coverage-status` worktree must not be removed or relocated.
    the clones are local.
 3. **Does `corpus score`'s output change break a test asserting exact text?** To be established by
    the first RED test in Phase 6.
+4. **Should `tests/` read-only stop being ON by default if precision lands at 0.0?** It ships
+   enabled (`--no-default-invariants` opts out) and `README.md`'s coverage claims rest on it.
+   **Deliberately deferred until the labels exist** (decision, 2026-07-29): deciding it now would
+   be reacting to the forecast in *Anticipated outcomes* rather than to a measurement, which is
+   the substitution this project exists to refuse. Revisit as the first question after M8.
 
 ---
 
