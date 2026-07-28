@@ -7,6 +7,10 @@ All notable changes to Belay are documented here. The format follows
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.8.0] - 2026-07-28
+
 Everything below is confined to `eval/` — the Phase-0 minting harness. **No `src/belay/` change,
 no verdict-axis change, and nothing here alters what a verdict claims.** A Belay user's install is
 byte-unchanged.
