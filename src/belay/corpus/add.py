@@ -40,12 +40,13 @@ read, so re-composing the same flagged turn yields the same case. `captured_at` 
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import shutil
 import sys
 from pathlib import Path
-from typing import Sequence
+from typing import Optional, Sequence
 
 from belay.corpus.case import Case, write_case
 from belay.index import derive_correlation, tool_calls
@@ -92,6 +93,37 @@ def _target_state_handle(records: Sequence[dict], target_turn_index: int) -> dic
             f"there is no pre-state handle to bundle"
         )
     return record.get("state_handle") or {}
+
+
+def _target_tool_name(records: Sequence[dict], target_turn_index: int) -> Optional[str]:
+    """The `params.name` off the target `tools/call`'s request frame, or `None`.
+
+    Selects the turn the same way `_target_state_handle` does — by correlation index —
+    and reads the name off THAT frame. `None` when the frame or the name is missing:
+    absent-never-guessed, because the strict independence clause reads this field and a
+    fabricated tool name would silently change the count the gate is read against.
+
+    Mirrors `verify.turn._tool_name`; kept local so this module owns its own read of the
+    trace, matching the convention that module already records.
+    """
+    calls = tool_calls(derive_correlation(list(records)))
+    if not (0 <= target_turn_index < len(calls)):
+        return None
+    request_seq = calls[target_turn_index].get("request_seq")
+    if request_seq is None:
+        return None
+    for record in records:
+        if record.get("kind") != "frame" or record.get("seq") != request_seq:
+            continue
+        try:
+            message = json.loads(base64.b64decode(record["raw"]))
+        except Exception:
+            return None
+        params = message.get("params")
+        if isinstance(params, dict) and isinstance(params.get("name"), str):
+            return params["name"]
+        return None
+    return None
 
 
 def add_case(
@@ -175,6 +207,7 @@ def add_case(
         provenance={"source_trace_id": source_trace_id, "captured_at": captured_at},
         capture_platform=sys.platform,
         capture_capabilities=sorted(snap.manifest.capabilities),
+        target_tool=_target_tool_name(records, target_turn_index),
     )
     write_case(case_dir, case)
     return case_dir

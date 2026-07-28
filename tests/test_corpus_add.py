@@ -514,3 +514,18 @@ def test_cli_corpus_add_passes_label_through(tmp_path, capsys):
     )
     assert rc == 0, capsys.readouterr()
     assert load_case(corpus_dir / "cli-trace-turn0").human_label == "true-positive"
+
+
+# --- target_tool: recorded so independence stays computable ---------------------------
+#
+# The gate's STRICT independence clause is "distinct instances AND distinct
+# tools", but the tool appears nowhere in case.json -- it lives in the trace.
+# `corpus add` already holds both the trace and the turn index, so it records
+# the tool here and the strict count stays computable without re-reading traces
+# at score time (which would make `score()` do I/O).
+
+
+def test_add_case_records_the_target_tool(tmp_path):
+    """The composed case carries the target turn's tool name."""
+    case_dir = _add_synthetic(tmp_path)
+    assert load_case(case_dir).target_tool == "edit_file"
