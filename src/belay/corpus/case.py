@@ -31,8 +31,10 @@ consulted — this is pure data and a JSON parse.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 #: The four human ground-truth labels a case may carry. `pending` is the default the
 #: engine writes; a human relabels it to one of the other three. Listing exactly these
@@ -67,6 +69,12 @@ _KNOWN_SUB_STATUSES = _KNOWN_STATUSES | {"NOT_COVERED"}
 #: format as of the `NOT_COVERED` change; a case written before it simply lacks the key and
 #: reads back as 1, which is true (nothing about the older format differs).
 CASE_SCHEMA_VERSION = 1
+
+#: A `root_cause.key` must match this: lowercase alphanumeric words joined by single
+#: hyphens. The key is what `corpus score` GROUPS ON to count independent findings, so a
+#: typo'd or free-form key would silently split one finding into two and inflate the count
+#: the gate is read against. Rejecting it here makes that a loud error instead.
+_ROOT_CAUSE_KEY_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 
 #: The case.json keys that MUST be present (every field except `human_label`, which
 #: defaults). Order is the stable field order used when constructing a `Case`.
@@ -111,11 +119,55 @@ class Case:
     capture_platform: str
     capture_capabilities: list[str]
     schema_version: int = CASE_SCHEMA_VERSION
+    root_cause: Optional[dict] = None
+    target_tool: Optional[str] = None
+
+
+def _validate_root_cause(raw: object, path: Path) -> Optional[dict]:
+    """Validate an on-disk `root_cause`, or raise a named `ValueError`.
+
+    Shape is `{"key": <kebab-case str>, "note": <str>}`. `key` is the grouping key
+    `corpus score` counts independent findings by; `note` is the human's prose, which
+    nothing groups on. Absent -> `None`, the same single silence `human_label` is allowed.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"case file {path!r} field 'root_cause' must be an object with 'key' and "
+            f"'note', got {type(raw).__name__}"
+        )
+    for key in ("key", "note"):
+        if key not in raw:
+            raise ValueError(f"case file {path!r} field 'root_cause' is missing {key!r}")
+        if not isinstance(raw[key], str):
+            raise ValueError(
+                f"case file {path!r} field 'root_cause.{key}' must be a string, "
+                f"got {type(raw[key]).__name__}"
+            )
+    if not _ROOT_CAUSE_KEY_RE.match(raw["key"]):
+        raise ValueError(
+            f"case file {path!r} field 'root_cause.key' is {raw['key']!r}; must be "
+            f"kebab-case (lowercase words joined by single hyphens) so that grouping "
+            f"independent findings cannot be split by a typo"
+        )
+    return raw
 
 
 def _to_payload(case: Case) -> dict:
-    """A `Case` as the JSON dict written to `case.json` (every field, `human_label` too)."""
+    """A `Case` as the JSON dict written to `case.json`.
+
+    `root_cause` and `target_tool` are OMITTED when unset rather than written as `null`:
+    a default is never a declaration, so "nobody adjudicated a cause" must stay
+    distinguishable from "a cause was recorded as empty".
+    """
+    optional = {
+        name: value
+        for name, value in (("root_cause", case.root_cause), ("target_tool", case.target_tool))
+        if value is not None
+    }
     return {
+        **optional,
         "id": case.id,
         "target_turn_index": case.target_turn_index,
         "expected": case.expected,
@@ -223,6 +275,14 @@ def load_case(case_dir: Path) -> Case:
             f"must be an integer"
         )
 
+    root_cause = _validate_root_cause(raw.get("root_cause"), path)
+
+    target_tool = raw.get("target_tool")
+    if target_tool is not None and not isinstance(target_tool, str):
+        raise ValueError(
+            f"case file {path!r} field 'target_tool' is {target_tool!r}; must be a string"
+        )
+
     human_label = raw.get("human_label", _DEFAULT_LABEL)
     if human_label not in _KNOWN_LABELS:
         known = ", ".join(sorted(_KNOWN_LABELS))
@@ -244,6 +304,8 @@ def load_case(case_dir: Path) -> Case:
         capture_platform=raw["capture_platform"],
         capture_capabilities=raw["capture_capabilities"],
         schema_version=schema_version,
+        root_cause=root_cause,
+        target_tool=target_tool,
     )
 
 

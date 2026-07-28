@@ -7,7 +7,60 @@ All notable changes to Belay are documented here. The format follows
 
 ## [Unreleased]
 
-_Nothing yet._
+### The Phase-0 gate ran. Decision: **PIVOT**, on `precision 0.00`.
+
+The seven-case failure corpus is hand-audited: **0 TP / 7 FP, precision 0.00, coverage 1.00, 0
+pending**. The A1 default `tests/` read-only invariant fired seven times on real mint data and was
+right zero times. Published in `docs/technical/PHASE0_RESULTS.md`, adjudicated case-by-case in the
+new `docs/technical/PHASE0_AUDIT.md`.
+
+The outcome was **pre-registered before any label was written** (`docs/planning/phase0-corpus-audit/prd.md`
+→ *Anticipated outcomes*), so the audit confirmed a forecast rather than discovering a result.
+
+**Read the PIVOT precisely.** It is earned by the letter of the pre-registered rule (*"PIVOT if
+fewer than 3 independent TPs survive audit"*), and it is **not** evidence for risk R1 (*the premise
+is wrong*). A 0.00-precision detector cannot measure the base rate it was aimed at, in either
+direction — and the rule fired on a run that never met its own ≥50 denominator clause (n=16). **A
+PIVOT of the detector, not of the thesis.** The mint is not void: 2 of 3 controls captured, both
+`VERIFIED_CLEAN`, `INSTRUMENT SUSPECT` did not fire, and A2 replay/effect PASS on all seven — every
+flag observed a **real** write under `tests/`. A precision failure, not an instrument failure.
+
+Two claims the planning docs reasoned from are **corrected by measurement**: *"one root cause
+observed seven times"* (true of the detector, false of the root cause — there are three distinct
+shapes), and *"`s1p` is the corrupt success"* (it is not; upstream `7c526140` makes the same change
+to the same test). **The corpus contains zero corrupt-success true positives.**
+
+### Added
+
+- **`Case.root_cause` (`{key, note}`) and `Case.target_tool`.** The gate requires a root cause
+  beside every true positive and a tool for its strict independence clause; neither could be
+  recorded before. Both are optional and additive — absent **omits** the JSON key rather than
+  writing `null`, because a default is never a declaration, and neither joins `_REQUIRED_FIELDS`
+  (which would reject every already-banked case, the same reasoning `schema_version` records).
+- **`belay corpus label --root-cause-key / --root-cause-note`.** A `true-positive` without a root
+  cause is now refused fail-closed: it is a finding the gate cannot evaluate.
+- **Independence counts in `belay corpus score`.** Both pre-registered readings print, each naming
+  the rule that produced it — they disagree, and a bare number invites quoting whichever flatters.
+  An unevaluable strict count prints `n/a` **with its reason**, never `0`.
+- **`eval/scripts/backfill_target_tool.py`** — one-off migration recovering `target_tool` from each
+  case's own bundled trace. Writes only that field; idempotent; leaves an unreadable turn absent
+  rather than guessing.
+
+### Fixed
+
+- **`belay corpus list` no longer runs a long case id into the label column.** Every real corpus id
+  rendered as `trace-pallets__flask-4992-turn10pending`. Cosmetic, but this is the table a human
+  reads while adjudicating.
+- **A root cause survives relabeling.** `set_label` round-trips through the frozen dataclass and
+  `write_case` serializes a fixed key set, so a cause stored as a loose JSON key would have been
+  silently erased by the next label call — the audit's own record destroying itself.
+
+### Note for anyone reading a green `belay corpus run`
+
+The corpus is now seven **human-labeled false positives**. A green `corpus run` therefore certifies
+only that Belay still mis-fires identically — regression safety, and no evidence of correctness.
+The cases are kept deliberately: they are `invariant-test-mutation-shape`'s negative fixtures, and
+it must go **7/7 clean** on them.
 
 ## [0.8.0] - 2026-07-28
 

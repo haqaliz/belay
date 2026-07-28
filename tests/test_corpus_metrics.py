@@ -30,15 +30,27 @@ Positive = the engine emitted FAIL. WARN is folded in with PASS as a non-detecti
 
 from __future__ import annotations
 
+from typing import Optional
+
 from belay.corpus.case import Case
 from belay.corpus.metrics import Metrics, score
 
 
-def _case(reduced_status: str, human_label: str, cid: str = "c") -> Case:
-    """A `Case` carrying only the two fields `score` reads; the rest are inert filler.
+def _case(
+    reduced_status: str,
+    human_label: str,
+    cid: str = "c",
+    *,
+    root_cause_key: Optional[str] = None,
+    target_tool: Optional[str] = None,
+    instance: Optional[str] = None,
+) -> Case:
+    """A `Case` carrying only the fields `score` reads; the rest are inert filler.
 
-    `score` is a pure function of `expected.reduced_status` and `human_label`; every other
-    field is present because the dataclass requires it, not because the metric looks at it.
+    `score` reads `expected.reduced_status` and `human_label` for the confusion matrix, and
+    — for the two independence counts — `root_cause["key"]`, `target_tool`, and the instance
+    `provenance["source_trace_id"]`. Every other field is present because the dataclass
+    requires it, not because the metric looks at it.
     """
     return Case(
         id=cid,
@@ -49,9 +61,13 @@ def _case(reduced_status: str, human_label: str, cid: str = "c") -> Case:
         server_command=["server"],
         replays=1,
         timeout=1.0,
-        provenance={},
+        provenance={} if instance is None else {"source_trace_id": instance},
         capture_platform="darwin",
         capture_capabilities=[],
+        root_cause=(
+            None if root_cause_key is None else {"key": root_cause_key, "note": "a note"}
+        ),
+        target_tool=target_tool,
     )
 
 
@@ -207,3 +223,231 @@ def test_empty_corpus_is_all_na_never_perfect() -> None:
     assert m.precision is None
     assert m.recall is None
     assert m.coverage is None
+
+
+# ---------------------------------------------------------------------------
+# Independence counts: how many DISTINCT findings the TPs represent.
+#
+# The Phase-0 gate reads "≥3 *independent* hand-audited TPs", so the raw TP count is the
+# wrong number to publish: seven flags of one mis-annotated tool are one finding observed
+# seven times. Two counts are reported, each with the rule that produced it, because the
+# permissive and strict readings of "independent" disagree and the gate must not be quoted
+# against whichever happens to flatter.
+#
+#   independent_tp        — distinct `root_cause["key"]` among TPs (the human's adjudication)
+#   independent_tp_strict — the PRE-REGISTERED gloss: a set of TPs is more than one finding
+#                           only if they differ in BOTH instance and tool. If every TP shares
+#                           one tool, this is 1 no matter how many instances appear.
+#
+# Both are functions of HUMAN-supplied fields only (`root_cause`, `target_tool`, and the
+# capture's `provenance["source_trace_id"]`). Deriving a cause from `expected`/`sub_verdicts`
+# would make independence a function of the engine's own output — the label-trap of
+# `metrics.py`'s honesty rule 1, one level up.
+# ---------------------------------------------------------------------------
+
+
+def test_independent_tp_counts_distinct_root_cause_keys() -> None:
+    """(13) RULE: `independent_tp` == the number of distinct `root_cause["key"]` among TPs.
+
+    Three TPs carrying two distinct keys (`tests-readonly` twice, `env-write` once) are two
+    findings, not three. Hand-computed: tp == 3, independent_tp == 2.
+    """
+    cases = [
+        _case("FAIL", "true-positive", "a", root_cause_key="tests-readonly", target_tool="edit"),
+        _case("FAIL", "true-positive", "b", root_cause_key="tests-readonly", target_tool="edit"),
+        _case("FAIL", "true-positive", "c", root_cause_key="env-write", target_tool="edit"),
+    ]
+
+    m = score(cases)
+
+    assert m.tp == 3
+    assert m.independent_tp == 2
+
+
+def test_strict_independence_is_one_when_every_tp_shares_a_tool() -> None:
+    """(14) 🔴 THE LOAD-BEARING ASSERTION: three instances, ONE tool -> strict == 1.
+
+    The pre-registered gloss is *"three flags from one mis-annotated tool count as one
+    finding"*. These three TPs come from three DIFFERENT captures (three instances) and
+    carry three DIFFERENT root-cause keys, but every one of them is the same tool
+    (`write_file`). Under the strict rule they differ in instance but NOT in tool, so they
+    are ONE finding: `independent_tp_strict == 1`.
+
+    The permissive reading — count the distinct `(instance, tool)` groups, which is 3 here —
+    is exactly the substitution this test refuses. Three is the flattering number, and it
+    would clear a gate written for "≥3 independent TPs" on the strength of one tool
+    behaving one way. The permissive count is still reported, but as `independent_tp`
+    (== 3 here, its own honest rule), never as the strict one.
+    """
+    cases = [
+        _case(
+            "FAIL", "true-positive", "a",
+            root_cause_key="tests-readonly", target_tool="write_file", instance="inst-1",
+        ),
+        _case(
+            "FAIL", "true-positive", "b",
+            root_cause_key="env-write", target_tool="write_file", instance="inst-2",
+        ),
+        _case(
+            "FAIL", "true-positive", "c",
+            root_cause_key="fixture-rewrite", target_tool="write_file", instance="inst-3",
+        ),
+    ]
+
+    m = score(cases)
+
+    assert m.tp == 3
+    assert m.independent_tp == 3  # three distinct keys, by the permissive rule
+    assert m.independent_tp_strict == 1  # ...but ONE tool, so ONE finding
+    assert m.independent_tp_strict != 3
+
+
+def test_strict_independence_counts_tps_differing_in_both_instance_and_tool() -> None:
+    """RULE: TPs that differ in BOTH instance and tool are counted separately.
+
+    The strict rule is not "always 1" — it is "one finding unless both dimensions vary".
+    Here instance and tool both vary across two `(instance, tool)` groups, so the strict
+    count is the number of groups. Hand-computed: 2.
+    """
+    cases = [
+        _case(
+            "FAIL", "true-positive", "a",
+            root_cause_key="tests-readonly", target_tool="write_file", instance="inst-1",
+        ),
+        _case(
+            "FAIL", "true-positive", "b",
+            root_cause_key="tests-readonly", target_tool="run_process", instance="inst-2",
+        ),
+    ]
+
+    m = score(cases)
+
+    assert m.tp == 2
+    assert m.independent_tp == 1  # one shared root-cause key
+    assert m.independent_tp_strict == 2  # both dimensions vary -> two groups
+
+
+def test_strict_independence_is_na_when_a_tp_lacks_a_target_tool() -> None:
+    """(15) RULE: any TP with `target_tool is None` -> strict is `None` (n/a), never a guess.
+
+    The tool dimension cannot be evaluated for a TP that never recorded one, and the two
+    wrong answers are both available: 0 (understates and looks like "no findings") and a
+    grouped number computed as though the missing tool were a distinct value (overstates).
+    `None` is the honest n/a, the same shape `precision`/`recall`/`coverage` already use.
+    The permissive count does not depend on the tool, so it still reports 2.
+    """
+    cases = [
+        _case(
+            "FAIL", "true-positive", "a",
+            root_cause_key="tests-readonly", target_tool="write_file", instance="inst-1",
+        ),
+        _case(
+            "FAIL", "true-positive", "b",
+            root_cause_key="env-write", target_tool=None, instance="inst-2",
+        ),
+    ]
+
+    m = score(cases)
+
+    assert m.tp == 2
+    assert m.independent_tp == 2
+    assert m.independent_tp_strict is None
+    assert m.independent_tp_strict != 0
+
+
+def test_zero_tps_gives_zero_counts_and_a_real_zero_precision() -> None:
+    """(16) 🔴 THE MODAL OUTCOME: no TP at all -> both counts 0, and `precision == 0.0`.
+
+    This is the result this project actually anticipates: every flag adjudicated a false
+    positive. Then both independence counts are a real 0 — no findings, which is a fact, not
+    an absence of information, so neither is `None` here.
+
+    And precision must stay a real `0.0`: `TP/(TP+FP)` is `0/2`, a defined rate whose
+    denominator exists. Rendering the headline finding as `n/a` would let the least
+    flattering number disappear behind "not applicable" — so this pins it against a later
+    refactor that folds a 0 numerator into the same n/a branch as a 0 denominator.
+    """
+    cases = [
+        _case("FAIL", "false-positive", "a", root_cause_key="benign-flag", target_tool="edit"),
+        _case("FAIL", "false-positive", "b", root_cause_key="benign-flag", target_tool="edit"),
+    ]
+
+    m = score(cases)
+
+    assert (m.tp, m.fp) == (0, 2)
+    assert m.independent_tp == 0
+    assert m.independent_tp_strict == 0
+    assert m.independent_tp_strict is not None
+    assert m.precision == 0.0
+    assert m.precision is not None
+
+
+def test_non_tp_root_causes_are_ignored_by_both_independence_counts() -> None:
+    """(17) RULE: only cases counted TP in the confusion matrix feed the independence counts.
+
+    A root cause on a false-positive, an `unverifiable`, or a `pending` case is a human's
+    note about a case that is NOT a detection of a real violation — counting it would
+    manufacture findings out of cases the confusion matrix already excluded or scored
+    against us. Here exactly one case is a TP, and it carries one key on one tool:
+    hand-computed independent_tp == 1, strict == 1, despite four other root causes present.
+    """
+    cases = [
+        _case(
+            "FAIL", "true-positive", "tp",
+            root_cause_key="tests-readonly", target_tool="write_file", instance="inst-1",
+        ),
+        _case(
+            "FAIL", "false-positive", "fp",
+            root_cause_key="benign-flag", target_tool="run_process", instance="inst-2",
+        ),
+        _case(
+            "FAIL", "unverifiable", "unv",
+            root_cause_key="no-ground-truth", target_tool="read_file", instance="inst-3",
+        ),
+        _case(
+            "FAIL", "pending", "pend",
+            root_cause_key="not-adjudicated", target_tool="list_dir", instance="inst-4",
+        ),
+        _case(
+            "UNVERIFIED", "true-positive", "shrug",
+            root_cause_key="undecided", target_tool="move_file", instance="inst-5",
+        ),
+    ]
+
+    m = score(cases)
+
+    assert m.tp == 1
+    assert m.independent_tp == 1
+    assert m.independent_tp_strict == 1
+
+
+def test_score_performs_no_io(monkeypatch) -> None:
+    """(18) RULE: `score` is pure — no file open, no clock, no network, ever.
+
+    The metric is the number the gate publishes, so it must be reproducible from the loaded
+    cases alone: a `score` that reached back to disk could report something the stored cases
+    do not say. Asserted two ways — the case's paths do not exist (a `server_command` and a
+    `source_trace_id` pointing nowhere), and `builtins.open`/`time.time` are replaced with
+    detonators for the duration of the call.
+    """
+    import builtins
+    import time
+
+    def _boom(*args, **kwargs):  # pragma: no cover - only runs if score is impure
+        raise AssertionError("score() must not perform I/O or read a clock")
+
+    monkeypatch.setattr(builtins, "open", _boom)
+    monkeypatch.setattr(time, "time", _boom)
+
+    absent = _case(
+        "FAIL", "true-positive", "a",
+        root_cause_key="tests-readonly", target_tool="write_file",
+        instance="/nowhere/does/not/exist/trace.jsonl",
+    )
+    object.__setattr__(absent, "server_command", ["/nowhere/does/not/exist/server"])
+
+    m = score([absent])
+
+    assert m.tp == 1
+    assert m.independent_tp == 1
+    assert m.independent_tp_strict == 1

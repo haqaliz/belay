@@ -20,7 +20,7 @@ from __future__ import annotations
 import dataclasses
 from pathlib import Path
 
-from belay.corpus.case import load_case, write_case
+from belay.corpus.case import _validate_root_cause, load_case, write_case
 
 #: The three REAL adjudications a human may assign. `pending` — the un-adjudicated default the
 #: engine writes — is deliberately absent: `label` means "adjudicate", so resetting to pending
@@ -31,13 +31,29 @@ ADJUDICATIONS = frozenset({"true-positive", "false-positive", "unverifiable"})
 __all__ = ["set_label", "ADJUDICATIONS"]
 
 
-def set_label(corpus_dir: Path, case_id: str, label: str) -> Path:
-    """Adjudicate `<corpus_dir>/<case_id>` to `label`, rewriting only `human_label`.
+def set_label(
+    corpus_dir: Path,
+    case_id: str,
+    label: str,
+    root_cause: dict | None = None,
+) -> Path:
+    """Adjudicate `<corpus_dir>/<case_id>` to `label`, rewriting only the human's fields.
 
     Rejects any `label` outside `ADJUDICATIONS` with a named `ValueError` before touching
     disk, so a bad label is never written. Re-labeling is allowed — a human correcting an
-    earlier call. Loads fail-closed (a missing or corrupt case raises), replaces just the one
-    field on the frozen `Case`, and writes it back. Returns the case directory.
+    earlier call. Loads fail-closed (a missing or corrupt case raises), replaces just the
+    human-authored fields on the frozen `Case`, and writes it back. Returns the case
+    directory.
+
+    A `true-positive` REQUIRES a `root_cause`. The pre-registered gate criteria demand a
+    root cause beside every TP so a reader can judge independence directly, so a TP without
+    one is a finding the gate cannot evaluate — refused here rather than scored later. The
+    other two adjudications may omit it.
+
+    `root_cause` is validated to the same shape `load_case` enforces, BEFORE any write: a
+    malformed cause caught only on the next load would leave a corrupt case on disk.
+    Passing `root_cause=None` to a re-label PRESERVES any cause already recorded — a
+    correction of the label is not a retraction of the reasoning.
     """
     if label not in ADJUDICATIONS:
         known = ", ".join(sorted(ADJUDICATIONS))
@@ -46,8 +62,22 @@ def set_label(corpus_dir: Path, case_id: str, label: str) -> Path:
             f"('pending' is the un-adjudicated default, not a label you set)"
         )
 
+    if root_cause is not None:
+        # Same validator the loader uses, so a cause is rejected at adjudication time
+        # rather than becoming an unloadable case.
+        _validate_root_cause(root_cause, Path(corpus_dir) / case_id / "case.json")
+
     case_dir = Path(corpus_dir) / case_id
     case = load_case(case_dir)  # fail-closed: a missing/corrupt case is a ValueError
-    relabeled = dataclasses.replace(case, human_label=label)
+
+    effective_cause = root_cause if root_cause is not None else case.root_cause
+    if label == "true-positive" and effective_cause is None:
+        raise ValueError(
+            f"cannot label {case_id!r} 'true-positive' without a root cause; the "
+            f"pre-registered gate criteria require a root cause beside every true "
+            f"positive so that independent findings can be counted"
+        )
+
+    relabeled = dataclasses.replace(case, human_label=label, root_cause=effective_cause)
     write_case(case_dir, relabeled)
     return case_dir

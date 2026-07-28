@@ -955,6 +955,17 @@ def _cmd_corpus_score(args: argparse.Namespace) -> int:
     _emit(f"  FN                    {m.fn}")
     _emit(f"  TN                    {m.tn}")
     _emit()
+    _emit("independent findings (the gate counts INDEPENDENT true positives, not raw TPs)")
+    _emit(f"  independent           {m.independent_tp}   distinct root-cause keys")
+    strict = "n/a" if m.independent_tp_strict is None else str(m.independent_tp_strict)
+    _emit(f"  independent, strict   {strict}   distinct instance+tool")
+    if m.independent_tp_strict is None:
+        _emit("      n/a: a true positive has no recorded target_tool, the dimension the")
+        _emit("      strict rule turns on. Not 0 — unevaluable is not 'no findings'.")
+    # Both readings print, always. They disagree (a corpus flagged many times through ONE
+    # tool is one finding strictly, many loosely), and a count whose grouping rule is
+    # invisible invites quoting whichever flatters — the move pre-registration forbids.
+    _emit()
     _emit("metrics")
     _emit(f"  precision             {_rate(m.precision)}   TP/(TP+FP)")
     _emit(f"  recall                {_rate(m.recall)}   TP/(TP+FN)")
@@ -981,14 +992,29 @@ def _cmd_corpus_label(args: argparse.Namespace) -> int:
     """
     from belay.corpus.curate import set_label
 
+    if args.root_cause_note and not args.root_cause_key:
+        _emit(
+            "belay: --root-cause-note requires --root-cause-key; the key is what "
+            "independent findings are grouped by, and a note alone cannot be counted"
+        )
+        return 2
+
+    root_cause = (
+        {"key": args.root_cause_key, "note": args.root_cause_note}
+        if args.root_cause_key
+        else None
+    )
+
     try:
-        case_dir = set_label(Path(args.corpus_dir), args.case_id, args.label)
+        case_dir = set_label(Path(args.corpus_dir), args.case_id, args.label, root_cause)
     except ValueError as exc:
         _emit(f"belay: {exc}")
         return 2
 
     _emit(f"belay corpus label: {case_dir}")
     _emit(f"  human_label -> {args.label}")
+    if root_cause is not None:
+        _emit(f"  root_cause  -> {root_cause['key']}")
     _emit("  Only the human label changed; the engine's recorded verdict is untouched.")
     return 0
 
@@ -1012,14 +1038,25 @@ def _cmd_corpus_list(args: argparse.Namespace) -> int:
     _emit()
     _emit(f"  {len(case_dirs)} case(s)")
     _emit()
-    _emit(f"  {'case-id':<32}{'label':<16}verdict")
+    cases = []
     for case_dir in case_dirs:
         try:
-            case = load_case(case_dir)
+            cases.append((case_dir, load_case(case_dir)))
         except ValueError as exc:
             _emit(f"belay: {exc}")
             return 2
-        _emit(f"  {case_dir.name:<32}{case.human_label:<16}{case.expected['reduced_status']}")
+
+    # Size the id column to the widest id actually present. The real corpus ids
+    # ("trace-pallets__flask-4992-turn10") overflow a fixed 32 and run straight into the
+    # next column, which reads as a different value entirely.
+    id_width = max([len(d.name) for d, _ in cases] + [len("case-id")]) + 2
+    _emit(f"  {'case-id':<{id_width}}{'label':<16}{'verdict':<12}root-cause")
+    for case_dir, case in cases:
+        key = case.root_cause["key"] if case.root_cause else ""
+        _emit(
+            f"  {case_dir.name:<{id_width}}{case.human_label:<16}"
+            f"{case.expected['reduced_status']:<12}{key}"
+        )
     return 0
 
 
@@ -1044,6 +1081,15 @@ def _cmd_corpus_show(args: argparse.Namespace) -> int:
     _emit(f"  id                    {case.id}")
     _emit(f"  target_turn_index     {case.target_turn_index}")
     _emit(f"  human_label           {case.human_label}")
+    # Absent renders as "(absent)", never as an empty string: nobody adjudicated a cause
+    # here, which is a different fact from a cause recorded as empty.
+    if case.root_cause:
+        _emit(f"  root_cause            {case.root_cause['key']}")
+        if case.root_cause.get("note"):
+            _emit(f"                        {case.root_cause['note']}")
+    else:
+        _emit("  root_cause            (absent)")
+    _emit(f"  target_tool           {case.target_tool or '(absent)'}")
     _emit(f"  expected status       {case.expected['reduced_status']}")
     _emit("  sub-verdicts")
     for sub in case.expected["sub_verdicts"]:
@@ -1647,6 +1693,22 @@ def _parser() -> argparse.ArgumentParser:
         required=True,
         choices=["true-positive", "false-positive", "unverifiable"],
         help="the HUMAN adjudication for this case (not 'pending' — that is the un-adjudicated default)",
+    )
+    corpus_label.add_argument(
+        "--root-cause-key",
+        help=(
+            "the kebab-case grouping key for this case's root cause. REQUIRED for "
+            "--label true-positive: the gate criteria count INDEPENDENT true positives by "
+            "distinct root cause, so a TP without one cannot be evaluated"
+        ),
+    )
+    corpus_label.add_argument(
+        "--root-cause-note",
+        default="",
+        help=(
+            "free-text reasoning recorded beside the key (evidence, upstream commit, etc). "
+            "Nothing groups on this; it is what a human reads. Requires --root-cause-key"
+        ),
     )
     corpus_label.add_argument(
         "--corpus-dir",

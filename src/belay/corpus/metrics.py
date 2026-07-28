@@ -61,6 +61,37 @@ not, rather than silently dropping it.
 This mirrors `belay.replay.report`'s discipline: "not-verifiable is NOT unverified" — kept off
 the numerator and reported on its own line. Same honesty, different axis.
 
+## Independence: how many DISTINCT findings the true positives represent
+
+The Phase-0 gate reads "≥3 **independent** hand-audited TPs", so the raw `tp` count is the
+wrong number to publish against it: seven flags of one mis-annotated tool are one finding
+observed seven times, not seven findings. Two counts are reported, because the permissive and
+strict readings of "independent" genuinely disagree, and a single unlabeled number invites
+quoting whichever flatters. Each must be rendered WITH the rule that produced it — the same
+discipline that makes the coverage line travel beside a `PASS`.
+
+    independent_tp        distinct `root_cause["key"]` among TPs — the human's own
+                          adjudication of what went wrong, one key per cause.
+    independent_tp_strict the PRE-REGISTERED gloss: a set of TPs is ONE finding unless they
+                          differ in BOTH instance and tool. Group TPs by
+                          (`provenance["source_trace_id"]`, `target_tool`); the count is the
+                          number of groups only when both dimensions actually vary. If every
+                          TP shares one tool, the strict count is 1 regardless of how many
+                          instances appear — "three flags from one mis-annotated tool count
+                          as one finding". `None` (n/a) when any TP has no `target_tool`:
+                          the tool dimension is unevaluable, and both 0 and a group count
+                          computed as though the absent tool were a value would be guesses.
+
+Both read HUMAN-supplied fields only. Deriving a cause from `expected`/`sub_verdicts` would
+make independence a function of the engine's own output — honesty rule 1's label-trap, one
+level up: the engine would decide how many distinct things it had found.
+
+Every ambiguity here resolves DOWNWARD. Only confusion-matrix TPs participate (an FP's or a
+`pending` case's root cause is a note about a case the matrix already excluded or scored
+against us), and a TP carrying no `root_cause` at all contributes no key — `corpus label`
+requires one for a `true-positive`, so that gap is a hand-edited case, and undercounting
+findings is the direction that cannot clear a gate it should not clear.
+
 Zero runtime dependencies: stdlib `dataclasses` and the `Case` dataclass. No model, no I/O
 beyond the list the caller passed.
 """
@@ -87,6 +118,13 @@ class Metrics:
     (verdict UNVERIFIED); those are the cases that lower coverage. `pending`/`unverifiable`
     count cases with no adjudicable label. Every case falls in exactly one bucket, so
     `tp+fp+fn+tn + unverified + pending + unverifiable == total`.
+
+    The two independence counts summarize the SAME `tp` cases under two different, named
+    grouping rules (see the module docstring). `independent_tp` is always a real integer —
+    0 TPs is 0 findings, a fact rather than an absence. `independent_tp_strict` is
+    additionally `None` when a TP records no `target_tool`, because the tool dimension the
+    strict rule turns on cannot be evaluated. Neither count is ever a fraction of `tp`, and
+    neither may be rendered without its rule beside it.
     """
 
     tp: int
@@ -100,6 +138,12 @@ class Metrics:
     pending: int  # label pending — no ground truth, excluded
     unverifiable: int  # label unverifiable — no ground truth, excluded
     total: int
+    #: Both default so that a caller constructing a `Metrics` by hand (the report renderers'
+    #: fixtures) keeps working; `score` ALWAYS passes both explicitly, so no computed metric
+    #: ever inherits a default. The defaults are the honest empty answer — no TPs is 0
+    #: findings, and an unevaluated strict rule is n/a rather than 0.
+    independent_tp: int = 0  # distinct root_cause["key"] among TPs
+    independent_tp_strict: Optional[int] = None  # None == n/a (a TP has no target_tool)
 
 
 def _ratio(numerator: int, denominator: int) -> Optional[float]:
@@ -111,10 +155,51 @@ def _ratio(numerator: int, denominator: int) -> Optional[float]:
     return numerator / denominator if denominator else None
 
 
-def score(cases: list[Case]) -> Metrics:
-    """Score `cases` into precision/recall/coverage against their human labels.
+def _independent_tp(true_positives: list[Case]) -> int:
+    """The number of distinct `root_cause["key"]` among `true_positives`.
 
-    Pure: reads only `case.expected["reduced_status"]` and `case.human_label`. The order of
+    A TP with no `root_cause` contributes no key: `corpus label` requires one to record a
+    `true-positive`, so an absent cause means a hand-edited case, and inventing a key for it
+    (say, one per case) would count an unadjudicated case as its own finding.
+    """
+    return len(
+        {case.root_cause["key"] for case in true_positives if case.root_cause is not None}
+    )
+
+
+def _independent_tp_strict(true_positives: list[Case]) -> Optional[int]:
+    """The strict, pre-registered count: one finding unless BOTH instance and tool vary.
+
+    Group the TPs by (`provenance["source_trace_id"]`, `target_tool`) and return the number
+    of groups ONLY when both dimensions actually vary across the corpus; otherwise the whole
+    set is a single finding. This is the gloss "three flags from one mis-annotated tool count
+    as one finding", and it is deliberately the harsher of the two readings — the permissive
+    group count is the flattering number, and the gate is not to be cleared by one tool
+    behaving one way across many captures.
+
+    `None` when any TP lacks a `target_tool`: the dimension the rule turns on is unevaluable
+    for that case, and both available numbers would be guesses — 0 understates it to "no
+    findings", while grouping as though the absent tool were a value overstates it.
+    """
+    if not true_positives:
+        return 0
+    if any(case.target_tool is None for case in true_positives):
+        return None
+    instances = {case.provenance.get("source_trace_id") for case in true_positives}
+    tools = {case.target_tool for case in true_positives}
+    if len(instances) == 1 or len(tools) == 1:
+        return 1
+    return len(
+        {(case.provenance.get("source_trace_id"), case.target_tool) for case in true_positives}
+    )
+
+
+def score(cases: list[Case]) -> Metrics:
+    """Score `cases` into precision/recall/coverage and the two independence counts.
+
+    Pure: reads `case.expected["reduced_status"]` and `case.human_label` for the confusion
+    matrix, plus — for TPs only — the human-supplied `root_cause["key"]`, `target_tool` and
+    `provenance["source_trace_id"]`. No replay, no server, no clock, no disk. The order of
     exclusion is deliberate — a case with no adjudicable label is set aside FIRST (its verdict
     is irrelevant without ground truth to score it against), then among adjudicable cases an
     UNVERIFIED verdict is set aside as undecided, and only a decisive verdict on an
@@ -122,6 +207,10 @@ def score(cases: list[Case]) -> Metrics:
     """
     tp = fp = fn = tn = 0
     unverified = pending = unverifiable = 0
+    # The independence counts group exactly the cases the matrix counted TP — nothing that was
+    # excluded, and nothing the engine decided on its own — so they are collected here rather
+    # than re-derived from a second pass over `cases` with its own, driftable, notion of TP.
+    true_positives: list[Case] = []
 
     for case in cases:
         label = case.human_label
@@ -147,6 +236,7 @@ def score(cases: list[Case]) -> Metrics:
         positive = verdict == "FAIL"  # positive == a detection; PASS and WARN are non-detections
         if positive and is_bad:
             tp += 1
+            true_positives.append(case)
         elif positive:
             fp += 1
         elif is_bad:
@@ -168,6 +258,8 @@ def score(cases: list[Case]) -> Metrics:
         pending=pending,
         unverifiable=unverifiable,
         total=len(cases),
+        independent_tp=_independent_tp(true_positives),
+        independent_tp_strict=_independent_tp_strict(true_positives),
     )
 
 
