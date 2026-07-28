@@ -981,14 +981,29 @@ def _cmd_corpus_label(args: argparse.Namespace) -> int:
     """
     from belay.corpus.curate import set_label
 
+    if args.root_cause_note and not args.root_cause_key:
+        _emit(
+            "belay: --root-cause-note requires --root-cause-key; the key is what "
+            "independent findings are grouped by, and a note alone cannot be counted"
+        )
+        return 2
+
+    root_cause = (
+        {"key": args.root_cause_key, "note": args.root_cause_note}
+        if args.root_cause_key
+        else None
+    )
+
     try:
-        case_dir = set_label(Path(args.corpus_dir), args.case_id, args.label)
+        case_dir = set_label(Path(args.corpus_dir), args.case_id, args.label, root_cause)
     except ValueError as exc:
         _emit(f"belay: {exc}")
         return 2
 
     _emit(f"belay corpus label: {case_dir}")
     _emit(f"  human_label -> {args.label}")
+    if root_cause is not None:
+        _emit(f"  root_cause  -> {root_cause['key']}")
     _emit("  Only the human label changed; the engine's recorded verdict is untouched.")
     return 0
 
@@ -1647,6 +1662,22 @@ def _parser() -> argparse.ArgumentParser:
         required=True,
         choices=["true-positive", "false-positive", "unverifiable"],
         help="the HUMAN adjudication for this case (not 'pending' — that is the un-adjudicated default)",
+    )
+    corpus_label.add_argument(
+        "--root-cause-key",
+        help=(
+            "the kebab-case grouping key for this case's root cause. REQUIRED for "
+            "--label true-positive: the gate criteria count INDEPENDENT true positives by "
+            "distinct root cause, so a TP without one cannot be evaluated"
+        ),
+    )
+    corpus_label.add_argument(
+        "--root-cause-note",
+        default="",
+        help=(
+            "free-text reasoning recorded beside the key (evidence, upstream commit, etc). "
+            "Nothing groups on this; it is what a human reads. Requires --root-cause-key"
+        ),
     )
     corpus_label.add_argument(
         "--corpus-dir",
