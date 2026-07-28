@@ -20,6 +20,25 @@ records a failing instance `failed` (with the exception message) and CONTINUES �
 (`src/belay/phase0/runner.py:123-135`). Retrying a *failed instance* is a later, explicit
 choice; making the *agent* smarter is out of scope (guardrail #1).
 
+**But containment is wrong for one class of error, and that mistake cost 56 instances.** On
+2026-07-24 a Stage-3 mint hit a 250-requests-per-day cap on instance 3 of 68; the bare
+`except Exception` recorded it `failed` and moved on, and the remaining 56 were fed into the
+same wall in 3m48s — one wasted request each, all `failed`, and `checkpoint.is_done` counts
+`failed` as done, so a resume would have skipped every one of them forever. Nothing crashed.
+So two handlers now sit AHEAD of that bare `except` (`resilience.py` decides which errors
+reach them):
+
+- `QuotaExhausted` — the wait is hours, so the batch **stops**. The instance records
+  `no_observation`; every later instance stays **absent** from the checkpoint and therefore
+  still eligible. Containment is exactly backwards here: continuing is what destroys the
+  denominator.
+- `TransientExhausted` — bounded retries were spent and nothing was observed, so the
+  instance records `no_observation` (re-armable) and the batch **continues**, because the
+  next instance has no reason to fail.
+
+Everything else is unchanged, byte for byte: `failed`, with `str(exc)` as the reason, and on
+to the next instance.
+
 **One `run_mint` call is single-server and single-batch-dir.** `build_server_command` names one
 server; the batch dir is `root/"batch"`, a pure function of the REQUIRED, per-call-distinct
 `root`. The caller runs the mint once per server (filesystem, shell) into two different roots,
@@ -65,6 +84,7 @@ from eval.minting_driver.bridge import bridge_capture
 from eval.minting_driver.capture import gated_env, proxy_command
 from eval.minting_driver.checkpoint import Checkpoint, load_checkpoint
 from eval.minting_driver.model import Model
+from eval.minting_driver.resilience import QuotaExhausted, TransientExhausted
 from eval.minting_driver.session import TransportFactory, run_session
 from eval.minting_driver.workspace import WorkspaceLayout, prepare_workspace
 
@@ -148,6 +168,20 @@ def run_mint(
     instance never aborts the mint. Returns the final in-memory `Checkpoint` (also persisted
     after every recorded disposition).
 
+    **Two errors are not contained that way, because containing them is what burned the
+    queue on 2026-07-24.** A `QuotaExhausted` (a provider day/period cap, whose retry hint
+    was 39043s) records the current instance `no_observation` and **STOPS THE LOOP**: the
+    remaining records are never touched, so they stay absent from the checkpoint and remain
+    eligible on the next run — a quota event costs one instance, not the rest of the queue.
+    A `TransientExhausted` (bounded retries spent, nothing observed) records the same
+    `no_observation` — re-armable, unlike `failed` — but the loop continues. Neither is a
+    re-roll: `is_done` is true for `captured` and `failed`, so an instance that produced an
+    observation is never re-driven, here or on any later resume.
+
+    A short return is therefore normal and is NOT an error: the returned `Checkpoint` simply
+    has fewer entries than `records`, and that visible absence is the honest signal. The
+    signature and return type are unchanged.
+
     `build_server_command` names ONE raw server (per-instance workspace baked into its argv);
     `root/"batch"` is this call's single batch dir. Run once per server into distinct roots to
     keep two servers from ever sharing a trace dir. `transport_factory` (default: real
@@ -216,6 +250,28 @@ def run_mint(
             )
             checkpoint.record(record.instance_id, "captured", trace_path=str(trace_path))
             checkpoint.save(checkpoint_path)
+        except QuotaExhausted as exc:
+            # Provider quota/period cap. The wait is HOURS (the observed retryDelay was
+            # 39043s, ~10h50m), so retrying is useless and CONTINUING is actively harmful:
+            # on 2026-07-24 the Stage-3 mint hit a daily cap on instance 3 of 68 and then
+            # fed the remaining 56 into the same wall in 3m48s, burning one request each
+            # and recording every one `failed` -- which `is_done` then treated as done,
+            # permanently. Nothing crashed; the denominator simply vanished.
+            #
+            # So: record THIS instance as having produced no observation, and STOP. The
+            # `break` is the whole fix. Every later record stays ABSENT from the checkpoint
+            # -- not `failed`, not anything -- and therefore still eligible on the next
+            # run. Do not "improve" this into a `continue` with a nicer status: any
+            # recorded disposition is a disposition, and the resume rule reads the ledger.
+            checkpoint.record(record.instance_id, "no_observation", reason=str(exc))
+            checkpoint.save(checkpoint_path)
+            break
+        except TransientExhausted as exc:
+            # Retries were spent and nothing was observed. Re-armable (unlike `failed`),
+            # but not a reason to stop the batch.
+            checkpoint.record(record.instance_id, "no_observation", reason=str(exc))
+            checkpoint.save(checkpoint_path)
+            continue
         except Exception as exc:
             # Per-instance containment: one instance failing (a bad checkout, a ServerExited,
             # a bridge error) records `failed` and moves on. The mint of dozens of instances

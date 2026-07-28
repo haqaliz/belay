@@ -17,6 +17,13 @@ real subprocess:
 The headline invariant (never more than one `tools/call` in flight) is asserted across
 MULTIPLE instances via a shared re-entrancy counter, proving the sequential guarantee holds
 batch-wide, not just within one session.
+
+The second headline invariant — added by the quota circuit breaker — is that a provider
+**quota** error stops the batch instead of burning the queue through it. Those tests inject
+the fault through `FaultOnNthInstance`, a `CountingModelFactory` that hands one chosen
+instance a `FlakyModel`, because the error the breaker reacts to arrives from the *model*,
+not from the transport (`FailingOnInstance` simulates the other half — a server that never
+starts). See `test_a_quota_error_stops_the_batch_and_leaves_the_rest_eligible`.
 """
 
 from __future__ import annotations
@@ -26,10 +33,24 @@ from pathlib import Path
 
 from eval.instances.registry import InstanceRecord
 from eval.minting_driver.batch import run_mint
-from eval.minting_driver.checkpoint import Checkpoint
-from eval.minting_driver.fakes import ScriptedModel
+from eval.minting_driver.checkpoint import Checkpoint, load_checkpoint
+from eval.minting_driver.fakes import FlakyModel, ScriptedModel
 from eval.minting_driver.model import Done, ToolCall
+from eval.minting_driver.resilience import QuotaExhausted, TransientExhausted
 from eval.minting_driver.workspace import layout_for
+
+#: An excerpt of the VERBATIM `reason` string the 2026-07-24 Stage-3 mint recorded for all
+#: 56 burned instances (`eval/mint/s3/checkpoint.json`), kept short here because these tests
+#: do not classify it — `tests/test_minting_driver_resilience.py:STAGE3_QUOTA_ERROR` holds
+#: the full, character-exact fixture and is where classification is pinned. What matters at
+#: THIS layer is only that whatever the provider said survives into the checkpoint, so the
+#: operator reading the ledger tomorrow morning learns *when* it is worth trying again —
+#: hence the `'retryDelay': '39043s'` tail (10h50m43s) is kept.
+STAGE3_QUOTA_REASON = (
+    "Error code: 429 - Quota exceeded for metric: generativelanguage.googleapis.com/"
+    "generate_requests_per_model_per_day, limit: 250, model: gemini-3.1-pro. "
+    "'status': 'RESOURCE_EXHAUSTED', 'retryDelay': '39043s'"
+)
 
 
 def _record(instance_id: str, *, task: str = "make the edit") -> InstanceRecord:
@@ -85,6 +106,38 @@ class CountingModelFactory:
     def __call__(self, tools: object) -> ScriptedModel:
         self.calls += 1
         return ScriptedModel(list(self._script))
+
+
+class FaultOnNthInstance(CountingModelFactory):
+    """A `CountingModelFactory` whose Nth model raises `fault` on its first `propose_next`.
+
+    The instance is selected by FACTORY CALL ORDER, which is exactly instance order among
+    the non-skipped instances: `run_mint` builds one model per driven instance, in registry
+    order (`batch.py:203`), and the factory is handed only the tool list — never the record
+    — so call order is the only thing there is to key on. (`FailingOnInstance` can key off
+    the instance id because a transport factory receives the env; a model factory does not.)
+
+    Everything after the fault delegates to the ordinary `ScriptedModel` this factory would
+    have built anyway, so a batch whose fault is contained keeps driving real sessions
+    rather than silently degrading into a different script.
+    """
+
+    def __init__(
+        self,
+        fault: BaseException,
+        *,
+        on_call: int,
+        script: list[ToolCall | Done] | None = None,
+    ) -> None:
+        super().__init__(script)
+        self._fault = fault
+        self._on_call = on_call
+
+    def __call__(self, tools: object) -> ScriptedModel | FlakyModel:  # type: ignore[override]
+        model = super().__call__(tools)
+        if self.calls == self._on_call:
+            return FlakyModel([self._fault], model)
+        return model
 
 
 def _canned_reply(obj: dict) -> dict:
@@ -470,3 +523,257 @@ def test_two_servers_never_share_a_trace_dir(tmp_path: Path) -> None:
     assert fs_trace.parent == root_fs / "batch"
     assert shell_trace.parent == root_shell / "batch"
     assert fs_trace.parent != shell_trace.parent
+
+
+# ---------------------------------------------------------------------------
+# The quota circuit breaker
+# ---------------------------------------------------------------------------
+
+
+def _ten_records() -> list[InstanceRecord]:
+    """A ten-instance registry — the smallest queue that makes "the rest" visible."""
+    return [_record(f"octo__repo-{n}") for n in range(1, 11)]
+
+
+def _drive(
+    tmp_path: Path,
+    records: list[InstanceRecord],
+    *,
+    prepare: StubPrepare,
+    factory: CountingModelFactory,
+    checkpoint_path: Path | None = None,
+) -> object:
+    """`run_mint` with the standard offline seams; the breaker tests vary only the fault.
+
+    Factored out on purpose: these tests differ from one another ONLY in which exception
+    the model raises and on which instance, so spelling out ten identical keyword arguments
+    six times would bury the one line that matters in each.
+    """
+    return run_mint(
+        records,
+        root=tmp_path / "mint",
+        clones_dir=tmp_path / "clones",
+        model_factory=factory,
+        build_server_command=lambda layout: ["node", "server.js"],
+        checkpoint_path=checkpoint_path or (tmp_path / "ckpt.json"),
+        request_timeout=30.0,
+        max_steps=8,
+        system="sys",
+        prepare=prepare,
+        transport_factory=lambda cmd, env: OkTransport(),
+        discover_tools=lambda cmd: [],
+    )
+
+
+def test_a_quota_error_stops_the_batch_and_leaves_the_rest_eligible(tmp_path: Path) -> None:
+    """THE regression test for the 2026-07-24 Stage-3 loss of 56 instances of denominator.
+
+    What happened: at 16:35:31 the mint hit Google's 250-requests-per-day cap on an early
+    instance. `batch.py`'s single bare `except Exception` recorded the rejection `failed`
+    and moved to the next instance, which hit the same wall — **56 remaining instances
+    burned in 3m48s, one wasted request each, all recorded `failed`**. Nothing crashed;
+    that is what made it lethal. `checkpoint.is_done` counts `failed` as done, so a resume
+    would have skipped all 56 forever, and the denominator was gone. The provider's own
+    `retryDelay` was 39043s (≈10h50m): no retry, at any backoff, could have helped. What
+    was lost was the QUEUE.
+
+    So the assertion that matters here is the one about instances 4–10, and it is
+    deliberately `status(...) is None` — ABSENT from the ledger, not merely "not captured".
+    A recorded-anything is a recorded disposition, and `is_done` is the resume rule; only
+    absence keeps them eligible. `prepare` never being called for them proves no work was
+    even attempted, which is the difference between a stop and a fast failure.
+    """
+    records = _ten_records()
+    prepare = StubPrepare()
+    factory = FaultOnNthInstance(
+        QuotaExhausted(STAGE3_QUOTA_REASON, retry_after_seconds=39043.0), on_call=3
+    )
+    ckpt_path = tmp_path / "ckpt.json"
+
+    checkpoint = _drive(
+        tmp_path, records, prepare=prepare, factory=factory, checkpoint_path=ckpt_path
+    )
+
+    # The instances that ran before the cap keep their observations.
+    assert checkpoint.status("octo__repo-1") == "captured"
+    assert checkpoint.status("octo__repo-2") == "captured"
+    # The instance the cap fired on produced NO observation — distinguishable from `failed`.
+    assert checkpoint.status("octo__repo-3") == "no_observation"
+    assert checkpoint.is_done("octo__repo-3") is False
+
+    # The 56-instance defect, encoded: everything after the stop is ABSENT, not `failed`.
+    for n in range(4, 11):
+        instance_id = f"octo__repo-{n}"
+        assert checkpoint.status(instance_id) is None, (
+            f"{instance_id} was recorded; a recorded disposition is what stranded the "
+            f"56 instances on 2026-07-24"
+        )
+
+    # No work was even attempted past the stop — not a request, not a checkout.
+    assert prepare.prepared == ["octo__repo-1", "octo__repo-2", "octo__repo-3"]
+    assert factory.calls == 3, "a model was built for an instance past the quota stop"
+
+    # And the same is true of the DURABLE ledger, which is what a resume actually reads.
+    persisted = load_checkpoint(ckpt_path)
+    assert persisted.status("octo__repo-3") == "no_observation"
+    assert persisted.is_done("octo__repo-3") is False
+    assert [persisted.status(f"octo__repo-{n}") for n in range(4, 11)] == [None] * 7
+
+
+def test_the_quota_stop_records_the_providers_own_retry_hint(tmp_path: Path) -> None:
+    """The recorded reason carries whatever the provider said, verbatim.
+
+    `retryDelay: 39043s` is the operator's entire plan for the rest of the day — it is the
+    difference between "resume in a minute" and "resume tomorrow". Losing it to a tidy
+    generic message would make the ledger unactionable.
+    """
+    records = _ten_records()
+    factory = FaultOnNthInstance(
+        QuotaExhausted(STAGE3_QUOTA_REASON, retry_after_seconds=39043.0), on_call=3
+    )
+
+    checkpoint = _drive(tmp_path, records, prepare=StubPrepare(), factory=factory)
+
+    # Asserted on the no-observation entry specifically: the hint has to survive on the
+    # disposition the breaker writes, not merely on some entry for that instance.
+    assert checkpoint.status("octo__repo-3") == "no_observation"
+    reason = str(checkpoint.reason("octo__repo-3"))
+    assert "39043s" in reason
+    assert "RESOURCE_EXHAUSTED" in reason
+
+
+def test_resume_after_a_quota_stop_re_drives_from_the_stopped_instance(
+    tmp_path: Path,
+) -> None:
+    """The recovery half of the headline: tomorrow's run picks up at 3 and finishes 4–10.
+
+    Together with the test above this is the whole user outcome — a quota event costs ONE
+    instance, not the remaining queue. Instances 1–2 are never re-driven (they produced
+    observations), and 3 is, because it did not.
+    """
+    records = _ten_records()
+    ckpt_path = tmp_path / "ckpt.json"
+
+    _drive(
+        tmp_path,
+        records,
+        prepare=StubPrepare(),
+        factory=FaultOnNthInstance(QuotaExhausted(STAGE3_QUOTA_REASON), on_call=3),
+        checkpoint_path=ckpt_path,
+    )
+
+    # The quota has since cleared: re-run the same registry against the same ledger.
+    resumed_prepare = StubPrepare()
+    resumed_factory = CountingModelFactory()
+    checkpoint = _drive(
+        tmp_path,
+        records,
+        prepare=resumed_prepare,
+        factory=resumed_factory,
+        checkpoint_path=ckpt_path,
+    )
+
+    assert resumed_prepare.prepared == [f"octo__repo-{n}" for n in range(3, 11)]
+    assert resumed_factory.calls == 8
+    assert all(
+        checkpoint.status(f"octo__repo-{n}") == "captured" for n in range(1, 11)
+    )
+    # The re-armed instance keeps the record of what already happened to it.
+    assert checkpoint.history("octo__repo-3") == [
+        {"status": "no_observation", "reason": STAGE3_QUOTA_REASON}
+    ]
+
+
+def test_an_instance_that_produced_an_observation_is_never_re_armed(
+    tmp_path: Path,
+) -> None:
+    """The anti-re-roll contract, in code: only `no_observation` is re-drivable.
+
+    `mint-execution/spec.md:52` puts "retrying instances to improve the number" out of
+    scope, and `:90-92` says why: *"silently re-rolling until the number looks good is
+    precisely the dishonesty this project exists to prevent."* So a `captured` instance is
+    never re-spent on, and — just as important — a genuinely `failed` one is not either:
+    it errored, that IS an observation, and quietly re-rolling it until it stops erroring
+    would launder a broken instance into a clean denominator.
+
+    The three seeded statuses are driven through ONE run so the discrimination is visible
+    in a single assertion: two skipped, one re-armed.
+    """
+    ckpt_path = tmp_path / "ckpt.json"
+    seed = Checkpoint()
+    seed.record("octo__repo-1", "captured", trace_path="already/there.jsonl")
+    seed.record("octo__repo-2", "failed", reason="a real ServerExited")
+    seed.record("octo__repo-3", "no_observation", reason=STAGE3_QUOTA_REASON)
+    seed.save(ckpt_path)
+
+    records = [_record(f"octo__repo-{n}") for n in range(1, 5)]
+    prepare = StubPrepare()
+    factory = CountingModelFactory()
+
+    checkpoint = _drive(
+        tmp_path, records, prepare=prepare, factory=factory, checkpoint_path=ckpt_path
+    )
+
+    # Only the no-observation instance and the never-recorded one were driven.
+    assert prepare.prepared == ["octo__repo-3", "octo__repo-4"]
+    assert factory.calls == 2, "an instance that produced an observation was re-spent on"
+    # The two prior observations survive untouched — same status, same reason, no history
+    # entry (a history entry would mean they were re-recorded).
+    assert checkpoint.status("octo__repo-1") == "captured"
+    assert checkpoint.trace_path("octo__repo-1") == "already/there.jsonl"
+    assert checkpoint.history("octo__repo-1") == []
+    assert checkpoint.status("octo__repo-2") == "failed"
+    assert checkpoint.reason("octo__repo-2") == "a real ServerExited"
+    assert checkpoint.history("octo__repo-2") == []
+    # And the re-armed one now carries an observation.
+    assert checkpoint.status("octo__repo-3") == "captured"
+
+
+def test_a_transient_exhausted_instance_is_re_armable_but_does_not_stop_the_batch(
+    tmp_path: Path,
+) -> None:
+    """Spent retries cost one instance's observation, not the queue's remaining instances.
+
+    `TransientExhausted` means the bounded retries in `RetryingModel` are gone and nothing
+    was observed — so the instance is re-armable exactly like a quota stop — but unlike a
+    quota cap there is no reason to believe the NEXT instance will fail too, so the batch
+    continues. That asymmetry (same status, different control flow) is the whole reason
+    the two handlers are separate.
+    """
+    records = _ten_records()
+    prepare = StubPrepare()
+    factory = FaultOnNthInstance(
+        TransientExhausted("gave up after 3 attempt(s); last error: 503"), on_call=3
+    )
+
+    checkpoint = _drive(tmp_path, records, prepare=prepare, factory=factory)
+
+    assert checkpoint.status("octo__repo-3") == "no_observation"
+    assert checkpoint.is_done("octo__repo-3") is False
+    assert "gave up after 3 attempt(s)" in str(checkpoint.reason("octo__repo-3"))
+    # The queue is NOT burned: every later instance ran and produced an observation.
+    assert prepare.prepared == [f"octo__repo-{n}" for n in range(1, 11)]
+    assert all(checkpoint.status(f"octo__repo-{n}") == "captured" for n in range(4, 11))
+
+
+def test_a_terminal_model_error_is_still_recorded_failed_and_the_batch_continues(
+    tmp_path: Path,
+) -> None:
+    """Containment is not weakened: an ordinary exception behaves exactly as it did.
+
+    The two new handlers sit AHEAD of the bare `except Exception`, and they catch two
+    exception types nothing else raises. Everything else — a bad checkout, a `ServerExited`,
+    a malformed reply — still lands `failed` with `str(exc)` as its reason and still lets
+    the loop carry on. `failed` remains a real observation, so it is done for good.
+    """
+    records = _ten_records()
+    prepare = StubPrepare()
+    factory = FaultOnNthInstance(ValueError("could not decode the model's reply"), on_call=3)
+
+    checkpoint = _drive(tmp_path, records, prepare=prepare, factory=factory)
+
+    assert checkpoint.status("octo__repo-3") == "failed"
+    assert checkpoint.reason("octo__repo-3") == "could not decode the model's reply"
+    assert checkpoint.is_done("octo__repo-3") is True
+    assert prepare.prepared == [f"octo__repo-{n}" for n in range(1, 11)]
+    assert all(checkpoint.status(f"octo__repo-{n}") == "captured" for n in range(4, 11))
