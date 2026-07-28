@@ -955,6 +955,17 @@ def _cmd_corpus_score(args: argparse.Namespace) -> int:
     _emit(f"  FN                    {m.fn}")
     _emit(f"  TN                    {m.tn}")
     _emit()
+    _emit("independent findings (the gate counts INDEPENDENT true positives, not raw TPs)")
+    _emit(f"  independent           {m.independent_tp}   distinct root-cause keys")
+    strict = "n/a" if m.independent_tp_strict is None else str(m.independent_tp_strict)
+    _emit(f"  independent, strict   {strict}   distinct instance+tool")
+    if m.independent_tp_strict is None:
+        _emit("      n/a: a true positive has no recorded target_tool, the dimension the")
+        _emit("      strict rule turns on. Not 0 — unevaluable is not 'no findings'.")
+    # Both readings print, always. They disagree (a corpus flagged many times through ONE
+    # tool is one finding strictly, many loosely), and a count whose grouping rule is
+    # invisible invites quoting whichever flatters — the move pre-registration forbids.
+    _emit()
     _emit("metrics")
     _emit(f"  precision             {_rate(m.precision)}   TP/(TP+FP)")
     _emit(f"  recall                {_rate(m.recall)}   TP/(TP+FN)")
@@ -1027,14 +1038,25 @@ def _cmd_corpus_list(args: argparse.Namespace) -> int:
     _emit()
     _emit(f"  {len(case_dirs)} case(s)")
     _emit()
-    _emit(f"  {'case-id':<32}{'label':<16}verdict")
+    cases = []
     for case_dir in case_dirs:
         try:
-            case = load_case(case_dir)
+            cases.append((case_dir, load_case(case_dir)))
         except ValueError as exc:
             _emit(f"belay: {exc}")
             return 2
-        _emit(f"  {case_dir.name:<32}{case.human_label:<16}{case.expected['reduced_status']}")
+
+    # Size the id column to the widest id actually present. The real corpus ids
+    # ("trace-pallets__flask-4992-turn10") overflow a fixed 32 and run straight into the
+    # next column, which reads as a different value entirely.
+    id_width = max([len(d.name) for d, _ in cases] + [len("case-id")]) + 2
+    _emit(f"  {'case-id':<{id_width}}{'label':<16}{'verdict':<12}root-cause")
+    for case_dir, case in cases:
+        key = case.root_cause["key"] if case.root_cause else ""
+        _emit(
+            f"  {case_dir.name:<{id_width}}{case.human_label:<16}"
+            f"{case.expected['reduced_status']:<12}{key}"
+        )
     return 0
 
 
@@ -1059,6 +1081,15 @@ def _cmd_corpus_show(args: argparse.Namespace) -> int:
     _emit(f"  id                    {case.id}")
     _emit(f"  target_turn_index     {case.target_turn_index}")
     _emit(f"  human_label           {case.human_label}")
+    # Absent renders as "(absent)", never as an empty string: nobody adjudicated a cause
+    # here, which is a different fact from a cause recorded as empty.
+    if case.root_cause:
+        _emit(f"  root_cause            {case.root_cause['key']}")
+        if case.root_cause.get("note"):
+            _emit(f"                        {case.root_cause['note']}")
+    else:
+        _emit("  root_cause            (absent)")
+    _emit(f"  target_tool           {case.target_tool or '(absent)'}")
     _emit(f"  expected status       {case.expected['reduced_status']}")
     _emit("  sub-verdicts")
     for sub in case.expected["sub_verdicts"]:

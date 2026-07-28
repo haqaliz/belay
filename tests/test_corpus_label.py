@@ -336,3 +336,121 @@ def test_cli_root_cause_note_without_key_exits_non_zero(tmp_path: Path, capsys) 
         ]
     )
     assert rc != 0
+
+
+# ---------------------------------------------------------------------------
+# Rendering: an independence count NEVER travels without the rule that
+# produced it.
+#
+# Same discipline as the coverage line travelling with a PASS. The two readings
+# of "independent" disagree, so a bare number invites quoting whichever
+# flatters -- exactly what pre-registering the criteria exists to prevent.
+# ---------------------------------------------------------------------------
+
+
+def _tp_case(case_id: str, key: str, tool: str | None, trace: str) -> Case:
+    """A true-positive case with a root cause, for the independence counts."""
+    case = _case(case_id=case_id, human_label="true-positive")
+    return Case(
+        **{
+            **case.__dict__,
+            "root_cause": {"key": key, "note": ""},
+            "target_tool": tool,
+            "provenance": {"source_trace_id": trace, "captured_at": "2026-07-18T00:00:00Z"},
+        }
+    )
+
+
+def test_cli_corpus_score_prints_both_independence_counts_with_their_rules(
+    tmp_path: Path, capsys
+) -> None:
+    """Both counts print, each naming the rule that produced it."""
+    from belay import cli
+
+    corpus = tmp_path / "corpus"
+    write_case(corpus / "a", _tp_case("a", "cause-one", "edit_file", "trace-x"))
+    write_case(corpus / "b", _tp_case("b", "cause-two", "edit_file", "trace-y"))
+
+    assert cli.main(["corpus", "score", str(corpus)]) == 0
+    out = capsys.readouterr().out
+
+    assert "independent" in out
+    assert "root-cause" in out  # the primary rule, named
+    assert "instance" in out and "tool" in out  # the strict rule, named
+    # Two distinct causes, but ONE tool across the corpus -> strict collapses to 1.
+    assert "2" in out and "1" in out
+
+
+def test_cli_corpus_score_renders_na_strict_when_a_tp_lacks_a_tool(
+    tmp_path: Path, capsys
+) -> None:
+    """An unevaluable strict count prints n/a with its reason — never 0."""
+    from belay import cli
+
+    corpus = tmp_path / "corpus"
+    write_case(corpus / "a", _tp_case("a", "cause-one", None, "trace-x"))
+
+    assert cli.main(["corpus", "score", str(corpus)]) == 0
+    out = capsys.readouterr().out
+
+    # The STRICT line specifically must read n/a -- not merely "n/a appears
+    # somewhere", which recall already satisfies on an all-TP corpus.
+    strict = [ln for ln in out.splitlines() if "strict" in ln]
+    assert strict, "the strict independence line is missing entirely"
+    assert "n/a" in strict[0]
+    assert "0" not in strict[0].split("n/a")[0].split("strict")[-1]
+
+
+def test_cli_corpus_show_renders_root_cause_and_target_tool(tmp_path: Path, capsys) -> None:
+    """`corpus show` surfaces both new fields, key and note."""
+    from belay import cli
+
+    corpus = tmp_path / "corpus"
+    write_case(corpus / "a", _tp_case("a", "required-test-update", "edit_file", "trace-x"))
+
+    assert cli.main(["corpus", "show", "a", "--corpus-dir", str(corpus)]) == 0
+    out = capsys.readouterr().out
+    assert "required-test-update" in out
+    assert "edit_file" in out
+
+
+def test_cli_corpus_show_marks_an_absent_root_cause_as_absent(tmp_path: Path, capsys) -> None:
+    """An unadjudicated case shows the cause as absent, not as an empty string."""
+    from belay import cli
+
+    corpus = tmp_path / "corpus"
+    write_case(corpus / "a", _case(case_id="a"))
+
+    assert cli.main(["corpus", "show", "a", "--corpus-dir", str(corpus)]) == 0
+    out = capsys.readouterr().out
+    assert "root_cause" in out
+    assert "(absent)" in out
+
+
+def test_cli_corpus_list_shows_the_root_cause_key(tmp_path: Path, capsys) -> None:
+    """`corpus list` carries the grouping key, so the shape distribution is legible."""
+    from belay import cli
+
+    corpus = tmp_path / "corpus"
+    write_case(corpus / "a", _tp_case("a", "required-test-update", "edit_file", "trace-x"))
+
+    assert cli.main(["corpus", "list", str(corpus)]) == 0
+    assert "required-test-update" in capsys.readouterr().out
+
+
+def test_cli_corpus_list_separates_a_long_case_id_from_its_label(tmp_path: Path, capsys) -> None:
+    """A long case id does not run into the next column.
+
+    The real corpus ids ("trace-pallets__flask-4992-turn10") overflowed the id
+    column and rendered as "...turn10MATCH"-style run-together text.
+    """
+    from belay import cli
+
+    corpus = tmp_path / "corpus"
+    long_id = "trace-pallets__flask-4992-turn10"
+    write_case(corpus / long_id, _case(case_id=long_id))
+
+    assert cli.main(["corpus", "list", str(corpus)]) == 0
+    out = capsys.readouterr().out
+    assert f"{long_id}pending" not in out
+    assert long_id in out and "pending" in out
