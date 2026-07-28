@@ -166,6 +166,17 @@ class Checkpoint:
         entry = self._entries.get(instance_id)
         return [] if entry is None else list(entry.get("history", []))
 
+    def instance_ids(self) -> tuple[str, ...]:
+        """Every recorded instance id, in the order it entered this ledger.
+
+        The read side of an audit (`eval/scripts/rearm_checkpoint.py` walks these to find
+        the stranded quota failures). A tuple, not the live keys view, so a caller can
+        record while iterating without mutating what it is iterating over — and so no
+        consumer is tempted to reach into `_entries` and re-implement the fail-closed
+        load beside `load_checkpoint`.
+        """
+        return tuple(self._entries)
+
     def save(self, path: StrPath) -> None:
         """Write the ledger to `path` ATOMICALLY: temp file in the same dir, then replace.
 

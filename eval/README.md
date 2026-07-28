@@ -271,8 +271,14 @@ uv run python -m eval.minting_driver batch \
 Both take the same flags: `--root` (**required, no default**), `--registry`,
 `--clones-dir`, `--checkpoint` (default `<root>/checkpoint.json`), `--provider`
 (default `openai-compat`), `--model` (default `gemini-flash-latest`),
-`--request-timeout` (default `120.0`), `--max-steps`, `--server-root`, and `--verify`.
+`--request-timeout` (default `120.0`), `--max-steps`, `--max-attempts` (default `3`),
+`--retry-base-delay` (default `1.0`), `--server-root`, and `--verify`.
 `python -m eval.minting_driver one --help` is authoritative.
+
+`--max-attempts` counts attempts per model call **including the first**, so `1` means
+"no retries"; `--retry-base-delay` is the first backoff, doubling each time (`0` retries
+immediately). Both tune the **transient** ladder only — a provider quota cap is never
+retried at any setting. See the next section for why.
 
 ### Required environment
 
@@ -302,12 +308,107 @@ caused by operator setup rather than by the agents being measured:
 
 ### Re-minting an instance
 
-Use a **fresh `--root`**. An instance already recorded in `<root>/checkpoint.json` is
-skipped (that is the resume, and it is what stops a crash at #37 from re-spending on
-1..36), and its bridge destination in `<root>/batch` already exists. There is deliberately
+Use a **fresh `--root`**. An instance already recorded `captured` or `failed` in
+`<root>/checkpoint.json` is skipped (that is the resume, and it is what stops a crash at
+#37 from re-spending on 1..36), and its bridge destination in `<root>/batch` already
+exists. An instance recorded `no_observation` is *not* skipped — see "`no_observation`,
+and how a resume re-arms it" below; it never produced an observation, so re-driving it is
+not a re-roll of anything. There is deliberately
 no `--force` and no way to forget a recorded disposition: both are ways to double-spend by
 accident and to lose the record of what already ran. A directory you name is a better unit
 of "this is a new attempt".
+
+### The quota circuit breaker
+
+> #### ⚠️ A daily cap destroyed 56 instances of denominator in 3m48s — measured, not theorised
+>
+> On 2026-07-24 a Stage-3 mint hit Google's 250-requests-per-day cap on instance 3 of 68.
+> **Nothing crashed** — that is the whole point. `run_mint`'s single bare
+> `except Exception` recorded the 429 as `failed` and moved on to the next instance, which
+> hit the same wall, and so on down the queue. Because `checkpoint.is_done` counts
+> `failed` as *done*, a resume would have skipped all 56 forever. The provider's own
+> `retryDelay` was **39043s (≈10h50m)**: no bounded backoff could ever have reached it.
+> What was lost was not a retry, it was the **queue** — and a shrunken denominator is the
+> R6 false-zero failure mode, one layer up.
+
+`eval/minting_driver/resilience.py` answers one question about a provider exception —
+*"is waiting going to help, and for how long?"* — and the mint acts on the answer:
+
+| kind | what it looks like | what the mint does |
+|---|---|---|
+| `quota` | a daily/period cap (429 + `RESOURCE_EXHAUSTED`, or a retry hint > 600s) | records `no_observation` and **stops the batch** |
+| `transient` | a rate-limit or transport blip (other 429s, 408/409/425/5xx, timeouts) | bounded retry with exponential backoff, then `no_observation` |
+| `terminal` | everything else | records `failed` and continues — today's behavior, unchanged |
+
+**An unrecognised error classifies `terminal`, never `transient`.** Retrying an error we
+do not understand is how the queue got burned; the next unknown shape will be a
+subscription-plan cap nobody has seen yet. A `terminal` verdict costs one instance and
+keeps the batch alive.
+
+The retry wraps `Model.propose_next` and **nothing else** — it is installed at the
+`ModelFactory` boundary (`entrypoint.make_model_factory`), so it is structurally incapable
+of re-sending a `tools/call`. Re-sending one would duplicate a real side effect against
+the workspace and corrupt the very capture the mint exists to produce; `loop.py`'s "no
+retries" claim stays literally true. The wrapper is built **inside** the factory, one per
+instance, for the same reason the model client is: a hoisted one would leak conversation
+state *and* accumulate the retry count across instances.
+
+### `no_observation`, and how a resume re-arms it
+
+The checkpoint has a third status: **`no_observation`** — the instance was never actually
+driven. A quota cap rejected the request outright, or a transient blip outlived its
+retries: no session ran, no trace exists, nothing was observed. `Checkpoint.is_done` is
+`True` for `captured` and `failed` and **`False` for `no_observation`**, so re-running the
+same `--root` re-drives exactly those instances and nothing else.
+
+That asymmetry **is** the re-arm mechanism. There is deliberately no flag and no
+`--force`, because the honest rule and the re-arm rule are the same rule: an instance that
+produced an observation is never re-rolled, and an instance that produced none was never
+measured in the first place. Each entry also carries an append-only `history`, so a
+superseded disposition is recorded rather than erased.
+
+When a quota stop happens, the instances *after* the stopping one stay **absent** from the
+checkpoint entirely — not recorded as anything. Absent is honest: they are visibly
+missing, and still eligible. Re-run the same `--root` once the cap resets.
+
+### Re-arming a ledger written before the breaker
+
+`eval/scripts/rearm_checkpoint.py` is the one-off migration for a checkpoint written
+*before* `no_observation` existed — concretely, the 56 stranded entries of the 2026-07-24
+Stage-3 run. It rewrites a `failed` entry to `no_observation` **if and only if** its
+recorded `reason` classifies `quota` under the same `classify_error` the live breaker uses
+(which is why that classifier is duck-typed: here there is no exception object, only the
+text `str(exc)` left in the ledger).
+
+```bash
+# always look first — this rewrites the only record of a live, unrepeatable mint
+uv run python -m eval.scripts.rearm_checkpoint \
+  --checkpoint eval/mint/s3/checkpoint.json --dry-run
+
+# then, without --dry-run, to write it
+uv run python -m eval.scripts.rearm_checkpoint --checkpoint eval/mint/s3/checkpoint.json
+```
+
+```
+rearm: DRY RUN — nothing will be written to eval/mint/s3/checkpoint.json
+  68 entr(ies) recorded
+  56 to re-arm (failed -> no_observation, quota-classified)
+  12 untouched
+  re-arm control__flask-read-only: Error code: 429 - [{'error': {'code': 429, ...
+```
+
+- **`--checkpoint` is required, with no default.** A default is how this gets pointed at
+  the wrong ledger.
+- **`captured` is never touched, whatever its reason says.** The guard is the *status*,
+  never the classifier. Re-arming a captured instance would double-spend and replace a
+  recorded result with a second roll of the same dice — the re-roll `eval/README.md` bans
+  `--force` for and `mint-execution/spec.md` calls "precisely the dishonesty this project
+  exists to prevent".
+- **A genuine failure stays `failed`.** It ran, it errored, an observation exists.
+- **The original reason moves to `history`**, so the evidence for why each instance became
+  eligible again survives in the file.
+- **Fail-closed and idempotent:** a corrupt or absent ledger exits 2 with one line, and a
+  second run rewrites nothing.
 
 ### Scoring the mint
 

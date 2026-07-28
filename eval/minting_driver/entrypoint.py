@@ -49,6 +49,11 @@ from eval.minting_driver.batch import (
     run_mint,
 )
 from eval.minting_driver.checkpoint import Checkpoint
+from eval.minting_driver.resilience import (
+    DEFAULT_BASE_DELAY_SECONDS,
+    DEFAULT_MAX_ATTEMPTS,
+    RetryingModel,
+)
 from eval.minting_driver.servers import (
     filesystem_server_command,
     resolve_server_entrypoint,
@@ -163,6 +168,12 @@ class MintConfig:
     max_steps: int = DEFAULT_MAX_STEPS
     system: str = DEFAULT_SYSTEM_PROMPT
     server_root: Optional[Path] = field(default=None)
+    #: The retry budget per model call, and its first backoff. Defaults IMPORTED from
+    #: `resilience.py` rather than restated, so "the documented default" and "the built
+    #: default" cannot drift. These tune only the transient ladder: a `quota` error is
+    #: never retried at any setting, because the observed wait was 39043s.
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS
+    retry_base_delay: float = DEFAULT_BASE_DELAY_SECONDS
 
     def __post_init__(self) -> None:
         # Every path is made ABSOLUTE here, once, at the boundary. A relative path in
@@ -194,6 +205,32 @@ class MintConfig:
         if not isinstance(self.max_steps, int) or self.max_steps <= 0:
             raise MintConfigError(
                 f"max_steps must be a positive int, got {self.max_steps!r}"
+            )
+        if (
+            isinstance(self.max_attempts, bool)
+            or not isinstance(self.max_attempts, int)
+            or self.max_attempts < 1
+        ):
+            # `1` is the honest way to spell "no retries" — `0` would mean the model is
+            # never called at all, which is a config typo that would mint nothing and
+            # read as INSTRUMENT SUSPECT. Refused here rather than in `RetryingModel`,
+            # so the CLI exits 2 with one line instead of a mid-mint traceback.
+            raise MintConfigError(
+                f"max_attempts must be an int >= 1 (1 means no retries), got "
+                f"{self.max_attempts!r}"
+            )
+        if (
+            self.retry_base_delay is None
+            or isinstance(self.retry_base_delay, bool)
+            or not isinstance(self.retry_base_delay, (int, float))
+            or self.retry_base_delay < 0
+        ):
+            # `0` is allowed and means "retry immediately" — legitimate against a local
+            # endpoint. Negative is not: `time.sleep` would raise, hours into a mint,
+            # from inside the very handler that exists to keep the mint alive.
+            raise MintConfigError(
+                f"retry_base_delay must be a number of seconds >= 0, got "
+                f"{self.retry_base_delay!r}"
             )
 
     @property
@@ -266,8 +303,10 @@ def make_model_factory(
     model: str = DEFAULT_MODEL,
     client: Optional[Any] = None,
     max_tokens: Optional[int] = None,
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+    base_delay: float = DEFAULT_BASE_DELAY_SECONDS,
 ) -> ModelFactory:
-    """A `ModelFactory` for `provider`/`model` — a FRESH model on every call.
+    """A `ModelFactory` for `provider`/`model` — a FRESH breaker-wrapped model per call.
 
     `run_mint` calls the returned factory once per instance. It MUST construct a new
     model each time: the clients accumulate conversation state
@@ -275,6 +314,14 @@ def make_model_factory(
     reusing one instance would let instance N inherit instance N-1's conversation —
     "cache the client, it's the same config" is the obvious future refactor and it is
     wrong (`batch.py`'s `ModelFactory` docstring says the same).
+
+    **Both providers are wrapped in `RetryingModel`, and the wrapper is built INSIDE the
+    factory** — never hoisted out of it, for the same reason the client is not, plus one
+    of its own: a hoisted wrapper would accumulate `retry_count` across instances, so
+    `run-accounting` would bill instance 1's retries to instance 40. Wrapping only one
+    provider would be worse than wrapping neither, because the breaker would look
+    installed while `--provider anthropic` still fed the whole queue into a quota wall
+    (`resilience.py`, module docstring: 56 instances in 3m48s).
 
     Credentials are resolved ONCE, here, so a missing key fails before any instance is
     prepped or driven rather than once per instance. `client` is the test injection seam
@@ -306,7 +353,13 @@ def make_model_factory(
                 kwargs.update(credentials)
             if max_tokens is not None:
                 kwargs["max_tokens"] = max_tokens
-            return LocalOpenAICompatModel(**kwargs)
+            # A NEW wrapper too, around a NEW client — see the docstring: hoisting
+            # either one leaks state across instances.
+            return RetryingModel(
+                LocalOpenAICompatModel(**kwargs),
+                max_attempts=max_attempts,
+                base_delay=base_delay,
+            )
 
         return openai_compat_factory
 
@@ -325,7 +378,13 @@ def make_model_factory(
             kwargs["client"] = client
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
-        return AnthropicModel(**kwargs)
+        # A NEW wrapper too, around a NEW client — see the docstring: hoisting either
+        # one leaks state across instances.
+        return RetryingModel(
+            AnthropicModel(**kwargs),
+            max_attempts=max_attempts,
+            base_delay=base_delay,
+        )
 
     return anthropic_factory
 
@@ -374,7 +433,12 @@ def mint_batch(
     preflight_servers(cfg)
 
     if model_factory is None:
-        model_factory = make_model_factory(provider=cfg.provider, model=cfg.model)
+        model_factory = make_model_factory(
+            provider=cfg.provider,
+            model=cfg.model,
+            max_attempts=cfg.max_attempts,
+            base_delay=cfg.retry_base_delay,
+        )
 
     if build_server_command is None:
 

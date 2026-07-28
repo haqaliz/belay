@@ -37,6 +37,11 @@ from eval.minting_driver.entrypoint import (
     DEFAULT_PROVIDER,
     DEFAULT_REGISTRY_PATH,
     DEFAULT_REQUEST_TIMEOUT,
+    MintConfigError,
+)
+from eval.minting_driver.resilience import (
+    DEFAULT_BASE_DELAY_SECONDS,
+    DEFAULT_MAX_ATTEMPTS,
 )
 from eval.minting_driver.servers import PINNED_SERVERS
 
@@ -72,6 +77,10 @@ def test_cli_parses_into_a_mint_config(tmp_path: Path) -> None:
     assert cfg.request_timeout == DEFAULT_REQUEST_TIMEOUT
     assert cfg.max_steps == DEFAULT_MAX_STEPS
     assert cfg.server_root is None
+    # The retry budget defaults to `resilience.py`'s, IMPORTED not restated — a second
+    # copy of the number here would let the documented and the built default drift.
+    assert cfg.max_attempts == DEFAULT_MAX_ATTEMPTS
+    assert cfg.retry_base_delay == DEFAULT_BASE_DELAY_SECONDS
 
 
 def test_cli_overrides_every_config_field(tmp_path: Path) -> None:
@@ -95,6 +104,10 @@ def test_cli_overrides_every_config_field(tmp_path: Path) -> None:
             "90",
             "--max-steps",
             "6",
+            "--max-attempts",
+            "5",
+            "--retry-base-delay",
+            "0.25",
             "--server-root",
             str(tmp_path / "servers"),
         ]
@@ -108,6 +121,8 @@ def test_cli_overrides_every_config_field(tmp_path: Path) -> None:
     assert cfg.model == "claude-sonnet-4-5"
     assert cfg.request_timeout == 90.0
     assert cfg.max_steps == 6
+    assert cfg.max_attempts == 5
+    assert cfg.retry_base_delay == 0.25
     assert cfg.server_root == tmp_path / "servers"
 
 
@@ -224,6 +239,57 @@ def test_cli_requires_root(capsys: pytest.CaptureFixture[str]) -> None:
         build_parser().parse_args(["batch"])
     assert excinfo.value.code != 0
     assert "--root" in capsys.readouterr().err
+
+
+def test_cli_retry_knobs_are_typed_and_bounded(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`--max-attempts` / `--retry-base-delay` are refused at config time, not mid-mint.
+
+    Both are consumed hours into a live run — `max_attempts` on the first 429,
+    `retry_base_delay` in a `time.sleep` inside the very handler that exists to keep the
+    mint alive. A bad value must fail before a byte is spent, and it must fail as a
+    named `MintConfigError` (exit 2, one line) rather than as a traceback.
+    """
+    parser = build_parser()
+
+    # Non-numeric is an argparse type error, like `--request-timeout none`.
+    with pytest.raises(SystemExit):
+        parser.parse_args(["batch", "--root", "r", "--max-attempts", "lots"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["batch", "--root", "r", "--retry-base-delay", "soon"])
+
+    # `1` is the honest spelling of "no retries"; `0` would never call the model at all.
+    with pytest.raises(MintConfigError, match="max_attempts"):
+        build_config(["batch", "--root", str(tmp_path / "m"), "--max-attempts", "0"])
+
+    # `0` seconds is legitimate (retry immediately); negative is not — `time.sleep`
+    # would raise from inside the quota handler, hours in.
+    zero_delay = build_config(
+        ["batch", "--root", str(tmp_path / "m"), "--retry-base-delay", "0"]
+    )
+    assert zero_delay.retry_base_delay == 0.0
+    with pytest.raises(MintConfigError, match="retry_base_delay"):
+        build_config(
+            ["batch", "--root", str(tmp_path / "m"), "--retry-base-delay", "-1"]
+        )
+
+    # And through `main`, a bad value is exit 2 with one legible line.
+    code = main(
+        [
+            "batch",
+            "--root",
+            str(tmp_path / "mint"),
+            "--server-root",
+            str(tmp_path / "servers"),
+            "--max-attempts",
+            "0",
+        ]
+    )
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "max_attempts" in captured.err
+    assert "Traceback" not in captured.err
 
 
 def test_cli_rejects_an_unknown_provider(capsys: pytest.CaptureFixture[str]) -> None:

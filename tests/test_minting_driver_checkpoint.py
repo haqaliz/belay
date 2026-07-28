@@ -241,6 +241,29 @@ def test_a_legacy_checkpoint_without_history_still_loads(tmp_path):
     assert cp.history("sympy__sympy-24152") == []
 
 
+def test_instance_ids_enumerates_every_recorded_instance_in_insertion_order(tmp_path):
+    """An auditor can enumerate the ledger without reaching into `_entries`.
+
+    `eval/scripts/rearm_checkpoint.py` has to walk every entry to find the quota
+    failures. The alternative — re-reading the JSON alongside `load_checkpoint` — would
+    duplicate the parse and quietly bypass the fail-closed load, which is the one
+    property the ledger cannot afford to have two versions of.
+    """
+    path = tmp_path / "cp.json"
+    cp = load_checkpoint(path)
+    cp.record("inst-b", "captured")
+    cp.record("inst-a", "failed", reason="boom")
+    cp.record("inst-c", "no_observation", reason="quota")
+
+    assert cp.instance_ids() == ("inst-b", "inst-a", "inst-c")
+
+    # Survives the round trip (the loader sorts keys on save; what matters is that every
+    # recorded instance is enumerable, not the order).
+    cp.save(path)
+    assert set(load_checkpoint(path).instance_ids()) == {"inst-a", "inst-b", "inst-c"}
+    assert load_checkpoint(tmp_path / "absent.json").instance_ids() == ()
+
+
 def test_record_with_an_invalid_status_still_raises_immediately(tmp_path):
     cp = load_checkpoint(tmp_path / "cp.json")
     with pytest.raises(ValueError):

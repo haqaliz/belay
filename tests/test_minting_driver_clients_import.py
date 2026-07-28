@@ -1,7 +1,7 @@
 """RED-first isolation tests for the minting-driver's BYOK clients (Task 8).
 
 The driver CORE (`loop.py`, `transport.py`, `model.py`, `session.py`, `capture.py`,
-`mcp.py`, `fakes.py`) must stay importable with zero third-party dependencies — that is
+`mcp.py`, `fakes.py`, `resilience.py`) must stay importable with zero third-party dependencies — that is
 what keeps the default `uv run pytest` environment (and CI, which only `uv sync`s the
 `dev` group) green without ever installing `anthropic` or `openai`. Those SDKs are real
 BYOK clients behind the `Model` seam (`clients/anthropic_client.py`,
@@ -57,6 +57,11 @@ def test_importing_driver_core_does_not_import_anthropic_or_openai() -> None:
         "import eval.minting_driver.session\n"
         "import eval.minting_driver.capture\n"
         "import eval.minting_driver.fakes\n"
+        # `resilience.py` classifies PROVIDER exceptions, which is exactly the module an
+        # `import openai` would look natural in — `isinstance(exc, openai.RateLimitError)`
+        # is the obvious wrong way to write it. It reads `status_code` off whatever it is
+        # handed instead, and this line is what keeps it that way.
+        "import eval.minting_driver.resilience\n"
         "import sys\n"
         "assert 'anthropic' not in sys.modules, 'anthropic leaked into the core import graph'\n"
         "assert 'openai' not in sys.modules, 'openai leaked into the core import graph'\n"

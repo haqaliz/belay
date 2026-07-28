@@ -26,9 +26,11 @@ from typing import Any
 import pytest
 
 from eval.instances.registry import InstanceRecord, dump_registry
+from eval.minting_driver import entrypoint as entrypoint_module
 from eval.minting_driver import transport as transport_module
 from eval.minting_driver.batch import run_mint
 from eval.minting_driver.checkpoint import Checkpoint, load_checkpoint
+from eval.minting_driver.clients.anthropic_client import AnthropicModel
 from eval.minting_driver.clients.local_client import LocalOpenAICompatModel
 from eval.minting_driver.entrypoint import (
     DEFAULT_REQUEST_TIMEOUT,
@@ -46,6 +48,11 @@ from eval.minting_driver.entrypoint import (
     preflight_servers,
     resolve_credentials,
     run_verify,
+)
+from eval.minting_driver.resilience import (
+    DEFAULT_BASE_DELAY_SECONDS,
+    DEFAULT_MAX_ATTEMPTS,
+    RetryingModel,
 )
 from eval.minting_driver.servers import PINNED_SERVERS, MissingServerError
 from eval.minting_driver.workspace import layout_for
@@ -100,7 +107,11 @@ def test_provider_selection_is_explicit(monkeypatch: pytest.MonkeyPatch) -> None
     )
     model = factory([])
 
-    assert isinstance(model, LocalOpenAICompatModel)
+    # Unwrapped: every factory product is breaker-wrapped (see
+    # `test_factory_wraps_every_provider_in_the_retry_breaker`); what this test is about
+    # is WHICH client is inside it.
+    assert isinstance(model, RetryingModel)
+    assert isinstance(model._inner, LocalOpenAICompatModel)
 
 
 def test_entrypoint_module_never_sniffs_the_anthropic_key() -> None:
@@ -510,13 +521,131 @@ def test_fresh_model_client_per_instance(monkeypatch: pytest.MonkeyPatch) -> Non
     first = factory([])
     second = factory([])
 
-    assert isinstance(first, LocalOpenAICompatModel)
-    assert isinstance(second, LocalOpenAICompatModel)
+    # The factory's product is the breaker-wrapped model (see
+    # `test_factory_wraps_every_provider_in_the_retry_breaker`); the conversation state
+    # this test is about lives on the inner client.
+    assert isinstance(first, RetryingModel)
+    assert isinstance(second, RetryingModel)
     assert first is not second
+    inner_first, inner_second = first._inner, second._inner
+    assert isinstance(inner_first, LocalOpenAICompatModel)
+    assert isinstance(inner_second, LocalOpenAICompatModel)
+    assert inner_first is not inner_second
     # Distinct list OBJECTS, not merely equal empty lists — a shared list is exactly how
     # a "cache the client, it's the same config" refactor would leak the conversation.
-    assert first._openai_messages is not second._openai_messages
-    assert first._seen == 0 and second._seen == 0
+    assert inner_first._openai_messages is not inner_second._openai_messages
+    assert inner_first._seen == 0 and inner_second._seen == 0
+
+    # The WRAPPER is per-instance too, and its retry budget is genuinely its own: a
+    # hoisted wrapper would not only share the conversation, it would also accumulate
+    # `retry_count` across instances, so `run-accounting` would attribute instance 1's
+    # retries to instance 40. Mutated directly rather than by provoking a retry, because
+    # provoking one would mean a real `time.sleep` in a unit test.
+    assert first.retry_count == 0 and second.retry_count == 0
+    first._retry_count = 7
+    assert second.retry_count == 0
+
+
+def test_factory_wraps_every_provider_in_the_retry_breaker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """BOTH providers come out of the factory behind `RetryingModel`.
+
+    The quota circuit breaker only exists on the path the mint actually takes. A wrapper
+    on `openai-compat` and a bare model on `anthropic` is a breaker that works in tests
+    and burns the queue live — which is the exact 2026-07-24 failure it was built for
+    (`eval/minting_driver/resilience.py`, module docstring).
+    """
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.invalid/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+
+    openai_compat = make_model_factory(
+        provider="openai-compat",
+        model="gemini-flash-latest",
+        client=FakeOpenAIClient(),
+    )([])
+    assert isinstance(openai_compat, RetryingModel)
+    assert isinstance(openai_compat._inner, LocalOpenAICompatModel)
+
+    # `client=` is any object here: nothing is called, and it keeps the `anthropic` SDK
+    # out of this test exactly as `tests/test_minting_driver_clients_import.py` requires.
+    anthropic = make_model_factory(
+        provider="anthropic", model="claude-sonnet-4-5", client=object()
+    )([])
+    assert isinstance(anthropic, RetryingModel)
+    assert isinstance(anthropic._inner, AnthropicModel)
+
+
+def test_retry_knobs_reach_the_wrapper(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`max_attempts` / `base_delay` default to `resilience.py`'s and are overridable.
+
+    The defaults are IMPORTED, never restated: a second copy of `3` and `1.0` here would
+    let the documented default and the built one drift apart silently.
+    """
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.invalid/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+
+    default = make_model_factory(
+        provider="openai-compat",
+        model="gemini-flash-latest",
+        client=FakeOpenAIClient(),
+    )([])
+    assert default._max_attempts == DEFAULT_MAX_ATTEMPTS
+    assert default._base_delay == DEFAULT_BASE_DELAY_SECONDS
+
+    tuned = make_model_factory(
+        provider="openai-compat",
+        model="gemini-flash-latest",
+        client=FakeOpenAIClient(),
+        max_attempts=5,
+        base_delay=0.25,
+    )([])
+    assert tuned._max_attempts == 5
+    assert tuned._base_delay == 0.25
+
+    tuned_anthropic = make_model_factory(
+        provider="anthropic",
+        model="claude-sonnet-4-5",
+        client=object(),
+        max_attempts=5,
+        base_delay=0.25,
+    )([])
+    assert tuned_anthropic._max_attempts == 5
+    assert tuned_anthropic._base_delay == 0.25
+
+
+def test_mint_batch_threads_the_retry_config_into_the_factory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`MintConfig`'s retry knobs reach `make_model_factory` — not just argparse.
+
+    `mint_batch` is where the config stops being data and becomes the model the mint
+    drives; a flag that parses but is never passed on is a knob the operator believes
+    they turned.
+    """
+    server_root = tmp_path / "servers"
+    _install_stub_server(server_root)
+    seen: dict[str, Any] = {}
+
+    def fake_make_model_factory(**kwargs: Any) -> Any:
+        seen.update(kwargs)
+        # Never called: the batch below drives no records.
+        return lambda tools: None
+
+    monkeypatch.setattr(entrypoint_module, "make_model_factory", fake_make_model_factory)
+
+    cfg = MintConfig(
+        root=tmp_path / "mint",
+        server_root=server_root,
+        max_attempts=5,
+        retry_base_delay=0.25,
+    )
+    mint_batch([], cfg, prepare=StubPrepare(), discover_tools=lambda cmd: [])
+
+    assert seen["provider"] == cfg.provider
+    assert seen["model"] == cfg.model
+    assert seen["max_attempts"] == 5
+    assert seen["base_delay"] == 0.25
 
 
 def test_conversation_state_does_not_bleed_between_instances(
@@ -564,8 +693,9 @@ def test_conversation_state_does_not_bleed_between_instances(
     assert len(factory.models) == 2, "one model per instance"
     assert factory.models[0] is not factory.models[1]
 
-    # Instance 1's conversation really did accumulate a tool result ...
-    first_conversation = factory.models[0]._openai_messages
+    # Instance 1's conversation really did accumulate a tool result ... (read off the
+    # INNER client: the factory's product is the breaker-wrapped model).
+    first_conversation = factory.models[0]._inner._openai_messages
     assert any(message["role"] == "tool" for message in first_conversation)
     assert any(
         "TASK-ONE" in str(message.get("content")) for message in first_conversation

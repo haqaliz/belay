@@ -47,6 +47,10 @@ from eval.minting_driver.entrypoint import (
     run_verify,
     verify_server_command,
 )
+from eval.minting_driver.resilience import (
+    DEFAULT_BASE_DELAY_SECONDS,
+    DEFAULT_MAX_ATTEMPTS,
+)
 from eval.minting_driver.servers import MissingServerError
 
 PROGRAM = "python -m eval.minting_driver"
@@ -120,6 +124,28 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
         default=DEFAULT_MAX_STEPS,
         metavar="n",
         help=f"maximum agent steps per instance (default: {DEFAULT_MAX_STEPS})",
+    )
+    parser.add_argument(
+        "--max-attempts",
+        type=int,
+        default=DEFAULT_MAX_ATTEMPTS,
+        metavar="n",
+        help=(
+            f"attempts per model call, INCLUDING the first (default: "
+            f"{DEFAULT_MAX_ATTEMPTS}; 1 means no retries). Only TRANSIENT errors are "
+            f"retried: a provider quota cap stops the mint at any setting, because the "
+            f"observed retryDelay was 39043s and no bounded backoff reaches that"
+        ),
+    )
+    parser.add_argument(
+        "--retry-base-delay",
+        type=float,
+        default=DEFAULT_BASE_DELAY_SECONDS,
+        metavar="seconds",
+        help=(
+            f"the first backoff between transient retries, doubling each time "
+            f"(default: {DEFAULT_BASE_DELAY_SECONDS:g}s). 0 means retry immediately"
+        ),
     )
     parser.add_argument(
         "--server-root",
@@ -200,6 +226,8 @@ def config_from_args(args: argparse.Namespace) -> MintConfig:
         model=args.model,
         request_timeout=args.request_timeout,
         max_steps=args.max_steps,
+        max_attempts=args.max_attempts,
+        retry_base_delay=args.retry_base_delay,
         server_root=Path(args.server_root) if args.server_root else None,
     )
 
