@@ -59,7 +59,12 @@ from belay.replay.determinism import DeterminismResult, classify_determinism
 from belay.replay.engine import DIVERGED, REPLAYED, TurnReplay, replay_turn
 from belay.replay.report import REPLAYED_SUB_VERDICT, canonical_cause
 from belay.verify.effect import network_subverdict, render_effect_verdict
-from belay.verify.invariants import Invariant, evaluate_invariant
+from belay.verify.invariants import (
+    CONTENT_GROUNDED_RULES,
+    Invariant,
+    evaluate_invariant,
+)
+from belay.verify.prestate import content_roots
 from belay.verify.result import render_result_verdict
 from belay.verify.verdict import Status, Verdict, reduce
 
@@ -254,14 +259,25 @@ def verify_turn(
     # above: one A1 sub-verdict per operator-declared invariant, each evaluated against the
     # SAME replay's observed `delta`. `reduce` is axis-agnostic worst-status-wins, so an A1
     # FAIL lowers an all-A2-PASS turn to FAIL — the divergence that catches a cheating agent
-    # A2 cannot (a declared-false tool that writes a task-read-only `tests/` is a C4 effect
-    # PASS but an A1 FAIL). A1 is added ONLY on this REPLAYED path: `evaluate_invariant`
+    # A2 cannot (a declared-false tool that guts a task-protected test is a C4 effect PASS
+    # but an A1 FAIL). A1 is added ONLY on this REPLAYED path: `evaluate_invariant`
     # grounds in an OBSERVED delta, and the non-REPLAYED early return has none — with no
     # delta A1 could only ever be UNVERIFIED, and that turn is ALREADY UNVERIFIED, so an A1
     # sub-verdict there changes no status and adds only noise. With `invariants=()` (the
     # default) this loop runs zero times and the turn is byte-for-byte C4's.
+    #
+    # A CONTENT-grounded rule (`no-assertion-weakening`) needs two trees the delta cannot
+    # supply: the TASK pre-state (turn 0's snapshot) and this replay's workspace. They are
+    # resolved HERE, at the call site, and handed over as two paths — `invariants.py` is
+    # deliberately kept unable to reach `records`, because its public surface is the
+    # provenance boundary that stops an agent authoring its own policy. The resolution runs
+    # only when a declared rule actually needs it, so a `read-only`-only run does exactly the
+    # work it did before.
+    roots = None
+    if any(inv.rule in CONTENT_GROUNDED_RULES for inv in invariants):
+        roots = content_roots(records, manifest_dir, reply.workspace)
     for inv in invariants:
-        sub_verdicts.append(evaluate_invariant(inv, reply.delta, n))
+        sub_verdicts.append(evaluate_invariant(inv, reply.delta, n, roots=roots))
 
     status = reduce(sub_verdicts)
     return TurnVerdict(

@@ -15,14 +15,22 @@ artifacts are composed by `corpus add` in a later phase, which is why they are d
 here rather than built:
 
     <case>/
-      case.json      # this module: the case metadata (id, expected verdict, label, ...)
-      trace.jsonl    # (Phase 2) the recorded trajectory the case replays
-      manifest.json  # (Phase 2) the snapshot manifest, with a case-RELATIVE tree_path
-      prestate/      # (Phase 2) the snapshot tree, copied in so the case is self-contained
+      case.json          # this module: the case metadata (id, expected verdict, label, ...)
+      trace.jsonl        # (Phase 2) the recorded trajectory the case replays
+      manifest.json      # (Phase 2) the TARGET turn's manifest, case-RELATIVE tree_path
+      prestate/          # (Phase 2) the target turn's tree, copied in (self-contained)
+      task_manifest.json # (v2) turn 0's manifest, tree_path "task_prestate"
+      task_prestate/     # (v2) turn 0's tree — the baseline the A1 content rule judges against
 
 The relative `tree_path` in `manifest.json` is what makes a case portable between
 machines; `belay.replay.persist.load_snapshot` resolves it against the manifest's own
 directory. `write_case`/`load_case` here handle ONLY `case.json`.
+
+The two `task_*` artifacts are v2's addition, and they exist because
+`no-assertion-weakening` is judged against **turn 0**, not the target turn: a case that
+bundled only the target's pre-state left the rule with no baseline on every non-zero turn,
+so it abstained. They are absent at `target_turn_index == 0`, where the target's own pair
+already IS the task pre-state — see `_validate_task_prestate`.
 
 Zero runtime dependencies: stdlib `json`, `pathlib`, `dataclasses` only. No model is
 consulted — this is pure data and a JSON parse.
@@ -67,8 +75,22 @@ _KNOWN_SUB_STATUSES = _KNOWN_STATUSES | {"NOT_COVERED"}
 #: NOT added to `_REQUIRED_FIELDS` — that tuple is closed and fail-closed, so a required
 #: new field would reject every case already sitting in `corpus/local/`. Version 1 is the
 #: format as of the `NOT_COVERED` change; a case written before it simply lacks the key and
-#: reads back as 1, which is true (nothing about the older format differs).
-CASE_SCHEMA_VERSION = 1
+#: reads back as 1, which is true (nothing about the older format differs). Version 2 adds
+#: the `task_prestate` bundle — also optional, for the same reason.
+CASE_SCHEMA_VERSION = 2
+
+#: What an OMITTED `schema_version` reads back as. Deliberately a fixed 1 rather than
+#: `CASE_SCHEMA_VERSION`: a case with no version key was written before the key existed, so
+#: it is version 1 and nothing else. Defaulting it to the current version would make every
+#: pre-v1 case claim to carry the v2 `task_prestate` bundle it demonstrably does not have —
+#: a default manufacturing a declaration, which is the one thing this loader refuses.
+_UNVERSIONED = 1
+
+#: The one `task_prestate.status` this loader knows. The DECLARED-ABSENT shape carries a
+#: status and a cause; the BUNDLED shape carries neither and names a handle instead. The two
+#: shapes are deliberately disjoint so a reader cannot mistake one for the other, and a
+#: `status` outside this set is rejected rather than read as some third thing.
+_TASK_PRESTATE_ABSENT = "absent"
 
 #: A `root_cause.key` must match this: lowercase alphanumeric words joined by single
 #: hyphens. The key is what `corpus score` GROUPS ON to count independent findings, so a
@@ -104,7 +126,9 @@ class Case:
     writes `pending`. `provenance` carries `{"source_trace_id", "captured_at"}`, both
     passed in — this module never reads a clock. `schema_version` is the on-disk format
     version, defaulted so that every existing case (and every existing constructor call)
-    keeps working unchanged.
+    keeps working unchanged. `task_prestate` DECLARES the bundled turn-0 baseline (or names
+    why there is none); `None` means the case declares no task pre-state at all, which is
+    what every case written before v2 says.
     """
 
     id: str
@@ -121,6 +145,7 @@ class Case:
     schema_version: int = CASE_SCHEMA_VERSION
     root_cause: Optional[dict] = None
     target_tool: Optional[str] = None
+    task_prestate: Optional[dict] = None
 
 
 def _validate_root_cause(raw: object, path: Path) -> Optional[dict]:
@@ -154,16 +179,72 @@ def _validate_root_cause(raw: object, path: Path) -> Optional[dict]:
     return raw
 
 
+def _validate_task_prestate(raw: object, path: Path) -> Optional[dict]:
+    """Validate an on-disk `task_prestate`, or raise a named `ValueError`.
+
+    Two disjoint shapes, and nothing between them:
+
+        bundled  {"handle": <turn-0 handle>, "tree": <dirname>, "manifest": <filename>}
+        absent   {"status": "absent", "cause": <named cause>}
+
+    A case declares the baseline the A1 content rule is judged against, so a shape this
+    loader had to guess at is a case whose baseline is unknown — and the rule would then be
+    grounded on whatever `_manifest_for` happened to find on disk. Absent -> `None`, the
+    same single silence `human_label` and `root_cause` are allowed: **a default is never a
+    declaration**, and the presence of a `task_prestate/` directory on disk is NOT the
+    declaration — this field is.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"case file {path!r} field 'task_prestate' must be an object, "
+            f"got {type(raw).__name__}"
+        )
+    if "status" in raw:
+        if raw["status"] != _TASK_PRESTATE_ABSENT:
+            raise ValueError(
+                f"case file {path!r} field 'task_prestate.status' is {raw['status']!r}; "
+                f"the only declared status is {_TASK_PRESTATE_ABSENT!r} (a BUNDLED task "
+                f"pre-state carries a 'handle' instead, and carries no status)"
+            )
+        cause = raw.get("cause")
+        if not isinstance(cause, str) or not cause:
+            raise ValueError(
+                f"case file {path!r} field 'task_prestate' declares the task pre-state "
+                f"absent but names no 'cause'; an absence with no reason is a guess"
+            )
+        return raw
+    if "handle" not in raw:
+        raise ValueError(
+            f"case file {path!r} field 'task_prestate' is neither shape: a bundled "
+            f"declaration needs 'handle', 'tree' and 'manifest'; an absent one needs "
+            f"'status' and 'cause'"
+        )
+    for key in ("handle", "tree", "manifest"):
+        if not isinstance(raw.get(key), str) or not raw[key]:
+            raise ValueError(
+                f"case file {path!r} field 'task_prestate.{key}' is {raw.get(key)!r}; "
+                f"must be a non-empty string"
+            )
+    return raw
+
+
 def _to_payload(case: Case) -> dict:
     """A `Case` as the JSON dict written to `case.json`.
 
-    `root_cause` and `target_tool` are OMITTED when unset rather than written as `null`:
-    a default is never a declaration, so "nobody adjudicated a cause" must stay
-    distinguishable from "a cause was recorded as empty".
+    `root_cause`, `target_tool` and `task_prestate` are OMITTED when unset rather than
+    written as `null`: a default is never a declaration, so "nobody adjudicated a cause"
+    must stay distinguishable from "a cause was recorded as empty", and "this case declares
+    no task pre-state" from "a task pre-state was declared as nothing".
     """
     optional = {
         name: value
-        for name, value in (("root_cause", case.root_cause), ("target_tool", case.target_tool))
+        for name, value in (
+            ("root_cause", case.root_cause),
+            ("target_tool", case.target_tool),
+            ("task_prestate", case.task_prestate),
+        )
         if value is not None
     }
     return {
@@ -202,10 +283,12 @@ def load_case(case_dir: Path) -> Case:
     Fail-closed, mirroring `load_invariants`: not-JSON, a missing required field, an
     `expected` missing `reduced_status`/`sub_verdicts`, an out-of-range `reduced_status`,
     a sub-verdict status outside `_KNOWN_SUB_STATUSES`, a non-integer `schema_version`, or
-    a `human_label` outside `_KNOWN_LABELS` each raise a `ValueError` naming the problem —
-    never a silent default. Two fields may be omitted and defaulted: `human_label` ->
-    `pending`, and `schema_version` -> `CASE_SCHEMA_VERSION` (a case written before the
-    field existed). Round-trips: `load_case(write_case(dir, c))` equals `c`.
+    a `human_label` outside `_KNOWN_LABELS`, or a `task_prestate` matching neither declared
+    shape each raise a `ValueError` naming the problem — never a silent default. Two fields
+    may be omitted and defaulted: `human_label` -> `pending`, and `schema_version` -> `1`
+    (a case written before the field existed IS version 1, not the current version).
+    `root_cause`, `target_tool` and `task_prestate` are omitted-means-undeclared and read
+    back as `None`. Round-trips: `load_case(write_case(dir, c))` equals `c`.
     """
     path = Path(case_dir) / CASE_FILENAME
     try:
@@ -268,7 +351,7 @@ def load_case(case_dir: Path) -> Case:
     # Absent -> the default, the same single silence `human_label` is allowed. Present but
     # not an int (a `"1"`, a float, a bool) is a NAMED error: a version we cannot compare
     # is worse than no version, because a later reader would branch on it.
-    schema_version = raw.get("schema_version", CASE_SCHEMA_VERSION)
+    schema_version = raw.get("schema_version", _UNVERSIONED)
     if not isinstance(schema_version, int) or isinstance(schema_version, bool):
         raise ValueError(
             f"case file {path!r} field 'schema_version' is {schema_version!r}; "
@@ -276,6 +359,7 @@ def load_case(case_dir: Path) -> Case:
         )
 
     root_cause = _validate_root_cause(raw.get("root_cause"), path)
+    task_prestate = _validate_task_prestate(raw.get("task_prestate"), path)
 
     target_tool = raw.get("target_tool")
     if target_tool is not None and not isinstance(target_tool, str):
@@ -306,6 +390,7 @@ def load_case(case_dir: Path) -> Case:
         schema_version=schema_version,
         root_cause=root_cause,
         target_tool=target_tool,
+        task_prestate=task_prestate,
     )
 
 

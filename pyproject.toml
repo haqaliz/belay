@@ -81,3 +81,14 @@ markers = [
 # Darwin + Seatbelt. `-m manual` on the command line overrides this addopts value, so
 # `uv run pytest tests/test_minting_driver_smoke.py -m manual` still selects it.
 addopts = "-m 'not manual'"
+
+[tool.ruff]
+# `tests/fixtures/assertions/` is VERBATIM TEST SOURCE lifted out of the audited mint
+# captures, not code this repo maintains. Linting it is a category error: the whole reason
+# `pylint_5859_t6_*` exists is that a trailing comma is what the Phase-0 audit's closest
+# call turned on, and `ruff --fix` would delete exactly that evidence. The files are never
+# imported or executed — `belay.verify.assertions.extract` reads their BYTES — so unused
+# imports and undefined helper names in them are facts about the captured agent run, not
+# defects. Excluded rather than per-rule-ignored because the next fixture will carry some
+# other real-world untidiness and must not need a config change to be checked in intact.
+extend-exclude = ["tests/fixtures/assertions"]

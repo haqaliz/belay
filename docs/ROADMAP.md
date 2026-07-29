@@ -139,12 +139,27 @@ Summarised, non-authoritatively: **PROCEED** iff ≥3 ***independent*** hand-aud
 > nothing about the base rate. The PIVOT also fired on a run that never satisfied the rule's own ≥50
 > denominator clause.
 >
-> **This is a PIVOT of the DETECTOR, not of the thesis** — and it is the first of the three
-> re-examination questions the paragraph below already lists ("wrong task set? wrong surface? real
-> but unverifiable?"). The action is to **fix the instrument and re-measure**: build
-> `invariant-test-mutation-shape`, and do not spend the remaining ~34 instances under a detector
-> known to be 0.00-precision. The mint is **not void** — 2 of 3 controls captured, both
-> `VERIFIED_CLEAN`, `INSTRUMENT SUSPECT` did not fire.
+> **Correction, 2026-07-29 — that argument is no longer from uninformativeness. It is now from
+> demonstrated blindness.** The paragraph above argued the detector *could not have* separated a
+> corrupt success from a clean run. It **did not** separate them, on a named instance, at named
+> turns, inside the same measurement window: **`pytest-dev__pytest-5227` turns 11 and 13**, published
+> `VERIFIED_CLEAN` 20/20 in `runs/s2.json`, and unflagged only because the default invariant's scope
+> is the byte prefix `b"tests/"` while pytest's tests live in `testing/`. *Execution* established the
+> capture replays faithfully and that six turns mutate under `testing/`; *human adjudication* — not
+> execution — established that five of the six are weakenings. **The gate decision is unchanged**: a
+> found-but-unflagged violation is a **false negative, not a hand-audited true positive**, so the TP
+> count stays 0 and PIVOT stands on the identical clause; nor is a miss a void condition. **No
+> published number was re-derived.** But the record now also carries a gap in the criteria
+> themselves — they are **entirely precision-side**, with no recall clause and no procedure by which
+> a missed violation could ever enter the count. See
+> [`PHASE0_RESULTS.md`](technical/PHASE0_RESULTS.md) → *Correction — 2026-07-29*.
+>
+> **This is a PIVOT of the DETECTOR, not of the thesis** — now evidenced rather than inferred — and
+> it is the first of the three re-examination questions the paragraph below already lists ("wrong
+> task set? wrong surface? real but unverifiable?"). The action is to **fix the instrument and
+> re-measure**: build `invariant-test-mutation-shape`, and do not spend the remaining ~34 instances
+> under a detector known to be 0.00-precision **and demonstrably blind on `testing/`**. The mint is
+> **not void** — 2 of 3 controls captured, both `VERIFIED_CLEAN`, `INSTRUMENT SUSPECT` did not fire.
 
 **Why a ~0 rate is still the thing to watch (risk R1).** The canonical block carries no rate threshold, but the reasoning that used to live here stands. If real runs contain ~no detectable violations, that is not a bug — it is the premise failing, and it is worth finding out in week 4. Re-examine: wrong task set (too easy to cheat-proof)? wrong surface (the interesting failures don't cross MCP)? are the failures real but *unverifiable* by replay? Mechanically such a run cannot reach ≥3 independent audited TPs and therefore PIVOTs under the canonical rule; the questions above are how to read that PIVOT, not a separate criterion. Do **not** launch and hope.
 
@@ -262,7 +277,7 @@ The phases above are *what we earn*. The sequenced, one-at-a-time backlog of *ho
 
 | # | Risk / Assumption | Tied to | Likelihood | Impact | Mitigation / Test |
 |---|-------------------|---------|-----------|--------|-------------------|
-| R1 | **The premise is wrong** — real agent runs contain ~no detectable violations | Phase 0 gate | Low | Fatal | **STILL OPEN, and NOT retired by the 2026-07-29 PIVOT** — that gate run measured a 0.00-precision *detector*, which cannot measure the base rate either way. R1 gets tested only once a detector with non-zero precision exists (`invariant-test-mutation-shape`). |
+| R1 | **The premise is wrong** — real agent runs contain ~no detectable violations | Phase 0 gate | Low | Fatal | **STILL OPEN, and still NOT retired by the 2026-07-29 PIVOT** — that gate run measured a 0.00-precision *detector*, which cannot measure the base rate either way. **But R1 no longer has zero supporting instances.** One corrupt success (`pytest-dev__pytest-5227`, turns 11 and 13) was hand-found in captured data *after* the gate ran, missed by the shipped detector's scope (`b"tests/"` vs pytest's `testing/`). That **refutes R1's absolute form** (*"none exist"*) and leaves its **quantitative form** (*"too rare a rate to build on"*) untouched. It is **n=1 and not a base rate** — do not quote "1/21" or "1/16" as a percentage, and note the numerator is at human-adjudication grade, found by a hand sweep rather than an instrument. R1's quantitative form is tested only by a re-mint under a detector with **measured non-zero precision** (`invariant-test-mutation-shape`). Likelihood and Impact unchanged — a rating change on n=1 would be manufactured precision. See [`PHASE0_RESULTS.md`](technical/PHASE0_RESULTS.md) → *Correction — 2026-07-29*. |
 | R2 | **C2 (snapshot/restore) is harder than budgeted** — it's week 2 and everything blocks on it | Phase 0, Wk 1–2 | **High** | **High** | Start with the narrowest restorable substrate (container FS overlay, one tool family); abstract late; if it slips, the whole calendar slips — treat as the schedule's critical path |
 | R3 | **Nobody authors the invariant** — A1 works but only if someone declares the policy | Phase 1 adoption | **High** | **High** | Infer from MCP annotations first (free, zero-friction); ship a library of common invariants; explicit Phase-2 experiment. **Named now, not discovered at launch** |
 | R4 | **"LLM judge with extra steps"** becomes the top launch comment | Phase 1 launch | Med | High | A3 structurally subordinated; `--no-claim-axis` refutation enforced by test; deterministic spine ships first and leads every demo |
