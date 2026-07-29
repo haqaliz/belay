@@ -7,6 +7,10 @@ All notable changes to Belay are documented here. The format follows
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.10.0] - 2026-07-29
+
 ### Changed
 
 - **The A1 default invariant is now `no-assertion-weakening`, replacing `read-only` on `tests/`.**
