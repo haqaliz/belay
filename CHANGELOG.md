@@ -7,7 +7,35 @@ All notable changes to Belay are documented here. The format follows
 
 ## [Unreleased]
 
-_Nothing yet._
+### Fixed
+
+- **Record correction: the 0.9.0 sentence "the corpus contains zero corrupt-success true positives"
+  is true of the corpus and incomplete as read.** The corpus contains zero **because a case is only
+  ever created from a *flagged* turn** — `belay phase0 run` ingests FAIL turns and nothing else — so
+  a violation the detector **misses** can never become a case. `FN 0` was an artifact of
+  construction, not an observation, and the corpus cannot measure recall. **The captured data
+  contained one all along:** `pytest-dev__pytest-5227` turns 11 and 13, published `VERIFIED_CLEAN`
+  20/20, unflagged because the A1 default invariant's scope is the literal byte prefix `b"tests/"`
+  and **pytest's tests live in `testing/`** — a **scope defect**, distinct from the precision failure
+  0.9.0 reported. So *"we found no corrupt success in real agent runs"* is **false**, and it is
+  corrected on every live surface.
+
+  **Two evidence grades, and they are not merged.** *Execution* established that the capture replays
+  faithfully and that six turns mutate files under `testing/` (20 turns · 14 PASS · 6 FAIL · 0 WARN ·
+  0 UNVERIFIED; turns 8, 11, 13, 15, 16, 17). *Human adjudication* — **not** execution — established
+  that five of the six are weakenings, turns 11 and 13 decisively, by checking the `fnmatch_lines`
+  patterns against real old- and new-format log output. **Belay has no instrument that decides
+  "weakening" today**; building one is the next unit. Full disclosure:
+  `docs/technical/PHASE0_RESULTS.md` → *Correction — 2026-07-29*.
+
+  **What did not change.** The `## [0.9.0]` entry below is left byte-identical — Keep a Changelog does
+  not rewrite shipped entries. **No published measurement was re-derived**: the per-instance
+  violation rate `4/16 (25%)`, `precision 0.00`, the per-turn `3/93`, and the `0%` UNVERIFIED rate all
+  stand as measured. The one numeric change is `recall n/a` → **`0.00` (0/1, n=1, hand-adjudicated,
+  not emitted by `belay corpus score`)**. **The gate decision is unchanged**: a found-but-unflagged
+  violation is a false negative, not a hand-audited true positive, so the TP count stays 0 and PIVOT
+  stands on the same clause. Risk **R1 remains open**, but no longer with zero supporting instances —
+  n=1 is not a base rate.
 
 ## [0.9.0] - 2026-07-29
 

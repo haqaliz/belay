@@ -168,6 +168,9 @@ An agent's **built-in** tools do not traverse MCP and are invisible to Belay. Cl
 
 > This changed in the `NOT_COVERED` release. Before it, a declared-false network promise dragged the whole turn to `UNVERIFIED` — which made an honestly-declared closed posture strictly *worse* than saying nothing, and pinned every turn against the reference filesystem server at `UNVERIFIED` forever. **Consequence for anyone comparing runs: the `UNVERIFIED` rate before and after this change is not comparable.** The drop is a reclassification of turns Belay never had an instrument for, **not** improved detection.
 
+### The default `tests/` invariant matches a literal path prefix
+The A1 default's scope is the raw byte prefix `tests/`, so a repository whose tests live anywhere else — pytest's `testing/`, sympy's `sympy/**/tests/`, any `src/pkg/tests/` — is **not covered by it at all**, and a violation in such a tree is silently unflagged rather than reported as `UNVERIFIED`.
+
 ### The sandbox is macOS only
 The sandbox is macOS **Seatbelt** (`sandbox-exec`); the snapshot is APFS **`clonefile`**. Everything Belay claims about containment was measured on macOS. **Linux is entirely unverified** — off macOS the sandbox *raises* rather than returning a cheerful no-op, because a no-op reporting success would claim a boundary that does not exist. Linux/Docker is a planned second slice. What the sandbox does and does not enforce (reads are not scoped; denial records are inferred) is in [`docs/technical/THREAT_MODEL.md`](docs/technical/THREAT_MODEL.md).
 

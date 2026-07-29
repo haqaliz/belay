@@ -90,6 +90,23 @@ This file orients a coding agent working in this repository. Read it first.
 > passed unchanged. **The corpus contains ZERO corrupt-success TPs** — the sole candidate for the
 > 27–78% statistic collapses. (`s1`/`s1b`/`s1p` are three genuine captured runs, not hand-perturbed
 > fixtures; `flask-4045` is excluded from the published denominator by `stage1.json`.)
+> **CORRECTION, 2026-07-29 — "ZERO corrupt-success TPs" is true of the CORPUS and was read as true of
+> the DATA. It is not.** The flask-4045 collapse above stands. But the corpus contains zero **because a
+> case is only ever created from a *flagged* turn** (`belay phase0 run` ingests FAIL turns and nothing
+> else), so a violation the detector **misses** can never become a case — `FN 0` is an artifact of
+> construction, and the corpus cannot measure recall. The captured data held one all along:
+> **`pytest-dev__pytest-5227` turns 11 and 13**, published `VERIFIED_CLEAN` 20/20 in `runs/s2.json`,
+> **unflagged because the default scope is the byte prefix `b"tests/"` and pytest's tests live in
+> `testing/`** (`invariants.py:250`) — the **scope** defect, distinct from the precision one.
+> **Two evidence grades, never merge them:** *execution* established the capture replays faithfully and
+> six turns mutate under `testing/` (20 turns · 14 PASS · 6 FAIL · 0 WARN · 0 UNVERIFIED; turns 8, 11,
+> 13, 15, 16, 17); *human adjudication* — not execution — established five of the six are weakenings,
+> 11 and 13 decisively, via `fnmatch`. **PIVOT is UNCHANGED**: a found-but-unflagged violation is a
+> **false negative, not a hand-audited TP**, so the TP count stays 0, and a miss is not a void condition
+> (voiding is for a control coming back FAIL — the opposite direction). **No published number was
+> re-derived**: 4/16, precision 0.00, 3/93 and the 0% UNVERIFIED all stand; only `recall n/a → 0.00`
+> (0/1, n=1, hand-adjudicated) changed. **R1 stays OPEN but no longer has zero supporting instances** —
+> n=1 is not a base rate. See `docs/technical/PHASE0_RESULTS.md` → *Correction — 2026-07-29*.
 > **Decision: fix the instrument, then re-measure — build `invariant-test-mutation-shape` next; do NOT
 > spend the remaining ~34 instances under a 0.00-precision detector.** The rule it needs is narrower
 > than the two-way split originally proposed: not *modification vs addition* but **"modification that
@@ -98,6 +115,13 @@ This file orients a coding agent working in this repository. Read it first.
 > The 7 cases are kept as its **negative fixtures** — a sharper invariant must go **7/7 clean** on them.
 > Note the corpus is now 7 human-labeled false positives, so a green `belay corpus run` certifies only
 > that Belay still mis-fires identically — regression safety, not evidence of correctness.
+> **The unit fixes TWO defects, not one** (2026-07-29): **precision** (the rule fires on normal
+> behaviour) **and scope** (`b"tests/"` misses `testing/` and `sympy/**/tests/`). Sharpening the rule
+> without fixing the scope leaves the only real positive fixture unreachable — the detector would be
+> correct and still silent. The **7 cases are its negative fixtures** (must not fire, 7/7 `PASS`) and
+> **`pytest-5227` is its positive one** (turns 11/13 must fire), so over-firing and under-firing are
+> both measurable. Anything said about how the new rule scores on `pytest-5227` before the acceptance
+> measurement runs is a **prediction, never a result**.
 > **First open question:** should `tests/` read-only stay **ON by default**? It ships enabled and
 > `README.md`'s coverage claims lean on it. See `docs/planning/phase0-corpus-audit/`.
 >

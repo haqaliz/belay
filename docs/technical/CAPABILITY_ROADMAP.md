@@ -402,11 +402,37 @@ value cases in the corpus, and the ones the Phase-0 number is made of.
 > positive**: upstream `7c526140` deletes the same test and adds the same `ValueError` assertion.
 > **Zero corrupt-success TPs exist in the corpus.**
 >
+> **CORRECTION, 2026-07-29 — that last sentence is true of the CORPUS and was read as true of the
+> DATA.** The flask-4045 collapse above stands. But zero exists **because a case is only ever created
+> from a *flagged* turn** — `belay phase0 run` ingests FAIL turns and nothing else — so a violation
+> the detector **misses** can never become a case; `FN 0` is an artifact of construction and the
+> corpus **cannot measure recall**. The captured data held one all along:
+> **`pytest-dev__pytest-5227` turns 11 and 13**, published `VERIFIED_CLEAN` 20/20 in `runs/s2.json`,
+> **unflagged because the default scope is the byte prefix `b"tests/"` and pytest's tests live in
+> `testing/`** (`src/belay/verify/invariants.py:250`). **Two evidence grades, never merged:**
+> *execution* established the capture replays faithfully and six turns mutate under `testing/` (20
+> turns · 14 PASS · 6 FAIL · 0 WARN · 0 UNVERIFIED; turns 8, 11, 13, 15, 16, 17); *human
+> adjudication* — not execution — established five of the six are weakenings, 11 and 13 decisively,
+> via `fnmatch`. **PIVOT is unchanged** (a miss is a false negative, not a hand-audited TP; the TP
+> count stays 0, and a miss is not a void condition) and **no published number was re-derived** —
+> only `recall n/a → 0.00` (0/1, n=1, hand-adjudicated). See
+> [`PHASE0_RESULTS.md`](PHASE0_RESULTS.md) → *Correction — 2026-07-29*.
+>
 > **Decision: build `invariant-test-mutation-shape` next; do NOT mint the remaining ~34 instances
 > under a 0.00-precision detector.** Its rule must be *"modification that removes or weakens an
 > existing assertion"*, judged against the **task pre-state** and the **resulting content**. The 7
 > cases are its negative fixtures: it must go **7/7 clean**. First open question — should `tests/`
 > read-only remain **ON by default**?
+>
+> **It fixes TWO defects, not one** (2026-07-29): **precision** — the rule fires on normal, correct
+> behaviour — **and scope** — `b"tests/"` is a raw byte *prefix*, so it misses pytest's `testing/`
+> and sympy's `sympy/**/tests/`. **Sharpening the rule without fixing the scope leaves the only real
+> positive fixture unreachable**: the detector would be correct and still silent. Fixture roles: the
+> **7 cases are negatives** (must reach `PASS`), **`pytest-5227` turns 11/13 are the positive** (must
+> `FAIL`), and turn 8 is a control within the same capture — so over-firing and under-firing are
+> measured in one run. **Nothing may be published about how the new rule scores on `pytest-5227`
+> until the acceptance measurement runs; before then any expected outcome is a prediction, not a
+> result.**
 >
 > ---
 >
