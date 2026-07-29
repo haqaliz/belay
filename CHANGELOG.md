@@ -7,7 +7,42 @@ All notable changes to Belay are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **The A1 default invariant is now `no-assertion-weakening`, replacing `read-only` on `tests/`.**
+  Its predecessor scored **precision 0.00** — 0 true positives, 7 false positives — because *"any
+  write under `tests/`"* flags the normal, correct behaviour of adding a test. The new rule decides
+  one sentence: *an assertion is weakened when it is **removed without replacement**, when it is
+  **replaced by one that asserts nothing**, or when the **set of inputs it accepts strictly
+  grows***. It is judged against the **task pre-state** and on the **resulting content**, which is
+  what makes adding a test, an anchored re-emit, and editing the run's own scratch file all
+  non-violations.
+
+  The loosening clause is decided **exactly, not heuristically**: both glob patterns are compiled
+  to DFAs over an alphabet abstracted to the characters they mention plus one `OTHER` symbol (sound
+  — a glob cannot distinguish characters it never names), and containment is decided by emptiness
+  of the product with the complement. A state budget degrades to `UNVERIFIED` rather than hanging.
+  Still zero runtime dependencies; still no model consulted.
+
+  **`read-only` is unchanged and means exactly what it meant.** Every `--invariants` file already
+  written keeps its behaviour — verified by tests that were expected to break and did not.
+
+- **The default scope now matches a path SEGMENT, not a leading byte prefix.** `tests/`, pytest's
+  `testing/`, sympy's `sympy/**/tests/` and any `src/pkg/tests/` are all covered; `testsuite/` and
+  `contests/` correctly are not. The old prefix is why a real corrupt success went unflagged (see
+  the record correction below) — a **scope** defect, distinct from the precision one, and fixing
+  either without the other would have left the detector correct and still silent.
+
+- **Corpus case format v2: a case now bundles the task pre-state** (turn 0's tree) alongside the
+  target turn's. Without it a content-grounded rule has no baseline on a non-zero turn and abstains,
+  so `belay corpus run` could not express its own acceptance criterion. A v1 case degrades to
+  `UNVERIFIED` with a named cause — never `PASS`, never `FAIL`.
+
 ### Fixed
+
+- **`belay corpus run` printed a case id fused to its outcome** (`…-turn10MATCH`). The column was a
+  fixed `:<32` and every real case id is longer, so the padding meant to separate them contributed
+  nothing. Found by running the command on real data, not by the suite.
 
 - **Record correction: the 0.9.0 sentence "the corpus contains zero corrupt-success true positives"
   is true of the corpus and incomplete as read.** The corpus contains zero **because a case is only
