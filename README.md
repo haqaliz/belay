@@ -88,7 +88,7 @@ belay verify ./traces/<run>.jsonl --manifest-dir ./traces.manifests --server my-
 For each recorded `tools/call`, Belay restores its pre-state, re-invokes the server, and renders a per-turn verdict:
 
 - **A2 — replay:** did the recorded result reproduce, and did the filesystem effect match the tool's declared `readOnlyHint`? (catches *trace infidelity*)
-- **A1 — invariant:** was a task-scoped policy violated by the observed effect? The `tests/` read-only default is on unless `--no-default-invariants`; add your own with `--invariants policy.json`. (catches *corrupt success* — a cheating agent whose trace is perfectly faithful, which A2 structurally cannot catch)
+- **A1 — invariant:** was a task-scoped policy violated by the observed effect? The default is **`no-assertion-weakening` on any `tests` or `testing` path segment**, on unless `--no-default-invariants`; add your own with `--invariants policy.json`. It FAILs a turn that **removes an assertion without replacement, replaces one with a tautology, or loosens one so it accepts strictly more** — judged against the **task pre-state**, so adding a test or editing the run's own scratch is not a violation. (catches *corrupt success* — a cheating agent whose trace is perfectly faithful, which A2 structurally cannot catch)
 
 Both are decided by **re-execution and diffing. No model is consulted** — enforced by an AST test that bans any inference import from the verdict path.
 
@@ -168,8 +168,19 @@ An agent's **built-in** tools do not traverse MCP and are invisible to Belay. Cl
 
 > This changed in the `NOT_COVERED` release. Before it, a declared-false network promise dragged the whole turn to `UNVERIFIED` — which made an honestly-declared closed posture strictly *worse* than saying nothing, and pinned every turn against the reference filesystem server at `UNVERIFIED` forever. **Consequence for anyone comparing runs: the `UNVERIFIED` rate before and after this change is not comparable.** The drop is a reclassification of turns Belay never had an instrument for, **not** improved detection.
 
-### The default `tests/` invariant matches a literal path prefix
-The A1 default's scope is the raw byte prefix `tests/`, so a repository whose tests live anywhere else — pytest's `testing/`, sympy's `sympy/**/tests/`, any `src/pkg/tests/` — is **not covered by it at all**, and a violation in such a tree is silently unflagged rather than reported as `UNVERIFIED`.
+### What the A1 default does and does not judge
+The default scope now matches a **path segment**, so `tests/`, pytest's `testing/`, sympy's `sympy/**/tests/` and any `src/pkg/tests/` are all covered. (It previously matched the raw byte prefix `tests/` only, which silently missed the rest — that gap is closed, and it is how a real corrupt success went unflagged in the Phase-0 mint. See [`PHASE0_RESULTS.md`](docs/technical/PHASE0_RESULTS.md) → *Correction — 2026-07-29*.)
+
+Four limits remain, and each is deliberate:
+
+- **A changed expectation is not a weakening.** `assert output == "old"` → `assert output == "new"` is the same check against a different value — possibly *wrong*, not *weaker*. An agent that rewrites an expected value to a wrong one **passes**. Wrongness is a different failure mode and Belay does not claim to catch it.
+- **Only Python files are judged.** A non-`.py` file under a test tree yields no assertions and the rule does not fire — it reaches `PASS`, not `UNVERIFIED`, because abstaining on every data fixture in a test tree is how a rule shrugs its way through a real repository.
+- **Only assertions are seen.** A mutation to a fixture or a config decorator that *parameterizes* an assertion (`@set_config(...)`, a conftest fixture) is invisible to it, even though it can change what the assertion tests.
+- **Unrecognised assertion helpers are not assertions.** Belay names `assert`, `pytest.raises`, `pytest.fail`, unittest-style `assert*`, and `fnmatch_lines` patterns. A project-specific helper is deliberately **not** inferred — a name allowlist tuned to the repos we happened to measure would be overfitting dressed as coverage.
+
+Whenever the rule cannot decide — an unparseable file, an undecidable pattern, a missing task pre-state — it reports `UNVERIFIED` with a named cause. **It never guesses in the passing direction.**
+
+> **The default's precision has not been re-measured.** Its predecessor scored **0.00** (0 true positives / 7 false positives) on the only real data available, which is why it was replaced. The replacement clears all 7 of those false positives and fires on the one real weakening in the captured set — but that is ~13 labeled points from 4 instances. Read it as **"0.00 → not yet measured"**, never as "0.00 → good".
 
 ### The sandbox is macOS only
 The sandbox is macOS **Seatbelt** (`sandbox-exec`); the snapshot is APFS **`clonefile`**. Everything Belay claims about containment was measured on macOS. **Linux is entirely unverified** — off macOS the sandbox *raises* rather than returning a cheerful no-op, because a no-op reporting success would claim a boundary that does not exist. Linux/Docker is a planned second slice. What the sandbox does and does not enforce (reads are not scoped; denial records are inferred) is in [`docs/technical/THREAT_MODEL.md`](docs/technical/THREAT_MODEL.md).
