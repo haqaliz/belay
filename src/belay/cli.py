@@ -875,17 +875,21 @@ def _cmd_corpus_run(args: argparse.Namespace) -> int:
     _emit(f"  {len(run.results)} case(s) re-verified by re-execution.")
     _emit()
     _emit("cases")
+    # The width is a MINIMUM, and the space after it is unconditional. Real case ids
+    # (`trace-pylint-dev__pylint-5859-turn11`) overflow any column we pick, and when
+    # they did the outcome abutted the id — `…-turn10MATCH` — which stops the line
+    # parsing by eye and makes `grep MATCH` name a case you cannot recover.
     for result in run.results:
         if result.outcome == REGRESSION:
-            _emit(f"  {result.case_id:<32}{REGRESSION}")
+            _emit(f"  {result.case_id:<40} {REGRESSION}")
             for div in result.divergences:
                 where = div.kind if not div.axis else f"{div.axis} {div.kind}"
                 _emit(f"      {where:<24}{div.expected_status} -> {div.got_status}")
         elif result.outcome == SKIP:
-            _emit(f"  {result.case_id:<32}{SKIP}")
+            _emit(f"  {result.case_id:<40} {SKIP}")
             _emit(f"      {result.skip_reason}")
         else:
-            _emit(f"  {result.case_id:<32}{MATCH}")
+            _emit(f"  {result.case_id:<40} {MATCH}")
 
     _emit()
     _emit("aggregate")

@@ -327,3 +327,52 @@ def test_cli_corpus_run_exits_zero_on_match_and_skip_only(tmp_path, monkeypatch,
     out = capsys.readouterr().out
     # the SKIP count is stated plainly, so a reader knows coverage was partial.
     assert "SKIP" in out and "1" in out
+
+
+def test_a_long_case_id_still_renders_separated_from_its_outcome(
+    tmp_path, monkeypatch, capsys
+):
+    """A real case id overflows the column, and the outcome ran into it.
+
+    Observed on the audited corpus: `trace-pallets__flask-4992-turn10MATCH` —
+    the id and the verdict fused into one token, so the line stops parsing by
+    eye and `grep MATCH` names a case you cannot recover from the output. A
+    fixed-width field is only ever a MINIMUM, so the separator has to be
+    unconditional: the ids that overflow it are exactly the real ones.
+
+    This drives the REAL renderer through `cli.main`. Asserting against a
+    format string written in the test would pass against the bug — twice
+    already in this repo a green test turned out to be checking its own stub
+    rather than the code (see `interop-merge-repair`).
+    """
+    from belay import cli
+    from belay.corpus.run import MATCH, REGRESSION, SKIP
+
+    # Every real id in the audited corpus overflows the old 32-column field.
+    long_ids = [
+        "trace-pylint-dev__pylint-5859-turn11",
+        "trace-pallets__flask-4992-turn10",
+    ]
+    assert all(len(i) > 30 for i in long_ids), "fixture no longer exercises overflow"
+
+    (tmp_path / "corpus").mkdir()
+    monkeypatch.setattr(
+        "belay.corpus.run.run_corpus",
+        lambda _dir: CorpusRun(
+            results=[_match(long_ids[0]), _regression(long_ids[1]), _skip(long_ids[0])]
+        ),
+    )
+    cli.main(["corpus", "run", str(tmp_path / "corpus")])
+    out = capsys.readouterr().out
+
+    # The outcome must never abut the id, for any outcome kind.
+    for outcome in (MATCH, REGRESSION, SKIP):
+        for case_id in long_ids:
+            assert f"{case_id}{outcome}" not in out, (
+                f"{case_id!r} fused with {outcome!r} — the separator is not unconditional"
+            )
+
+    # And the id must still be recoverable as its own whitespace-delimited token.
+    tokens = out.split()
+    for case_id in long_ids:
+        assert case_id in tokens, f"{case_id!r} is not a standalone token in the output"
