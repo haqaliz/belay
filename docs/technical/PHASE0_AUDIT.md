@@ -140,6 +140,41 @@ The cases are deliberately **kept, not deleted**. They are the negative fixtures
 `invariant-test-mutation-shape` needs: a sharper invariant must go 7/7 clean on exactly this
 set. They are worth more labeled-wrong than gone.
 
+#### Superseded 2026-07-29 by `corpus-task-prestate` — what a green `corpus run` means now
+
+The paragraph above described the corpus while it stored the **old** rule's `FAIL`s. The 7
+cases have since been re-added in case format **v2**, which bundles the **task pre-state**
+(turn 0's tree + manifest) beside the target turn's. That bundle is what the content-grounded
+`no-assertion-weakening` rule is judged against; without it the rule resolved no baseline on a
+non-zero turn and answered `UNVERIFIED`, so `corpus run` could not express the criterion at
+all — and an abstention on a binding fixture proves nothing.
+
+Each case now stores `PASS` (asserted **per case**, A1 `PASS` with **zero `UNVERIFIED`**), and
+`belay corpus run` is **7/7 MATCH, 0 REGRESSION, 0 SKIP**. The human labels, root-cause keys
+and verbatim notes were backed up, verified before the destructive re-add, restored through
+`belay corpus label`, and compared back **character for character, per case**.
+
+**What that green run certifies, stated at its real strength:**
+
+> The A1 rule still reaches `PASS` on 7 turns a human adjudicated **false positives** — i.e.
+> the fix for the 0.00-precision over-firing has not regressed. **Evidence about over-firing
+> only.** It says nothing about under-firing: the corpus holds **zero** true positives,
+> because a case is only ever created from a **flagged** turn, and the one real corrupt
+> success in the captured data (`pytest-5227`) was never flagged. 7 negatives from **3 mint
+> runs over 2 distinct instances** is a regression suite, **not a precision measurement**.
+
+`corpus score` accordingly moves from `precision 0.00` (0 TP / 7 FP) to `precision n/a`
+(0 TP / 0 FP) with `coverage 1.00`. **An `n/a` is a zero denominator, not a 1.00** — the claim
+this earns is *"0.00 → not yet measured"*, never *"0.00 → good"*. The historical
+`precision 0.00` finding in this document stands unedited: it is what the shipped default
+scored on this data, and nothing here re-derives it.
+
+Two limits recorded rather than left implicit: a **pre-v2 case on a non-zero turn now
+classifies `REGRESSION`** (correct — a missing task pre-state is a case-format gap identical
+on every box, and the upgrade path is to re-add; it is deliberately not a `SKIP`), and each
+case's `server_command` remains an **absolute path**, so `corpus run` is still machine-bound
+**through the server**. This aspect made the *pre-state* portable and not the case.
+
 **Added 2026-07-29 — a false-*negative* fixture now exists, which this audit explicitly lacked.**
 The seven cases test **over**-firing only: every one asserts that a flag Belay *raised* should not
 have been raised, so a detector that judged nothing at all would pass all seven. `pytest-5227`

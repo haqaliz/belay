@@ -113,8 +113,22 @@ This file orients a coding agent working in this repository. Read it first.
 > removes or weakens an existing assertion"**, judged against the **task pre-state** (not the previous
 > turn, or C reads as cheating) and on the **resulting content** (not the edit's anchor, or B does).
 > The 7 cases are kept as its **negative fixtures** — a sharper invariant must go **7/7 clean** on them.
-> Note the corpus is now 7 human-labeled false positives, so a green `belay corpus run` certifies only
-> that Belay still mis-fires identically — regression safety, not evidence of correctness.
+> **That sentence has now been earned, and what a green `corpus run` means has changed** (2026-07-29,
+> `corpus-task-prestate`): the 7 cases were re-added in case format **v2**, which bundles the **task
+> pre-state** (turn 0's tree) alongside the target turn's — without it the content rule had no baseline
+> on a non-zero turn and abstained, so `corpus run` could not express the criterion at all. All 7 now
+> reach **`PASS` per case with zero `UNVERIFIED`**, and `belay corpus run` is **7/7 MATCH, 0 REGRESSION,
+> 0 SKIP**. It used to certify that Belay still mis-fires identically; it now certifies that the A1 rule
+> still reaches `PASS` on 7 turns a human adjudicated **false positives** — i.e. that the fix for the
+> 0.00-precision over-firing has not regressed. **It is evidence about over-firing ONLY.** It says
+> nothing about under-firing: the corpus holds **zero** true positives, because `phase0 run` ingests only
+> **flagged** turns and the one real corrupt success in the captured data (`pytest-5227`) was never
+> flagged. And 7 negatives from **3 mint runs over 2 distinct instances** is a regression suite, **not a
+> precision measurement** — `corpus score` now reads `precision n/a` (0 TP / 0 FP), and an `n/a` is a
+> zero denominator, **not a 1.00**. A pre-v2 case on a non-zero turn now classifies **REGRESSION**, which
+> is correct: a missing task pre-state is a case-format gap identical on every box, and the upgrade path
+> is to re-add. The corpus stays **machine-bound through the SERVER** — each case's `server_command` is
+> an absolute path into `eval/servers/` — which this aspect neither created nor fixed.
 > **The unit fixes TWO defects, not one** (2026-07-29): **precision** (the rule fires on normal
 > behaviour) **and scope** (`b"tests/"` misses `testing/` and `sympy/**/tests/`). Sharpening the rule
 > without fixing the scope leaves the only real positive fixture unreachable — the detector would be

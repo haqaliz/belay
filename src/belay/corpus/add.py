@@ -6,10 +6,30 @@ persisted this run's snapshot manifests, it writes a case DIRECTORY that survive
 of the original run:
 
     <case>/
-      case.json      # the recomputed expected verdict, the A1 policy, the HUMAN label
-      trace.jsonl    # the FULL records (the handshake too — corpus run re-selects the turn)
-      manifest.json  # the snapshot manifest, tree_path rewritten to the relative "prestate"
-      prestate/      # a real COPY of the pre-state tree, so the case needs no original run
+      case.json          # the recomputed expected verdict, the A1 policy, the HUMAN label
+      trace.jsonl        # the FULL records (the handshake too — corpus run re-selects the turn)
+      manifest.json      # the TARGET turn's manifest, tree_path rewritten to "prestate"
+      prestate/          # a real COPY of that tree, so the case needs no original run
+      task_manifest.json # turn 0's manifest, tree_path rewritten to "task_prestate"
+      task_prestate/     # a real COPY of turn 0's tree — the A1 content rule's baseline
+
+## Two pre-states, because the rule and the replay need different baselines
+
+Replay needs the TARGET turn's pre-state: that is the state the call was made from.
+`no-assertion-weakening` needs the **TASK** pre-state, turn 0's — an agent editing a scratch
+test it wrote earlier in the same run has weakened nothing, and a file absent from turn 0's
+tree is exactly how that stops reading as cheating. A case bundling only the first left the
+rule with no baseline on every non-zero turn, so it abstained; `corpus run` could then not
+express "these cases reach PASS" at all.
+
+Both are resolved by the same mechanism and neither needs a change in `run.py`:
+`replay.engine._manifest_for` globs `manifest_dir/*.json` and matches on the recorded
+**handle**, not the filename, and `run_case` already passes `manifest_dir=case_dir`.
+`case.json` is skipped by that glob because it carries no `handle` key.
+
+At `target_turn_index == 0` the two handles are identical, so the `task_*` pair is NOT
+written and the declaration points at the existing `manifest.json` / `prestate/` — see
+`_bundle_task_prestate`.
 
 ## The one rule that cannot bend: the engine never labels (D3)
 
@@ -52,10 +72,18 @@ from belay.corpus.case import Case, write_case
 from belay.index import derive_correlation, tool_calls
 from belay.replay.engine import _manifest_for
 from belay.replay.persist import load_snapshot
-from belay.verify.invariants import Invariant
+from belay.verify.invariants import (
+    NO_TASK_PRESTATE_HANDLE,
+    NO_TASK_PRESTATE_MANIFEST,
+    NO_TASK_PRESTATE_TREE,
+    Invariant,
+)
 from belay.verify.turn import TurnVerdict
 
 _PRESTATE_DIRNAME = "prestate"
+_MANIFEST_FILENAME = "manifest.json"
+_TASK_PRESTATE_DIRNAME = "task_prestate"
+_TASK_MANIFEST_FILENAME = "task_manifest.json"
 
 
 def _safe_case_id(source_trace_id: str, target_turn_index: int) -> str:
@@ -126,6 +154,77 @@ def _target_tool_name(records: Sequence[dict], target_turn_index: int) -> Option
     return None
 
 
+def _bundle_task_prestate(
+    case_dir: Path,
+    records: Sequence[dict],
+    manifest_dir: Path,
+    target_handle: dict,
+) -> dict:
+    """Copy turn 0's tree into `<case>/task_prestate/`; return the `task_prestate` declaration.
+
+    `no-assertion-weakening` is judged against the **task** pre-state, so a case that carries
+    only the target turn's baseline leaves the rule nothing to compare and it abstains. This
+    bundles the second tree exactly the way the target's is bundled — `copytree` plus a
+    `tree_path` rewritten to the relative dirname — so the case still restores from itself
+    alone on any machine.
+
+    **When turn 0's handle IS the target's, nothing extra is written** and the declaration
+    points at the existing pair. That is the `target_turn_index == 0` case, and skipping it is
+    a property rather than an optimisation: two manifests carrying the SAME handle in one
+    directory would leave which one `_manifest_for`'s `sorted(glob)` returns as an
+    *"it should be harmless"* no fixture exercises. Eliminating the situation beats reasoning
+    about it, and beats every future reader having to re-do the reasoning.
+
+    **Fail-closed by RECORDING the absence, never by raising.** A case with a target pre-state
+    but no task pre-state is still fully replayable — A2 result and A2 effect are unaffected
+    and only A1 abstains. Raising would send the turn to `flagged_unaddable`
+    (`phase0/runner.py`) and lose the case from the corpus entirely, trading an honest partial
+    verdict for no evidence at all, in the one system whose purpose is compounding evidence.
+    The contrast is deliberate: an absent TARGET pre-state still raises in `add_case`, because
+    then nothing can be replayed at all.
+    """
+    try:
+        handle = _target_state_handle(records, 0)
+    except ValueError:
+        return {"status": "absent", "cause": NO_TASK_PRESTATE_HANDLE}
+    if handle.get("status") != "present":
+        return {"status": "absent", "cause": NO_TASK_PRESTATE_HANDLE}
+
+    if handle.get("handle") == target_handle.get("handle"):
+        return {
+            "handle": handle["handle"],
+            "tree": _PRESTATE_DIRNAME,
+            "manifest": _MANIFEST_FILENAME,
+        }
+
+    manifest_path = _manifest_for(handle.get("handle"), manifest_dir)
+    if manifest_path is None:
+        return {"status": "absent", "cause": NO_TASK_PRESTATE_MANIFEST}
+
+    tree_dest = case_dir / _TASK_PRESTATE_DIRNAME
+    try:
+        snap = load_snapshot(manifest_path)
+        shutil.copytree(snap.snapshot.path, tree_dest)
+        payload = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError, KeyError):
+        # A tree that vanished, an unreadable manifest, a copy that failed part-way: all one
+        # finding — there is no reconstructable task pre-state. Remove any partial copy so
+        # the case's artifact set stays exactly what the declaration says it is; a half-tree
+        # on disk would be read by `_manifest_for`'s sibling as a bundled baseline.
+        shutil.rmtree(tree_dest, ignore_errors=True)
+        return {"status": "absent", "cause": NO_TASK_PRESTATE_TREE}
+
+    payload["tree_path"] = _TASK_PRESTATE_DIRNAME
+    (case_dir / _TASK_MANIFEST_FILENAME).write_text(
+        json.dumps(payload, indent=2), encoding="utf-8"
+    )
+    return {
+        "handle": handle["handle"],
+        "tree": _TASK_PRESTATE_DIRNAME,
+        "manifest": _TASK_MANIFEST_FILENAME,
+    }
+
+
 def add_case(
     corpus_dir: Path,
     *,
@@ -180,11 +279,15 @@ def add_case(
     shutil.copytree(snap.snapshot.path, case_dir / _PRESTATE_DIRNAME)
     manifest_payload = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
     manifest_payload["tree_path"] = _PRESTATE_DIRNAME
-    (case_dir / "manifest.json").write_text(
+    (case_dir / _MANIFEST_FILENAME).write_text(
         json.dumps(manifest_payload, indent=2), encoding="utf-8"
     )
 
-    # 3. case.json — the recomputed expected verdict, the A1 policy, the HUMAN label.
+    # 3. task_manifest.json + task_prestate/ — turn 0's pair, resolved by the SAME by-handle
+    #    glob, so `run_case`'s `manifest_dir=case_dir` finds both with no change in run.py.
+    task_prestate = _bundle_task_prestate(case_dir, records, manifest_dir, handle)
+
+    # 4. case.json — the recomputed expected verdict, the A1 policy, the HUMAN label.
     expected = {
         "reduced_status": verdict.status.value,
         "sub_verdicts": [
@@ -208,6 +311,7 @@ def add_case(
         capture_platform=sys.platform,
         capture_capabilities=sorted(snap.manifest.capabilities),
         target_tool=_target_tool_name(records, target_turn_index),
+        task_prestate=task_prestate,
     )
     write_case(case_dir, case)
     return case_dir

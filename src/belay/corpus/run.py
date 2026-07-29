@@ -20,6 +20,23 @@ every non-darwin run RED, and a "SKIP is basically a pass" would let a real regr
 behind an environment excuse. So SKIP is decided FIRST and only for a closed set of
 environment/substrate causes; everything else that differs from `expected` is a REGRESSION.
 
+## A case older than the `task_prestate` format is a REGRESSION, and that is correct
+
+Case format v2 bundles turn 0's pre-state (`task_manifest.json` + `task_prestate/`), which
+is the baseline `no-assertion-weakening` is judged against. A case written before v2 whose
+target turn is NOT 0 carries no such manifest, so the rule reaches UNVERIFIED with a named
+cause, and a stored `expected` recording an A1 FAIL no longer matches: the case classifies
+**REGRESSION** and the run exits non-zero.
+
+**Do not add a new SKIP cause to quiet that.** A SKIP means "THIS box could not evaluate the
+case" — an environment gap that differs between machines. A missing task pre-state is a
+**case-format** gap, identical on every box, and filing it as SKIP would let a real detector
+regression hide behind it. There is no migration tool: the upgrade path for a stale case is
+to **re-add** it, and the REGRESSION is exactly what tells the operator to.
+
+(A pre-v2 case whose target turn IS 0 evaluates normally — its one manifest genuinely IS
+turn 0's, so the baseline is present and nothing degrades.)
+
 ## Why the comparison pins the per-sub-verdict SET, not the reduced status (D4)
 
 `classify_case` compares the WHOLE recomputed set — `reduced_status` AND every
