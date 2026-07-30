@@ -180,8 +180,11 @@ def _fail_verdict() -> TurnVerdict:
     )
 
 
-def _add_synthetic(tmp_path: Path, *, human_label: str = "pending", verdict=None) -> Path:
-    records, manifest_dir, _tree = _synthetic_run(tmp_path)
+def _add_synthetic(tmp_path: Path, *, human_label: str = "pending", verdict=None, run=None) -> Path:
+    # `run` lets a caller add the SAME synthetic run twice: `_synthetic_run` builds its tree
+    # with a plain `mkdir(parents=True)`, so re-deriving it would collide in the fixture
+    # rather than in `add_case` — which is the collision under test.
+    records, manifest_dir, _tree = run if run is not None else _synthetic_run(tmp_path)
     return add_case(
         tmp_path / "corpus",
         records=records,
@@ -341,6 +344,121 @@ def test_missing_manifest_is_a_named_valueerror(tmp_path):
             manifest_dir=empty_dir, server_command=["x"], invariants=[],
             replays=3, timeout=1.0, source_trace_id="synth-trace", captured_at=CAPTURED_AT,
         )
+
+
+# --- re-add: a stored case is never overwritten, and never half-written ---------------
+#
+# `add_case` used to `mkdir(exist_ok=True)` onto a populated case dir, truncate `trace.jsonl`
+# in `"w"` mode, and only then hit `FileExistsError` from `copytree` onto an existing
+# `prestate/`. Two consequences, both dangerous: the existing case was damaged on the way to
+# failing, and `FileExistsError` is not a `ValueError`, so `phase0/runner.py`'s per-turn
+# handler missed it and the WHOLE instance became `ERRORED` — excluded from
+# `violation_denominator()`. Re-running a measurement could therefore shrink its own
+# denominator and manufacture an `INSTRUMENT SUSPECT`, i.e. a fake PIVOT.
+
+
+def _case_fingerprint(case_dir: Path) -> dict[str, str]:
+    """A `{relpath: sha256}` map over every file under `case_dir`, sorted-path stable.
+
+    Contents only: the failure this guards against (`trace.jsonl` opened `"w"`) changes
+    bytes, so a content hash is sufficient and a mode/size comparison would add noise
+    without adding a discrimination. Relative paths keep the map comparable across the
+    `tmp_path` the case happens to live in.
+    """
+    import hashlib
+
+    return {
+        str(path.relative_to(case_dir)): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(case_dir.rglob("*"))
+        if path.is_file()
+    }
+
+
+def test_readd_same_case_id_raises_case_exists(tmp_path):
+    """A second `add_case` for the same trace + turn refuses, naming the case id.
+
+    `ValueError` specifically, because that is the type `phase0/runner.py` already handles
+    per-turn — see `test_case_exists_error_is_a_valueerror`.
+    """
+    run = _synthetic_run(tmp_path)
+    _add_synthetic(tmp_path, run=run)
+
+    with pytest.raises(ValueError) as excinfo:
+        _add_synthetic(tmp_path, run=run)
+
+    message = str(excinfo.value)
+    assert "synth-trace-turn0" in message, message
+    assert "exists" in message, message
+
+
+def test_readd_leaves_existing_case_byte_identical(tmp_path):
+    """A refused re-add mutates NOTHING: every file under the case dir is byte-identical.
+
+    The collision must be detected BEFORE the first write. This is deliberately not a
+    statement about which exception is raised — that is
+    `test_readd_same_case_id_raises_case_exists`'s job — so the failing call is caught
+    broadly here and the assertion is purely about what survives on disk.
+
+    The re-add carries a SECOND capture of the same instance: the same `source_trace_id`
+    (hence the same case id) but different records. That is deliberate and it is what makes
+    the damage observable — re-adding the *identical* records truncates `trace.jsonl` and
+    then rewrites the same bytes, so a content hash cannot see the write at all, and the
+    test would pass against the very bug it exists to catch. A re-mint of an instance
+    producing a fresh capture under the same trace stem is also the realistic case.
+    """
+    stored = _synthetic_run(tmp_path)
+    case_dir = _add_synthetic(tmp_path, human_label="true-positive", run=stored)
+    before = _case_fingerprint(case_dir)
+    assert "trace.jsonl" in before and "prestate/tests/test_auth.py" in before, before
+
+    rerun_root = tmp_path / "rerun"
+    rerun_root.mkdir()
+    rerun = _synthetic_run(rerun_root, handle="H2")
+
+    try:
+        _add_synthetic(tmp_path, run=rerun)
+    except Exception:  # noqa: BLE001 - WHICH error is the previous test's assertion
+        pass
+    else:
+        pytest.fail("a re-add of an existing case id must not succeed")
+
+    assert _case_fingerprint(case_dir) == before
+
+
+def test_readd_preserves_human_label_and_root_cause(tmp_path):
+    """A human adjudication is not overwritable by the engine, even by a failed re-add.
+
+    The corpus metric measures engine verdicts against HUMAN ground truth, so a label the
+    engine could clobber is not ground truth. Today `case.json` survives a collision only
+    by accident — `copytree` raises before `write_case` is reached — which is exactly why
+    this is pinned.
+    """
+    from belay.corpus.curate import set_label
+
+    run = _synthetic_run(tmp_path)
+    _add_synthetic(tmp_path, run=run)
+    root_cause = {"key": "tests-dir-write", "note": "a real weakening of test_auth.py"}
+    set_label(tmp_path / "corpus", "synth-trace-turn0", "true-positive", root_cause)
+
+    with pytest.raises(ValueError):
+        _add_synthetic(tmp_path, run=run)
+
+    case = load_case(tmp_path / "corpus" / "synth-trace-turn0")
+    assert case.human_label == "true-positive", case.human_label
+    assert case.root_cause == root_cause, case.root_cause
+
+
+def test_case_exists_error_is_a_valueerror():
+    """The collision type MUST be a `ValueError`, and this is load-bearing, not cosmetic.
+
+    `phase0/runner.py`'s per-turn ingest handler catches `ValueError`, sending the turn to
+    `flagged_unaddable` while the instance keeps its real disposition. Any other base class
+    escapes to `run_batch`'s catch-all, ERRORs the whole instance, and drops it from
+    `violation_denominator()` — the fake-`INSTRUMENT SUSPECT` path.
+    """
+    from belay.corpus.add import CaseExistsError
+
+    assert issubclass(CaseExistsError, ValueError)
 
 
 def test_cli_default_timeout_matches_client(tmp_path):

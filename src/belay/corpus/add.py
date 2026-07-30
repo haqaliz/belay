@@ -80,6 +80,25 @@ from belay.verify.invariants import (
 )
 from belay.verify.turn import TurnVerdict
 
+class CaseExistsError(ValueError):
+    """The target case id already exists in the corpus dir; nothing was written.
+
+    **Subclasses `ValueError` on purpose, and that is load-bearing.** `phase0/runner.py`'s
+    per-turn ingest loop catches `ValueError` and records the turn in `flagged_unaddable`,
+    leaving the instance's real disposition and turn counts intact. Any other base class —
+    `FileExistsError`, which is what the collision used to surface as — escapes to
+    `run_batch`'s catch-all, turns the WHOLE instance into `Disposition.ERRORED`, and drops
+    it from `violation_denominator()`. Enough of those and `instrument_suspect()` fires: a
+    re-run of a measurement could manufacture a fake `INSTRUMENT SUSPECT`, i.e. a fake
+    PIVOT. The base class is therefore part of this error's contract, pinned by a test.
+
+    **Any** existing case dir is a collision, including one already half-damaged by the bug
+    this error replaces. Conservative deliberately: this code cannot tell an intact case from
+    a wreck, and guessing risks overwriting a human adjudication. There is no `--overwrite`;
+    re-adding is a human act — delete the case dir, or use a fresh corpus dir.
+    """
+
+
 _PRESTATE_DIRNAME = "prestate"
 _MANIFEST_FILENAME = "manifest.json"
 _TASK_PRESTATE_DIRNAME = "task_prestate"
@@ -248,7 +267,10 @@ def add_case(
 
     Raises a named `ValueError` when the target turn has no restorable pre-state (an
     `absent`/non-`present` handle) or no persisted manifest is found for its handle — a case
-    with no pre-state cannot be a replayable corpus case.
+    with no pre-state cannot be a replayable corpus case. And `CaseExistsError` (a
+    `ValueError`) when the case id already exists: an existing case may carry a HUMAN label,
+    so it is never overwritten, and the check runs before ANY write so a refused re-add
+    leaves the stored case byte-identical.
     """
     handle = _target_state_handle(records, target_turn_index)
     if handle.get("status") != "present":
@@ -265,7 +287,20 @@ def add_case(
 
     case_id = _safe_case_id(source_trace_id, target_turn_index)
     case_dir = Path(corpus_dir) / case_id
-    case_dir.mkdir(parents=True, exist_ok=True)
+    # Collision is decided BEFORE the first write. `trace.jsonl` opens in `"w"` mode below,
+    # which used to truncate an existing case's trace on the way to failing in `copytree`.
+    # Ordering against the pre-state checks above is deliberate: they stay first, so a turn
+    # that both collides AND has no restorable pre-state keeps reporting the pre-state cause,
+    # exactly as before. Not atomic, and it does not need to be — this path is sequential by
+    # construction (one `tools/call` in flight, R7), so a TOCTOU race is not in the model.
+    if case_dir.exists():
+        raise CaseExistsError(
+            f"corpus case {case_id!r} already exists at {case_dir}; refusing to overwrite "
+            f"(a stored case may carry a human label). Delete it or use a fresh corpus dir."
+        )
+    # No `exist_ok`: after the check above, an existing dir is a real defect and must surface
+    # as an error rather than being silently written into.
+    case_dir.mkdir(parents=True)
 
     # 1. trace.jsonl — the FULL records, so the case carries the tools/list handshake a
     #    later `corpus run`'s verify_turn needs, not just the target frame.
@@ -317,4 +352,4 @@ def add_case(
     return case_dir
 
 
-__all__ = ["add_case"]
+__all__ = ["add_case", "CaseExistsError"]
