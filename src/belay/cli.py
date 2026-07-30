@@ -1331,6 +1331,75 @@ def _cmd_phase0_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def _parse_labeled_ledger_arg(arg: str) -> tuple[str, Path]:
+    """`LABEL=PATH` -> `(label, path)`, or raise `ValueError` naming the bad argument.
+
+    Split on the FIRST `=` only, so a ledger path containing one still parses. Both halves
+    must be non-empty: an empty label cannot distinguish two stages, and an empty path names
+    no ledger. Every failure here is raised, never skipped -- a silently dropped input would
+    print a smaller population that looks exactly like a correct one.
+    """
+    label, separator, raw_path = arg.partition("=")
+    if not separator or not label or not raw_path:
+        raise ValueError(
+            f"malformed LABEL=PATH argument {arg!r}: expected a stage label, an '=', then a "
+            "ledger path (for example: s2=runs/s2.json)"
+        )
+    return label, Path(raw_path)
+
+
+def _cmd_phase0_combine(args: argparse.Namespace) -> int:
+    """`belay phase0 combine LABEL=PATH ...` — one population from many stage ledgers.
+
+    Each input ledger carries a caller-supplied stage LABEL because a `trace_id` is NOT
+    unique across stages: it is the trace file's stem, so the `s2` and `s3` captures of one
+    instance share an id while being genuinely different observations. A capture is
+    `(label, trace_id)`; an instance is `trace_id`. The report states the dedup rule, both
+    denominators, and every instance whose captures disagreed.
+
+    Fail-closed on every input defect -- a malformed pair, a repeated label, a missing or
+    corrupt ledger -- because the alternative is a number computed over a population nobody
+    chose. `phase0 report`'s single-ledger contract is untouched: this is a new command.
+    """
+    from belay.phase0.ledger import from_json
+    from belay.phase0.population import LabeledLedger, Population
+    from belay.phase0.report import render_population_report
+
+    labeled = []
+    for arg in args.ledgers:
+        try:
+            label, ledger_path = _parse_labeled_ledger_arg(arg)
+        except ValueError as exc:
+            _emit(f"belay: {exc}")
+            return 2
+
+        if not ledger_path.is_file():
+            _emit(f"belay: ledger file not found for label {label!r}: {ledger_path}")
+            return 2
+        try:
+            data = json.loads(ledger_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            _emit(f"belay: could not read ledger {ledger_path} for label {label!r}: {exc}")
+            return 2
+        try:
+            labeled.append(LabeledLedger(label, from_json(data)))
+        except ValueError as exc:
+            _emit(f"belay: {ledger_path} (label {label!r}): {exc}")
+            return 2
+
+    # The duplicate-label and duplicate-trace_id rules live in `Population.from_labeled`,
+    # not here: they are the merge's own identity rules, and restating them at the CLI is
+    # how two definitions of "the same capture" drift apart.
+    try:
+        population = Population.from_labeled(labeled)
+    except ValueError as exc:
+        _emit(f"belay: {exc}")
+        return 2
+
+    _emit(render_population_report(population))
+    return 0
+
+
 # --- belay interop correlate: OTLP spans -> MCP turns -> the attached verdict ----------
 
 #: The named cause a matched span carries when `--server` was not given at all, so no
@@ -1928,6 +1997,39 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     phase0_report.set_defaults(func=_cmd_phase0_report)
+
+    phase0_combine = phase0.add_parser(
+        "combine",
+        help="merge several labeled stage ledgers into one population and report the number",
+        description=(
+            "Merge N run ledgers into ONE population, given as LABEL=PATH pairs, and print "
+            "the population report: the dedup rule in words, BOTH denominators (instances "
+            "as the headline, captures alongside), and every instance whose captures "
+            "disagreed.\n\n"
+            "The LABEL is mandatory and is the ledger's stage (s1, s2, s3...). A trace_id "
+            "is NOT unique across stages -- it is the trace file's stem, so two stages of "
+            "one instance share it while being genuinely different observations. A CAPTURE "
+            "is (label, trace_id); an INSTANCE is a trace_id. Without labels the population "
+            "would silently collapse two real observations into one.\n\n"
+            "Dedup: an instance is VIOLATING iff ANY of its captures flagged "
+            "(worst-verdict-wins), and is IN THE DENOMINATOR iff ANY of its captures is "
+            "VERIFIED_CLEAN or VERIFIED_FLAGGED -- a capture that ERRORED is not evidence "
+            "of a violation.\n\n"
+            "Fail-closed on every input defect: a malformed pair, a repeated label, a "
+            "missing or corrupt ledger is a named error, never a silent skip."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    phase0_combine.add_argument(
+        "ledgers",
+        nargs="+",
+        metavar="LABEL=PATH",
+        help=(
+            "a stage label and the ledger JSON file it names, e.g. s2=runs/s2.json; "
+            "repeat for each stage"
+        ),
+    )
+    phase0_combine.set_defaults(func=_cmd_phase0_combine)
 
     interop = subcommands.add_parser(
         "interop", help="observability interop: correlate OTLP spans to MCP turns and attach the verdict"

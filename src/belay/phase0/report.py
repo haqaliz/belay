@@ -92,10 +92,12 @@ def instrument_suspect(ledger: RunLedger, *, threshold: float = 1.0) -> bool:
 #: `runs/` is one, produced by the REPLACED `tests/` read-only rule. Printing nothing here
 #: reads as "the current detector, obviously"; printing the current detector would be a
 #: fabrication. The only honest rendering names the gap and says what follows from it.
-_UNRECORDED_DETECTOR = (
-    "detector: unrecorded — this ledger does not record which A1 rules produced it, so "
+_UNRECORDED_DETECTOR_CLAUSE = (
+    "unrecorded — this ledger does not record which A1 rules produced it, so "
     "the numbers below MUST NOT be assumed current"
 )
+
+_UNRECORDED_DETECTOR = f"detector: {_UNRECORDED_DETECTOR_CLAUSE}"
 
 
 def _detector_section(ledger: RunLedger) -> list[str]:
@@ -265,4 +267,134 @@ def render_report(ledger: RunLedger, metrics: Metrics) -> str:
     return "\n".join(lines)
 
 
-__all__ = ["violation_rate", "instrument_suspect", "render_report"]
+# --- the POPULATION report: many stage ledgers, one number ----------------------------
+
+#: The dedup rule, stated in the output rather than only in a docstring. A merged number is
+#: only auditable if the reduction that produced it is on the page: a reader who cannot see
+#: that one `trace_id` captured in three stages counted ONCE cannot check the denominator,
+#: and a denominator nobody can check is the defect this whole unit exists to end.
+_DEDUP_RULE = (
+    "dedup rule: a CAPTURE is (stage label, trace_id); an INSTANCE is a trace_id. An "
+    "instance is\n"
+    "  VIOLATING iff ANY of its captures flagged (worst-verdict-wins), and IN THE "
+    "DENOMINATOR iff\n"
+    "  ANY of its captures is VERIFIED_CLEAN or VERIFIED_FLAGGED — a capture that ERRORED "
+    "is NOT\n"
+    "  evidence of a violation, and an instance that ERRORED in every stage was never "
+    "verified."
+)
+
+
+def _population_detector_section(population) -> list[str]:
+    """Which detector produced each input ledger, by stage label.
+
+    Merging is precisely where a stale detector would disappear: a population can mix a
+    ledger written by the REPLACED `tests/` read-only rule with one written by today's
+    `no-assertion-weakening`, and the merged rate would then be a number no single detector
+    ever produced. So the identity is stated PER STAGE — one unrecorded ledger among four
+    recorded ones has to stay visible as unrecorded, not be averaged into silence.
+    """
+    lines = ["detector by stage (what produced each input ledger):"]
+    if not population.detectors:
+        lines.append("  (no input ledger — nothing produced this population)")
+        return lines
+    for label, detector in population.detectors:
+        if detector is None:
+            lines.append(f"  {label}: {_UNRECORDED_DETECTOR_CLAUSE}")
+            continue
+        lines.append(f"  {label}: {len(detector.rules)} A1 rule(s) in force")
+        for scope, rule in detector.rules:
+            # Scope and rule on ONE line: a detector is the PAIR, exactly as in the
+            # single-ledger report above.
+            lines.append(f"    scope {scope!r}: {rule}")
+        if not detector.rules:
+            lines.append("    (none — A1 was disabled for this run; no invariant was enforced)")
+        version = detector.version if detector.version is not None else "unrecorded"
+        lines.append(f"    code version: {version}")
+    return lines
+
+
+def _disagreement_section(population) -> list[str]:
+    """Every instance whose captures disagree, NAMED with each capture's outcome.
+
+    Worst-verdict-wins can inflate the rate, and that is only acceptable because the
+    reduction is auditable. "None" is a result and is printed in words: an empty section
+    would read as though the question had never been asked.
+    """
+    disagreements = population.disagreements()
+    if not disagreements:
+        return [
+            "disagreements: none — no disagreement between any instance's captures on the "
+            "violation question"
+        ]
+    lines = [
+        "disagreements (one instance, captures that differ on the violation question): "
+        f"{len(disagreements)}"
+    ]
+    for view in disagreements:
+        outcomes = ", ".join(
+            f"{capture.label}={capture.disposition.name}" for capture in view.captures
+        )
+        lines.append(
+            f"  {view.trace_id}: {outcomes} -> counted "
+            f"{'VIOLATING' if view.is_violating() else 'NOT violating'} by worst-verdict-wins"
+        )
+    return lines
+
+
+def render_population_report(population) -> str:
+    """Render the Phase-0 report for a MERGED population, in this fixed order:
+
+    0. THE DETECTOR per stage label, or `unrecorded` — first, for the same reason it comes
+       first in `render_report`: it qualifies every number below, and a merge is where a
+       stale detector would otherwise vanish into an average.
+    1. THE DEDUP RULE, in the output. A merged denominator that a reader cannot reconstruct
+       is not auditable.
+    2. Population size: captures, instances and turns, each with the noun it counts.
+    3. THE HEADLINE, per INSTANCE — a `trace_id` captured in several stages counts ONCE.
+    4. ALONGSIDE, per CAPTURE — the same instance counts TWICE, and the line says it is not
+       the headline. Both carry their denominator, and a 0 denominator is `n/a`, never a
+       bare `0%` and never a conjured `100%`.
+    5. DISAGREEMENTS, named, or the words "no disagreement".
+
+    Takes no `Metrics`: the corpus FP-rate is scored over a corpus directory, not over a
+    population of ledgers, and pairing it with a merged rate would imply the two share a
+    denominator. `render_report`'s single-ledger contract is untouched by this function.
+
+    Deterministic: no clock, no randomness, no network, no filesystem.
+    """
+    lines = _population_detector_section(population) + ["", _DEDUP_RULE, ""]
+
+    lines.append(
+        f"population size: {population.capture_count()} capture(s) over "
+        f"{population.instance_count()} instance(s), {population.total_turns()} turn(s)"
+    )
+
+    instance_numerator = len(population.violating_instances())
+    instance_denominator = population.instance_denominator()
+    lines.append(
+        "HEADLINE violation rate, per INSTANCE (a trace_id captured in several stages "
+        f"counts ONCE) = {instance_numerator}/{instance_denominator} = "
+        f"{_format_rate(_ratio(instance_numerator, instance_denominator))}"
+    )
+
+    capture_numerator = len(population.violating_captures())
+    capture_denominator = population.capture_denominator()
+    lines.append(
+        "alongside, per CAPTURE (an instance captured in two stages counts TWICE; NOT the "
+        f"headline) = {capture_numerator}/{capture_denominator} = "
+        f"{_format_rate(_ratio(capture_numerator, capture_denominator))}"
+    )
+    lines.append("")
+
+    lines.extend(_disagreement_section(population))
+
+    return "\n".join(lines)
+
+
+__all__ = [
+    "violation_rate",
+    "instrument_suspect",
+    "render_report",
+    "render_population_report",
+]
