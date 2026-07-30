@@ -13,9 +13,19 @@ This file is written FIRST, before `src/belay/phase0/ledger.py` exists, per stri
 
 from __future__ import annotations
 
+import json
+import os
+
 import pytest
 
-from belay.phase0.ledger import Disposition, InstanceRecord, RunLedger, from_json, to_json
+from belay.phase0.ledger import (
+    DetectorIdentity,
+    Disposition,
+    InstanceRecord,
+    RunLedger,
+    from_json,
+    to_json,
+)
 
 
 def _instance(
@@ -202,3 +212,104 @@ def test_from_json_rejects_missing_instances_key() -> None:
     """A payload with no `instances` key at all is also a named `ValueError`."""
     with pytest.raises(ValueError, match="instances"):
         from_json({})
+
+
+# --- Detector identity: what produced this ledger, or an honest "unrecorded" -----------
+
+
+def test_detector_identity_round_trips() -> None:
+    """A recorded detector survives `to_json`/`from_json` exactly — rules, scopes, version.
+
+    The four ledgers in `runs/` were produced by the REPLACED `tests/` read-only rule and
+    are indistinguishable, by reading them, from one produced by today's
+    `no-assertion-weakening`. A ledger about to re-derive a published number must state
+    what decided its verdicts, and a round-trip that dropped or reordered a rule would put
+    a different detector's name on the same number.
+    """
+    detector = DetectorIdentity(
+        rules=(("tests", "no-assertion-weakening"), ("testing", "no-assertion-weakening")),
+        version="belay 0.10.0",
+    )
+    ledger = RunLedger(instances=_mixed_ledger().instances, detector=detector)
+
+    rebuilt = from_json(to_json(ledger))
+
+    assert rebuilt == ledger
+    assert rebuilt.detector is not None
+    assert rebuilt.detector.rules == (
+        ("tests", "no-assertion-weakening"),
+        ("testing", "no-assertion-weakening"),
+    )
+    assert rebuilt.detector.version == "belay 0.10.0"
+
+
+def test_detector_identity_round_trips_a_non_utf8_scope() -> None:
+    """A scope whose raw bytes are not UTF-8 round-trips LOSSLESSLY, never mangled.
+
+    `Invariant.scope` is raw path BYTES on purpose (`invariants.py:106-115`), so the
+    identity must carry `os.fsdecode`'s surrogate-escaped form — the same encoding
+    `corpus/add.py:351` stores — and `os.fsencode` must recover the original bytes. A
+    replacement-character round-trip would silently rename the scope a verdict was
+    decided under.
+    """
+    scope = os.fsdecode(b"tests/\xff")
+    ledger = RunLedger(
+        instances=[],
+        detector=DetectorIdentity(rules=((scope, "read-only"),), version=None),
+    )
+
+    payload = json.loads(json.dumps(to_json(ledger)))
+    rebuilt = from_json(payload)
+
+    assert rebuilt.detector is not None
+    assert os.fsencode(rebuilt.detector.rules[0][0]) == b"tests/\xff"
+
+
+def test_ledger_without_detector_loads_as_unrecorded() -> None:
+    """A ledger with NO detector key loads fine, and reads as unrecorded — not as corrupt.
+
+    FAIL-CLOSED WOULD BE WRONG HERE. Every field in `_REQUIRED_INSTANCE_FIELDS` is
+    fail-closed because its absence means the record is malformed. `detector` is the
+    opposite case, and it is exactly `not_covered_turns`' case (`ledger.py:57-63`): its
+    absence means "this ledger predates the field", which is true of all four ledgers in
+    `runs/`. Rejecting them would make the banked captures unreadable by the very command
+    that must re-render them; defaulting them to the CURRENT detector would put today's
+    rule's name on yesterday's verdicts. `None` — rendered as `unrecorded` — is the only
+    honest third answer.
+
+    The payload below is shaped like a real `runs/s2.json` instance: the nine existing
+    fields, no detector key.
+    """
+    payload = {
+        "instances": [
+            {
+                "trace_id": "trace-pytest-dev__pytest-5227",
+                "disposition": "VERIFIED_CLEAN",
+                "turn_status_counts": {"PASS": 20, "FAIL": 0, "WARN": 0, "UNVERIFIED": 0},
+                "flagged_turns": [],
+                "flagged_addable": [],
+                "flagged_unaddable": [],
+                "unverified_causes": {},
+                "error": None,
+                "not_covered_turns": {"effect:network": 20},
+            }
+        ]
+    }
+
+    ledger = from_json(payload)
+
+    assert ledger.detector is None
+    assert len(ledger.instances) == 1
+    assert ledger.instances[0].disposition is Disposition.VERIFIED_CLEAN
+
+
+def test_to_json_omits_the_detector_key_when_unrecorded() -> None:
+    """An unrecorded detector emits NO key at all, so an existing ledger round-trips as-is.
+
+    Writing `"detector": null` would rewrite every banked ledger's bytes on the next
+    re-render for no information gained; absent and null mean the same thing here, and
+    absent is what the four ledgers in `runs/` already say.
+    """
+    payload = to_json(RunLedger(instances=[]))
+
+    assert "detector" not in payload

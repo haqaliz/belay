@@ -87,6 +87,44 @@ def instrument_suspect(ledger: RunLedger, *, threshold: float = 1.0) -> bool:
     return (ledger.no_verifiable_count() + ledger.errored_count()) >= threshold * total
 
 
+#: What an unrecorded detector must SAY. A ledger that does not record its detector is
+#: indistinguishable, by reading it, from one written by today's rule — and every ledger in
+#: `runs/` is one, produced by the REPLACED `tests/` read-only rule. Printing nothing here
+#: reads as "the current detector, obviously"; printing the current detector would be a
+#: fabrication. The only honest rendering names the gap and says what follows from it.
+_UNRECORDED_DETECTOR = (
+    "detector: unrecorded — this ledger does not record which A1 rules produced it, so "
+    "the numbers below MUST NOT be assumed current"
+)
+
+
+def _detector_section(ledger: RunLedger) -> list[str]:
+    """Which detector produced this ledger, or the honest `unrecorded`.
+
+    Placed FIRST in the report because it qualifies everything after it: a violation rate
+    is a statement about a detector applied to a population, and a reader who learns which
+    detector only after reading the number has already read the number as current.
+
+    Read back from the ledger, never computed here — `belay phase0 report` is a pure
+    re-render, so an identity that only existed at verification time could not reach that
+    surface, which is the same reason `not_covered_turns` is persisted.
+    """
+    detector = ledger.detector
+    if detector is None:
+        return [_UNRECORDED_DETECTOR]
+
+    lines = [f"detector: {len(detector.rules)} A1 rule(s) in force"]
+    for scope, rule in detector.rules:
+        # Scope and rule on ONE line: a detector is the PAIR. `tests`+`read-only` and
+        # `tests`+`no-assertion-weakening` are different detectors over the same scope.
+        lines.append(f"  scope {scope!r}: {rule}")
+    if not detector.rules:
+        lines.append("  (none — A1 was disabled for this run; no invariant was enforced)")
+    version = detector.version if detector.version is not None else "unrecorded"
+    lines.append(f"  code version: {version}")
+    return lines
+
+
 def _disposition_breakdown(ledger: RunLedger) -> str:
     """One line per disposition, in a fixed order, plus the total instance count."""
     counts = {
@@ -145,6 +183,11 @@ def _coverage_section(ledger: RunLedger) -> list[str]:
 def render_report(ledger: RunLedger, metrics: Metrics) -> str:
     """Render the human-readable Phase-0 report, in this fixed order:
 
+    0. THE DETECTOR that produced this ledger — its A1 rules with their scopes and its
+       code version — or the word `unrecorded` with what follows from it. First, because
+       it qualifies every number below: the same captures under a different rule are a
+       different number, and a reader who learns the detector after the rate has already
+       read the rate as current.
     1. Run size + disposition breakdown.
     2. THE HEADLINE: if `instrument_suspect(ledger)`, a loud "INSTRUMENT SUSPECT" block
        and NO violation-rate percentage headline at all. Otherwise, the violation rate
@@ -166,7 +209,7 @@ def render_report(ledger: RunLedger, metrics: Metrics) -> str:
 
     Deterministic: no clock, no randomness, no network, no filesystem.
     """
-    lines = [_disposition_breakdown(ledger), ""]
+    lines = _detector_section(ledger) + ["", _disposition_breakdown(ledger), ""]
 
     if instrument_suspect(ledger):
         lines.append(

@@ -62,6 +62,40 @@ _REQUIRED_INSTANCE_FIELDS = (
 #: coverage".
 _DEFAULT_NOT_COVERED: dict[str, int] = {}
 
+#: `detector` is deliberately NOT a required ledger field, for the same reason
+#: `not_covered_turns` is not: it is optional-with-default so every ledger written before
+#: the detector was recorded still loads. Fail-closed here would turn "this ledger predates
+#: the field" into a corrupt-ledger error, and it is true of all four ledgers in `runs/` —
+#: the exact captures this field exists to disambiguate. Defaulting to the CURRENT detector
+#: would be worse still: it would print today's rule's name over yesterday's verdicts. The
+#: honest third answer is `None`, which every surface renders as the word "unrecorded".
+_DEFAULT_DETECTOR = None
+
+
+@dataclass(frozen=True)
+class DetectorIdentity:
+    """WHAT PRODUCED A LEDGER: the A1 rules and scopes in force, plus a code identity.
+
+    A ledger is a fraction and its verdicts came from a detector; without this, a ledger
+    written by the REPLACED `tests/` read-only rule reads identically to one written by
+    today's `no-assertion-weakening`, and a reader re-deriving a published number cannot
+    tell a current result from a stale one.
+
+    `rules` is `(scope, rule)` pairs in the order the run applied them, a TUPLE so the
+    identity stays hashable and frozen like everything else here. `scope` is a `str`
+    because `Invariant.scope` is raw path BYTES: the caller decodes with `os.fsdecode`
+    (the encoding `belay.corpus.add` already stores), which is lossless — `os.fsencode`
+    recovers the original bytes even when they are not UTF-8.
+
+    `version` is a free-form code identity and is **caller-injected ONLY**. This module
+    must not read git, the environment, or a clock: `belay.phase0` is a deterministic
+    path, and a library that derived its own version string would make the same ledger
+    serialize differently on two boxes.
+    """
+
+    rules: tuple[tuple[str, str], ...]
+    version: Optional[str] = None
+
 
 @dataclass(frozen=True)
 class InstanceRecord:
@@ -110,6 +144,7 @@ class RunLedger:
     """
 
     instances: list[InstanceRecord]
+    detector: Optional[DetectorIdentity] = None
 
     def violation_denominator(self) -> int:
         """Instances whose disposition is VERIFIED_CLEAN or VERIFIED_FLAGGED."""
@@ -177,9 +212,31 @@ def _instance_to_json(inst: InstanceRecord) -> dict:
     }
 
 
+def _detector_to_json(detector: DetectorIdentity) -> dict:
+    """One `DetectorIdentity` as a plain JSON-able dict.
+
+    `rules` becomes a list of `{"scope": ..., "rule": ...}` objects — the same shape
+    `belay.corpus.add` stores for the invariants a case was judged under — rather than
+    bare pairs, so a reader of the raw JSON can tell which half is which.
+    """
+    return {
+        "rules": [{"scope": scope, "rule": rule} for scope, rule in detector.rules],
+        "version": detector.version,
+    }
+
+
 def to_json(ledger: RunLedger) -> dict:
-    """`ledger` as a plain JSON-able dict."""
-    return {"instances": [_instance_to_json(inst) for inst in ledger.instances]}
+    """`ledger` as a plain JSON-able dict.
+
+    The `"detector"` key is OMITTED ENTIRELY when the detector is unrecorded — see
+    `_DEFAULT_DETECTOR`. Emitting `"detector": null` would rewrite every ledger written
+    before this field existed on its next re-render, for no information gained: absent and
+    null say the same thing, and absent is what those ledgers already say.
+    """
+    payload: dict = {"instances": [_instance_to_json(inst) for inst in ledger.instances]}
+    if ledger.detector is not None:
+        payload["detector"] = _detector_to_json(ledger.detector)
+    return payload
 
 
 def _instance_from_json(raw: object) -> InstanceRecord:
@@ -218,6 +275,38 @@ def _instance_from_json(raw: object) -> InstanceRecord:
     )
 
 
+def _detector_from_json(raw: object) -> DetectorIdentity:
+    """Rebuild one `DetectorIdentity` from JSON, or raise a named `ValueError`.
+
+    Fail-closed on everything INSIDE the object. Only the object's ABSENCE is tolerated
+    (see `_DEFAULT_DETECTOR`): a ledger that names its detector and names it malformed is
+    corrupt, and silently reading it as unrecorded would hide a real defect behind the
+    same word that back-compat uses.
+    """
+    if not isinstance(raw, dict):
+        raise ValueError(f"ledger field 'detector' must be a JSON object, got {type(raw).__name__}")
+
+    if "rules" not in raw:
+        raise ValueError("ledger field 'detector' is missing required field 'rules'")
+
+    raw_rules = raw["rules"]
+    if not isinstance(raw_rules, list):
+        raise ValueError(
+            f"detector field 'rules' must be a list, got {type(raw_rules).__name__}"
+        )
+
+    rules = []
+    for entry in raw_rules:
+        if not isinstance(entry, dict) or "scope" not in entry or "rule" not in entry:
+            raise ValueError(
+                "each detector rule must be a JSON object with 'scope' and 'rule'; "
+                f"got {entry!r}"
+            )
+        rules.append((entry["scope"], entry["rule"]))
+
+    return DetectorIdentity(rules=tuple(rules), version=raw.get("version"))
+
+
 def from_json(data: dict) -> RunLedger:
     """Rebuild a `RunLedger` from JSON, FAIL-CLOSED: never silently defaults a bad field.
 
@@ -237,10 +326,19 @@ def from_json(data: dict) -> RunLedger:
             f"ledger field 'instances' must be a list, got {type(raw_instances).__name__}"
         )
 
-    return RunLedger(instances=[_instance_from_json(item) for item in raw_instances])
+    # Optional-with-default, ON PURPOSE — see `_DEFAULT_DETECTOR`. An absent key means the
+    # ledger predates the field (every ledger in `runs/` does), NOT that it is corrupt.
+    raw_detector = data.get("detector", _DEFAULT_DETECTOR)
+    detector = None if raw_detector is None else _detector_from_json(raw_detector)
+
+    return RunLedger(
+        instances=[_instance_from_json(item) for item in raw_instances],
+        detector=detector,
+    )
 
 
 __all__ = [
+    "DetectorIdentity",
     "Disposition",
     "InstanceRecord",
     "RunLedger",

@@ -1203,17 +1203,22 @@ def _cmd_phase0_run(args: argparse.Namespace) -> int:
     cannot be rooted at the recorded workspace is UNVERIFIED too, and both appear by name in
     the report's UNVERIFIED-by-cause table rather than as a fabricated FAIL.
 
+    The ledger records the A1 rules that were in force, so a stored result can be dated: a
+    ledger with no detector recorded reports `unrecorded` and is never read as current.
+
     `--no-ingest` makes the run a pure measurement: no corpus case is written at all, while
     every verdict, count and rate stays exactly what it would have been. It suppresses
     WRITES, never detection -- and the report says so in those words (`_NO_INGEST_NOTE`),
     because the empty ingest buckets it produces would otherwise read as "nothing could be
     added".
     """
+    import os
+    from dataclasses import replace
     from datetime import datetime, timezone
 
     from belay.corpus.metrics import score
     from belay.phase0 import runner as phase0_runner
-    from belay.phase0.ledger import to_json
+    from belay.phase0.ledger import DetectorIdentity, to_json
     from belay.phase0.report import render_report
     from belay.verify.invariants import default_invariants, load_invariants
 
@@ -1251,6 +1256,21 @@ def _cmd_phase0_run(args: argparse.Namespace) -> int:
         # it take effect here -- exactly the seam `run_batch` itself documents.
         verifier=phase0_runner.verify_turn,
         ingester=phase0_runner.add_case,
+    )
+
+    # WHAT DECIDED THESE VERDICTS, recorded on the ledger. Built from `invariants` -- the
+    # very list passed to `run_batch` above, never a second `default_invariants()` call,
+    # which could name a policy other than the one that ran. `os.fsdecode` mirrors what
+    # `corpus add` stores for a case's invariants and is lossless for a non-UTF8 scope.
+    # `version` stays None on purpose: the only version this process could reach without a
+    # git or environment read is `belay.__version__`, a stale `0.0.0` placeholder, and a
+    # WRONG version is worse than an honestly unrecorded one.
+    ledger = replace(
+        ledger,
+        detector=DetectorIdentity(
+            rules=tuple((os.fsdecode(inv.scope), inv.rule) for inv in invariants),
+            version=None,
+        ),
     )
 
     # Create the parent BEFORE writing. This runs after the entire batch has been
