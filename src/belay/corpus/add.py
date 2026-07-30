@@ -49,6 +49,16 @@ against the manifest's own directory). So the case restores from itself alone �
 original run's manifest dir and snapshot tree and the case still reconstructs the pre-state.
 That is what makes a case portable between machines and durable past a run's cleanup.
 
+## Re-adding is a human act
+
+A case id that already exists is a `CaseExistsError` raised before the first write, and that
+is not an error to route around. There is deliberately no `--overwrite`: the engine must not
+have a supported path to overwrite a human adjudication, so the remedies are both human ones —
+delete the case dir, or point `--corpus-dir` at a fresh corpus. Ingesting into a new, empty
+directory is the INTENDED re-verification path and is pinned unharmed by
+`test_fresh_corpus_dir_ingest_unchanged`; a collision check widened from the case dir to the
+corpus dir would refuse it, which is why that test exists.
+
 ## Deterministic, zero runtime deps
 
 The case id is derived from `source_trace_id` + the turn index — never a uuid or a clock

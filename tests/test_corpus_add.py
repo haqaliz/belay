@@ -62,22 +62,22 @@ def _tools_list_response() -> bytes:
     ).encode()
 
 
-def _edit_file_call() -> bytes:
+def _edit_file_call(call_id: int = 3) -> bytes:
     return json.dumps(
         {
             "jsonrpc": "2.0",
-            "id": 3,
+            "id": call_id,
             "method": "tools/call",
             "params": {"name": "edit_file", "arguments": {}},
         }
     ).encode()
 
 
-def _recorded_reply() -> bytes:
+def _recorded_reply(call_id: int = 3) -> bytes:
     return json.dumps(
         {
             "jsonrpc": "2.0",
-            "id": 3,
+            "id": call_id,
             "result": {
                 "content": [{"type": "text", "text": "edited tests/test_auth.py"}],
                 "isError": False,
@@ -459,6 +459,152 @@ def test_case_exists_error_is_a_valueerror():
     from belay.corpus.add import CaseExistsError
 
     assert issubclass(CaseExistsError, ValueError)
+
+
+# --- the INTENDED path: a fresh corpus dir, and the determinism boundary --------------
+#
+# The guard above refuses a re-add. These two guard the GUARD: the supported remedy for a
+# collision is a new corpus dir (there is deliberately no `--overwrite`), so if the check were
+# ever widened — `corpus_dir.exists()` instead of `case_dir.exists()` is the obvious slip —
+# the remedy would refuse too and a whole re-verification would have nowhere to land.
+
+OTHER_CAPTURED_AT = "2026-07-30T12:00:00+00:00"
+
+
+def _two_turn_synthetic_run(root: Path):
+    """A (records, manifest_dir) pair over two turns with two DISTINCT pre-state trees.
+
+    A two-turn run rather than `_synthetic_run`'s single turn because `task_prestate/` only
+    exists on a NON-ZERO target turn: at turn 0 the task pre-state IS the target's, so
+    `add_case` writes no second tree and declares the existing pair instead (pinned by
+    `test_corpus_task_prestate.test_a_turn_zero_case_has_exactly_one_manifest_and_declares_it`).
+    Checking the fresh-corpus path on a turn-0 case would therefore check a case shape with
+    half the artifacts of the one a real re-verification produces.
+
+    The two trees carry different `marker.txt` bytes, so a mis-bundle is caught by content
+    rather than by a filename.
+    """
+    manifest_dir = root / "manifests"
+    manifest_dir.mkdir(parents=True)
+    for handle, marker in (("H0", "turn-zero"), ("H1", "turn-one")):
+        tree = root / f"snap-{handle}"
+        (tree / "tests").mkdir(parents=True)
+        (tree / "tests" / "test_auth.py").write_text(STRONG_BODY, encoding="utf-8")
+        (tree / "marker.txt").write_text(marker, encoding="utf-8")
+        (manifest_dir / f"{handle}.json").write_text(
+            json.dumps(
+                {
+                    "handle": handle,
+                    "tree_path": str(tree),
+                    "backend": "clonefile",
+                    "capabilities": ["dir-mtimes", "hardlinks", "setuid"],
+                    "fidelity_gaps": [],
+                    "sidecar": {"link_groups": [], "special_modes": [], "dir_times": []},
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+    records = _trace(
+        root,
+        "two-turn-trace",
+        [
+            ("c2s", _tools_list_request(), None),
+            ("s2c", _tools_list_response(), None),
+            ("c2s", _edit_file_call(3), {"status": "present", "handle": "H0"}),
+            ("s2c", _recorded_reply(3), None),
+            ("c2s", _edit_file_call(4), {"status": "present", "handle": "H1"}),
+            ("s2c", _recorded_reply(4), None),
+        ],
+    )
+    return records, manifest_dir
+
+
+def _add_two_turn(corpus_dir: Path, run, *, captured_at: str) -> Path:
+    records, manifest_dir = run
+    return add_case(
+        corpus_dir,
+        records=records,
+        target_turn_index=1,
+        verdict=_fail_verdict(),
+        manifest_dir=manifest_dir,
+        server_command=[sys.executable, "editor.py"],
+        invariants=[Invariant(scope=b"tests", rule="no-assertion-weakening")],
+        replays=3,
+        timeout=20.0,
+        source_trace_id="two-turn-trace",
+        captured_at=captured_at,
+    )
+
+
+def test_fresh_corpus_dir_ingest_unchanged(tmp_path):
+    """The same flagged turn ingested into two fresh corpus dirs composes the same case.
+
+    This is the guard against the guard, and it is the path the next re-verification takes:
+    point `--corpus-dir` at a brand-new directory and every flagged turn lands. One of the two
+    dirs is **pre-created and empty** — the realistic operator flow (`mkdir`, then measure) and
+    the one a collision check widened from `case_dir` to `corpus_dir` would refuse outright.
+    The other is absent, so both forms are pinned.
+
+    "Identical modulo `captured_at`" is asserted over the WHOLE case, not just `case.json`:
+    every other artifact must be byte-for-byte equal, and `case.json` equal after dropping the
+    one injected field the caller varied.
+    """
+    run = _two_turn_synthetic_run(tmp_path / "run")
+
+    preexisting = tmp_path / "corpus-preexisting"
+    preexisting.mkdir()
+    absent = tmp_path / "corpus-absent"  # deliberately NOT created; add_case makes it
+
+    first = _add_two_turn(preexisting, run, captured_at=CAPTURED_AT)
+    second = _add_two_turn(absent, run, captured_at=OTHER_CAPTURED_AT)
+
+    assert first.name == second.name == "two-turn-trace-turn1", (first.name, second.name)
+
+    # both pre-states are present AND populated, and they hold the RIGHT trees.
+    for case_dir in (first, second):
+        assert (case_dir / "prestate").is_dir() and (case_dir / "task_prestate").is_dir()
+        for tree, marker in ((case_dir / "prestate", "turn-one"),
+                             (case_dir / "task_prestate", "turn-zero")):
+            assert (tree / "marker.txt").read_text(encoding="utf-8") == marker, tree
+            assert (tree / "tests" / "test_auth.py").read_text(encoding="utf-8") == STRONG_BODY
+
+    payloads = []
+    for case_dir, expected_at in ((first, CAPTURED_AT), (second, OTHER_CAPTURED_AT)):
+        payload = json.loads((case_dir / "case.json").read_text(encoding="utf-8"))
+        assert payload["provenance"]["captured_at"] == expected_at, payload["provenance"]
+        payload["provenance"] = {
+            k: v for k, v in payload["provenance"].items() if k != "captured_at"
+        }
+        payloads.append(payload)
+    assert payloads[0] == payloads[1]
+
+    fp_first, fp_second = _case_fingerprint(first), _case_fingerprint(second)
+    assert fp_first.keys() == fp_second.keys(), (sorted(fp_first), sorted(fp_second))
+    assert {k: v for k, v in fp_first.items() if k != "case.json"} == {
+        k: v for k, v in fp_second.items() if k != "case.json"
+    }
+
+
+def test_add_case_reads_no_clock_captured_at_is_injected(tmp_path):
+    """`captured_at` is caller-injected and stored verbatim — `add_case` reads no clock.
+
+    The determinism boundary, extending `test_case_id_is_deterministic_from_trace_and_turn`
+    from the case id to the case CONTENT: `cli.py` reads the clock at the CLI boundary and
+    passes the value down, so two composes of the same flagged turn with the same injected
+    timestamp are byte-identical. A clock read inside `add_case` would make a re-composed case
+    differ from the stored one in a field nothing about the run changed, and the corpus's whole
+    claim is that a case is a fixture rather than a recording of when it was written.
+    """
+    run = _synthetic_run(tmp_path)
+    first = _add_synthetic(tmp_path / "a", run=run)
+    second = _add_synthetic(tmp_path / "b", run=run)
+
+    payload = json.loads((first / "case.json").read_text(encoding="utf-8"))
+    assert payload["provenance"]["captured_at"] == CAPTURED_AT, payload["provenance"]
+
+    assert (first / "case.json").read_bytes() == (second / "case.json").read_bytes()
 
 
 def test_cli_default_timeout_matches_client(tmp_path):
