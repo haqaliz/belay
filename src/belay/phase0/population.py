@@ -42,6 +42,41 @@ from belay.phase0.ledger import (
     RunLedger,
 )
 
+#: The instance-id prefix that marks a CONTROL. This is a CONVENTION shared with
+#: `eval/instances/controls.py`, and it is deliberately DUPLICATED here rather than
+#: imported: `src/belay/` is the product and must never depend on `eval/`, which is the
+#: measurement harness. The cost of duplication is that the two can drift; the cost of the
+#: import would be a product package that cannot be installed without the eval tree.
+_CONTROL_PREFIX = "control__"
+
+#: The prefix `belay.trace.TraceWriter` puts on every trace FILE, which `phase0.runner`
+#: then uses verbatim as the `trace_id` (`runner.py:141`, `trace_path.stem`). The mint
+#: bridge names each capture `trace-<instance_id>.jsonl`, so on a real ledger a control's
+#: id reads `trace-control__flask-read-only` and the `control__` convention NEVER appears
+#: at position 0. Testing `trace_id.startswith(_CONTROL_PREFIX)` would therefore classify
+#: every real control as an ordinary instance and fold it straight into the headline —
+#: silently, and in the exact direction that makes the rate look better.
+_TRACE_STEM_PREFIX = "trace-"
+
+
+def is_control_id(trace_id: str) -> bool:
+    """True iff `trace_id` names a control, by the `control__` instance-id convention.
+
+    An optional leading `trace-` is stripped first, because a ledger's `trace_id` is the
+    trace FILE'S stem. Both forms are accepted: `trace-control__x` (what the mint bridge
+    writes) and a bare `control__x` (a ledger whose ids are instance ids).
+
+    A PREFIX on the instance id, never a substring anywhere in it — `org__control__repo` is
+    a repository that happens to contain the token, not a control.
+
+    This is a naming convention, not a guarantee. An instance genuinely named `control__*`
+    that is not a control would be mis-partitioned, which is why every surface that uses
+    this NAMES the ids it treated as controls rather than only counting them.
+    """
+    instance_id = trace_id[len(_TRACE_STEM_PREFIX):] if trace_id.startswith(_TRACE_STEM_PREFIX) else trace_id
+    return instance_id.startswith(_CONTROL_PREFIX)
+
+
 # `_DENOMINATOR_DISPOSITIONS` is imported rather than restated. It is private to the
 # package, not to the module, and the alternative — writing the denominator rule down a
 # second time — is how two definitions of "counted" drift apart. This module must answer
@@ -261,9 +296,63 @@ class Population:
         """Instances whose captures give different answers to the violation question."""
         return tuple(view for view in self.instances() if view.disagrees())
 
+    # --- the control partition ----------------------------------------------------------
+
+    def _partition(self, *, controls: bool) -> "Population":
+        """A population holding only the control captures, or only the non-control ones.
+
+        Returns a `Population`, not a bare list, so every count above means the same thing
+        on either side of the partition — the controls block reports its own denominators
+        with the same code that reports the headline's, rather than a parallel tally.
+        `detectors` is carried through unchanged: the same ledgers produced both halves.
+        """
+        return Population(
+            captures=tuple(
+                c for c in self.captures if is_control_id(c.trace_id) is controls
+            ),
+            detectors=self.detectors,
+        )
+
+    def measured(self) -> "Population":
+        """This population WITHOUT its controls — what the headline rate is computed over.
+
+        A control is a known-answer instance run to check the instrument, not a task the
+        agent was measured on. Because controls are clean by construction, folding them into
+        the headline drags the rate toward zero by exactly the number of controls that ran,
+        while mixing "did the agent violate?" with "did the instrument work?".
+        """
+        return self._partition(controls=False)
+
+    def controls(self) -> "Population":
+        """Only the controls of this population, reported in their own block."""
+        return self._partition(controls=True)
+
+    def control_ids(self) -> tuple[str, ...]:
+        """The `trace_id`s this population TREATED as controls, ordered.
+
+        Named, not just counted: the `control__` prefix is a convention rather than a
+        guarantee, so a mis-partition has to be visible to a reader instead of silent.
+        """
+        return tuple(view.trace_id for view in self.controls().instances())
+
+    def failing_controls(self) -> tuple[InstanceView, ...]:
+        """Controls that flagged — a DETECTOR FALSE POSITIVE, never a mint void.
+
+        The meaning of a failing control is context-dependent and nothing in the data
+        encodes the context. In a FRESH MINT it means the instrument was broken while
+        capturing, and it voids the mint. Here — re-verifying captures that are already
+        banked — there is no mint in flight to void: a control is known-clean by
+        construction, so a flag on it is the detector firing on known-good behaviour, i.e.
+        a precision signal, which is the very thing this measurement exists to produce.
+        Conflating the two would fabricate a void, and a fabricated void reads as a PIVOT
+        the data never supported.
+        """
+        return tuple(view for view in self.controls().instances() if view.is_violating())
+
 
 __all__ = [
     "Capture",
+    "is_control_id",
     "InstanceView",
     "LabeledLedger",
     "Population",

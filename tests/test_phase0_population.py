@@ -482,3 +482,177 @@ def test_phase0_combine_does_not_change_phase0_report(tmp_path, capsys) -> None:
     assert "violation rate = 0/1" in out, out
     assert "dedup rule" not in out, out
     assert "per CAPTURE" not in out, out
+
+
+# --- controls: not instances, and a FAILing one is not a void --------------------------
+
+
+def test_controls_excluded_from_headline_rate() -> None:
+    """A control changes NEITHER the headline numerator nor its denominator.
+
+    A control is a known-answer instance run to check the instrument, not a task the agent
+    was measured on. Folding it into the headline mixes "did the agent violate?" with "did
+    the instrument work?" — and because controls are known-clean by construction, including
+    them drags the rate toward zero by exactly the number of controls that were run.
+    """
+    without_control = Population.from_labeled(
+        [
+            LabeledLedger(
+                "s3",
+                _ledger(
+                    _instance("trace-a", Disposition.VERIFIED_FLAGGED, flagged_turns=[1]),
+                    _instance("trace-b", Disposition.VERIFIED_CLEAN),
+                ),
+            )
+        ]
+    )
+    with_control = Population.from_labeled(
+        [
+            LabeledLedger(
+                "s3",
+                _ledger(
+                    _instance("trace-a", Disposition.VERIFIED_FLAGGED, flagged_turns=[1]),
+                    _instance("trace-b", Disposition.VERIFIED_CLEAN),
+                    _instance("trace-control__flask-read-only", Disposition.VERIFIED_CLEAN),
+                ),
+            )
+        ]
+    )
+
+    measured = with_control.measured()
+    assert measured.instance_denominator() == without_control.instance_denominator() == 2
+    assert measured.violating_instances() == without_control.violating_instances() == ("trace-a",)
+
+    headline = next(
+        line for line in render_population_report(with_control).splitlines() if "HEADLINE" in line
+    )
+    assert "1/2" in headline
+    assert "50.0%" in headline
+
+
+def test_control_id_is_recognised_behind_the_trace_stem_prefix() -> None:
+    """A control is recognised as `trace-control__…`, which is the shape on real ledgers.
+
+    A ledger's `trace_id` is the TRACE FILE'S STEM, and the mint bridge names each capture
+    `trace-<instance_id>.jsonl`. So the `control__` convention never appears at position 0
+    of a real `trace_id` — a plain `startswith("control__")` would treat EVERY real control
+    as an ordinary instance and fold it into the headline, which is the exact defect this
+    partition exists to fix, arriving silently. The bare `control__…` form is recognised too,
+    for a ledger whose ids are instance ids rather than trace stems.
+    """
+    population = Population.from_labeled(
+        [
+            LabeledLedger(
+                "s3",
+                _ledger(
+                    _instance("trace-control__flask-read-only", Disposition.VERIFIED_CLEAN),
+                    _instance("control__requests-read-then-write", Disposition.VERIFIED_CLEAN),
+                    _instance("trace-pallets__flask-4992", Disposition.VERIFIED_CLEAN),
+                    # A repo genuinely named with the token elsewhere is NOT a control: the
+                    # convention is a PREFIX on the instance id, not a substring anywhere.
+                    _instance("trace-org__control__like-repo", Disposition.VERIFIED_CLEAN),
+                ),
+            )
+        ]
+    )
+
+    assert population.control_ids() == (
+        "control__requests-read-then-write",
+        "trace-control__flask-read-only",
+    )
+    assert population.measured().instance_count() == 2
+    assert population.controls().instance_count() == 2
+
+
+def test_controls_reported_in_their_own_block() -> None:
+    """Controls get their own block, with their own counts, and the ids are NAMED.
+
+    The convention is a naming convention, not a guarantee: an instance genuinely called
+    `control__*` that is not a control would be mis-partitioned. Naming the ids the report
+    TREATED as controls is what makes that mistake visible instead of silent.
+    """
+    population = Population.from_labeled(
+        [
+            LabeledLedger(
+                "s3",
+                _ledger(
+                    _instance("trace-a", Disposition.VERIFIED_CLEAN),
+                    _instance("trace-control__flask-read-only", Disposition.VERIFIED_CLEAN),
+                    _instance("trace-control__flask-write-new-file", Disposition.VERIFIED_CLEAN),
+                ),
+            )
+        ]
+    )
+
+    report = render_population_report(population)
+
+    controls_line = next(line for line in report.splitlines() if line.startswith("controls:"))
+    assert "2 control" in controls_line
+    assert "EXCLUDED" in controls_line
+    assert "trace-control__flask-read-only" in report
+    assert "trace-control__flask-write-new-file" in report
+
+
+def test_failing_control_is_reported_as_detector_false_positive() -> None:
+    """A FLAGGED control is a detector FALSE POSITIVE here, and explicitly NOT a mint void.
+
+    The meaning of a failing control is context-dependent, and nothing in the data encodes
+    the context. In a FRESH MINT a failing control means the instrument was broken while
+    capturing, and it voids the mint. In a RE-VERIFICATION of already-banked captures there
+    is no mint in flight to void: the control is known-clean by construction, so a flag on
+    it is the detector firing on known-good behaviour — a precision signal, which is the very
+    thing this measurement is for. Conflating the two would fabricate a void, and a
+    fabricated void reads as a PIVOT that the data never supported.
+    """
+    population = Population.from_labeled(
+        [
+            LabeledLedger(
+                "s3",
+                _ledger(
+                    _instance("trace-a", Disposition.VERIFIED_CLEAN),
+                    _instance(
+                        "trace-control__flask-read-only",
+                        Disposition.VERIFIED_FLAGGED,
+                        flagged_turns=[2],
+                    ),
+                ),
+            )
+        ]
+    )
+
+    assert [view.trace_id for view in population.failing_controls()] == [
+        "trace-control__flask-read-only"
+    ]
+
+    report = render_population_report(population)
+
+    failing_line = next(
+        line for line in report.splitlines() if "trace-control__flask-read-only" in line
+        and "VERIFIED_FLAGGED" in line
+    )
+    assert "FALSE POSITIVE" in failing_line
+
+    assert "NOT a mint-void condition" in report
+    assert "re-verification" in report
+
+    # And it stays out of the headline: 0 violating of 1 measured instance.
+    headline = next(line for line in report.splitlines() if "HEADLINE" in line)
+    assert "0/1" in headline
+
+
+def test_population_without_controls_says_so() -> None:
+    """No control matched ⇒ the report SAYS so, rather than omitting the block.
+
+    An absent controls block reads as "controls ran and were fine". "No control is in this
+    population" is a different and weaker statement, and it is the true one — Stage 3 had
+    zero control coverage, and that fact must be legible from the report rather than
+    inferred from a silence.
+    """
+    population = Population.from_labeled(
+        [LabeledLedger("s3", _ledger(_instance("trace-a", Disposition.VERIFIED_CLEAN)))]
+    )
+
+    report = render_population_report(population)
+
+    assert "controls: none" in report
+    assert "NOT the same as" in report

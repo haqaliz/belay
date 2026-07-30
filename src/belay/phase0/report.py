@@ -342,6 +342,65 @@ def _disagreement_section(population) -> list[str]:
     return lines
 
 
+#: What a FLAGGED control means HERE, spelled out in the output rather than left to docs.
+#: The meaning is context-dependent and nothing in the data encodes the context: in a FRESH
+#: MINT a failing control says the instrument was broken while capturing, and it VOIDS the
+#: mint. Re-verifying captures that are already banked, there is no mint in flight to void —
+#: the control is known-clean by construction, so a flag on it is the detector firing on
+#: known-good behaviour, i.e. a PRECISION signal, which is exactly what this measurement is
+#: for. Printing "void" here would fabricate one, and a fabricated void reads as a PIVOT the
+#: data never supported.
+_FAILING_CONTROL_MEANING = (
+    "    a control is known-clean BY CONSTRUCTION, so a flagged control is the detector "
+    "firing on\n"
+    "    known-good behaviour: a DETECTOR FALSE POSITIVE, and a precision signal — which is "
+    "what\n"
+    "    this measurement is for. This is NOT a mint-void condition. Voiding belongs to a "
+    "FRESH\n"
+    "    MINT, where a failing control means the instrument was broken WHILE CAPTURING;\n"
+    "    in a re-verification of already-banked captures there is no mint in flight to void."
+)
+
+#: What "no controls" must SAY. An omitted block reads as "controls ran and were fine";
+#: "no control is in this population" is a different and weaker statement, and Stage 3 —
+#: which captured zero of its three controls — is exactly the run that makes the difference
+#: matter. The absence has to be legible, not inferred from a silence.
+_NO_CONTROLS = (
+    "controls: none — no instance id in this population matches the 'control__' convention.\n"
+    "  That is NOT the same as controls having run and come back clean: this population "
+    "contains\n"
+    "  no control at all, so it carries no evidence either way about the instrument."
+)
+
+
+def _controls_section(population) -> list[str]:
+    """The controls, partitioned out of the headline and reported with their own counts."""
+    controls = population.controls()
+    views = controls.instances()
+    if not views:
+        return [_NO_CONTROLS]
+
+    lines = [
+        f"controls: {len(views)} control instance(s) over {controls.capture_count()} "
+        "capture(s) — EXCLUDED from the headline rate and its denominator"
+    ]
+    lines.append(
+        "  ids treated as controls (by the 'control__' instance-id convention — a naming "
+        "convention,"
+    )
+    lines.append("  not a guarantee, so they are named here rather than only counted):")
+    for view in views:
+        outcomes = ", ".join(
+            f"{capture.label}={capture.disposition.name}" for capture in view.captures
+        )
+        suffix = " -> DETECTOR FALSE POSITIVE" if view.is_violating() else ""
+        lines.append(f"    {view.trace_id}: {outcomes}{suffix}")
+
+    if population.failing_controls():
+        lines.append(_FAILING_CONTROL_MEANING)
+    return lines
+
+
 def render_population_report(population) -> str:
     """Render the Phase-0 report for a MERGED population, in this fixed order:
 
@@ -356,6 +415,13 @@ def render_population_report(population) -> str:
        the headline. Both carry their denominator, and a 0 denominator is `n/a`, never a
        bare `0%` and never a conjured `100%`.
     5. DISAGREEMENTS, named, or the words "no disagreement".
+    6. CONTROLS, in their own block with their own counts and their ids named — or the
+       words "controls: none", never an omitted block. Steps 2-5 are computed over
+       `population.measured()`, i.e. with the controls partitioned OUT: a control is a
+       known-answer instance run to check the instrument, and it is clean by construction,
+       so folding it into the headline drags the rate toward zero by exactly the number of
+       controls that ran. A FLAGGED control is labeled a DETECTOR FALSE POSITIVE and the
+       block states that this is NOT a mint-void condition here.
 
     Takes no `Metrics`: the corpus FP-rate is scored over a corpus directory, not over a
     population of ledgers, and pairing it with a merged rate would imply the two share a
@@ -365,21 +431,28 @@ def render_population_report(population) -> str:
     """
     lines = _population_detector_section(population) + ["", _DEDUP_RULE, ""]
 
+    # EVERY number below is over the MEASURED population — controls partitioned out. A
+    # control is a known-answer instance run to check the instrument, not a task the agent
+    # was measured on, and because controls are clean by construction, folding them in
+    # drags the rate toward zero by exactly the number of controls that ran.
+    measured = population.measured()
+
     lines.append(
-        f"population size: {population.capture_count()} capture(s) over "
-        f"{population.instance_count()} instance(s), {population.total_turns()} turn(s)"
+        f"population size: {measured.capture_count()} capture(s) over "
+        f"{measured.instance_count()} instance(s), {measured.total_turns()} turn(s)"
+        + (" — controls excluded, see below" if population.control_ids() else "")
     )
 
-    instance_numerator = len(population.violating_instances())
-    instance_denominator = population.instance_denominator()
+    instance_numerator = len(measured.violating_instances())
+    instance_denominator = measured.instance_denominator()
     lines.append(
         "HEADLINE violation rate, per INSTANCE (a trace_id captured in several stages "
         f"counts ONCE) = {instance_numerator}/{instance_denominator} = "
         f"{_format_rate(_ratio(instance_numerator, instance_denominator))}"
     )
 
-    capture_numerator = len(population.violating_captures())
-    capture_denominator = population.capture_denominator()
+    capture_numerator = len(measured.violating_captures())
+    capture_denominator = measured.capture_denominator()
     lines.append(
         "alongside, per CAPTURE (an instance captured in two stages counts TWICE; NOT the "
         f"headline) = {capture_numerator}/{capture_denominator} = "
@@ -387,7 +460,13 @@ def render_population_report(population) -> str:
     )
     lines.append("")
 
-    lines.extend(_disagreement_section(population))
+    # Over the MEASURED population, because this section exists to explain the HEADLINE's
+    # reduction. No control outcome is lost by that: the controls block below lists every
+    # capture of every control by name and stage.
+    lines.extend(_disagreement_section(measured))
+    lines.append("")
+
+    lines.extend(_controls_section(population))
 
     return "\n".join(lines)
 
