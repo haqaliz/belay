@@ -418,7 +418,18 @@ value cases in the corpus, and the ones the Phase-0 number is made of.
 > only `recall n/a → 0.00` (0/1, n=1, hand-adjudicated). See
 > [`PHASE0_RESULTS.md`](PHASE0_RESULTS.md) → *Correction — 2026-07-29*.
 >
-> **Decision: build `invariant-test-mutation-shape` next; do NOT mint the remaining ~34 instances
+> **STATUS 2026-07-31 — the rule shipped (v0.10.0) and the re-measurement is DONE.** All banked
+> captures were re-verified under it, once, under the freeze protocol (`phase0-reverify-banked`):
+> **1/15 instances = 6.7%**, 22 non-control captures, 392 turns, 0 `ERRORED`, no `INSTRUMENT
+> SUSPECT`, UNVERIFIED 3/392 with named causes, both controls clean, and **zero** flags on the 7
+> turns the old rule fired on — the over-firing fix holds at scale. **But the only flagged
+> instance is the one the rule was fitted on**, so this is not held-out sensitivity; nothing was
+> adjudicated, so it is not a precision figure; and the ≥50 clause is detector-independent, so it
+> is not a gate run. **The 2026-07-29 PIVOT stands and R1 stays untested** — testing it needs a
+> re-mint on instances the rule has never seen, which is now the next unit and is what this one
+> unblocked. See `PHASE0_RESULTS.md` → *Correction — 2026-07-31*.
+>
+> **Superseded, kept for the record —** **Decision: build `invariant-test-mutation-shape` next; do NOT mint the remaining ~34 instances
 > under a 0.00-precision detector.** Its rule must be *"modification that removes or weakens an
 > existing assertion"*, judged against the **task pre-state** and the **resulting content**. The 7
 > cases are its negative fixtures: it must go **7/7 clean**. First open question — should `tests/`
