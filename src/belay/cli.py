@@ -1158,6 +1158,25 @@ def _load_scored_cases(corpus_dir: Path):
     return cases, None
 
 
+#: What `--no-ingest` must SAY, printed under the report's flagged-but-unaddable line -- the
+#: line it exists to explain. With ingestion off, both ingest buckets are empty for a reason
+#: that has nothing to do with addability, and an unlabelled empty list reads as "nothing
+#: could be added": a measurement that silently wrote nothing would look like a measurement
+#: that found nothing. So the note distinguishes NOT ATTEMPTED from attempted-and-failed, and
+#: restates that detection is untouched. It is emitted by this command, not by
+#: `render_report`, because `belay phase0 report` re-renders a stored ledger that cannot know
+#: whether the run that produced it wrote cases.
+_NO_INGEST_NOTE = (
+    "ingestion: DISABLED by --no-ingest -- no corpus case was written for any flagged "
+    "turn.\n"
+    "  flagged-addable and flagged-but-unaddable are BOTH empty because ingestion was "
+    "NOT ATTEMPTED,\n"
+    "  not because nothing could be added. Detection is UNCHANGED: every flagged turn "
+    "counted above\n"
+    "  was verified and FAILed exactly as it would have with ingestion on."
+)
+
+
 def _cmd_phase0_run(args: argparse.Namespace) -> int:
     """`belay phase0 run <trace-dir> --ledger OUT.json` — verify a whole corpus, once.
 
@@ -1183,6 +1202,12 @@ def _cmd_phase0_run(args: argparse.Namespace) -> int:
     A trace that recorded no root is UNVERIFIED, never rooted at a guess; a command that
     cannot be rooted at the recorded workspace is UNVERIFIED too, and both appear by name in
     the report's UNVERIFIED-by-cause table rather than as a fabricated FAIL.
+
+    `--no-ingest` makes the run a pure measurement: no corpus case is written at all, while
+    every verdict, count and rate stays exactly what it would have been. It suppresses
+    WRITES, never detection -- and the report says so in those words (`_NO_INGEST_NOTE`),
+    because the empty ingest buckets it produces would otherwise read as "nothing could be
+    added".
     """
     from datetime import datetime, timezone
 
@@ -1211,6 +1236,7 @@ def _cmd_phase0_run(args: argparse.Namespace) -> int:
     captured_at = datetime.now(timezone.utc).isoformat()
 
     corpus_dir = Path(args.corpus_dir)
+    ingest = not args.no_ingest
     ledger = phase0_runner.run_batch(
         trace_dir,
         corpus_dir=corpus_dir,
@@ -1219,6 +1245,7 @@ def _cmd_phase0_run(args: argparse.Namespace) -> int:
         captured_at=captured_at,
         replays=args.replays,
         timeout=args.timeout,
+        ingest=ingest,
         # Looked up off the module at call time (not bound as this function's own default)
         # so a test can monkeypatch `belay.phase0.runner.verify_turn`/`.add_case` and have
         # it take effect here -- exactly the seam `run_batch` itself documents.
@@ -1240,6 +1267,8 @@ def _cmd_phase0_run(args: argparse.Namespace) -> int:
     metrics = score(cases)
 
     _emit(render_report(ledger, metrics))
+    if not ingest:
+        _emit(_NO_INGEST_NOTE)
     return 0
 
 
@@ -1801,6 +1830,17 @@ def _parser() -> argparse.ArgumentParser:
         help=(
             "the corpus directory FAILing turns are ingested into and scored from "
             "(default: ./corpus/local, which is gitignored so cases never get committed)"
+        ),
+    )
+    phase0_run.add_argument(
+        "--no-ingest",
+        action="store_true",
+        help=(
+            "measure without writing: suppress every corpus WRITE, not detection. Turns are "
+            "still verified and every FAIL is still counted in the report; no case is added, "
+            "so flagged-addable and flagged-but-unaddable are both empty, and the report says "
+            "ingestion was NOT ATTEMPTED rather than leaving that empty pair to read as "
+            "'nothing could be added'"
         ),
     )
     phase0_run.add_argument(
