@@ -7,7 +7,52 @@ All notable changes to Belay are documented here. The format follows
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added
+
+- **A ledger now records which detector produced it** — the A1 rules and scopes in force, plus an
+  optional caller-injected version. A ledger without that field (every ledger written before this
+  release) loads unchanged and renders the literal word **`unrecorded`**, with a clause saying its
+  numbers must not be assumed current. Absent is never treated as corrupt *or* as current.
+- **`belay phase0 combine LABEL=PATH …`** merges N run ledgers into one population and states its
+  dedup rule in words. A **capture** is `(stage label, trace_id)`; an **instance** is a `trace_id`
+  — because a `trace_id` is the trace file's stem and is therefore **not unique across stages**,
+  so two stages of one instance share it while being genuinely different observations. Both
+  denominators are reported (instances as the headline, captures alongside), and every instance
+  whose captures disagree is named.
+- **Controls are partitioned out of the headline violation rate** and reported in their own block,
+  with the ids treated as controls named rather than only counted. A FAILing control is reported
+  as a **detector false positive** and explicitly *not* as a mint-void condition — void belongs to
+  a fresh mint, and conflating the two would manufacture a fake PIVOT.
+- **`belay phase0 run --no-ingest`** for a pure measurement that writes no corpus cases, with a
+  report note distinguishing *not attempted* from *attempted and failed* — an unlabelled empty
+  ingest bucket otherwise reads as "nothing could be added".
+
+### Fixed
+
+- **Re-ingesting an existing corpus case no longer damages it.** `add_case` raised
+  `FileExistsError` *after* truncating the stored case's `trace.jsonl`, and because that is not a
+  `ValueError` the phase-0 runner mis-routed it into `run_batch`'s catch-all, marking the **whole
+  instance `ERRORED`** — which is excluded from the violation denominator. Re-running a
+  measurement could therefore silently shrink its own denominator and trip `INSTRUMENT SUSPECT`:
+  **a fake PIVOT manufactured by the measurement itself.** A collision is now detected before any
+  write and raised as `CaseExistsError(ValueError)`, so the turn lands in `flagged_unaddable`, the
+  instance keeps its real disposition, and the denominator is unaffected. There is deliberately no
+  `--overwrite`: a stored case may carry a human adjudication, and re-adding stays a human act.
+
+### Changed
+
+- **The Phase-0 record now says which detector produced it.** Every published number in
+  `docs/technical/PHASE0_RESULTS.md` was produced by the A1 default that `0.10.0` replaced, and
+  nothing on the page said so. A *Correction — 2026-07-31* section records the re-verification of
+  all banked captures under the shipped rule: **1/15 instances (6.7%)**, 22 non-control captures,
+  392 turns, 0 `ERRORED`, no `INSTRUMENT SUSPECT`, UNVERIFIED 3/392 (0.8%) all with named causes,
+  both controls clean, and **zero** flags on the 7 turns the old rule fired on. **No published
+  number was re-derived** — `4/16`, `precision 0.00`, `3/93` and the rest stand as what the old
+  detector measured. The `0.10.0` entry below is unchanged, as shipped entries always are.
+  **This is not a gate run** (the ≥50 denominator clause counts instances minted, so no
+  re-verification can satisfy it), **not a precision measurement** (nothing was adjudicated), and
+  **not evidence of held-out sensitivity** (the one flagged instance is the one the rule was
+  fitted on). R1 remains untested.
 
 ## [0.10.0] - 2026-07-29
 

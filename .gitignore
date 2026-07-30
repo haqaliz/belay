@@ -18,7 +18,13 @@ dist/
 /traces/
 /runs/
 /_sandbox/
-/corpus/local/
+# The WHOLE corpus dir, not just `local/`. It was `/corpus/local/`, which silently stopped
+# covering anything the moment a run used a different corpus dir — and one did:
+# `phase0-reverify-banked` writes its cases to `corpus/reverify-YYYYMMDD/`, whose prestate
+# trees are cloned git workspaces. A `git add -A` swept 42 of those files into a commit
+# (caught before push, and reset). A guardrail that depends on every future caller picking
+# the one blessed subdirectory is not a guardrail.
+/corpus/
 
 # Pre-installed MCP servers for the eval mint. Installed OUTSIDE the sandbox by a
 # documented `npm install` (see eval/README.md) and invoked by absolute `node` path:
