@@ -24,7 +24,7 @@ import json
 import os
 from pathlib import Path
 
-from belay import cli
+from belay import __version__ as belay_version, cli
 from belay.phase0.ledger import Disposition, from_json
 from belay.trace import TraceWriter
 from belay.verify.invariants import default_invariants
@@ -310,11 +310,15 @@ def test_phase0_run_records_the_detector_in_force(tmp_path, capsys, monkeypatch)
         (os.fsdecode(inv.scope), inv.rule) for inv in default_invariants()
     )
     # The RULES are recorded, so the report never says the detector itself is unrecorded.
-    # (`code version: unrecorded` is a separate, true statement: the CLI injects no version
-    # string, and `belay.__version__` is a stale `0.0.0` placeholder — naming a wrong
-    # version would be worse than naming none.)
     assert "detector: unrecorded" not in out, out
     assert "no-assertion-weakening" in out, out
+    # And the CODE VERSION is recorded too. It was not, deliberately: `belay.__version__`
+    # was a hardcoded `0.0.0` that had drifted from the real release, and stamping a version
+    # known to be wrong is worse than recording none. `belay.__version__` now reads the
+    # installed distribution, so there is a true answer to record.
+    assert ledger.detector.version == belay_version
+    assert ledger.detector.version != "0.0.0"
+    assert "code version: unrecorded" not in out, out
 
 
 def test_phase0_run_with_no_default_invariants_records_an_empty_detector(

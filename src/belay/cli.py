@@ -1216,6 +1216,7 @@ def _cmd_phase0_run(args: argparse.Namespace) -> int:
     from dataclasses import replace
     from datetime import datetime, timezone
 
+    from belay import __version__
     from belay.corpus.metrics import score
     from belay.phase0 import runner as phase0_runner
     from belay.phase0.ledger import DetectorIdentity, to_json
@@ -1262,14 +1263,17 @@ def _cmd_phase0_run(args: argparse.Namespace) -> int:
     # very list passed to `run_batch` above, never a second `default_invariants()` call,
     # which could name a policy other than the one that ran. `os.fsdecode` mirrors what
     # `corpus add` stores for a case's invariants and is lossless for a non-UTF8 scope.
-    # `version` stays None on purpose: the only version this process could reach without a
-    # git or environment read is `belay.__version__`, a stale `0.0.0` placeholder, and a
-    # WRONG version is worse than an honestly unrecorded one.
+    # `version` is `belay.__version__`, which now reads the INSTALLED distribution instead of
+    # a hardcoded literal. This call used to pass None on purpose, because that literal was a
+    # stale `0.0.0` and stamping a version known to be wrong is worse than recording none.
+    # That reason is gone, so the ledger carries it. Still no git and no environment read: an
+    # installed package's own metadata is the closest to a code identity this process can
+    # state truthfully.
     ledger = replace(
         ledger,
         detector=DetectorIdentity(
             rules=tuple((os.fsdecode(inv.scope), inv.rule) for inv in invariants),
-            version=None,
+            version=__version__,
         ),
     )
 
