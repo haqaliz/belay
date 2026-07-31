@@ -7,6 +7,10 @@ All notable changes to Belay are documented here. The format follows
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.11.0] - 2026-07-31
+
 ### Added
 
 - **A ledger now records which detector produced it** — the A1 rules and scopes in force, plus an
