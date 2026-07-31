@@ -2,7 +2,42 @@
 
 This file orients a coding agent working in this repository. Read it first.
 
-> **Status: C1–C6 are built and merged; the Phase-0 corpus runner is built** (1005 tests, 1 platform-skip; zero runtime dependencies).
+> **THE RE-MEASUREMENT IS DONE, and the number is 1/15 instances (6.7%)** (2026-07-31,
+> `phase0-reverify-banked`). Every published Phase-0 number was produced by the A1 default that
+> v0.10.0 **replaced**, and a ledger recorded nothing about its own detector — so the record no
+> longer described the shipped code and no reader could tell. All banked captures were
+> re-verified under `no-assertion-weakening`, **once**, under the freeze protocol (script
+> `6df53a1` containing no result; verbatim output `27a99d0`): **22 non-control captures over 15
+> instances, 392 turns · 1/15 = 6.7% per instance · 2/22 = 9.1% per capture · 0 ERRORED · no
+> `INSTRUMENT SUSPECT` · UNVERIFIED 3/392 = 0.8%, all with named causes · both controls
+> `VERIFIED_CLEAN`**. The population is *larger* than the published one: it includes the **7 s3
+> captures that appear in no ledger** (`s3-partial` covered only 5 of 12).
+> **Two real results.** The over-firing fix **holds at scale** — **zero** flags on the 7 turns the
+> old rule fired on, now over 22 captures rather than 7 fixtures. And the rule fires on a capture
+> it was never tuned against: `pytest-5227`'s `s2` capture flags turns 11/13/15/16/17 (reproducing
+> `95e6ff8` exactly) while its **s3** capture — a different trajectory — flags 18/19.
+> **Four things this is NOT, and conflating any of them is the failure mode.** (1) **Not a gate
+> run**: the ≥50 clause counts *instances minted*, is detector-independent, and no re-verification
+> can ever satisfy it — **the 2026-07-29 PIVOT stands on the identical clause**. (2) **Not a
+> precision number**: nothing was adjudicated, `corpus score` reads `precision n/a` (0 TP / 0 FP),
+> and an `n/a` is a **zero denominator, not a 1.00**. (3) **Not held-out sensitivity**: the sole
+> flagged instance is the one the rule was **fitted on**; a different *capture* of a fitted-on
+> instance is not a held-out positive. (4) **Not a test of R1** — by the pre-registered reading
+> this is *"flags, but not yet evidence of held-out sensitivity"*, and the **blindness clause**
+> covers the 14 silent instances: this run cannot separate *"those captures are clean"* from
+> *"the rule is blind to them"*. **`1/15` and `4/16` are NOT comparable** — different detector,
+> population, and dedup; quoting a drop from 25% to 6.7% is wrong in both directions.
+> **What shipped with it:** a ledger now records its detector (absent ⇒ `unrecorded`, never
+> assumed current); `belay phase0 combine` merges stages with an explicit dedup rule (a `trace_id`
+> is **not unique across stages**, so a capture is `(stage, trace_id)`); controls are partitioned
+> out of the headline and a FAILing control is a **detector FP, not a mint void**; `--no-ingest`;
+> and a corpus-collision guard that closed a live hazard — re-ingest used to raise
+> `FileExistsError` *after* truncating the stored trace, mis-route into `ERRORED`, drop the
+> instance from the denominator and so let a **re-run fabricate `INSTRUMENT SUSPECT`, a fake
+> PIVOT**. See `docs/planning/phase0-reverify-banked/` and `PHASE0_RESULTS.md` →
+> *Correction — 2026-07-31*.
+>
+> **Status: C1–C6 are built and merged; the Phase-0 corpus runner is built** (1238 tests, 1 platform-skip; zero runtime dependencies).
 > The full record → sandbox → snapshot/restore → replay → verdict spine exists: the byte-transparent
 > stdio MCP proxy + trace format (C1), the Seatbelt sandbox with snapshot/restore (C2), deterministic
 > replay with a real before/after delta (C3), and the grounded verdict — **A2** result-equivalence +

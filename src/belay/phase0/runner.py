@@ -103,6 +103,7 @@ def run_batch(
     server_command_for: Callable[[Path], list[str]] | None = None,
     verifier: Callable[..., TurnVerdict] = verify_turn,
     ingester: Callable[..., Path] = add_case,
+    ingest: bool = True,
 ) -> RunLedger:
     """Verify every trace in `trace_dir`, ingest FAILing turns, and return the `RunLedger`.
 
@@ -119,6 +120,14 @@ def run_batch(
     (`{workspace}`) in one static command is substituted with each trace's own recorded
     `source_root`, which is strictly more correct than restating a root the trace carries.
     Exactly one of the two must be given.
+
+    `ingest=False` makes this a PURE MEASUREMENT: the corpus is never written, so the
+    ingester is never called at all. Detection is untouched -- every turn is still verified,
+    every FAIL still counted in `flagged_turns`, and the disposition is unchanged. What
+    changes is only the ingest ACCOUNTING: both `flagged_addable` and `flagged_unaddable`
+    stay empty, because nothing was attempted. That empty pair is exactly why the caller
+    must SAY ingestion was disabled -- unlabelled, it reads as "nothing could be added"
+    (see `belay.cli._cmd_phase0_run`).
     """
     if (server_command is None) == (server_command_for is None):
         raise TypeError("run_batch requires exactly one of server_command / server_command_for")
@@ -143,6 +152,7 @@ def run_batch(
                 manifest_dir_for=manifest_dir_for,
                 verifier=verifier,
                 ingester=ingester,
+                ingest=ingest,
             )
         except Exception as exc:  # noqa: BLE001 -- one bad trace must never abort the batch
             instance = InstanceRecord(
@@ -173,6 +183,7 @@ def _verify_one_trace(
     manifest_dir_for: Callable[[Path], Path],
     verifier: Callable[..., TurnVerdict],
     ingester: Callable[..., Path],
+    ingest: bool = True,
 ) -> InstanceRecord:
     """One trace file, fully verified: every `tools/call` turn, every FAIL ingested.
 
@@ -180,6 +191,10 @@ def _verify_one_trace(
     ingester's `ValueError` (the one exception this function itself handles, per turn, since
     an unaddable case is a bucketed fact, not a batch-ending error). `run_batch` is the layer
     that turns any OTHER exception here into `Disposition.ERRORED`.
+
+    `ingest=False` skips the ingest loop wholesale (see `run_batch`): the verdicts, the
+    `flagged_turns` list and the disposition are computed exactly as before, and only the
+    two ingest-outcome buckets are left empty.
     """
     records = list(read_trace(trace_path).records)
     calls = tool_calls(derive_correlation(records))
@@ -241,25 +256,31 @@ def _verify_one_trace(
 
     flagged_addable: list[int] = []
     flagged_unaddable: list[dict] = []
-    for n in flagged_turns:
-        try:
-            ingester(
-                corpus_dir,
-                records=records,
-                target_turn_index=n,
-                verdict=verdicts[n],
-                manifest_dir=manifest_dir,
-                server_command=server_command,
-                invariants=list(invariants),
-                human_label="pending",
-                replays=replays,
-                timeout=timeout,
-                source_trace_id=source_trace_id,
-                captured_at=captured_at,
-            )
-            flagged_addable.append(n)
-        except ValueError as exc:
-            flagged_unaddable.append({"turn": n, "cause": str(exc)})
+    # `ingest=False` means the corpus is never written, so the ingester is never CALLED --
+    # skipping the loop is the whole implementation. Both buckets therefore stay empty: a
+    # turn nobody tried to add is NOT an unaddable turn, and recording it as one would
+    # assert a composition failure that never happened. `flagged_turns` above is already
+    # computed, so the turn keeps its real FAIL and its place in the numerator.
+    if ingest:
+        for n in flagged_turns:
+            try:
+                ingester(
+                    corpus_dir,
+                    records=records,
+                    target_turn_index=n,
+                    verdict=verdicts[n],
+                    manifest_dir=manifest_dir,
+                    server_command=server_command,
+                    invariants=list(invariants),
+                    human_label="pending",
+                    replays=replays,
+                    timeout=timeout,
+                    source_trace_id=source_trace_id,
+                    captured_at=captured_at,
+                )
+                flagged_addable.append(n)
+            except ValueError as exc:
+                flagged_unaddable.append({"turn": n, "cause": str(exc)})
 
     if flagged_turns:
         disposition = Disposition.VERIFIED_FLAGGED

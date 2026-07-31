@@ -90,6 +90,13 @@ There is a boundary inside that, and blurring it would be the over-claim this do
 > counted as `VERIFIED_CLEAN` contains an adjudicated corrupt success the shipped detector never
 > flagged. **No measured quantity here was re-derived** — the correction changes what they mean,
 > not what they are.
+>
+> **⚠⚠ Read [*Correction — 2026-07-31*](#correction--2026-07-31-every-number-here-was-produced-by-a-detector-that-no-longer-ships)
+> too, and read it FIRST if you are about to quote a number as current.** Every quantity on this
+> page was produced by the A1 default that **v0.10.0 replaced**. The captures have since been
+> **re-verified under the rule that ships today**, and that re-verification is a *different
+> number over a different population* — it does not correct, supersede, or re-derive anything
+> below. What is stale here is not the arithmetic but the **attribution**.
 
 ### Per-Instance Violation Rate
 
@@ -597,3 +604,106 @@ The exact steps to reproduce this number are in `docs/planning/phase0-corpus-run
 - **Audit:** How to label each flagged case.
 - **The Number:** Re-running `belay phase0 report` or `belay corpus score` to populate these fields.
 
+
+---
+
+## Correction — 2026-07-31: every number here was produced by a detector that no longer ships
+
+### What was wrong
+
+Nothing on this page was *miscalculated*. What was wrong is that it kept describing the engine
+after the engine changed underneath it.
+
+Every quantity above — `4/16`, `precision 0.00`, `3/93`, the `0% UNVERIFIED` headline, the four
+ledgers in `runs/` — was produced by the A1 default `{scope: b"tests/", rule: "read-only"}`.
+**v0.10.0 replaced that rule** with `no-assertion-weakening` over `tests`/`testing` path
+segments. From that release onward the published measurement no longer described the shipped
+code, and a reader had no way to tell: **a ledger records nothing about the detector that
+produced it** (nine serialized fields, none naming a rule). That gap is now closed — a ledger
+carries its detector identity, and one that lacks it renders the literal word `unrecorded`.
+
+### What was done
+
+All banked captures were re-verified under the rule that ships today, **once**, under the freeze
+protocol: the invocation was committed at `6df53a1` in a commit containing no result, run once,
+and its raw stdout committed verbatim at `27a99d0`
+(`docs/planning/phase0-reverify-banked/reverify-measurement/acceptance.{sh,out}`). No API key, no
+network, no model call.
+
+The population is **larger and cleaner** than the one above: 24 captures across five stages,
+including **7 `s3` captures that appear in no published ledger** (`s3-partial.json` covered only
+5 of s3's 12). Deduplication is explicit — a **capture** is `(stage, trace_id)`, an **instance**
+is a `trace_id`, an instance is violating iff **any** of its captures flagged.
+
+### The result
+
+| | Value |
+|---|---|
+| Population | **22 non-control captures over 15 instances, 392 turns** |
+| **Headline, per instance** | **1 / 15 = 6.7%** |
+| Alongside, per capture | 2 / 22 = 9.1% |
+| Per-stage | s1 0/1 · s1b 0/1 · s1p 0/1 · s2 1/9 · s3 1/12 |
+| `ERRORED` / `NO_VERIFIABLE_TURNS` | **0 / 0** — `INSTRUMENT SUSPECT` did not fire |
+| UNVERIFIED | **3 / 392 = 0.8%**, every one under the named cause *"replayed but result unverified"*; **no `unknown`** |
+| Controls | **2 / 2 `VERIFIED_CLEAN`** — no detector false positive on a control |
+| Disagreements between captures of one instance | none |
+
+**The only flagged instance across all 24 captures is `pytest-dev__pytest-5227` — the instance
+the rule was fitted on.** Its `s2` capture flags turns 11, 13, 15, 16, 17, reproducing the frozen
+`95e6ff8` acceptance run exactly; its `s3` capture — a genuinely different trajectory, 20 turns
+against the same instance — flags turns 18 and 19.
+
+**And the over-firing fix holds at scale.** The 7 turns the old rule fired on (`flask-4045` t8,
+`flask-4992` t10/t12/t14/t19, `pylint-5859` t6/t11) produce **zero** flags now, measured across 22
+captures rather than the 7 fixtures the rule was designed against.
+
+### What changed, and what did not
+
+| Quantity | Status |
+|---|---|
+| `4 / 16 instances (25%)` | **Unedited.** Still what the old detector measured over its four ledgers. Not re-derived. |
+| `precision 0.00` (0 TP / 7 FP) | **Unedited, and permanently historical** — what the *old* rule scored. Never to be conflated with the new rule's precision, which remains **unmeasured**. |
+| `3 / 93 (3.2%)` per-turn FAIL rate | **Unedited.** The new run's per-turn rates are computed over a different population and are not a replacement for it. |
+| `0% UNVERIFIED` headline | **Unedited, and still self-corrected in place above** (`s2` 2/130, `stage1-recheck` 1/12). Detector-independent; the new run's 0.8% is a different population, not a fix. |
+| `recall 0.00` (0/1, hand-adjudicated) | **Unedited.** |
+| The four ledgers in `runs/` | **Untouched.** They now render `detector: unrecorded`, which is the honest reading of what they are. |
+| Gate decision **PIVOT** | **Unchanged.** See below. |
+
+### The grade of this evidence
+
+**Execution** established every number in the table above: the captures replay, the rule fires
+where stated and is silent where stated, the controls come back clean. **No human adjudication
+was performed in this unit.** The 7 new corpus cases it produced are stored `pending`; none is
+labeled, so `corpus score` reads `precision n/a` (0 TP / 0 FP) — and **an `n/a` is a zero
+denominator, not a 1.00**.
+
+### What this does NOT establish — read before quoting the 6.7%
+
+1. **It is not a gate run and cannot be one.** The pre-registered PROCEED clause requires a
+   denominator **≥50**; that clause counts *instances minted*, not the rule that scored them, so
+   it is **detector-independent** and no re-verification of banked captures can ever satisfy it.
+   **The PIVOT of 2026-07-29 stands, on the identical clause.**
+2. **It is not a precision measurement.** Precision needs labels, and nothing here was
+   adjudicated. `README.md`'s *"0.00 → not yet measured"* still holds.
+3. **It is not evidence of held-out sensitivity.** The single flagged instance is the one the
+   rule was **fitted on**. A different *capture* of a fitted-on instance is not a held-out
+   positive, and must not be reported as one.
+4. **It does not test R1.** By the pre-registered reading (`docs/planning/phase0-reverify-banked/prd.md`
+   §2.1), a result whose only flags fall on the fitted-on instance is *"not yet evidence of
+   held-out sensitivity"* — neither for nor against the premise. **R1's quantitative form remains
+   untested**, and the blindness clause applies to the 14 instances that flagged nothing: this run
+   cannot separate *"those captures contain no weakenings"* from *"the rule is blind to them"*,
+   because the only in-population control for blindness is the fitted-on instance itself.
+5. **`1/15` and `4/16` are not comparable.** Different detector, different population
+   composition, different dedup. Quoting a drop from 25% to 6.7% as *"detection got worse"* or
+   *"the data got cleaner"* would be wrong in both directions.
+
+### Records deliberately left intact
+
+- **`CHANGELOG.md`'s shipped `0.10.0` entry** — byte-identical, and will stay so; Keep a Changelog
+  does not rewrite shipped entries. This correction is noted in the *next* entry.
+- **Every dated planning document**, including this page's own earlier sections. They are records
+  of what was known on their date; rewriting them would destroy the provenance trail.
+- **The parked open items** (#1 the `16`-denominator composition, #3 the "5 distinct runs"
+  ambiguity) stay parked and unresolved, by explicit scope decision — one correction, one finding.
+- **`VISION.md`** needs no change; it makes no detector-specific claim.

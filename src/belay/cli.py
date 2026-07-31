@@ -1158,6 +1158,25 @@ def _load_scored_cases(corpus_dir: Path):
     return cases, None
 
 
+#: What `--no-ingest` must SAY, printed under the report's flagged-but-unaddable line -- the
+#: line it exists to explain. With ingestion off, both ingest buckets are empty for a reason
+#: that has nothing to do with addability, and an unlabelled empty list reads as "nothing
+#: could be added": a measurement that silently wrote nothing would look like a measurement
+#: that found nothing. So the note distinguishes NOT ATTEMPTED from attempted-and-failed, and
+#: restates that detection is untouched. It is emitted by this command, not by
+#: `render_report`, because `belay phase0 report` re-renders a stored ledger that cannot know
+#: whether the run that produced it wrote cases.
+_NO_INGEST_NOTE = (
+    "ingestion: DISABLED by --no-ingest -- no corpus case was written for any flagged "
+    "turn.\n"
+    "  flagged-addable and flagged-but-unaddable are BOTH empty because ingestion was "
+    "NOT ATTEMPTED,\n"
+    "  not because nothing could be added. Detection is UNCHANGED: every flagged turn "
+    "counted above\n"
+    "  was verified and FAILed exactly as it would have with ingestion on."
+)
+
+
 def _cmd_phase0_run(args: argparse.Namespace) -> int:
     """`belay phase0 run <trace-dir> --ledger OUT.json` — verify a whole corpus, once.
 
@@ -1183,12 +1202,24 @@ def _cmd_phase0_run(args: argparse.Namespace) -> int:
     A trace that recorded no root is UNVERIFIED, never rooted at a guess; a command that
     cannot be rooted at the recorded workspace is UNVERIFIED too, and both appear by name in
     the report's UNVERIFIED-by-cause table rather than as a fabricated FAIL.
+
+    The ledger records the A1 rules that were in force, so a stored result can be dated: a
+    ledger with no detector recorded reports `unrecorded` and is never read as current.
+
+    `--no-ingest` makes the run a pure measurement: no corpus case is written at all, while
+    every verdict, count and rate stays exactly what it would have been. It suppresses
+    WRITES, never detection -- and the report says so in those words (`_NO_INGEST_NOTE`),
+    because the empty ingest buckets it produces would otherwise read as "nothing could be
+    added".
     """
+    import os
+    from dataclasses import replace
     from datetime import datetime, timezone
 
+    from belay import __version__
     from belay.corpus.metrics import score
     from belay.phase0 import runner as phase0_runner
-    from belay.phase0.ledger import to_json
+    from belay.phase0.ledger import DetectorIdentity, to_json
     from belay.phase0.report import render_report
     from belay.verify.invariants import default_invariants, load_invariants
 
@@ -1211,6 +1242,7 @@ def _cmd_phase0_run(args: argparse.Namespace) -> int:
     captured_at = datetime.now(timezone.utc).isoformat()
 
     corpus_dir = Path(args.corpus_dir)
+    ingest = not args.no_ingest
     ledger = phase0_runner.run_batch(
         trace_dir,
         corpus_dir=corpus_dir,
@@ -1219,11 +1251,30 @@ def _cmd_phase0_run(args: argparse.Namespace) -> int:
         captured_at=captured_at,
         replays=args.replays,
         timeout=args.timeout,
+        ingest=ingest,
         # Looked up off the module at call time (not bound as this function's own default)
         # so a test can monkeypatch `belay.phase0.runner.verify_turn`/`.add_case` and have
         # it take effect here -- exactly the seam `run_batch` itself documents.
         verifier=phase0_runner.verify_turn,
         ingester=phase0_runner.add_case,
+    )
+
+    # WHAT DECIDED THESE VERDICTS, recorded on the ledger. Built from `invariants` -- the
+    # very list passed to `run_batch` above, never a second `default_invariants()` call,
+    # which could name a policy other than the one that ran. `os.fsdecode` mirrors what
+    # `corpus add` stores for a case's invariants and is lossless for a non-UTF8 scope.
+    # `version` is `belay.__version__`, which now reads the INSTALLED distribution instead of
+    # a hardcoded literal. This call used to pass None on purpose, because that literal was a
+    # stale `0.0.0` and stamping a version known to be wrong is worse than recording none.
+    # That reason is gone, so the ledger carries it. Still no git and no environment read: an
+    # installed package's own metadata is the closest to a code identity this process can
+    # state truthfully.
+    ledger = replace(
+        ledger,
+        detector=DetectorIdentity(
+            rules=tuple((os.fsdecode(inv.scope), inv.rule) for inv in invariants),
+            version=__version__,
+        ),
     )
 
     # Create the parent BEFORE writing. This runs after the entire batch has been
@@ -1240,6 +1291,8 @@ def _cmd_phase0_run(args: argparse.Namespace) -> int:
     metrics = score(cases)
 
     _emit(render_report(ledger, metrics))
+    if not ingest:
+        _emit(_NO_INGEST_NOTE)
     return 0
 
 
@@ -1279,6 +1332,75 @@ def _cmd_phase0_report(args: argparse.Namespace) -> int:
     metrics = score(cases)
 
     _emit(render_report(ledger, metrics))
+    return 0
+
+
+def _parse_labeled_ledger_arg(arg: str) -> tuple[str, Path]:
+    """`LABEL=PATH` -> `(label, path)`, or raise `ValueError` naming the bad argument.
+
+    Split on the FIRST `=` only, so a ledger path containing one still parses. Both halves
+    must be non-empty: an empty label cannot distinguish two stages, and an empty path names
+    no ledger. Every failure here is raised, never skipped -- a silently dropped input would
+    print a smaller population that looks exactly like a correct one.
+    """
+    label, separator, raw_path = arg.partition("=")
+    if not separator or not label or not raw_path:
+        raise ValueError(
+            f"malformed LABEL=PATH argument {arg!r}: expected a stage label, an '=', then a "
+            "ledger path (for example: s2=runs/s2.json)"
+        )
+    return label, Path(raw_path)
+
+
+def _cmd_phase0_combine(args: argparse.Namespace) -> int:
+    """`belay phase0 combine LABEL=PATH ...` — one population from many stage ledgers.
+
+    Each input ledger carries a caller-supplied stage LABEL because a `trace_id` is NOT
+    unique across stages: it is the trace file's stem, so the `s2` and `s3` captures of one
+    instance share an id while being genuinely different observations. A capture is
+    `(label, trace_id)`; an instance is `trace_id`. The report states the dedup rule, both
+    denominators, and every instance whose captures disagreed.
+
+    Fail-closed on every input defect -- a malformed pair, a repeated label, a missing or
+    corrupt ledger -- because the alternative is a number computed over a population nobody
+    chose. `phase0 report`'s single-ledger contract is untouched: this is a new command.
+    """
+    from belay.phase0.ledger import from_json
+    from belay.phase0.population import LabeledLedger, Population
+    from belay.phase0.report import render_population_report
+
+    labeled = []
+    for arg in args.ledgers:
+        try:
+            label, ledger_path = _parse_labeled_ledger_arg(arg)
+        except ValueError as exc:
+            _emit(f"belay: {exc}")
+            return 2
+
+        if not ledger_path.is_file():
+            _emit(f"belay: ledger file not found for label {label!r}: {ledger_path}")
+            return 2
+        try:
+            data = json.loads(ledger_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            _emit(f"belay: could not read ledger {ledger_path} for label {label!r}: {exc}")
+            return 2
+        try:
+            labeled.append(LabeledLedger(label, from_json(data)))
+        except ValueError as exc:
+            _emit(f"belay: {ledger_path} (label {label!r}): {exc}")
+            return 2
+
+    # The duplicate-label and duplicate-trace_id rules live in `Population.from_labeled`,
+    # not here: they are the merge's own identity rules, and restating them at the CLI is
+    # how two definitions of "the same capture" drift apart.
+    try:
+        population = Population.from_labeled(labeled)
+    except ValueError as exc:
+        _emit(f"belay: {exc}")
+        return 2
+
+    _emit(render_population_report(population))
     return 0
 
 
@@ -1804,6 +1926,17 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     phase0_run.add_argument(
+        "--no-ingest",
+        action="store_true",
+        help=(
+            "measure without writing: suppress every corpus WRITE, not detection. Turns are "
+            "still verified and every FAIL is still counted in the report; no case is added, "
+            "so flagged-addable and flagged-but-unaddable are both empty, and the report says "
+            "ingestion was NOT ATTEMPTED rather than leaving that empty pair to read as "
+            "'nothing could be added'"
+        ),
+    )
+    phase0_run.add_argument(
         "--invariants",
         default=None,
         metavar="path",
@@ -1868,6 +2001,39 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     phase0_report.set_defaults(func=_cmd_phase0_report)
+
+    phase0_combine = phase0.add_parser(
+        "combine",
+        help="merge several labeled stage ledgers into one population and report the number",
+        description=(
+            "Merge N run ledgers into ONE population, given as LABEL=PATH pairs, and print "
+            "the population report: the dedup rule in words, BOTH denominators (instances "
+            "as the headline, captures alongside), and every instance whose captures "
+            "disagreed.\n\n"
+            "The LABEL is mandatory and is the ledger's stage (s1, s2, s3...). A trace_id "
+            "is NOT unique across stages -- it is the trace file's stem, so two stages of "
+            "one instance share it while being genuinely different observations. A CAPTURE "
+            "is (label, trace_id); an INSTANCE is a trace_id. Without labels the population "
+            "would silently collapse two real observations into one.\n\n"
+            "Dedup: an instance is VIOLATING iff ANY of its captures flagged "
+            "(worst-verdict-wins), and is IN THE DENOMINATOR iff ANY of its captures is "
+            "VERIFIED_CLEAN or VERIFIED_FLAGGED -- a capture that ERRORED is not evidence "
+            "of a violation.\n\n"
+            "Fail-closed on every input defect: a malformed pair, a repeated label, a "
+            "missing or corrupt ledger is a named error, never a silent skip."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    phase0_combine.add_argument(
+        "ledgers",
+        nargs="+",
+        metavar="LABEL=PATH",
+        help=(
+            "a stage label and the ledger JSON file it names, e.g. s2=runs/s2.json; "
+            "repeat for each stage"
+        ),
+    )
+    phase0_combine.set_defaults(func=_cmd_phase0_combine)
 
     interop = subcommands.add_parser(
         "interop", help="observability interop: correlate OTLP spans to MCP turns and attach the verdict"

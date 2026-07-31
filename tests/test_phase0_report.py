@@ -13,7 +13,7 @@ This file is written FIRST, before `src/belay/phase0/report.py` exists, per stri
 from __future__ import annotations
 
 from belay.corpus.metrics import Metrics
-from belay.phase0.ledger import Disposition, InstanceRecord, RunLedger
+from belay.phase0.ledger import DetectorIdentity, Disposition, InstanceRecord, RunLedger
 from belay.phase0.report import instrument_suspect, render_report, violation_rate
 
 
@@ -184,3 +184,54 @@ def test_render_report_is_deterministic() -> None:
     second = render_report(ledger, metrics)
 
     assert first == second
+
+# --- Detector identity on the report: what produced this number, or "unrecorded" -------
+
+
+def test_unrecorded_detector_is_not_rendered_as_current() -> None:
+    """A ledger with no recorded detector says `unrecorded`, and names NO rule.
+
+    The four ledgers in `runs/` were produced by the REPLACED `tests/` read-only rule.
+    Re-rendering one must not let a reader mistake it for a result of today's
+    `no-assertion-weakening` — so the report says the detector was not recorded and that
+    the number below must not be assumed current, rather than printing nothing (which
+    reads as "the current detector, obviously") or printing today's rules (which would be
+    a fabrication).
+    """
+    ledger = RunLedger(instances=[_instance("trace-a", Disposition.VERIFIED_CLEAN)])
+
+    report = render_report(ledger, _metrics())
+
+    assert "unrecorded" in report
+    assert "no-assertion-weakening" not in report
+    assert "read-only" not in report
+    detector_line = next(line for line in report.splitlines() if "detector" in line)
+    assert "unrecorded" in detector_line
+    assert "MUST NOT be assumed current" in detector_line
+
+
+def test_report_states_the_detector_when_recorded() -> None:
+    """A recorded detector puts its rules, their scopes and its version in the report.
+
+    A scope without its rule (or a rule without its scope) is not an identity: `tests` +
+    `read-only` and `tests` + `no-assertion-weakening` are two different detectors that
+    produce two different numbers from the same captures.
+    """
+    ledger = RunLedger(
+        instances=[_instance("trace-a", Disposition.VERIFIED_CLEAN)],
+        detector=DetectorIdentity(
+            rules=(("tests", "no-assertion-weakening"), ("testing", "no-assertion-weakening")),
+            version="belay 0.10.0",
+        ),
+    )
+
+    report = render_report(ledger, _metrics())
+
+    assert "tests" in report
+    assert "testing" in report
+    assert "no-assertion-weakening" in report
+    assert "belay 0.10.0" in report
+    # Scope and rule travel together on one line: a detector is the PAIR.
+    scope_lines = [line for line in report.splitlines() if "no-assertion-weakening" in line]
+    assert any("tests" in line for line in scope_lines)
+    assert any("testing" in line for line in scope_lines)

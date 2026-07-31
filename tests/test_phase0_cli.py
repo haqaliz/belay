@@ -21,11 +21,13 @@ mode the brief calls out by name.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
-from belay import cli
+from belay import __version__ as belay_version, cli
 from belay.phase0.ledger import Disposition, from_json
 from belay.trace import TraceWriter
+from belay.verify.invariants import default_invariants
 from belay.verify.turn import TurnVerdict
 from belay.verify.verdict import Status, Verdict
 
@@ -270,3 +272,85 @@ def test_phase0_run_exits_zero_with_violations_present(tmp_path, capsys, monkeyp
     data = json.loads(ledger_path.read_text(encoding="utf-8"))
     ledger = from_json(data)
     assert ledger.violating_instances() == 1
+
+
+# --- (6) the ledger a run writes says WHICH detector produced it -----------------------
+
+
+def test_phase0_run_records_the_detector_in_force(tmp_path, capsys, monkeypatch) -> None:
+    """The ledger a run writes records the A1 rules that were actually in force.
+
+    Without this the run's own output is the thing that cannot be dated: the four ledgers
+    in `runs/` were produced by the REPLACED `tests/` read-only rule and read identically
+    to one produced by today's `no-assertion-weakening`. The identity comes from the
+    invariants the run resolved — not from a re-resolution, which could name a different
+    policy than the one that decided the verdicts.
+    """
+    trace_dir = tmp_path / "traces"
+    corpus_dir = tmp_path / "corpus"
+    ledger_path = tmp_path / "ledger.json"
+
+    clean_path = _write_trace(trace_dir, "pass_tool", 1)
+    _patch_seam(monkeypatch, {clean_path.stem: [_verdict(0, Status.PASS)]})
+
+    rc = cli.main(
+        [
+            "phase0", "run", str(trace_dir),
+            "--corpus-dir", str(corpus_dir),
+            "--ledger", str(ledger_path),
+            "--server", "irrelevant",
+        ]
+    )
+    out = capsys.readouterr().out
+    assert rc == 0, out
+
+    ledger = from_json(json.loads(ledger_path.read_text(encoding="utf-8")))
+    assert ledger.detector is not None
+    assert ledger.detector.rules == tuple(
+        (os.fsdecode(inv.scope), inv.rule) for inv in default_invariants()
+    )
+    # The RULES are recorded, so the report never says the detector itself is unrecorded.
+    assert "detector: unrecorded" not in out, out
+    assert "no-assertion-weakening" in out, out
+    # And the CODE VERSION is recorded too. It was not, deliberately: `belay.__version__`
+    # was a hardcoded `0.0.0` that had drifted from the real release, and stamping a version
+    # known to be wrong is worse than recording none. `belay.__version__` now reads the
+    # installed distribution, so there is a true answer to record.
+    assert ledger.detector.version == belay_version
+    assert ledger.detector.version != "0.0.0"
+    assert "code version: unrecorded" not in out, out
+
+
+def test_phase0_run_with_no_default_invariants_records_an_empty_detector(
+    tmp_path, capsys, monkeypatch
+) -> None:
+    """`--no-default-invariants` records a detector with NO rules — recorded, not absent.
+
+    "A1 was disabled for this run" and "nobody wrote down what A1 was" are different
+    claims about the same 0% violation rate, and only one of them is a reason to distrust
+    the number. Collapsing an empty rule list to `None` would render the first as the
+    second.
+    """
+    trace_dir = tmp_path / "traces"
+    ledger_path = tmp_path / "ledger.json"
+
+    clean_path = _write_trace(trace_dir, "pass_tool", 1)
+    _patch_seam(monkeypatch, {clean_path.stem: [_verdict(0, Status.PASS)]})
+
+    rc = cli.main(
+        [
+            "phase0", "run", str(trace_dir),
+            "--corpus-dir", str(tmp_path / "corpus"),
+            "--ledger", str(ledger_path),
+            "--no-default-invariants",
+            "--server", "irrelevant",
+        ]
+    )
+    out = capsys.readouterr().out
+    assert rc == 0, out
+
+    ledger = from_json(json.loads(ledger_path.read_text(encoding="utf-8")))
+    assert ledger.detector is not None
+    assert ledger.detector.rules == ()
+    assert "detector: unrecorded" not in out, out
+    assert "A1 was disabled" in out, out
