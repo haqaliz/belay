@@ -29,6 +29,13 @@ All notable changes to Belay are documented here. The format follows
 
 ### Fixed
 
+- **`belay.__version__` now reads the installed distribution** instead of a hardcoded `"0.0.0"`
+  that had drifted from the shipped release — a literal in `__init__.py` and the version in
+  `pyproject.toml` are two places to state one fact. The old smoke test asserted only that it was
+  a *non-empty string*, which passed against the drift the whole time. A phase-0 ledger now
+  records that version as its code identity; it previously recorded `None` **on purpose**, because
+  the only version reachable was known-wrong and a confidently wrong version is worse than an
+  honestly unrecorded one.
 - **Re-ingesting an existing corpus case no longer damages it.** `add_case` raised
   `FileExistsError` *after* truncating the stored case's `trace.jsonl`, and because that is not a
   `ValueError` the phase-0 runner mis-routed it into `run_batch`'s catch-all, marking the **whole

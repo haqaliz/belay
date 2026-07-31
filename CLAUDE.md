@@ -37,7 +37,7 @@ This file orients a coding agent working in this repository. Read it first.
 > PIVOT**. See `docs/planning/phase0-reverify-banked/` and `PHASE0_RESULTS.md` →
 > *Correction — 2026-07-31*.
 >
-> **Status: C1–C6 are built and merged; the Phase-0 corpus runner is built** (1237 tests, 1 platform-skip; zero runtime dependencies).
+> **Status: C1–C6 are built and merged; the Phase-0 corpus runner is built** (1238 tests, 1 platform-skip; zero runtime dependencies).
 > The full record → sandbox → snapshot/restore → replay → verdict spine exists: the byte-transparent
 > stdio MCP proxy + trace format (C1), the Seatbelt sandbox with snapshot/restore (C2), deterministic
 > replay with a real before/after delta (C3), and the grounded verdict — **A2** result-equivalence +
