@@ -30,11 +30,9 @@ import pytest
 from belay.snapshot.bth1 import diff_records, scan_tree
 from belay.verify.invariants import (
     IN_SCOPE_FILE_BUDGET,
-    NO_CONTENT_ROOTS,
     NO_POST_STATE_TREE,
     NO_TASK_PRESTATE_HANDLE,
     NO_TASK_PRESTATE_TREE,
-    POST_STATE_NOT_OBSERVED,
     RULE_NO_ASSERTION_WEAKENING,
     RULE_READ_ONLY,
     ContentRoots,
