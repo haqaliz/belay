@@ -19,6 +19,7 @@ defect this aspect exists to remove.
 
 from __future__ import annotations
 
+import dataclasses
 import inspect
 import json
 import subprocess
@@ -28,6 +29,7 @@ from pathlib import Path
 import pytest
 
 from belay.corpus.case import CASE_SCHEMA_VERSION, Case, load_case, write_case
+from belay.corpus.curate import set_label
 from belay.corpus.run import (
     MATCH,
     MISS_CLOSED,
@@ -1018,3 +1020,249 @@ def test_the_same_real_case_undeclared_is_a_regression(tmp_path: Path) -> None:
     (case_dir / "case.json").write_text(json.dumps(raw, indent=2), encoding="utf-8")
 
     assert run_case(case_dir).outcome == REGRESSION
+
+
+# =========================================================================================
+# Phase 3 -- a HUMAN declares a recorded miss, and `corpus score` names its provenance.
+#
+# `curate.set_label` is the only supported way to turn a stored PASS/WARN case into an FN
+# (`corpus label --label true-positive`), so the declaration belongs in that same human act,
+# not a separate command. `corpus show`/`list` surface it -- invisible state on a case is
+# how the next reader gets it wrong -- and `corpus score` names FN's provenance so a banked,
+# known miss cannot be misread as a detection freshly failing today.
+# =========================================================================================
+
+
+def _pass_case(case_id: str = "cheat-run-0007", human_label: str = "pending") -> Case:
+    """A case whose stored verdict is a CLEAN PASS -- the shape a recorded miss declares
+    against. `_full_case` already carries this shape (`reduced_status` PASS, an A1
+    `invariant` sub-verdict at PASS); this just renames the id and label for readability at
+    each call site.
+    """
+    return dataclasses.replace(_full_case(), id=case_id, human_label=human_label, root_cause=None)
+
+
+def test_labeling_a_case_can_declare_it_a_recorded_miss(tmp_path: Path) -> None:
+    """`set_label` accepts a `recorded_miss` note and stores it beside the label.
+
+    A `true-positive` label on a PASS-verdict case still requires a `root_cause`
+    (`curate.py:74-79`, unchanged) -- the human says what the failure IS -- and now, with a
+    note, also says what the engine MISSED.
+    """
+    corpus = tmp_path / "corpus"
+    case = _pass_case()
+    write_case(corpus / case.id, case)
+
+    root_cause = {"key": "scope-defect", "note": "testing/ was never in the byte prefix"}
+    note = "banked: pytest-5227 t11/t13, unflagged because of the testing/ scope gap"
+    returned = set_label(
+        corpus, case.id, "true-positive", root_cause=root_cause, recorded_miss={"note": note}
+    )
+    assert returned == corpus / case.id
+
+    reloaded = load_case(corpus / case.id)
+    assert reloaded.human_label == "true-positive"
+    assert reloaded.recorded_miss == {"note": note}
+    # The D3 boundary from the OTHER field: the engine's verdict is untouched.
+    assert reloaded.expected == case.expected
+
+
+def test_recorded_miss_note_is_preserved_across_a_relabel(tmp_path: Path) -> None:
+    """A later `set_label` call that omits `recorded_miss` does not erase it.
+
+    Mirrors `test_relabeling_preserves_an_existing_root_cause`: a correction of the LABEL
+    is not a retraction of a previously banked declaration.
+    """
+    corpus = tmp_path / "corpus"
+    case = _pass_case()
+    write_case(corpus / case.id, case)
+
+    note = "banked: known blind spot"
+    set_label(
+        corpus,
+        case.id,
+        "true-positive",
+        root_cause={"key": "scope-defect", "note": ""},
+        recorded_miss={"note": note},
+    )
+
+    # A human corrects the label; they do not repeat the declaration.
+    set_label(corpus, case.id, "unverifiable")
+
+    reloaded = load_case(corpus / case.id)
+    assert reloaded.human_label == "unverifiable"
+    assert reloaded.recorded_miss == {"note": note}
+
+
+def test_a_declaration_on_an_already_fail_case_is_rejected_by_set_label(tmp_path: Path) -> None:
+    """`set_label` fails closed BEFORE writing when the stored verdict is already FAIL.
+
+    `case.py`'s own contradiction rule (a miss that was caught is a contradiction) must be
+    enforced here too, at the point a human tries to introduce the declaration -- not only
+    discovered later on the next `load_case`.
+    """
+    corpus = tmp_path / "corpus"
+    case = dataclasses.replace(
+        _pass_case(),
+        expected={
+            "reduced_status": "FAIL",
+            "sub_verdicts": [{"axis": "A1", "kind": "invariant", "status": "FAIL"}],
+        },
+    )
+    write_case(corpus / case.id, case)
+    before = (corpus / case.id / "case.json").read_bytes()
+
+    with pytest.raises(ValueError, match="recorded_miss"):
+        set_label(
+            corpus,
+            case.id,
+            "true-positive",
+            root_cause={"key": "already-caught", "note": ""},
+            recorded_miss={"note": "this contradicts the stored FAIL"},
+        )
+
+    assert (corpus / case.id / "case.json").read_bytes() == before
+
+
+def test_the_engine_has_no_path_from_a_verdict_to_the_declaration() -> None:
+    """Structural: `set_label` cannot be handed a verdict, and `add_case` never sets it.
+
+    Mirrors the D3 boundary `add.py:34-42` establishes for `human_label`, applied to a
+    second field. `add_case` -- the engine's own case-composition path -- never mentions
+    `recorded_miss` at all (it is a pure `None` default on `Case`, never constructed there),
+    and `set_label`'s parameter set is CLOSED and contains no `verdict`/`expected`/`status`
+    -- the function structurally cannot be handed one, so it structurally cannot derive a
+    declaration's content from it. What it MAY do is VALIDATE a human-supplied declaration
+    against the case's own stored `expected` (the FAIL-contradiction rule); that is a check
+    on the human's claim, not a source for it.
+    """
+    from belay.corpus.add import add_case
+
+    assert "recorded_miss" not in inspect.getsource(add_case)
+
+    params = inspect.signature(set_label).parameters
+    assert set(params) == {"corpus_dir", "case_id", "label", "root_cause", "recorded_miss"}
+    assert params["recorded_miss"].default is None
+
+
+def test_show_and_list_surface_the_declaration(tmp_path: Path, capsys) -> None:
+    """`corpus show`/`list` render a declared miss; an undeclared case reads absent/blank.
+
+    Invisible state on a case is how the next reader gets it wrong -- the same reasoning
+    `corpus show`/`list` already apply to `root_cause`.
+    """
+    from belay import cli
+
+    corpus = tmp_path / "corpus"
+    note = "banked: pytest-5227 t11/t13, testing/ scope gap"
+
+    declared_case = _pass_case("declared")
+    write_case(corpus / declared_case.id, declared_case)
+    set_label(
+        corpus,
+        declared_case.id,
+        "true-positive",
+        root_cause={"key": "scope-defect", "note": ""},
+        recorded_miss={"note": note},
+    )
+
+    undeclared_case = _pass_case("undeclared")
+    write_case(corpus / undeclared_case.id, undeclared_case)
+
+    assert cli.main(["corpus", "show", "declared", "--corpus-dir", str(corpus)]) == 0
+    show_declared = capsys.readouterr().out
+    assert note in show_declared
+
+    assert cli.main(["corpus", "show", "undeclared", "--corpus-dir", str(corpus)]) == 0
+    show_undeclared = capsys.readouterr().out
+    assert "(absent)" in show_undeclared
+    assert note not in show_undeclared
+
+    assert cli.main(["corpus", "list", str(corpus)]) == 0
+    listed = capsys.readouterr().out
+    declared_line = next(ln for ln in listed.splitlines() if "declared" in ln and "undeclared" not in ln)
+    undeclared_line = next(ln for ln in listed.splitlines() if "undeclared" in ln)
+    assert declared_line != undeclared_line
+    # The declared case's line marks the miss; the undeclared case's does not.
+    assert "MISS" in declared_line
+    assert "MISS" not in undeclared_line
+
+
+def test_corpus_score_reports_recall_with_a_real_denominator(tmp_path: Path, capsys) -> None:
+    """A declared recorded miss is a genuine FN: `corpus score` reports a REAL recall.
+
+    `metrics.py` needs no change -- `human_label == "true-positive"` with
+    `expected.reduced_status` in `{PASS, WARN}` already produces `fn += 1`
+    (`metrics.py:242-243`). This proves the CLI surfaces a real (non-n/a) recall once such a
+    case exists, AND that the FN count's provenance is named -- so a reader cannot mistake a
+    banked, already-known miss for a detection that just failed today.
+    """
+    from belay import cli
+
+    corpus = tmp_path / "corpus"
+    case = _pass_case("miss-case", human_label="true-positive")
+    case = dataclasses.replace(
+        case,
+        root_cause={"key": "scope-defect", "note": ""},
+        recorded_miss={"note": "banked: pytest-5227 t11/t13, testing/ scope gap"},
+    )
+    write_case(corpus / case.id, case)
+
+    assert cli.main(["corpus", "score", str(corpus)]) == 0
+    out = capsys.readouterr().out
+
+    # TP=0, FN=1 -> a REAL 0.00, never n/a and never a fabricated 1.00.
+    assert "recall                0.00" in out
+    fn_line = next(ln for ln in out.splitlines() if ln.strip().startswith("FN"))
+    assert "1" in fn_line
+    provenance = out[out.index(fn_line):]
+    assert "RECORDED MISS" in provenance.split("\n\n")[0]
+
+
+def test_a_zero_denominator_still_renders_n_a_never_1_00_or_0_00(tmp_path: Path, capsys) -> None:
+    """A recorded-miss case with NO human adjudication yet still reads recall n/a.
+
+    `pending` is excluded from the confusion matrix entirely (honesty rule 1, the
+    label-trap) -- a declared `recorded_miss` on an un-adjudicated case must not manufacture
+    a denominator `metrics.py` never earned. `_ratio` returns `None` on a 0 denominator and
+    the CLI prints "n/a", never "1.00" and never "0.00".
+    """
+    from belay import cli
+
+    corpus = tmp_path / "corpus"
+    case = dataclasses.replace(
+        _pass_case("undecided-miss", human_label="pending"),
+        recorded_miss={"note": "banked, awaiting adjudication"},
+    )
+    write_case(corpus / case.id, case)
+
+    assert cli.main(["corpus", "score", str(corpus)]) == 0
+    out = capsys.readouterr().out
+
+    assert "recall                n/a" in out
+    assert "recall                0.00" not in out
+    assert "recall                1.00" not in out
+
+
+def test_cli_corpus_label_can_declare_a_recorded_miss(tmp_path: Path, capsys) -> None:
+    """`belay corpus label ... --recorded-miss-note ...` wires through to the stored case."""
+    from belay import cli
+
+    corpus = tmp_path / "corpus"
+    case = _pass_case()
+    write_case(corpus / case.id, case)
+
+    note = "banked: known blind spot"
+    rc = cli.main(
+        [
+            "corpus", "label", case.id,
+            "--label", "true-positive",
+            "--root-cause-key", "scope-defect",
+            "--recorded-miss-note", note,
+            "--corpus-dir", str(corpus),
+        ]
+    )
+    assert rc == 0
+    reloaded = load_case(corpus / case.id)
+    assert reloaded.recorded_miss == {"note": note}
+    assert note in capsys.readouterr().out

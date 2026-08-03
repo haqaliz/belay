@@ -1159,6 +1159,19 @@ def _cmd_corpus_score(args: argparse.Namespace) -> int:
 
     m = score(cases)
 
+    # `metrics.py` is unchanged: its FN branch (`human_label == "true-positive"` over a
+    # non-FAIL `expected`) already produces `m.fn`. This counts, among exactly those same
+    # FN cases, how many carry a HUMAN-declared `recorded_miss` -- so the FN line can name
+    # its own provenance rather than leaving a bare count a reader could mistake for a
+    # detection that just failed today, when it may be a banked, already-known gap.
+    fn_recorded_miss = sum(
+        1
+        for case in cases
+        if case.human_label == "true-positive"
+        and case.expected["reduced_status"] in ("PASS", "WARN")
+        and case.recorded_miss is not None
+    )
+
     _emit(f"belay corpus score {corpus_dir}")
     _emit()
     _emit(f"  {m.total} case(s) scored against HUMAN labels (no replay — stored verdicts only).")
@@ -1167,6 +1180,14 @@ def _cmd_corpus_score(args: argparse.Namespace) -> int:
     _emit(f"  TP                    {m.tp}")
     _emit(f"  FP                    {m.fp}")
     _emit(f"  FN                    {m.fn}")
+    if m.fn:
+        _emit(
+            f"      {fn_recorded_miss}/{m.fn} FN case(s) are a RECORDED MISS — a human-banked"
+        )
+        _emit(
+            "      known blind spot the stored verdict already reflects, not a detection"
+        )
+        _emit("      that just failed today.")
     _emit(f"  TN                    {m.tn}")
     _emit()
     _emit("independent findings (the gate counts INDEPENDENT true positives, not raw TPs)")
@@ -1199,10 +1220,11 @@ def _cmd_corpus_score(args: argparse.Namespace) -> int:
 def _cmd_corpus_label(args: argparse.Namespace) -> int:
     """`belay corpus label <case-id> --label ...` — adjudicate a case's HUMAN label.
 
-    Rewrites ONLY `human_label`; the engine's recorded `expected` verdict is untouched (the D3
-    boundary — a human adjudication never rewrites what the engine computed). `--label`'s
-    argparse choices already exclude `pending` and any unknown string, and `set_label` fails
-    closed a second time, so a bad label never lands on disk.
+    Rewrites ONLY `human_label` (and its supporting `root_cause`/`recorded_miss` fields); the
+    engine's recorded `expected` verdict is untouched (the D3 boundary — a human adjudication
+    never rewrites what the engine computed). `--label`'s argparse choices already exclude
+    `pending` and any unknown string, and `set_label` fails closed a second time, so a bad
+    label never lands on disk.
     """
     from belay.corpus.curate import set_label
 
@@ -1218,18 +1240,23 @@ def _cmd_corpus_label(args: argparse.Namespace) -> int:
         if args.root_cause_key
         else None
     )
+    recorded_miss = {"note": args.recorded_miss_note} if args.recorded_miss_note else None
 
     try:
-        case_dir = set_label(Path(args.corpus_dir), args.case_id, args.label, root_cause)
+        case_dir = set_label(
+            Path(args.corpus_dir), args.case_id, args.label, root_cause, recorded_miss
+        )
     except ValueError as exc:
         _emit(f"belay: {exc}")
         return 2
 
     _emit(f"belay corpus label: {case_dir}")
-    _emit(f"  human_label -> {args.label}")
+    _emit(f"  human_label   -> {args.label}")
     if root_cause is not None:
-        _emit(f"  root_cause  -> {root_cause['key']}")
-    _emit("  Only the human label changed; the engine's recorded verdict is untouched.")
+        _emit(f"  root_cause    -> {root_cause['key']}")
+    if recorded_miss is not None:
+        _emit(f"  recorded_miss -> {recorded_miss['note']}")
+    _emit("  Only the human's own fields changed; the engine's recorded verdict is untouched.")
     return 0
 
 
@@ -1262,14 +1289,29 @@ def _cmd_corpus_list(args: argparse.Namespace) -> int:
 
     # Size the id column to the widest id actually present. The real corpus ids
     # ("trace-pallets__flask-4992-turn10") overflow a fixed 32 and run straight into the
-    # next column, which reads as a different value entirely.
+    # next column, which reads as a different value entirely. Same reasoning now sizes the
+    # root-cause column, since a trailing recorded-miss marker follows it.
     id_width = max([len(d.name) for d, _ in cases] + [len("case-id")]) + 2
-    _emit(f"  {'case-id':<{id_width}}{'label':<16}{'verdict':<12}root-cause")
+    key_width = (
+        max(
+            [len(case.root_cause["key"]) if case.root_cause else 0 for _, case in cases]
+            + [len("root-cause")]
+        )
+        + 2
+    )
+    _emit(
+        f"  {'case-id':<{id_width}}{'label':<16}{'verdict':<12}"
+        f"{'root-cause':<{key_width}}recorded-miss"
+    )
     for case_dir, case in cases:
         key = case.root_cause["key"] if case.root_cause else ""
+        # A marker, not the note: the note can be long free text and `show` is where it's
+        # read in full. Invisible state on a case is how the next reader gets it wrong, so
+        # even a marker beats no signal at all.
+        miss = "MISS" if case.recorded_miss else ""
         _emit(
             f"  {case_dir.name:<{id_width}}{case.human_label:<16}"
-            f"{case.expected['reduced_status']:<12}{key}"
+            f"{case.expected['reduced_status']:<12}{key:<{key_width}}{miss}"
         )
     return 0
 
@@ -1304,6 +1346,12 @@ def _cmd_corpus_show(args: argparse.Namespace) -> int:
     else:
         _emit("  root_cause            (absent)")
     _emit(f"  target_tool           {case.target_tool or '(absent)'}")
+    # Same absent-vs-declared discipline as root_cause above: invisible state on a case is
+    # how the next reader mistakes a banked, known miss for a clean pass.
+    if case.recorded_miss:
+        _emit(f"  recorded_miss         {case.recorded_miss['note']}")
+    else:
+        _emit("  recorded_miss         (absent)")
     _emit(f"  expected status       {case.expected['reduced_status']}")
     _emit("  sub-verdicts")
     for sub in case.expected["sub_verdicts"]:
@@ -2059,6 +2107,17 @@ def _parser() -> argparse.ArgumentParser:
         help=(
             "free-text reasoning recorded beside the key (evidence, upstream commit, etc). "
             "Nothing groups on this; it is what a human reads. Requires --root-cause-key"
+        ),
+    )
+    corpus_label.add_argument(
+        "--recorded-miss-note",
+        default="",
+        help=(
+            "declare that this case's STORED verdict is a miss the engine produced, not a "
+            "catch a human is now agreeing with. Requires the case's stored verdict to not "
+            "already be FAIL (a miss that was caught is a contradiction). Preserved across "
+            "a later relabel unless this flag is given again -- omitting it does not erase "
+            "an existing declaration"
         ),
     )
     corpus_label.add_argument(
