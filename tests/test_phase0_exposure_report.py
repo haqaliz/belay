@@ -73,9 +73,9 @@ def test_three_exposure_states_render_three_distinct_sentences() -> None:
 
     report = render_report(ledger, _metrics())
 
-    assert "judged 3 file(s) across 2 turn(s)" in report
+    assert "judged 3 file-comparison(s) across 2 turn(s)" in report
     assert (
-        "0 file(s) compared — this instance's silence carries no information about "
+        "0 file-comparison(s) — this instance's silence carries no information about "
         "the rule" in report
     )
     assert (
@@ -171,7 +171,7 @@ def test_no_opportunity_sentence_states_the_count_and_claims_no_cause() -> None:
     report = render_report(ledger, _metrics())
 
     line = next(line for line in report.splitlines() if "trace-additions-only" in line)
-    assert "0 file(s) compared" in line
+    assert "0 file-comparison(s)" in line
     assert "nothing to judge" not in line
     assert "carries no information about the rule" in line
 

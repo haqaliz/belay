@@ -184,8 +184,17 @@ def _coverage_section(ledger: RunLedger) -> list[str]:
 
 #: The `no opportunity` and `unrecorded` sentences, verbatim — quoted here rather than
 #: composed inline, so every call site (and every test) reads the identical wording.
-#: `judged` has no constant because its two numbers (files, turns) vary per instance; the
-#: other two do not.
+#: `judged` has no constant because its two numbers (comparisons, turns) vary per instance;
+#: the other two do not.
+#:
+#: THE NOUN IS `file-comparison(s)`, NEVER `file(s)`, on every aggregate surface in this
+#: module. `files_compared` is SUMMED across turns (`runner.py:214-224`), so it counts
+#: `(turn, file)` JUDGMENTS: one file edited on four turns contributes 4, and the published
+#: total of 17 is 17 judgments over 7 distinct files. The two are different quantities and
+#: the aggregate has no access to the second — it never sees a path, only a count — so the
+#: only honest thing it can name is the judgment. The per-sub-verdict message in
+#: `verify/invariants.py` keeps `file(s) compared`: there the count IS distinct files,
+#: because one judgment compares each in-scope file once.
 #:
 #: BOTH sentences state what the ledger holds and NAME no cause, because the ledger records
 #: none — and the causes the earlier wording asserted (`docs/planning/under-firing-
@@ -208,7 +217,7 @@ def _coverage_section(ledger: RunLedger) -> list[str]:
 #: possibilities are named without picking one; the disclaimer is the load-bearing half and
 #: stays verbatim.
 _NO_OPPORTUNITY_SENTENCE = (
-    "0 file(s) compared — this instance's silence carries no information about the rule"
+    "0 file-comparison(s) — this instance's silence carries no information about the rule"
 )
 _UNRECORDED_EXPOSURE_SENTENCE = (
     "exposure unrecorded — no exposure fact was recorded here (a ledger written before "
@@ -222,9 +231,11 @@ def _exposure_line(inst) -> str:
 
     `exposure is None` -> unrecorded. `files_compared == 0` -> no opportunity (some turn
     recorded a fact and the total compared came to zero — the ledger records the count,
-    not the reason). Otherwise -> judged, with its own file/turn counts:
+    not the reason). Otherwise -> judged, with its own comparison/turn counts:
     this is the one state whose sentence is NOT a fixed constant, because "judged N
-    file(s) across K turn(s)" is a fact specific to this instance, not a shared phrase.
+    file-comparison(s) across K turn(s)" is a fact specific to this instance, not a shared
+    phrase. `files_compared` is a SUM over turns, so it counts JUDGMENTS, not distinct
+    files — see the noun rule above `_NO_OPPORTUNITY_SENTENCE`.
     """
     if inst.exposure is None:
         return f"  {inst.trace_id}: {_UNRECORDED_EXPOSURE_SENTENCE}"
@@ -232,7 +243,10 @@ def _exposure_line(inst) -> str:
     if files_compared == 0:
         return f"  {inst.trace_id}: {_NO_OPPORTUNITY_SENTENCE}"
     turns_judging = inst.exposure.get("turns_judging", 0)
-    return f"  {inst.trace_id}: judged {files_compared} file(s) across {turns_judging} turn(s)"
+    return (
+        f"  {inst.trace_id}: judged {files_compared} file-comparison(s) across "
+        f"{turns_judging} turn(s)"
+    )
 
 
 def _exposure_section(ledger: RunLedger) -> list[str]:
@@ -469,7 +483,7 @@ def _view_exposure_sentence(view) -> str:
     recorded = view.exposure_recorded_captures()
     files_compared = sum(c.record.exposure.get("files_compared", 0) for c in recorded)
     turns_judging = sum(c.record.exposure.get("turns_judging", 0) for c in recorded)
-    return f"judged {files_compared} file(s) across {turns_judging} turn(s)"
+    return f"judged {files_compared} file-comparison(s) across {turns_judging} turn(s)"
 
 
 def _population_exposure_section(population) -> list[str]:
@@ -510,7 +524,7 @@ def _population_exposure_section(population) -> list[str]:
 
     lines.append(
         "alongside, per CAPTURE (summed, no dedup) = "
-        f"{measured.total_files_compared()} file(s) compared across "
+        f"{measured.total_files_compared()} file-comparison(s) across "
         f"{measured.exposure_capture_count()}/{measured.capture_count()} capture(s) that "
         "recorded exposure"
     )

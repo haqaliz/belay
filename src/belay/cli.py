@@ -609,9 +609,18 @@ _A1_NO_INFORMATION_CLAUSE = "this carries no information about the rule"
 #: reaches it too. `_exposure_summary` carries no `in_scope` (it mirrors the ledger
 #: accumulator field for field, deliberately), so the aggregate reports the one number it
 #: has.
-_A1_NO_OPPORTUNITY_SENTENCE = (
-    f"no opportunity — 0 file(s) compared; {_A1_NO_INFORMATION_CLAUSE}"
-)
+#:
+#: `no opportunity` is the STATE NAME and stays in the code; it is deliberately NOT in the
+#: printed sentence, matching `phase0.report`'s constant of the same name. Printed beside
+#: a real in-scope count it contradicts itself — the per-turn line says a file WAS in scope
+#: — and it asserts the same absent cause the wording above was fixed to stop asserting.
+#:
+#: THE NOUN IS `file-comparison(s)`, NEVER `file(s)`, wherever the count is summed:
+#: `_exposure_summary` adds `compared` across turns, so its total counts `(turn, file)`
+#: JUDGMENTS and one file edited on four turns contributes 4. `in_scope` keeps `file(s)` —
+#: that one really is a per-judgment distinct-file count, and holding the two nouns apart
+#: on the same line is what tells a reader they are different quantities.
+_A1_NO_OPPORTUNITY_SENTENCE = f"0 file-comparison(s) — {_A1_NO_INFORMATION_CLAUSE}"
 _A1_UNRECORDED_SENTENCE = (
     "unrecorded — this check carries no exposure fact (a read-only rule, or judgment "
     "never reached content comparison); this is NOT a claim that the rule judged nothing"
@@ -636,7 +645,9 @@ def _exposure_prose(expected) -> str:
     as `A1 invariant PASS ... (0 file(s) compared, 1 touched)` followed by a claim that the
     rule was given nothing. It was given a file; it found nothing in it to weaken, because
     a file absent from the task pre-state is skipped (`invariants.py:417-420`). The two
-    numbers, side by side, are the whole honest statement — no cause is asserted.
+    numbers, side by side, are the whole honest statement — no cause is asserted, and the
+    state name `no opportunity` is not printed for the same reason: beside `1 file(s) in
+    scope` it reads as a second, contradicting claim about the same turn.
     """
     if not isinstance(expected, dict) or "exposure" not in expected:
         return f"exposure: {_A1_UNRECORDED_SENTENCE}"
@@ -651,10 +662,10 @@ def _exposure_prose(expected) -> str:
     in_scope = exposure.get("in_scope", 0)
     if compared == 0:
         return (
-            f"exposure: no opportunity — {in_scope} file(s) in scope, 0 compared; "
+            f"exposure: {in_scope} file(s) in scope, 0 file-comparison(s) — "
             f"{_A1_NO_INFORMATION_CLAUSE}"
         )
-    return f"exposure: judged {compared} file(s) ({in_scope} in scope)"
+    return f"exposure: judged {compared} file-comparison(s) ({in_scope} file(s) in scope)"
 
 
 def _exposure_summary(verdicts) -> Optional[dict]:
@@ -728,7 +739,7 @@ def _emit_exposure(verdicts) -> None:
         )
         return
     _emit(
-        f"    judged {summary['files_compared']} file(s) across "
+        f"    judged {summary['files_compared']} file-comparison(s) across "
         f"{summary['turns_judging']}/{total} turn(s) "
         f"({summary['turns_recorded']}/{total} turn(s) recorded an exposure fact)"
     )

@@ -497,9 +497,11 @@ def test_captures_disagreeing_on_exposure_are_reduced_by_the_stated_rule() -> No
     assert "judged" in exposure_line
 
     alongside_line = next(
-        line for line in report.splitlines() if "file(s)" in line and "capture" in line.lower()
+        line
+        for line in report.splitlines()
+        if "file-comparison(s)" in line and "capture" in line.lower()
     )
-    assert "2" in alongside_line
+    assert "2 file-comparison(s)" in alongside_line
 
 
 def test_unrecorded_instances_are_named_individually_not_only_counted() -> None:
@@ -577,8 +579,8 @@ def test_control_exposure_is_surfaced_with_the_same_three_states() -> None:
         )
         return "\n".join(lines[start:end])
 
-    assert "judged 1 file(s) across 1 turn(s)" in _lines_for("trace-control__judged")
-    assert "0 file(s) compared" in _lines_for("trace-control__no-opportunity")
+    assert "judged 1 file-comparison(s) across 1 turn(s)" in _lines_for("trace-control__judged")
+    assert "0 file-comparison(s)" in _lines_for("trace-control__no-opportunity")
     unrecorded_span = _lines_for("trace-control__unrecorded")
     assert "exposure unrecorded" in unrecorded_span
     assert "0 file(s)" not in unrecorded_span

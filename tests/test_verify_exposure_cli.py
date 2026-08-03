@@ -170,9 +170,9 @@ def test_verify_per_turn_output_carries_exposure(tmp_path, capsys):
     out = capsys.readouterr().out
 
     assert rc == 1, out  # the tests-scope rule FAILs the corrupt success
-    assert "exposure: judged 1 file(s) (1 in scope)" in out, out
+    assert "exposure: judged 1 file-comparison(s) (1 file(s) in scope)" in out, out
     assert (
-        "exposure: no opportunity — 0 file(s) in scope, 0 compared; this carries no "
+        "exposure: 0 file(s) in scope, 0 file-comparison(s) — this carries no "
         "information about the rule" in out
     ), out
 
@@ -211,13 +211,14 @@ def test_verify_aggregate_distinguishes_judged_from_no_opportunity(tmp_path, cap
     )
     no_opportunity_out = capsys.readouterr().out
 
-    assert "judged 1 file(s) across 1/1 turn(s)" in judged_out, judged_out
+    assert "judged 1 file-comparison(s) across 1/1 turn(s)" in judged_out, judged_out
     assert (
-        "no opportunity" not in judged_out.split("aggregate")[-1].split("exposure (")[0]
+        "0 file-comparison(s)"
+        not in judged_out.split("aggregate")[-1].split("exposure (")[0]
     ), judged_out
 
     assert (
-        "no opportunity — 0 file(s) compared; this carries no information about the rule "
+        "0 file-comparison(s) — this carries no information about the rule "
         "(1/1 turn(s) recorded an exposure fact)"
         in no_opportunity_out
     ), no_opportunity_out
@@ -299,13 +300,13 @@ def test_verify_per_turn_names_unrecorded_for_a_read_only_rule(tmp_path, capsys)
 def test_exposure_prose_reports_judged_from_a_full_dict():
     assert (
         _exposure_prose({"exposure": {"compared": 3, "in_scope": 5}})
-        == "exposure: judged 3 file(s) (5 in scope)"
+        == "exposure: judged 3 file-comparison(s) (5 file(s) in scope)"
     )
 
 
 def test_exposure_prose_reports_no_opportunity_when_compared_is_zero():
     assert _exposure_prose({"exposure": {"compared": 0, "in_scope": 0}}) == (
-        "exposure: no opportunity — 0 file(s) in scope, 0 compared; this carries no "
+        "exposure: 0 file(s) in scope, 0 file-comparison(s) — this carries no "
         "information about the rule"
     )
 
@@ -320,7 +321,7 @@ def test_exposure_prose_reports_in_scope_when_nothing_was_compared():
     """
     prose = _exposure_prose({"exposure": {"compared": 0, "in_scope": 1}})
     assert prose == (
-        "exposure: no opportunity — 1 file(s) in scope, 0 compared; this carries no "
+        "exposure: 1 file(s) in scope, 0 file-comparison(s) — this carries no "
         "information about the rule"
     )
     assert "nothing to judge" not in prose
@@ -332,7 +333,7 @@ def test_exposure_prose_does_not_fabricate_compared_for_the_budget_abstain_shape
     "no opportunity", or it would fabricate the exact zero Task 1 refused to invent.
     """
     prose = _exposure_prose({"exposure": {"in_scope": 600}})
-    assert "no opportunity" not in prose, prose
+    assert "0 file-comparison(s)" not in prose, prose
     assert "compared" not in prose, prose
     assert "600 file(s) in scope" in prose, prose
     assert "comparison never began" in prose, prose
