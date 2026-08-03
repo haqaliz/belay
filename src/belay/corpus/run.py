@@ -5,6 +5,28 @@ reaches its recorded verdict. The corpus IS the regression suite: a case that no
 reaches its `expected` verdict is a caught DRIFT in a detector, and the run exits non-zero
 so the build breaks.
 
+## What a GREEN run means, and what it does NOT
+
+Read this before quoting a green run as evidence of anything. The meaning has moved twice
+already — it once certified that Belay still MIS-FIRES identically, then that the A1 rule
+still reaches PASS on turns a human adjudicated false positives — and both times the record
+had to be corrected afterwards. So it is stated here rather than left to be inferred:
+
+    a green `corpus run` means "no case regressed, AND every recorded miss is still
+    recorded as missed".
+
+It does **NOT** mean *"the engine catches everything in the corpus"*. A green run coexists
+with known, DECLARED blindness: a `STILL_MISSED` case is a violation a human adjudicated
+real that the engine does not detect, it is green, and that is deliberate — a known-open
+miss is not a DRIFT, and failing the build on it would leave CI permanently red over a
+state the corpus exists to record. That is also exactly why `STILL_MISSED` is its own
+outcome rather than a `MATCH`: `MATCH` would certify blindness AS AGREEMENT, and a reader
+would take the green for coverage it does not have.
+
+A green run is therefore a statement about **drift**, not about **coverage**. The
+`STILL_MISSED` count is printed on the sign-off line for that reason; `belay corpus score`,
+against human labels, is where detection is measured.
+
 ## The one property that carries this module: a SKIP is not a REGRESSION (and never a pass)
 
 - A **REGRESSION** is a detector change that flipped a verdict — the engine now computes a
@@ -39,8 +61,10 @@ turn 0's, so the baseline is present and nothing degrades.)
 
 ## A case that DECLARES a recorded miss is classified in the opposite direction
 
-The corpus can only ever be built from FLAGGED turns, so a violation the detector MISSES can
-never become a case by the normal path. A case may therefore DECLARE (`case.recorded_miss`)
+`belay phase0 run` ingests FLAGGED turns and nothing else, so a violation the detector MISSES
+never becomes a case by the bulk path. (`belay corpus add` enforces no such precondition —
+pointing it at a turn the detector verified clean is how one gets in at all.) A case may
+therefore DECLARE (`case.recorded_miss`)
 that its stored `expected` is a verdict the engine produced but a human adjudicated a MISS —
 its `expected.reduced_status` is the CLEAN verdict, and the clean verdict is the defect.
 

@@ -42,7 +42,7 @@ Belay's verdict is **grounded in execution, not opinion** — which means it get
 - 🧱 **Sandbox / execution boundaries.** The agent's tools run inside enforced filesystem and network limits — a bad action is contained, not catastrophic. The same boundary that *contains* an action is the machinery that *judges* it.
 - 🔁 **Per-turn verification by replay.** Each tool call is re-executed in isolation against its restored pre-state, and the observed effect is diffed against what was claimed.
 - 🎞 **Deterministic trace + replay.** Every run is captured exactly and can be re-run — for debugging, regression, and audit.
-- 📈 **A compounding failure corpus.** Every caught failure becomes a labeled, replayable case; `belay corpus run` re-replays the whole corpus as a regression suite, and precision/recall/coverage measures detection against **human** labels.
+- 📈 **A compounding failure corpus.** Every caught failure becomes a labeled, replayable case; `belay corpus run` re-replays the whole corpus as a regression suite, and precision/recall/coverage measures detection against **human** labels. A case can also record a **miss** — a violation a human adjudicated real that the engine did not catch — so a green run means *no case regressed and every recorded miss is still missed*, never *everything is caught*.
 - 🔒 **Runs on your infrastructure.** Self-hostable, zero runtime dependencies, stdlib only. Traces and state stay on your box; nothing is uploaded, ever.
 
 > **Honesty is the whole product.** `UNVERIFIED` is *never* rendered as `PASS`, the verdict never over-claims beyond what the replay actually checked, and where Belay cannot see or cannot ground a claim it says so by name. Read [Coverage & limits](#coverage--limits-stated-exactly) before trusting any verdict.
@@ -97,11 +97,12 @@ Both are decided by **re-execution and diffing. No model is consulted** — enfo
 ```bash
 belay corpus add ./traces/<run>.jsonl --turn 7 --manifest-dir ./traces.manifests --server my-mcp-server
 belay corpus label <case-id> --label true-positive     # a human adjudicates; the engine never labels its own cases
-belay corpus run                                        # re-replay every case, assert its verdict — the corpus IS the regression suite
+belay corpus label <case-id> --label true-positive --recorded-miss-note "…"   # …and declare the STORED verdict a MISS: the engine returned clean and was wrong
+belay corpus run                                        # re-replay every case — green = nothing drifted, NOT "everything is caught"
 belay corpus score                                      # precision · recall · coverage vs human labels (UNVERIFIED excluded, reported separately)
 ```
 
-Cases are self-contained (they bundle their own pre-state) and live under the gitignored `corpus/local/` — nothing leaves your machine.
+Cases are self-contained (they bundle their own pre-state) and live under the gitignored `corpus/local/` — nothing leaves your machine. What a green `corpus run` does and does not certify is in [Coverage & limits](#a-green-belay-corpus-run-is-a-drift-check-not-a-coverage-claim).
 
 ### 4 · Measure at scale — the violation rate
 
@@ -181,6 +182,13 @@ Four limits remain, and each is deliberate:
 Whenever the rule cannot decide — an unparseable file, an undecidable pattern, a missing task pre-state — it reports `UNVERIFIED` with a named cause. **It never guesses in the passing direction.**
 
 > **The default's precision still has not been measured.** Its predecessor scored **0.00** (0 true positives / 7 false positives) on the only real data available, which is why it was replaced. The replacement has since been run over **every banked capture** — 22 non-control captures across 15 instances, 392 turns, once, under a freeze protocol — and it flagged **1 instance (6.7%)**, with **zero** flags on the 7 turns its predecessor fired on and both clean controls staying clean. That is a genuine result about **over-firing**, and it is *not* a precision figure: nothing in that run was hand-adjudicated (`corpus score` reads `precision n/a` — 0 TP / 0 FP, and an `n/a` is a **zero denominator, not a 1.00**), and the single instance it flagged is the one the rule was **fitted on**, so it is not evidence of held-out sensitivity either. Read it as **"0.00 → still not measured"**, never as "0.00 → good".
+
+### A green `belay corpus run` is a drift check, not a coverage claim
+A green run means exactly this: **no case regressed, and every recorded miss is still recorded as missed.** It does **not** mean the engine catches everything in the corpus, and a green run coexists with known, *declared* blindness.
+
+A case may **declare** that its stored verdict records a **miss** — the engine returned clean on a turn a human adjudicated a real violation, so the clean verdict *is* the defect. Re-verifying such a case reports `STILL_MISSED` (the engine is still blind to it — exit `0`, because a known-open miss is not a drift, but deliberately **not** counted as a `MATCH`, since a `MATCH` on a recorded miss would certify blindness as agreement) or `MISS_CLOSED` (a sharpened detector now catches it — a fix landing, which must not break the build). The exemption covers exactly one transition; any other divergence on a declared case is still a `REGRESSION`. The `STILL_MISSED` count is printed on the sign-off line so that skimming only the last line cannot hide it.
+
+**This changes what the corpus is able to say, and the change is a capability, not a result.** Until now it was evidence about **over-firing only**: `belay phase0 run` ingests flagged turns and nothing else, so a violation the detector *missed* could never become a case, and an `FN` of `0` was an artifact of construction rather than a measurement. A miss can now enter the corpus (`belay corpus add` enforces no precondition on the target turn's verdict), be declared as one, and — once a human labels it — contribute a false negative to `belay corpus score`'s recall with its provenance named. **Whether any miss has actually been banked, and what the resulting recall is, is a separate empirical question that is not answered here.**
 
 ### The sandbox is macOS only
 The sandbox is macOS **Seatbelt** (`sandbox-exec`); the snapshot is APFS **`clonefile`**. Everything Belay claims about containment was measured on macOS. **Linux is entirely unverified** — off macOS the sandbox *raises* rather than returning a cheerful no-op, because a no-op reporting success would claim a boundary that does not exist. Linux/Docker is a planned second slice. What the sandbox does and does not enforce (reads are not scoped; denial records are inferred) is in [`docs/technical/THREAT_MODEL.md`](docs/technical/THREAT_MODEL.md).

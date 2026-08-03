@@ -7,7 +7,58 @@ All notable changes to Belay are documented here. The format follows
 
 ## [Unreleased]
 
-_Nothing yet._
+### Changed
+
+- **What a green `belay corpus run` means — again, so read this before quoting one.** It now means
+  *"no case regressed, **and** every recorded miss is still recorded as missed"*. It does **not**
+  mean *"the engine catches everything in the corpus"*: a green run coexists with known,
+  **declared** blindness, and that is the point of `STILL_MISSED` existing as its own outcome.
+  This reading has had to be corrected twice before — the same green once certified that Belay
+  still *mis-fired identically*, and later that the A1 rule still reached `PASS` on seven turns a
+  human adjudicated false positives — so it is now said outright where a reader will hit it:
+  `src/belay/corpus/run.py`'s module docstring and README's *Coverage & limits*, and in the
+  negative on `corpus run`'s `--help` and its sign-off line, which state the `STILL_MISSED` count
+  so a known-open miss is never mistaken for a clean full pass.
+- **The corpus is no longer structurally confined to over-firing evidence.** `belay phase0 run`
+  ingests flagged turns and nothing else, so a violation the detector *missed* could never become
+  a case and an `FN` of `0` was an artifact of construction, not a measurement. A miss can now
+  enter the corpus, be declared as one, and contribute a false negative to `corpus score`'s
+  recall. **This is a capability, not a result** — whether any miss has actually been banked, and
+  what the resulting recall is, is a separate empirical question that nothing in this release
+  answers.
+
+### Added
+
+- **A corpus case can declare that its stored verdict records a MISS** — the engine returned clean
+  on a turn a human adjudicated a real violation, so the clean verdict *is* the defect. Declared
+  by a human via `belay corpus label --recorded-miss-note "…"` (case schema **v3**); the note is
+  **required**, mirroring the existing rule that a `true-positive` label requires a root cause — a
+  human asserting the engine missed something must say what. Presence of the field *is* the
+  declaration, absent is a normal case byte-for-byte, and there is no code path from a verdict, a
+  status, or a label to setting it. A declaration on a case whose stored verdict is already `FAIL`
+  is rejected at load and at label time: a miss that was caught is a contradiction.
+- **Two `belay corpus run` outcomes, reachable only for a declared case.** `STILL_MISSED` — the
+  engine still does not catch it; exit `0`, but deliberately **not** a `MATCH`, because `MATCH` on
+  a recorded miss certifies blindness as agreement. `MISS_CLOSED` — a sharpened detector now
+  catches it; exit `0`, so CI does not go red for a fix. The exemption covers **exactly one**
+  transition (the reduced status and the A1 `invariant` sub-verdict(s) both moving `PASS → FAIL`,
+  everything else byte-identical), decided by constructing that one patched expectation and
+  demanding exact equality rather than by inspecting a diff. Any other divergence — an A2 move, a
+  `WARN`, an `UNVERIFIED` without an environment cause — is still a `REGRESSION`, on a declared
+  case as much as on any other. `has_regression`, and therefore the exit contract, counts only
+  `REGRESSION`.
+- **`belay corpus score` names where a false negative came from**, reporting how many `FN`-
+  contributing cases are a human-banked recorded miss — a known blind spot the stored verdict
+  already reflects, not a detection that failed today. `corpus show` prints the declaration
+  (absent-vs-declared kept distinct) and `corpus list` carries a `recorded-miss` marker column.
+
+### Fixed
+
+- **`belay corpus add`'s help no longer claims a precondition it never enforced.** Four places
+  said a case is composed from a *flagged* turn; nothing in the composition path has ever filtered
+  on the recomputed verdict. A reader who trusted them went looking for a `FAIL` filter that does
+  not exist and concluded the corpus structurally cannot hold a miss — the exact misconception
+  this release removes. No behaviour changed; the strings did.
 
 ## [0.11.0] - 2026-07-31
 
