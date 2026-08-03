@@ -19,12 +19,26 @@ defect this aspect exists to remove.
 
 from __future__ import annotations
 
+import inspect
 import json
+import sys
 from pathlib import Path
 
 import pytest
 
 from belay.corpus.case import CASE_SCHEMA_VERSION, Case, load_case, write_case
+from belay.corpus.run import (
+    MATCH,
+    MISS_CLOSED,
+    REGRESSION,
+    SKIP,
+    STILL_MISSED,
+    CaseResult,
+    CorpusRun,
+    classify_case,
+)
+from belay.verify.turn import TurnVerdict
+from belay.verify.verdict import Status, Verdict
 
 
 def _full_case() -> Case:
@@ -204,3 +218,595 @@ def test_schema_version_is_three_and_absent_still_means_one(tmp_path: Path) -> N
     (tmp_path / "case.json").write_text(json.dumps(data), encoding="utf-8")
 
     assert load_case(tmp_path).schema_version == 1
+
+
+# =====================================================================================
+# Phase 2 -- `corpus run` stops inverting on a declared miss
+# =====================================================================================
+#
+# `classify_case` compares the recomputed verdict against `expected` alone, so a case that
+# DECLARES its stored verdict is a miss gets classified backwards in both directions:
+#
+#   - the engine still misses it  -> the sets are equal -> MATCH. The regression suite
+#     certifies "the engine is still blind here" AS AGREEMENT.
+#   - the detector is sharpened and now CATCHES it -> the sets differ -> REGRESSION, exit 1.
+#     **CI goes red for a fix.**
+#
+# Two outcomes fix that, reachable ONLY for a declared case: `STILL_MISSED` (equal sets --
+# the known state, exit 0, but never called agreement) and `MISS_CLOSED` (the ONE exempted
+# transition -- the reduced status AND the A1 `invariant` sub-verdict both moving
+# PASS -> FAIL, and nothing else diverging). Anything else stays a `REGRESSION`: the escape
+# exempts exactly one transition and must never become a blanket exemption for declared cases.
+
+#: The declaration itself. Presence is the claim; the note is what makes it auditable.
+DECLARED = {"note": "pytest-5227 turns 11/13 -- fnmatch weakening the byte prefix missed"}
+
+
+def _sub(axis: str, kind: str, status: Status) -> Verdict:
+    return Verdict(axis, kind, status, None, None, f"{axis} {kind} {status.value}")
+
+
+def _turn(status: Status, subs: list, cause: str | None = None) -> TurnVerdict:
+    return TurnVerdict(
+        turn_index=0, tool_name="edit_file", status=status, sub_verdicts=subs, cause=cause
+    )
+
+
+def _expected(reduced: str, subs: list) -> dict:
+    """A stored `expected` dict, exactly the shape `corpus add` writes to case.json."""
+    return {
+        "reduced_status": reduced,
+        "sub_verdicts": [{"axis": a, "kind": k, "status": s} for a, k, s in subs],
+    }
+
+
+#: The clean verdict a recorded-miss case banks: the engine saw nothing, and a human says
+#: it should have. Used as both the stored `expected` and (unchanged) the still-blind recompute.
+_MISSED_EXPECTED = _expected(
+    "PASS", [("A1", "invariant", "PASS"), ("A2", "effect", "PASS"), ("A2", "replay", "PASS")]
+)
+
+
+def _missed_recompute() -> TurnVerdict:
+    return _turn(
+        Status.PASS,
+        [
+            _sub("A1", "invariant", Status.PASS),
+            _sub("A2", "effect", Status.PASS),
+            _sub("A2", "replay", Status.PASS),
+        ],
+    )
+
+
+def _caught_recompute() -> TurnVerdict:
+    """The same turn once a sharpened A1 rule CATCHES it -- the one exempted transition."""
+    return _turn(
+        Status.FAIL,
+        [
+            _sub("A1", "invariant", Status.FAIL),
+            _sub("A2", "effect", Status.PASS),
+            _sub("A2", "replay", Status.PASS),
+        ],
+    )
+
+
+# --- the spine: a miss is not agreement ----------------------------------------------
+
+
+def test_a_declared_miss_still_missed_does_not_classify_match() -> None:
+    """Equal sets on a DECLARED case is `STILL_MISSED`, exit 0 -- never `MATCH`.
+
+    MATCH means "the recorded verdict still reproduces, and that is what we want". On a
+    recorded miss the recorded verdict is the engine being blind, so calling it MATCH
+    certifies blindness as agreement. It is still exit 0 -- the known state is not a
+    failure -- but it must be counted and named separately from agreement.
+    """
+    result = classify_case(_MISSED_EXPECTED, _missed_recompute(), recorded_miss=DECLARED)
+
+    assert result.outcome == STILL_MISSED, result
+    assert result.outcome != MATCH
+    run = CorpusRun(results=[result])
+    assert run.has_regression is False, "a still-open miss is the known state, not a failure"
+    assert run.matches == 0, "a STILL_MISSED must not be folded into the MATCH count"
+    assert run.still_missed == 1
+
+
+# --- the spine: closing a miss is not a regression (stops CI going red for a fix) ------
+
+
+def test_a_declared_miss_now_caught_does_not_classify_regression() -> None:
+    """The reduced status and A1 `invariant` both moving PASS -> FAIL is `MISS_CLOSED`, exit 0.
+
+    This is the criterion that stops CI going red for a fix: without it, sharpening the
+    detector so it finally catches a banked miss breaks the build, and the regression suite
+    punishes exactly the change the corpus exists to drive.
+    """
+    result = classify_case(_MISSED_EXPECTED, _caught_recompute(), recorded_miss=DECLARED)
+
+    assert result.outcome == MISS_CLOSED, result
+    assert result.outcome != REGRESSION
+    run = CorpusRun(results=[result])
+    assert run.has_regression is False, "a closed miss must not exit CI non-zero"
+    assert run.matches == 0
+    assert run.miss_closed == 1
+
+
+# --- the escape is narrow: EXACTLY ONE transition, on a declared case ------------------
+
+
+def _other_divergences() -> list:
+    """Every near-miss of the exempted transition. Each must stay a REGRESSION."""
+    return [
+        pytest.param(
+            _turn(
+                Status.FAIL,
+                [
+                    _sub("A1", "invariant", Status.FAIL),
+                    _sub("A2", "effect", Status.FAIL),
+                    _sub("A2", "replay", Status.PASS),
+                ],
+            ),
+            id="an-A2-sub-verdict-also-moved",
+        ),
+        pytest.param(
+            _turn(
+                Status.WARN,
+                [
+                    _sub("A1", "invariant", Status.WARN),
+                    _sub("A2", "effect", Status.PASS),
+                    _sub("A2", "replay", Status.PASS),
+                ],
+            ),
+            id="the-move-is-to-WARN-not-FAIL",
+        ),
+        pytest.param(
+            _turn(
+                Status.UNVERIFIED,
+                [
+                    _sub("A1", "invariant", Status.UNVERIFIED),
+                    _sub("A2", "effect", Status.PASS),
+                    _sub("A2", "replay", Status.PASS),
+                ],
+                cause="no-task-prestate-manifest",
+            ),
+            id="UNVERIFIED-without-a-skip-cause",
+        ),
+        pytest.param(
+            _turn(
+                Status.FAIL,
+                [
+                    _sub("A1", "invariant", Status.PASS),
+                    _sub("A2", "effect", Status.FAIL),
+                    _sub("A2", "replay", Status.PASS),
+                ],
+            ),
+            id="only-A2-moved-A1-is-still-blind",
+        ),
+        pytest.param(
+            _turn(
+                Status.PASS,
+                [
+                    _sub("A1", "invariant", Status.FAIL),
+                    _sub("A2", "effect", Status.PASS),
+                    _sub("A2", "replay", Status.PASS),
+                ],
+            ),
+            id="A1-moved-but-the-reduced-status-did-not",
+        ),
+        pytest.param(
+            _turn(
+                Status.FAIL,
+                [_sub("A2", "effect", Status.PASS), _sub("A2", "replay", Status.PASS)],
+            ),
+            id="the-A1-sub-verdict-vanished",
+        ),
+    ]
+
+
+@pytest.mark.parametrize("recomputed", _other_divergences())
+def test_any_other_divergence_on_a_declared_case_is_still_a_regression(
+    recomputed: TurnVerdict,
+) -> None:
+    """The declaration exempts ONE transition, not the case.
+
+    A blanket "a declared case never regresses" would turn every banked miss into a hole in
+    the regression suite. Each parameter here is a near-miss of the exempted transition, and
+    each must still break the build.
+    """
+    result = classify_case(_MISSED_EXPECTED, recomputed, recorded_miss=DECLARED)
+
+    assert result.outcome == REGRESSION, result
+    assert result.divergences, "a REGRESSION must name what diverged"
+    assert CorpusRun(results=[result]).has_regression is True
+
+
+# --- SKIP still wins first ------------------------------------------------------------
+
+
+def test_a_declared_case_with_an_environment_cause_is_still_a_skip() -> None:
+    """An environment gap outranks the declaration: the case was not evaluated HERE.
+
+    A recorded miss is identical on every box; "this box could not run the server" is not,
+    and it is decided first, exactly as it is for an undeclared case.
+    """
+    from belay.replay.report import REPLAY_DID_NOT_ANSWER
+
+    recomputed = _turn(Status.UNVERIFIED, [], cause=REPLAY_DID_NOT_ANSWER)
+    result = classify_case(_MISSED_EXPECTED, recomputed, recorded_miss=DECLARED)
+
+    assert result.outcome == SKIP, result
+    assert result.skip_reason == REPLAY_DID_NOT_ANSWER
+
+
+def test_skip_causes_is_unchanged() -> None:
+    """`_SKIP_CAUSES` is a CLOSED set and this aspect does not widen it.
+
+    The module docstring (`run.py:31-35`) forbids the cheap escape: a SKIP means "this box
+    could not evaluate the case" -- an environment gap that differs between machines. A
+    recorded miss is a property of the CASE, identical on every box, so filing it as a SKIP
+    would let a real detector regression hide behind an environment excuse.
+    """
+    from belay.corpus.run import _SKIP_CAUSES
+    from belay.replay.report import REPLAY_DID_NOT_ANSWER
+    from belay.snapshot.substrate import UnrestorableCause
+
+    assert _SKIP_CAUSES == frozenset(
+        {REPLAY_DID_NOT_ANSWER, UnrestorableCause.UNRESTORABLE_CAPABILITY_MISMATCH.value}
+    )
+    assert len(_SKIP_CAUSES) == 2
+
+
+# --- classification and human labels stay independent ---------------------------------
+
+
+def test_classify_case_never_reads_the_human_label() -> None:
+    """Structural: classification reads the DECLARATION and the verdicts, never the label.
+
+    `corpus score` scores `human_label` independently. Coupling regression detection to the
+    same field would corrupt both -- relabelling a case would silently move the regression
+    suite, and the engine would have a path from its own output to a human adjudication.
+    """
+    params = inspect.signature(classify_case).parameters
+    assert set(params) == {"expected", "recomputed", "case_id", "recorded_miss"}, params
+    assert "human_label" not in params
+
+    from belay.corpus import run as run_module
+
+    reachable = [classify_case] + [
+        getattr(run_module, name)
+        for name in ("_recomputed_set", "_divergences", "_closes_the_miss")
+    ]
+    for fn in reachable:
+        # the docstring is prose ABOUT the rule and may name the field; the CODE may not.
+        code = inspect.getsource(fn).replace(fn.__doc__ or "\0", "")
+        assert "human_label" not in code, fn.__name__
+
+
+# --- an UNDECLARED case is bit-for-bit what it is today --------------------------------
+
+
+def test_an_undeclared_case_classifies_bit_for_bit_as_today() -> None:
+    """No declaration -> the two new outcomes are unreachable and nothing else moved.
+
+    MATCH is EXACT dict equality of the whole recomputed set including the ordered
+    sub-verdict list; the new branch must not weaken that.
+    """
+    still = classify_case(_MISSED_EXPECTED, _missed_recompute(), case_id="c")
+    assert still == CaseResult(case_id="c", outcome=MATCH)
+
+    caught = classify_case(_MISSED_EXPECTED, _caught_recompute(), case_id="c")
+    assert caught.outcome == REGRESSION, "the exempted transition is NOT exempted undeclared"
+    flips = {(d.axis, d.kind, d.expected_status, d.got_status) for d in caught.divergences}
+    assert flips == {
+        ("", "reduced_status", "PASS", "FAIL"),
+        ("A1", "invariant", "PASS", "FAIL"),
+    }, flips
+
+    # the ordered sub-verdict list is still pinned exactly: same (axis, kind, status) triples,
+    # reordered, is a REGRESSION and not a MATCH.
+    reordered = _turn(
+        Status.PASS,
+        [
+            _sub("A2", "replay", Status.PASS),
+            _sub("A2", "effect", Status.PASS),
+            _sub("A1", "invariant", Status.PASS),
+        ],
+    )
+    assert classify_case(_MISSED_EXPECTED, reordered).outcome == REGRESSION
+
+
+def test_the_new_outcomes_are_unreachable_without_a_declaration() -> None:
+    """`recorded_miss=None` is the default, and it is the pre-Phase-2 behaviour verbatim."""
+    assert inspect.signature(classify_case).parameters["recorded_miss"].default is None
+    for recomputed in (_missed_recompute(), _caught_recompute()):
+        outcome = classify_case(_MISSED_EXPECTED, recomputed).outcome
+        assert outcome in (MATCH, REGRESSION, SKIP), outcome
+
+
+# --- the exit contract ----------------------------------------------------------------
+
+
+def test_has_regression_counts_only_regression() -> None:
+    """The exit contract: only a REGRESSION exits non-zero, and only a MATCH is a match."""
+    results = [
+        CaseResult(case_id="m", outcome=MATCH),
+        CaseResult(case_id="s", outcome=SKIP, skip_reason="off substrate"),
+        CaseResult(case_id="miss", outcome=STILL_MISSED),
+        CaseResult(case_id="closed", outcome=MISS_CLOSED),
+    ]
+    run = CorpusRun(results=results)
+    assert run.has_regression is False
+    assert run.matches == 1, "the new outcomes must not be folded into `matches`"
+    assert run.skips == 1
+    assert run.still_missed == 1
+    assert run.miss_closed == 1
+    assert run.regressions == 0
+
+    regressed = CorpusRun(results=[*results, CaseResult(case_id="r", outcome=REGRESSION)])
+    assert regressed.has_regression is True
+    assert regressed.regressions == 1
+
+
+# --- the CLI reports both new outcomes ------------------------------------------------
+
+
+def test_corpus_run_reports_the_two_new_outcomes_and_exits_zero(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """Driven through the REAL renderer: both outcomes are named per case and counted.
+
+    Asserting against a format string written in the test would pass against the bug --
+    twice in this repo a green test turned out to be checking its own stub.
+    """
+    from belay import cli
+
+    (tmp_path / "corpus").mkdir()
+    monkeypatch.setattr(
+        "belay.corpus.run.run_corpus",
+        lambda _dir: CorpusRun(
+            results=[
+                CaseResult(case_id="trace-pytest-dev__pytest-5227-turn11", outcome=STILL_MISSED),
+                CaseResult(
+                    case_id="trace-pytest-dev__pytest-5227-turn13",
+                    outcome=MISS_CLOSED,
+                    divergences=list(
+                        classify_case(
+                            _MISSED_EXPECTED, _caught_recompute(), recorded_miss=DECLARED
+                        ).divergences
+                    ),
+                ),
+            ]
+        ),
+    )
+
+    rc = cli.main(["corpus", "run", str(tmp_path / "corpus")])
+    out = capsys.readouterr().out
+
+    assert rc == 0, out
+    assert STILL_MISSED in out and MISS_CLOSED in out
+    # each case is named beside its outcome, separated -- not fused into one token.
+    assert f"trace-pytest-dev__pytest-5227-turn11 {STILL_MISSED}" in " ".join(out.split())
+    assert f"trace-pytest-dev__pytest-5227-turn13 {MISS_CLOSED}" in " ".join(out.split())
+    # and both are counted in the aggregate, separately from MATCH.
+    aggregate = out.split("aggregate", 1)[1]
+    assert f"{STILL_MISSED}" in aggregate and f"{MISS_CLOSED}" in aggregate
+    assert "MATCH                 0" in aggregate
+    assert "belay: no regressions" in out
+
+
+def test_the_clean_exit_line_says_a_miss_is_still_open(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """A run holding an open recorded miss must not sign off as an unqualified clean pass.
+
+    "no regressions" is true and insufficient: the same line already qualifies itself with
+    the SKIP count so partial coverage is never read as a full pass, and a STILL_MISSED is
+    the same kind of admission -- the engine is known blind on that case.
+    """
+    from belay import cli
+
+    (tmp_path / "corpus").mkdir()
+    monkeypatch.setattr(
+        "belay.corpus.run.run_corpus",
+        lambda _dir: CorpusRun(
+            results=[
+                CaseResult(case_id="kept", outcome=MATCH),
+                CaseResult(case_id="open-miss", outcome=STILL_MISSED),
+            ]
+        ),
+    )
+
+    assert cli.main(["corpus", "run", str(tmp_path / "corpus")]) == 0
+    out = capsys.readouterr().out
+    assert "belay: no regressions (1 still missed)" in out, out
+
+
+# --- end-to-end, through the REAL run_case (darwin only) -------------------------------
+
+FIXTURES = Path(__file__).parent / "fixtures"
+EDITOR_SERVER = FIXTURES / "weakening_editor_server.py"
+
+STRONG_BODY = (
+    "def test_rejects_wrong_password():\n"
+    "    assert authenticate('user', 'wrong') is False\n"
+)
+
+
+def _edit_file_call(call_id: int) -> bytes:
+    return json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": call_id,
+            "method": "tools/call",
+            "params": {"name": "edit_file", "arguments": {}},
+        }
+    ).encode()
+
+
+def _recorded_reply(call_id: int) -> bytes:
+    return json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": call_id,
+            "result": {
+                "content": [{"type": "text", "text": "edited tests/test_auth.py"}],
+                "isError": False,
+            },
+        }
+    ).encode()
+
+
+def _trace(tmp_path: Path, name: str, frames: list) -> list:
+    from belay.trace import TraceWriter
+
+    trace_dir = tmp_path / name
+    writer = TraceWriter.in_directory(trace_dir)
+    try:
+        for direction, raw, handle in frames:
+            if handle is not None:
+                writer.set_state_handle(handle, frame=raw)
+            writer.observer(direction)(raw, False)
+    finally:
+        writer.close()
+    path = sorted(trace_dir.glob("*.jsonl"))[0]
+    return [json.loads(line) for line in path.read_bytes().split(b"\n") if line]
+
+
+def _real_declared_case(tmp_path: Path) -> Path:
+    """A REAL two-turn capture, added as a case, then banked as a recorded miss.
+
+    The capture, the snapshots, the re-invoked server and the A1 FAIL are all real. What is
+    written by hand is the one thing a recorded miss IS: the stored `expected` says the
+    engine saw nothing (reduced PASS, A1 `invariant` PASS), and `recorded_miss` declares a
+    human found a violation there anyway. A sharpened detector recomputing the real FAIL
+    then diverges by exactly the exempted transition.
+    """
+    from belay.corpus.add import add_case
+    from belay.replay.persist import persist_snapshot
+    from belay.snapshot.substrate import present_handle, take_snapshot
+    from belay.verify.invariants import Invariant
+    from belay.verify.turn import verify_turn
+
+    work = tmp_path / "work"
+    (work / "tests").mkdir(parents=True)
+    (work / "tests" / "test_auth.py").write_text(STRONG_BODY, encoding="utf-8")
+
+    manifest_dir = tmp_path / "run-manifests"
+    snap0 = take_snapshot(work, tmp_path / "snap-0")
+    persist_snapshot(snap0, manifest_dir / f"{snap0.manifest.handle}.json")
+    snap1 = take_snapshot(work, tmp_path / "snap-1")
+    persist_snapshot(snap1, manifest_dir / f"{snap1.manifest.handle}.json")
+
+    records = _trace(
+        tmp_path,
+        "flagged-trace",
+        [
+            (
+                "c2s",
+                json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}).encode(),
+                None,
+            ),
+            (
+                "s2c",
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "result": {
+                            "tools": [
+                                {"name": "edit_file", "annotations": {"readOnlyHint": False}}
+                            ]
+                        },
+                    }
+                ).encode(),
+                None,
+            ),
+            ("c2s", _edit_file_call(3), present_handle(snap0)),
+            ("s2c", _recorded_reply(3), None),
+            ("c2s", _edit_file_call(4), present_handle(snap1)),
+            ("s2c", _recorded_reply(4), None),
+        ],
+    )
+
+    server_command = [sys.executable, str(EDITOR_SERVER)]
+    invariants = [Invariant(scope=b"tests", rule="no-assertion-weakening")]
+    verdict = verify_turn(
+        records,
+        1,
+        server_command=server_command,
+        manifest_dir=manifest_dir,
+        invariants=invariants,
+        replays=3,
+    )
+    # Preconditions, pinned so the test cannot go green for the wrong reason: the FAIL is
+    # A1's (a real weakening caught on the real delta), and A2 replayed cleanly. A verdict
+    # FAILing on A2 instead would produce the same two divergences by accident.
+    assert verdict.status is Status.FAIL, verdict
+    by_axis = {(v.axis, v.kind): v.status for v in verdict.sub_verdicts}
+    assert by_axis[("A1", "invariant")] is Status.FAIL, by_axis
+    assert all(s is Status.PASS for (a, _), s in by_axis.items() if a == "A2"), by_axis
+
+    case_dir = add_case(
+        tmp_path / "corpus",
+        records=records,
+        target_turn_index=1,
+        verdict=verdict,
+        manifest_dir=manifest_dir,
+        server_command=server_command,
+        invariants=invariants,
+        replays=3,
+        timeout=20.0,
+        source_trace_id="flagged-trace",
+        captured_at="2026-08-03T00:00:00+00:00",
+    )
+
+    raw = json.loads((case_dir / "case.json").read_text(encoding="utf-8"))
+    raw["expected"]["reduced_status"] = "PASS"
+    for sub in raw["expected"]["sub_verdicts"]:
+        if (sub["axis"], sub["kind"]) == ("A1", "invariant"):
+            sub["status"] = "PASS"
+    raw["recorded_miss"] = {"note": "banked: the shipped detector was blind to this weakening"}
+    (case_dir / "case.json").write_text(json.dumps(raw, indent=2), encoding="utf-8")
+    return case_dir
+
+
+pytestmark_darwin = pytest.mark.skipif(
+    sys.platform != "darwin",
+    reason="run_case re-invokes the server inside the macOS Seatbelt sandbox",
+)
+
+
+@pytestmark_darwin
+def test_a_declared_case_reaches_miss_closed_through_the_real_run_case(tmp_path: Path) -> None:
+    """`run_case` passes the loaded case's declaration into `classify_case`, on real replay.
+
+    Built on a REAL capture: a real snapshot pair, the real weakening editor re-invoked
+    under Seatbelt, and the real `verify_turn` reaching a real A1 FAIL. The case's stored
+    `expected` is then hand-set to the CLEAN verdict a blind detector would have banked,
+    with the declaration -- which is exactly what a recorded miss is -- so the recompute
+    diverges by precisely the exempted transition and must classify `MISS_CLOSED`, not
+    `REGRESSION`.
+    """
+    from belay.corpus.run import run_case
+
+    case_dir = _real_declared_case(tmp_path)
+    result = run_case(case_dir)
+
+    assert result.outcome == MISS_CLOSED, (result.outcome, result.divergences)
+
+
+@pytestmark_darwin
+def test_the_same_real_case_undeclared_is_a_regression(tmp_path: Path) -> None:
+    """The control for the test above: strip the declaration and the SAME case breaks CI.
+
+    Without this, `MISS_CLOSED` could be coming from anywhere in the pipeline. The only
+    difference between the two runs is the one key in `case.json`.
+    """
+    from belay.corpus.run import run_case
+
+    case_dir = _real_declared_case(tmp_path)
+    raw = json.loads((case_dir / "case.json").read_text(encoding="utf-8"))
+    del raw["recorded_miss"]
+    (case_dir / "case.json").write_text(json.dumps(raw, indent=2), encoding="utf-8")
+
+    assert run_case(case_dir).outcome == REGRESSION

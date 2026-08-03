@@ -1013,12 +1013,25 @@ def _cmd_corpus_run(args: argparse.Namespace) -> int:
     Re-verifies every stored case against the live engine (the corpus IS the regression
     suite) and prints each case's outcome plus an aggregate. A REGRESSION shows its diverging
     axis/kind (expected -> got); a SKIP shows why the case could not be evaluated on this box.
-    The exit is non-zero IFF at least one case REGRESSED — a run that is all MATCH/SKIP exits
-    0, because a pure SKIP is partial coverage (a non-darwin box, an unavailable server), not
-    a CI failure. The SKIP count is stated plainly so partial coverage is never mistaken for
-    a clean full pass.
+    The exit is non-zero IFF at least one case REGRESSED — every other outcome exits 0,
+    because a pure SKIP is partial coverage (a non-darwin box, an unavailable server), not a
+    CI failure. Each non-MATCH count is stated plainly, with a line saying what it means, so
+    a partial or still-blind run is never mistaken for a clean full pass.
+
+    STILL_MISSED and MISS_CLOSED belong to cases that DECLARE their stored verdict is a
+    recorded miss. STILL_MISSED is the known state — the engine is still blind there — and it
+    is deliberately NOT reported as a MATCH, because MATCH on a recorded miss would read as
+    "the corpus agrees". MISS_CLOSED is a detector fix landing: the case's miss just closed,
+    which must not break the build.
     """
-    from belay.corpus.run import MATCH, REGRESSION, SKIP, run_corpus
+    from belay.corpus.run import (
+        MATCH,
+        MISS_CLOSED,
+        REGRESSION,
+        SKIP,
+        STILL_MISSED,
+        run_corpus,
+    )
 
     corpus_dir = Path(args.corpus_dir)
     if not corpus_dir.is_dir():
@@ -1042,14 +1055,16 @@ def _cmd_corpus_run(args: argparse.Namespace) -> int:
     # they did the outcome abutted the id — `…-turn10MATCH` — which stops the line
     # parsing by eye and makes `grep MATCH` name a case you cannot recover.
     for result in run.results:
-        if result.outcome == REGRESSION:
-            _emit(f"  {result.case_id:<40} {REGRESSION}")
+        if result.outcome in (REGRESSION, MISS_CLOSED):
+            _emit(f"  {result.case_id:<40} {result.outcome}")
             for div in result.divergences:
                 where = div.kind if not div.axis else f"{div.axis} {div.kind}"
                 _emit(f"      {where:<24}{div.expected_status} -> {div.got_status}")
         elif result.outcome == SKIP:
             _emit(f"  {result.case_id:<40} {SKIP}")
             _emit(f"      {result.skip_reason}")
+        elif result.outcome == STILL_MISSED:
+            _emit(f"  {result.case_id:<40} {STILL_MISSED}")
         else:
             _emit(f"  {result.case_id:<40} {MATCH}")
 
@@ -1059,6 +1074,8 @@ def _cmd_corpus_run(args: argparse.Namespace) -> int:
     _emit(f"  MATCH                 {run.matches}")
     _emit(f"  REGRESSION            {run.regressions}")
     _emit(f"  SKIP                  {run.skips}")
+    _emit(f"  STILL_MISSED          {run.still_missed}")
+    _emit(f"  MISS_CLOSED           {run.miss_closed}")
 
     _emit()
     if run.skips:
@@ -1067,6 +1084,18 @@ def _cmd_corpus_run(args: argparse.Namespace) -> int:
             f"server unavailable, or capability mismatch). Coverage here was PARTIAL; a SKIP "
             f"is never a pass and never a regression."
         )
+    if run.still_missed:
+        _emit(
+            f"  {run.still_missed} case(s) are STILL_MISSED — each records a violation a human "
+            f"adjudicated real that the engine still does not catch. That is the known state, "
+            f"not agreement, which is why it is not counted as a MATCH."
+        )
+    if run.miss_closed:
+        _emit(
+            f"  {run.miss_closed} case(s) are MISS_CLOSED — a recorded miss that the engine now "
+            f"CATCHES. This is a detector fix landing, so it exits 0; re-add the case to bank "
+            f"the caught verdict as its new expected."
+        )
     if run.has_regression:
         _emit(
             f"belay: {run.regressions} case(s) REGRESSED — a recorded verdict no longer "
@@ -1074,7 +1103,15 @@ def _cmd_corpus_run(args: argparse.Namespace) -> int:
             f"skip."
         )
         return 1
-    _emit("belay: no regressions" + (f" ({run.skips} skipped)" if run.skips else ""))
+    # "no regressions" is true but insufficient on its own: a SKIP means partial coverage and
+    # a STILL_MISSED means the engine is KNOWN blind on that case. Both qualify the sign-off
+    # line, so a reader skimming only the last line cannot mistake either for a full pass.
+    qualifiers = [
+        f"{run.skips} skipped" if run.skips else "",
+        f"{run.still_missed} still missed" if run.still_missed else "",
+    ]
+    stated = ", ".join(q for q in qualifiers if q)
+    _emit("belay: no regressions" + (f" ({stated})" if stated else ""))
     return 0
 
 

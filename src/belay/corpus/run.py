@@ -37,6 +37,32 @@ to **re-add** it, and the REGRESSION is exactly what tells the operator to.
 (A pre-v2 case whose target turn IS 0 evaluates normally — its one manifest genuinely IS
 turn 0's, so the baseline is present and nothing degrades.)
 
+## A case that DECLARES a recorded miss is classified in the opposite direction
+
+The corpus can only ever be built from FLAGGED turns, so a violation the detector MISSES can
+never become a case by the normal path. A case may therefore DECLARE (`case.recorded_miss`)
+that its stored `expected` is a verdict the engine produced but a human adjudicated a MISS —
+its `expected.reduced_status` is the CLEAN verdict, and the clean verdict is the defect.
+
+Comparing such a case against `expected` alone inverts both directions:
+
+- the engine still misses it -> the sets are EQUAL -> `MATCH`, i.e. the regression suite
+  certifies blindness AS AGREEMENT.
+- the detector is sharpened and now CATCHES it -> the sets DIFFER -> `REGRESSION`, exit 1,
+  i.e. **CI goes red for a fix**.
+
+So a declared case reaches `STILL_MISSED` (equal sets — the known state, exit 0, but never
+called agreement, and never counted as a MATCH) or `MISS_CLOSED` (the ONE exempted
+transition: the reduced status AND the A1 `invariant` sub-verdict BOTH moving PASS -> FAIL
+and nothing else diverging). **The escape exempts exactly one transition, not the case.** An
+A2 divergence, a move to `WARN`, a move to `UNVERIFIED` without a `_SKIP_CAUSES` cause, an A1
+flip the reduced status did not follow — every one of them is still a `REGRESSION`, because a
+blanket "a declared case never regresses" would make each banked miss a hole in the suite.
+
+`classify_case` reads the DECLARATION and the verdicts, never `human_label`: `corpus score`
+scores that field independently, and coupling regression detection to it would mean
+relabelling a case silently moved the regression suite.
+
 ## Why the comparison pins the per-sub-verdict SET, not the reduced status (D4)
 
 `classify_case` compares the WHOLE recomputed set — `reduced_status` AND every
@@ -67,13 +93,18 @@ from belay.verify.invariants import Invariant
 from belay.verify.turn import TurnVerdict, verify_turn
 from belay.verify.verdict import Status
 
-#: The three outcomes a case re-verification can reach. A SKIP is deliberately a THIRD
-#: state, not a shade of MATCH: it means "not evaluated here", and keeping it distinct is
-#: what lets the corpus fail CI on a real regression without failing it on every box that
-#: lacks the substrate.
+#: The outcomes a case re-verification can reach. A SKIP is deliberately a THIRD state, not
+#: a shade of MATCH: it means "not evaluated here", and keeping it distinct is what lets the
+#: corpus fail CI on a real regression without failing it on every box that lacks the
+#: substrate.
 MATCH = "MATCH"
 REGRESSION = "REGRESSION"
 SKIP = "SKIP"
+
+#: The two outcomes a case that DECLARES a recorded miss can reach instead (see the section
+#: above). Both exit 0; neither is ever reachable without the declaration.
+STILL_MISSED = "STILL_MISSED"
+MISS_CLOSED = "MISS_CLOSED"
 
 #: The canonical cause buckets that mean "this box could not evaluate the case" — an
 #: environment/substrate gap, never a detector change. `verify_turn` stamps a non-replayed
@@ -122,9 +153,11 @@ class Divergence:
 class CaseResult:
     """One case's re-verification outcome.
 
-    `outcome` is `MATCH` / `REGRESSION` / `SKIP`. `divergences` is populated only for a
-    REGRESSION — the diverging `(axis, kind, expected, got)` list. `skip_reason` is populated
-    only for a SKIP — the environment/substrate cause that stopped evaluation here.
+    `outcome` is `MATCH` / `REGRESSION` / `SKIP` / `STILL_MISSED` / `MISS_CLOSED`.
+    `divergences` is populated for a REGRESSION and for a MISS_CLOSED — the diverging
+    `(axis, kind, expected, got)` list, which for a MISS_CLOSED names the very transition
+    that closed the miss. `skip_reason` is populated only for a SKIP — the
+    environment/substrate cause that stopped evaluation here.
     """
 
     case_id: str
@@ -138,8 +171,10 @@ class CorpusRun:
     """The whole-corpus aggregate: every `CaseResult`, with counts and the exit signal.
 
     `has_regression` is the exit contract in one place: the run exits non-zero IFF at least
-    one case REGRESSED. A run that is all MATCH/SKIP is a clean exit — a pure SKIP is partial
-    coverage (say so), never a CI failure.
+    one case REGRESSED. A run with no REGRESSION is a clean exit — a pure SKIP is partial
+    coverage (say so), never a CI failure, and neither `STILL_MISSED` (a known-open miss) nor
+    `MISS_CLOSED` (a miss a fix just closed) may exit CI non-zero. The counts are kept
+    separate rather than folded into `matches`: a miss is not agreement.
     """
 
     results: list[CaseResult] = field(default_factory=list)
@@ -155,6 +190,14 @@ class CorpusRun:
     @property
     def skips(self) -> int:
         return sum(1 for r in self.results if r.outcome == SKIP)
+
+    @property
+    def still_missed(self) -> int:
+        return sum(1 for r in self.results if r.outcome == STILL_MISSED)
+
+    @property
+    def miss_closed(self) -> int:
+        return sum(1 for r in self.results if r.outcome == MISS_CLOSED)
 
     @property
     def has_regression(self) -> bool:
@@ -198,34 +241,83 @@ def _divergences(expected: dict, recomputed_set: dict) -> list[Divergence]:
     return divergences
 
 
-def classify_case(expected: dict, recomputed: TurnVerdict, *, case_id: str = "") -> CaseResult:
+#: The ONE transition a `recorded_miss` declaration exempts from REGRESSION: the reduced
+#: status and the A1 `invariant` sub-verdict, BOTH moving PASS -> FAIL. That is a detector
+#: the corpus banked a miss against having been sharpened until it catches the case — the
+#: change the corpus exists to drive, so it must not break the build.
+#:
+#: Written as the exact expected divergence SET, because "narrow" has to be checked in the
+#: direction that matters: not "does the set CONTAIN this transition" (which would exempt a
+#: declared case that ALSO regressed on A2) but "is the set EXACTLY this transition". Every
+#: near miss — an A2 sub-verdict that also moved, a move to WARN or UNVERIFIED, an A1 flip
+#: the reduced status did not follow, an A1 sub-verdict that appeared from nothing
+#: (`None -> FAIL`, not `PASS -> FAIL`) — falls outside it and stays a REGRESSION.
+_MISS_CLOSING_TRANSITION = frozenset(
+    {
+        ("", "reduced_status", "PASS", "FAIL"),
+        ("A1", "invariant", "PASS", "FAIL"),
+    }
+)
+
+
+def _closes_the_miss(divergences: list[Divergence]) -> bool:
+    """True IFF `divergences` is EXACTLY `_MISS_CLOSING_TRANSITION` — nothing more, nothing less.
+
+    The length check is not redundant with the set comparison: a duplicated divergence would
+    collapse in the set and must not pass as the clean two-element transition.
+    """
+    if len(divergences) != len(_MISS_CLOSING_TRANSITION):
+        return False
+    observed = {(d.axis, d.kind, d.expected_status, d.got_status) for d in divergences}
+    return observed == _MISS_CLOSING_TRANSITION
+
+
+def classify_case(
+    expected: dict,
+    recomputed: TurnVerdict,
+    *,
+    case_id: str = "",
+    recorded_miss: Optional[dict] = None,
+) -> CaseResult:
     """Compare a recomputed verdict against a case's stored `expected` — SKIP first, then diff.
 
     1. **SKIP first.** If the recompute could not EVALUATE the case on this box — the turn is
        UNVERIFIED with an environment/substrate cause in `_SKIP_CAUSES` — the case was not
-       evaluated here. Return SKIP; it is neither a pass nor a regression.
+       evaluated here. Return SKIP; it is neither a pass nor a regression. This outranks the
+       declaration: a recorded miss is identical on every box, an environment gap is not.
     2. Else compare the WHOLE recomputed set (reduced status AND every `(axis, kind, status)`)
-       against `expected`. Equal -> MATCH. Otherwise -> REGRESSION, naming each divergence.
+       against `expected`. Equal -> MATCH, or **STILL_MISSED** if the case declares a recorded
+       miss (equal sets there mean the engine is still blind, which is not agreement).
+    3. Otherwise -> REGRESSION, naming each divergence — unless the case declares a recorded
+       miss AND the divergences are EXACTLY `_MISS_CLOSING_TRANSITION`, which is
+       **MISS_CLOSED**: the detector was sharpened and now catches the banked miss.
+
+    `recorded_miss` is the DECLARATION, passed in by `run_case` from the loaded case; `None`
+    (the default) is an undeclared case, whose classification is byte-for-byte what it was
+    before the two new outcomes existed. This function never reads `human_label` — the labels
+    `corpus score` scores stay independent of what the regression suite decides.
 
     Pure: no replay, no server, no model. `case_id` stamps the result for the report; it is
-    the one thing `classify_case` cannot read from its two data arguments.
+    the one thing `classify_case` cannot read from its data arguments.
     """
     if recomputed.status is Status.UNVERIFIED:
         cause = canonical_cause(recomputed.cause)
         if cause in _SKIP_CAUSES:
             return CaseResult(case_id=case_id, outcome=SKIP, skip_reason=cause)
 
+    declared = recorded_miss is not None
+
     # MATCH is EXACT equality of the whole set — the ordered sub-verdict list too — so nothing
     # can collapse two like-`(axis, kind)` sub-verdicts into a false MATCH. The `(axis, kind)`
     # matching below is for naming the REGRESSION's divergences only, never for deciding it.
     recomputed_set = _recomputed_set(recomputed)
     if recomputed_set == expected:
-        return CaseResult(case_id=case_id, outcome=MATCH)
-    return CaseResult(
-        case_id=case_id,
-        outcome=REGRESSION,
-        divergences=_divergences(expected, recomputed_set),
-    )
+        return CaseResult(case_id=case_id, outcome=STILL_MISSED if declared else MATCH)
+
+    divergences = _divergences(expected, recomputed_set)
+    if declared and _closes_the_miss(divergences):
+        return CaseResult(case_id=case_id, outcome=MISS_CLOSED, divergences=divergences)
+    return CaseResult(case_id=case_id, outcome=REGRESSION, divergences=divergences)
 
 
 def run_case(case_dir: Path) -> CaseResult:
@@ -267,7 +359,9 @@ def run_case(case_dir: Path) -> CaseResult:
         replays=case.replays,
         timeout=case.timeout,
     )
-    return classify_case(case.expected, recomputed, case_id=case.id)
+    return classify_case(
+        case.expected, recomputed, case_id=case.id, recorded_miss=case.recorded_miss
+    )
 
 
 def run_corpus(corpus_dir: Path) -> CorpusRun:
@@ -285,8 +379,10 @@ def run_corpus(corpus_dir: Path) -> CorpusRun:
 
 __all__ = [
     "MATCH",
+    "MISS_CLOSED",
     "REGRESSION",
     "SKIP",
+    "STILL_MISSED",
     "CaseResult",
     "CorpusRun",
     "Divergence",
