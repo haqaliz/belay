@@ -1931,7 +1931,7 @@ def _parser() -> argparse.ArgumentParser:
     ).add_subparsers(dest="action", required=True)
     corpus_add = corpus.add_parser(
         "add",
-        help="compose a self-contained, labeled case from one flagged turn of a trace",
+        help="compose a self-contained, labeled case from one turn of a trace",
         description=(
             "Recompute one tools/call turn's verdict by RE-EXECUTION (the same verify_turn "
             "the verify surface runs, with the same effective A1 policy) and bundle it into "
@@ -1939,15 +1939,20 @@ def _parser() -> argparse.ArgumentParser:
             "case survives deletion of the original run), the A1 policy, and the recomputed "
             "expected verdict. A later `corpus run` re-replays the case and asserts it still "
             "reaches this verdict.\n\n"
+            "The turn need not be flagged: this command enforces NO precondition on the "
+            "recomputed verdict. The typical source is a turn `belay phase0 run` already "
+            "flagged FAIL, but pointing --turn at a turn the detector verified clean composes "
+            "a case for a MISS -- a violation you know is real but the engine did not catch. "
+            "Declare it as one afterward with `corpus label --recorded-miss-note`.\n\n"
             "The human label is a PASS-THROUGH: --label sets it, and its ABSENCE stores "
             "'pending'. The engine NEVER derives a label from the verdict it just computed — "
             "a case is labeled true/false-positive by a HUMAN, later, not by the engine that "
-            "flagged it. That separation is what keeps the corpus's precision honest.\n\n"
+            "computed the verdict. That separation is what keeps the corpus's precision honest.\n\n"
             "Manifests: point --manifest-dir at the gate's .manifests sibling, as with verify."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    corpus_add.add_argument("trace", help="the trace file (.jsonl) the flagged turn is in")
+    corpus_add.add_argument("trace", help="the trace file (.jsonl) the target turn is in")
     corpus_add.add_argument(
         "--turn",
         type=int,

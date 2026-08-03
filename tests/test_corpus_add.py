@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -793,3 +794,34 @@ def test_add_case_records_the_target_tool(tmp_path):
     """The composed case carries the target turn's tool name."""
     case_dir = _add_synthetic(tmp_path)
     assert load_case(case_dir).target_tool == "edit_file"
+
+
+# --- help text must not assert a precondition the code never enforces -----------------
+#
+# `add_case` reads `verdict` at exactly one place (to build `expected`) and the CLI
+# handler applies no FAIL filter. Composing a case for a turn the detector did NOT flag
+# is a supported path -- it is how a recorded miss (`corpus label --recorded-miss-note`)
+# enters the corpus at all. The old help text claimed the opposite ("one flagged turn",
+# "the trace file the flagged turn is in"), which sends a reader looking for a filter
+# that was never there and, worse, concludes the corpus cannot hold a miss.
+
+
+def test_corpus_add_help_does_not_assert_a_flagged_turn_precondition() -> None:
+    """`belay corpus add --help` must not claim a flagged/FAIL precondition on the turn.
+
+    Asserted on the PARSER's help strings, because the wrong claim in --help is exactly
+    what would send a reader looking for a filter that does not exist.
+    """
+    completed = subprocess.run(
+        [sys.executable, "-m", "belay.cli", "corpus", "add", "--help"],
+        capture_output=True,
+        timeout=30,
+    )
+    out = completed.stdout.decode(errors="replace").lower()
+
+    assert completed.returncode == 0, completed.stderr.decode(errors="replace")
+    assert "flagged turn" not in out
+    assert "flagged run" not in out
+    # the manual unflagged-turn path must be documented where a user reading --help finds
+    # it, not merely absent of the false claim.
+    assert "need not" in out or "not be flagged" in out or "any turn" in out

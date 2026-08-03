@@ -1,7 +1,11 @@
-"""C6 Phase 2: compose a SELF-CONTAINED, labeled corpus case from a flagged run.
+"""C6 Phase 2: compose a SELF-CONTAINED, labeled corpus case from one turn of a run.
 
 `add_case` is the seam between a caught failure and the corpus that regresses against it.
-Given the run's records, the target turn, its recomputed verdict, and where the gate
+It enforces NO precondition on the turn's verdict -- `verdict` is read at exactly one
+place, to build `expected`. The typical caller composes a case for a turn that was
+FLAGGED, but a turn the detector verified clean composes just as well, and that unflagged
+path is how a recorded miss (a violation the engine failed to catch) enters the corpus at
+all. Given the run's records, the target turn, its recomputed verdict, and where the gate
 persisted this run's snapshot manifests, it writes a case DIRECTORY that survives deletion
 of the original run:
 
@@ -62,7 +66,7 @@ corpus dir would refuse it, which is why that test exists.
 ## Deterministic, zero runtime deps
 
 The case id is derived from `source_trace_id` + the turn index — never a uuid or a clock
-read, so re-composing the same flagged turn yields the same case. `captured_at` is passed in
+read, so re-composing the same turn yields the same case. `captured_at` is passed in
 (the CLI boundary reads the clock, not this library code). stdlib only: `json`, `shutil`,
 `os`, `sys`, `pathlib`. The turn's pre-state handle is located with the engine's OWN
 `_manifest_for`, not a reinvented glob. No model is consulted.
@@ -118,7 +122,7 @@ _TASK_MANIFEST_FILENAME = "task_manifest.json"
 def _safe_case_id(source_trace_id: str, target_turn_index: int) -> str:
     """A deterministic, filesystem-safe case dir name from the trace id and turn index.
 
-    Derived, never random: the same flagged turn always yields the same case id, so a
+    Derived, never random: the same turn always yields the same case id, so a
     re-compose is idempotent rather than a fresh uuid every time. Any character that is not
     alphanumeric / `-` / `_` / `.` is replaced with `_`, so an awkward trace stem cannot
     escape the corpus dir or name an unwriteable path.
@@ -269,7 +273,11 @@ def add_case(
     source_trace_id: str,
     captured_at: str,
 ) -> Path:
-    """Compose `corpus_dir/<case-id>/` from a flagged run; return the created case dir.
+    """Compose `corpus_dir/<case-id>/` from one turn of a run; return the created case dir.
+
+    No precondition is enforced on `verdict`'s status: the target turn need not have been
+    flagged. Pointing this at a turn the detector verified clean is how a recorded miss
+    enters the corpus.
 
     `human_label` is a PASS-THROUGH input (default `pending`) — this function NEVER derives
     it from `verdict`. See the module docstring: a label the engine wrote is not human
