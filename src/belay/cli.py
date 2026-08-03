@@ -1063,10 +1063,14 @@ def _cmd_corpus_run(args: argparse.Namespace) -> int:
         elif result.outcome == SKIP:
             _emit(f"  {result.case_id:<40} {SKIP}")
             _emit(f"      {result.skip_reason}")
-        elif result.outcome == STILL_MISSED:
-            _emit(f"  {result.case_id:<40} {STILL_MISSED}")
+        elif result.outcome in (MATCH, STILL_MISSED):
+            _emit(f"  {result.case_id:<40} {result.outcome}")
         else:
-            _emit(f"  {result.case_id:<40} {MATCH}")
+            # Fail SAFE, not AGREEABLE. A catch-all `else: MATCH` was tolerable with three
+            # outcomes; with five it is a direction, and an outcome this renderer has not been
+            # taught yet would be printed as agreement — the one claim this command must never
+            # make by accident. An unknown token a reader can grep beats a wrong word.
+            _emit(f"  {result.case_id:<40} {result.outcome} (unrecognised outcome)")
 
     _emit()
     _emit("aggregate")
@@ -1966,13 +1970,22 @@ def _parser() -> argparse.ArgumentParser:
             "Re-verify every case in the corpus against the live engine and assert each still "
             "reaches its recorded verdict. The corpus IS the regression suite: a case that no "
             "longer reproduces its per-sub-verdict SET (not merely its reduced status) is a "
-            "caught detector DRIFT, and the run exits NON-ZERO.\n\n"
+            "caught detector DRIFT — a REGRESSION — and the run exits NON-ZERO.\n\n"
             "A SKIP is kept distinct from a REGRESSION and is never a pass: a case this box "
             "cannot evaluate — off the macOS Seatbelt substrate, the recorded server not "
             "runnable, a backend capability mismatch on restore — is SKIPPED, not failed, so "
-            "the corpus does not fail CI on every non-darwin box. The run exits non-zero IFF "
-            "at least one case REGRESSED; an all-MATCH/SKIP run exits 0 with its SKIP count "
-            "stated plainly."
+            "the corpus does not fail CI on every non-darwin box.\n\n"
+            "Two further outcomes belong to a case that DECLARES a recorded miss — a stored "
+            "verdict the engine produced but a human adjudicated a MISS, so the clean verdict "
+            "IS the defect. STILL_MISSED means the engine still does not catch it: the known "
+            "state, deliberately not reported as a MATCH, because MATCH on a recorded miss "
+            "would read as agreement. MISS_CLOSED means a sharpened detector now catches it — "
+            "a fix landing, which must not break the build. Neither is reachable without the "
+            "declaration, and the exemption covers exactly one transition: any OTHER change on "
+            "a declared case is still a REGRESSION.\n\n"
+            "The run exits non-zero IFF at least one case REGRESSED; every other outcome "
+            "exits 0, with the SKIP and STILL_MISSED counts stated plainly so partial "
+            "coverage or a known-open miss is never mistaken for a clean full pass."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

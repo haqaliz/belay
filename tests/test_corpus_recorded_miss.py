@@ -400,6 +400,44 @@ def _other_divergences() -> list:
             ),
             id="the-A1-sub-verdict-vanished",
         ),
+        # The next three are the shapes a `(axis, kind)`-keyed comparison silently accepts.
+        # Undeclared, every one of them is a REGRESSION by exact equality; the declaration
+        # must not buy an escape from the exact-equality rule itself.
+        pytest.param(
+            _turn(
+                Status.FAIL,
+                [
+                    _sub("A2", "effect", Status.PASS),
+                    _sub("A1", "invariant", Status.FAIL),
+                    _sub("A2", "replay", Status.PASS),
+                ],
+            ),
+            id="the-exempted-pair-but-the-sub-verdict-list-is-REORDERED",
+        ),
+        pytest.param(
+            _turn(
+                Status.FAIL,
+                [
+                    _sub("A1", "invariant", Status.FAIL),
+                    _sub("A1", "invariant", Status.FAIL),
+                    _sub("A2", "effect", Status.PASS),
+                    _sub("A2", "replay", Status.PASS),
+                ],
+            ),
+            id="the-A1-sub-verdict-is-DUPLICATED",
+        ),
+        pytest.param(
+            _turn(
+                Status.FAIL,
+                [
+                    _sub("A1", "invariant", Status.PASS),
+                    _sub("A1", "invariant", Status.FAIL),
+                    _sub("A2", "effect", Status.PASS),
+                    _sub("A2", "replay", Status.PASS),
+                ],
+            ),
+            id="TWO-CONTRADICTORY-A1-sub-verdicts-one-PASS-one-FAIL",
+        ),
     ]
 
 
@@ -418,6 +456,53 @@ def test_any_other_divergence_on_a_declared_case_is_still_a_regression(
     assert result.outcome == REGRESSION, result
     assert result.divergences, "a REGRESSION must name what diverged"
     assert CorpusRun(results=[result]).has_regression is True
+    # and the declaration changed nothing here: each of these is a REGRESSION undeclared too,
+    # so the declaration never buys an escape from the exact-equality rule itself.
+    assert classify_case(_MISSED_EXPECTED, recomputed).outcome == REGRESSION
+
+
+def test_an_a1_sub_verdict_appearing_from_nothing_is_a_regression() -> None:
+    """`None -> FAIL` is not `PASS -> FAIL`, and the difference is deliberate.
+
+    The exempted transition is a detector that reached PASS on this case reaching FAIL
+    instead. An A1 `invariant` sub-verdict materialising where the stored verdict had none is
+    a structural change to the axis set -- the engine now emits something it did not emit
+    when the case was banked -- and this module already treats an axis appearing or vanishing
+    as significant (`_divergences` matches on `(axis, kind)` precisely so it diverges against
+    `None` rather than silently aligning by position). It does not arise on the real path: a
+    recorded miss banks a verdict the A1 rule DID produce, at PASS.
+    """
+    expected = _expected("PASS", [("A2", "effect", "PASS"), ("A2", "replay", "PASS")])
+    recomputed = _turn(
+        Status.FAIL,
+        [
+            _sub("A1", "invariant", Status.FAIL),
+            _sub("A2", "effect", Status.PASS),
+            _sub("A2", "replay", Status.PASS),
+        ],
+    )
+
+    result = classify_case(expected, recomputed, recorded_miss=DECLARED)
+    assert result.outcome == REGRESSION, result
+    flips = {(d.axis, d.kind, d.expected_status, d.got_status) for d in result.divergences}
+    assert ("A1", "invariant", None, "FAIL") in flips, flips
+
+
+def test_the_exempted_transition_starts_from_pass_not_from_any_status() -> None:
+    """A stored A1 `invariant` that is not PASS is not a miss, so nothing can close.
+
+    The rule patches `expected` and demands equality, so without an explicit PASS guard on the
+    SOURCE status a stored `WARN` would be patched to `FAIL` and exempted too -- turning
+    "PASS -> FAIL" into "anything -> FAIL". A recorded miss is specifically a CLEAN verdict a
+    human adjudicated wrong; a WARN is the engine having already said something.
+    """
+    expected = _expected("PASS", [("A1", "invariant", "WARN"), ("A2", "effect", "PASS")])
+    recomputed = _turn(
+        Status.FAIL,
+        [_sub("A1", "invariant", Status.FAIL), _sub("A2", "effect", Status.PASS)],
+    )
+
+    assert classify_case(expected, recomputed, recorded_miss=DECLARED).outcome == REGRESSION
 
 
 # --- SKIP still wins first ------------------------------------------------------------
@@ -621,6 +706,56 @@ def test_the_clean_exit_line_says_a_miss_is_still_open(
     assert "belay: no regressions (1 still missed)" in out, out
 
 
+def test_corpus_run_help_states_the_exit_contract_it_actually_has() -> None:
+    """`belay corpus run --help` must not describe an exit contract the command lost.
+
+    It used to say a case that no longer reproduces its per-sub-verdict set "exits NON-ZERO"
+    and that "an all-MATCH/SKIP run exits 0". Both are now false for a case that declares a
+    recorded miss, and a user reading --help would meet two outcome names it never mentioned.
+    """
+    import subprocess
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "belay.cli", "corpus", "run", "--help"],
+        capture_output=True,
+        timeout=30,
+    )
+    out = completed.stdout.decode(errors="replace").lower()
+
+    assert completed.returncode == 0, completed.stderr.decode(errors="replace")
+    assert STILL_MISSED.lower() in out and MISS_CLOSED.lower() in out
+    assert "recorded miss" in out, "help must say WHICH cases reach the two new outcomes"
+    # the two sentences that are now false must be gone, not merely appended to.
+    assert "all-match/skip" not in out
+    assert "regression" in out and "exits 0" in out
+
+
+def test_an_unrecognised_outcome_is_never_rendered_as_a_match(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """The renderer's fallback must fail SAFE, not fail AGREEABLE.
+
+    With three outcomes a catch-all `else: MATCH` was tolerable. With five it is a direction:
+    an outcome this renderer has not been taught yet would be printed as agreement, which is
+    the one thing this whole aspect exists to stop a corpus run from claiming. Print the
+    outcome verbatim instead -- an unknown token a reader can grep beats a wrong word.
+    """
+    from belay import cli
+
+    (tmp_path / "corpus").mkdir()
+    monkeypatch.setattr(
+        "belay.corpus.run.run_corpus",
+        lambda _dir: CorpusRun(
+            results=[CaseResult(case_id="from-the-future", outcome="NOT_YET_INVENTED")]
+        ),
+    )
+
+    assert cli.main(["corpus", "run", str(tmp_path / "corpus")]) == 0
+    out = capsys.readouterr().out
+    assert "NOT_YET_INVENTED" in out, out
+    assert MATCH not in out.split("aggregate", 1)[0], "a case line must not claim MATCH"
+
+
 # --- end-to-end, through the REAL run_case (darwin only) -------------------------------
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -770,13 +905,13 @@ def _real_declared_case(tmp_path: Path) -> Path:
     return case_dir
 
 
-pytestmark_darwin = pytest.mark.skipif(
+_REQUIRES_SEATBELT = pytest.mark.skipif(
     sys.platform != "darwin",
     reason="run_case re-invokes the server inside the macOS Seatbelt sandbox",
 )
 
 
-@pytestmark_darwin
+@_REQUIRES_SEATBELT
 def test_a_declared_case_reaches_miss_closed_through_the_real_run_case(tmp_path: Path) -> None:
     """`run_case` passes the loaded case's declaration into `classify_case`, on real replay.
 
@@ -795,7 +930,7 @@ def test_a_declared_case_reaches_miss_closed_through_the_real_run_case(tmp_path:
     assert result.outcome == MISS_CLOSED, (result.outcome, result.divergences)
 
 
-@pytestmark_darwin
+@_REQUIRES_SEATBELT
 def test_the_same_real_case_undeclared_is_a_regression(tmp_path: Path) -> None:
     """The control for the test above: strip the declaration and the SAME case breaks CI.
 

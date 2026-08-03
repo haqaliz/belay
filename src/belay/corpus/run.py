@@ -58,6 +58,10 @@ and nothing else diverging). **The escape exempts exactly one transition, not th
 A2 divergence, a move to `WARN`, a move to `UNVERIFIED` without a `_SKIP_CAUSES` cause, an A1
 flip the reduced status did not follow — every one of them is still a `REGRESSION`, because a
 blanket "a declared case never regresses" would make each banked miss a hole in the suite.
+And the exemption is decided the same way every other outcome here is — by CONSTRUCTING the
+one patched expectation and demanding EXACT equality, never by inspecting a diff (see
+`_closes_the_miss`), so the declaration cannot buy an escape from the exact-equality rule of
+the next section either.
 
 `classify_case` reads the DECLARATION and the verdicts, never `human_label`: `corpus score`
 scores that field independently, and coupling regression detection to it would mean
@@ -241,35 +245,50 @@ def _divergences(expected: dict, recomputed_set: dict) -> list[Divergence]:
     return divergences
 
 
-#: The ONE transition a `recorded_miss` declaration exempts from REGRESSION: the reduced
-#: status and the A1 `invariant` sub-verdict, BOTH moving PASS -> FAIL. That is a detector
-#: the corpus banked a miss against having been sharpened until it catches the case — the
-#: change the corpus exists to drive, so it must not break the build.
-#:
-#: Written as the exact expected divergence SET, because "narrow" has to be checked in the
-#: direction that matters: not "does the set CONTAIN this transition" (which would exempt a
-#: declared case that ALSO regressed on A2) but "is the set EXACTLY this transition". Every
-#: near miss — an A2 sub-verdict that also moved, a move to WARN or UNVERIFIED, an A1 flip
-#: the reduced status did not follow, an A1 sub-verdict that appeared from nothing
-#: (`None -> FAIL`, not `PASS -> FAIL`) — falls outside it and stays a REGRESSION.
-_MISS_CLOSING_TRANSITION = frozenset(
-    {
-        ("", "reduced_status", "PASS", "FAIL"),
-        ("A1", "invariant", "PASS", "FAIL"),
-    }
-)
+#: The A1 sub-verdict the exempted transition is about. A miss closes when the invariant axis
+#: — the ONLY axis that can catch a corrupt success — starts FAILing on a case it passed.
+_A1_INVARIANT = ("A1", "invariant")
 
 
-def _closes_the_miss(divergences: list[Divergence]) -> bool:
-    """True IFF `divergences` is EXACTLY `_MISS_CLOSING_TRANSITION` — nothing more, nothing less.
+def _closes_the_miss(expected: dict, recomputed_set: dict) -> bool:
+    """True IFF the recompute is `expected` with EXACTLY the miss-closing transition applied.
 
-    The length check is not redundant with the set comparison: a duplicated divergence would
-    collapse in the set and must not pass as the clean two-element transition.
+    The ONE transition a `recorded_miss` declaration exempts from REGRESSION: the reduced
+    status and the A1 `invariant` sub-verdict, BOTH moving PASS -> FAIL. That is the detector
+    the corpus banked a miss against having been sharpened until it catches the case — the
+    change the corpus exists to drive, so it must not break the build.
+
+    **Decided by CONSTRUCTION, then EXACT EQUALITY** — never by inspecting a diff. This
+    module's whole comparison rule is exact equality of the recomputed set, ordered
+    sub-verdict list included (see `classify_case`); a rule phrased over `_divergences` would
+    silently inherit that helper's `(axis, kind)` keying and accept three shapes exact
+    equality rejects: a REORDERED sub-verdict list, a DUPLICATED A1 sub-verdict, and — worst —
+    two CONTRADICTORY A1 entries where the last one wins in the dict. Those are exactly what
+    the exact-equality rule exists to prevent, so the declaration must not buy an escape from
+    it. Instead: patch `expected` with the one transition and demand the recompute equal the
+    patch, byte for byte.
+
+    The two guards are what make it a TRANSITION rather than a destination. The stored verdict
+    must have been PASS overall AND have carried an A1 `invariant` sub-verdict at PASS, so an
+    A1 sub-verdict that materialises where the case recorded none (`None -> FAIL`, not
+    `PASS -> FAIL`) is a structural change to the axis set and stays a REGRESSION.
     """
-    if len(divergences) != len(_MISS_CLOSING_TRANSITION):
+    if expected.get("reduced_status") != "PASS":
         return False
-    observed = {(d.axis, d.kind, d.expected_status, d.got_status) for d in divergences}
-    return observed == _MISS_CLOSING_TRANSITION
+    subs = expected.get("sub_verdicts", [])
+    if not any(
+        (s["axis"], s["kind"]) == _A1_INVARIANT and s["status"] == "PASS" for s in subs
+    ):
+        return False
+
+    patched = {
+        "reduced_status": "FAIL",
+        "sub_verdicts": [
+            {**s, "status": "FAIL"} if (s["axis"], s["kind"]) == _A1_INVARIANT else s
+            for s in subs
+        ],
+    }
+    return recomputed_set == patched
 
 
 def classify_case(
@@ -289,8 +308,9 @@ def classify_case(
        against `expected`. Equal -> MATCH, or **STILL_MISSED** if the case declares a recorded
        miss (equal sets there mean the engine is still blind, which is not agreement).
     3. Otherwise -> REGRESSION, naming each divergence — unless the case declares a recorded
-       miss AND the divergences are EXACTLY `_MISS_CLOSING_TRANSITION`, which is
-       **MISS_CLOSED**: the detector was sharpened and now catches the banked miss.
+       miss AND the recompute equals `expected` with exactly the miss-closing transition
+       applied (`_closes_the_miss`, itself an exact-equality test), which is **MISS_CLOSED**:
+       the detector was sharpened and now catches the banked miss.
 
     `recorded_miss` is the DECLARATION, passed in by `run_case` from the loaded case; `None`
     (the default) is an undeclared case, whose classification is byte-for-byte what it was
@@ -307,15 +327,17 @@ def classify_case(
 
     declared = recorded_miss is not None
 
-    # MATCH is EXACT equality of the whole set — the ordered sub-verdict list too — so nothing
-    # can collapse two like-`(axis, kind)` sub-verdicts into a false MATCH. The `(axis, kind)`
-    # matching below is for naming the REGRESSION's divergences only, never for deciding it.
+    # EVERY outcome is decided by EXACT equality of the whole set — the ordered sub-verdict
+    # list too — so nothing can collapse two like-`(axis, kind)` sub-verdicts into a false
+    # MATCH, and nothing can collapse them into a false MISS_CLOSED either (`_closes_the_miss`
+    # compares against a CONSTRUCTED expectation, not against a diff). The `(axis, kind)`
+    # matching below is for NAMING the divergences only, never for deciding an outcome.
     recomputed_set = _recomputed_set(recomputed)
     if recomputed_set == expected:
         return CaseResult(case_id=case_id, outcome=STILL_MISSED if declared else MATCH)
 
     divergences = _divergences(expected, recomputed_set)
-    if declared and _closes_the_miss(divergences):
+    if declared and _closes_the_miss(expected, recomputed_set):
         return CaseResult(case_id=case_id, outcome=MISS_CLOSED, divergences=divergences)
     return CaseResult(case_id=case_id, outcome=REGRESSION, divergences=divergences)
 
