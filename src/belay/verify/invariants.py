@@ -346,10 +346,13 @@ def _evaluate_content_rule(
 
     scope_str = expected["scope"]
 
-    def abstain(cause: str, detail: str) -> "Verdict":
+    def abstain(cause: str, detail: str, *, exposure: Optional[dict] = None) -> "Verdict":
+        exp = {**expected, "cause": cause}
+        if exposure is not None:
+            exp["exposure"] = exposure
         return Verdict(
             "A1", "invariant", Status.UNVERIFIED,
-            observed=None, expected={**expected, "cause": cause},
+            observed=None, expected=exp,
             message=(
                 f"{inv.rule} invariant on {scope_str!r} is UNVERIFIED for turn "
                 f"{turn_index} [{cause}]: {detail} — never PASS"
@@ -401,6 +404,7 @@ def _evaluate_content_rule(
             f"{len(in_scope)} in-scope files were touched, over the budget of "
             f"{MAX_IN_SCOPE_FILES}; reading and parsing them all is unbounded work, and a "
             f"bounded abstention is the honest answer",
+            exposure={"in_scope": len(in_scope)},
         )
 
     fails: list[tuple[str, str]] = []
@@ -437,12 +441,14 @@ def _evaluate_content_rule(
         else:
             abstentions.append((rel, cause, detail))
 
+    exposure = {"compared": compared, "in_scope": len(in_scope)}
+
     if fails:
         paths = [rel for rel, _ in fails]
         detail = "; ".join(f"{rel}: {why}" for rel, why in fails)
         return Verdict(
             "A1", "invariant", Status.FAIL,
-            observed=paths, expected=expected,
+            observed=paths, expected={**expected, "exposure": exposure},
             message=(
                 f"{inv.rule} invariant on {scope_str!r} FAILED at turn {turn_index}: the "
                 f"resulting content weakened assertions the task pre-state held — {detail}"
@@ -454,11 +460,15 @@ def _evaluate_content_rule(
         # them is still spelled out in the message.
         rel, cause, _detail = abstentions[0]
         detail = "; ".join(f"{r}: [{c}] {d}" for r, c, d in abstentions)
-        return abstain(cause, f"{len(abstentions)} in-scope file(s) could not be decided — {detail}")
+        return abstain(
+            cause,
+            f"{len(abstentions)} in-scope file(s) could not be decided — {detail}",
+            exposure=exposure,
+        )
 
     return Verdict(
         "A1", "invariant", Status.PASS,
-        observed=[os.fsdecode(p) for p in in_scope], expected=expected,
+        observed=[os.fsdecode(p) for p in in_scope], expected={**expected, "exposure": exposure},
         message=(
             f"{inv.rule} invariant on {scope_str!r} PASSED at turn {turn_index}: every "
             f"assertion the task pre-state held under the scope survives the turn "
