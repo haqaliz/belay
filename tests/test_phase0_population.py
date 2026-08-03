@@ -52,6 +52,7 @@ def _instance(
     unverified_causes: dict | None = None,
     error: str | None = None,
     not_covered_turns: dict | None = None,
+    exposure: dict | None = None,
 ) -> InstanceRecord:
     return InstanceRecord(
         trace_id=trace_id,
@@ -63,6 +64,7 @@ def _instance(
         unverified_causes=unverified_causes or {},
         error=error,
         not_covered_turns=not_covered_turns or {},
+        exposure=exposure,
     )
 
 
@@ -372,6 +374,126 @@ def test_population_report_states_each_stages_detector() -> None:
     current_block = report.split("s3:")[1]
     assert "no-assertion-weakening" in current_block
     assert "belay 0.10.0" in current_block
+
+
+# --- (8) exposure: per-instance ANY-reduction, per-capture sum, both reported ----------
+
+
+def test_instance_is_exposed_if_any_capture_judged_a_file() -> None:
+    """An instance is EXPOSED iff ANY of its captures judged >= 1 file — the ANY-reduction.
+
+    `trace-x`'s `s2` capture recorded exposure but judged nothing in scope; its `s3`
+    capture judged one file. Mirroring `is_violating`'s worst-verdict-wins reduction
+    (`population.py:137-146`), the instance is exposed on the strength of the capture that
+    found something, not averaged down by the capture that found nothing.
+    """
+    s2 = _ledger(
+        _instance(
+            "trace-x",
+            Disposition.VERIFIED_CLEAN,
+            exposure={"files_compared": 0, "turns_judging": 0, "turns_recorded": 1},
+        )
+    )
+    s3 = _ledger(
+        _instance(
+            "trace-x",
+            Disposition.VERIFIED_CLEAN,
+            exposure={"files_compared": 1, "turns_judging": 1, "turns_recorded": 1},
+        )
+    )
+    population = Population.from_labeled([LabeledLedger("s2", s2), LabeledLedger("s3", s3)])
+
+    view = population.instances()[0]
+    assert view.is_exposed() is True
+    assert view.exposure_unrecorded() is False
+    assert population.exposed_instances() == ("trace-x",)
+
+
+def test_instance_exposure_is_unrecorded_only_when_no_capture_recorded_it() -> None:
+    """UNRECORDED iff NO capture recorded exposure at all — never merely "no files found".
+
+    `trace-old` predates exposure accounting in both stages: `exposure is None` on every
+    capture. That is a DIFFERENT claim from `trace-empty`, whose single capture DID record
+    exposure and found nothing in scope — the "no opportunity" state, not "unrecorded".
+    Collapsing the two would fabricate a measurement for a ledger that never took one.
+    """
+    old_s2 = _ledger(_instance("trace-old", Disposition.VERIFIED_CLEAN))
+    old_s3 = _ledger(_instance("trace-old", Disposition.VERIFIED_CLEAN))
+    empty = _ledger(
+        _instance(
+            "trace-empty",
+            Disposition.VERIFIED_CLEAN,
+            exposure={"files_compared": 0, "turns_judging": 0, "turns_recorded": 1},
+        )
+    )
+    population = Population.from_labeled(
+        [LabeledLedger("s2", old_s2), LabeledLedger("s3", old_s3)]
+    )
+    empty_population = Population.from_labeled([LabeledLedger("s2", empty)])
+
+    old_view = population.instances()[0]
+    assert old_view.exposure_unrecorded() is True
+    assert old_view.is_exposed() is False
+    assert population.unrecorded_exposure_instances() == ("trace-old",)
+
+    empty_view = empty_population.instances()[0]
+    assert empty_view.exposure_unrecorded() is False
+    assert empty_view.is_exposed() is False
+
+
+def test_population_report_prints_the_exposure_merge_rule() -> None:
+    """The exposure merge rule is PRINTED, beside the dedup rule — not merely documented.
+
+    The dedup rule is printed in the output rather than left to a docstring
+    (`population.py:342-351`/`report.py:342-351`), and this aspect owes exposure the same
+    discipline: a reader who cannot see the reduction on the page cannot audit it.
+    """
+    population = Population.from_labeled(
+        [LabeledLedger("s2", _ledger(_instance("trace-a", Disposition.VERIFIED_CLEAN)))]
+    )
+
+    report = render_population_report(population)
+
+    assert "per INSTANCE, reduce by ANY" in report
+    assert "per CAPTURE" in report
+    assert "SUMMED" in report or "sum" in report.lower()
+
+
+def test_captures_disagreeing_on_exposure_are_reduced_by_the_stated_rule() -> None:
+    """One instance, one capture judged a file, one recorded nothing — BOTH numbers reported.
+
+    Per-instance: `trace-y` reduces to EXPOSED (ANY-reduction). Per-capture: the totals are
+    SUMMED across both captures without dedup, matching `total_turns()`'s discipline — the
+    same instance's two captures both contribute their own `files_compared`.
+    """
+    s2 = _ledger(
+        _instance(
+            "trace-y",
+            Disposition.VERIFIED_CLEAN,
+            exposure={"files_compared": 2, "turns_judging": 1, "turns_recorded": 1},
+        )
+    )
+    s3 = _ledger(
+        _instance(
+            "trace-y",
+            Disposition.VERIFIED_CLEAN,
+            exposure={"files_compared": 0, "turns_judging": 0, "turns_recorded": 1},
+        )
+    )
+    population = Population.from_labeled([LabeledLedger("s2", s2), LabeledLedger("s3", s3)])
+
+    assert population.exposed_instances() == ("trace-y",)
+    assert population.total_files_compared() == 2
+    assert population.exposure_capture_count() == 2
+
+    report = render_population_report(population)
+    exposure_line = next(line for line in report.splitlines() if "trace-y" in line and "judged" in line)
+    assert "judged" in exposure_line
+
+    alongside_line = next(
+        line for line in report.splitlines() if "file(s)" in line and "capture" in line.lower()
+    )
+    assert "2" in alongside_line
 
 
 # --- `belay phase0 combine LABEL=PATH ...` — the CLI over the population ----------------

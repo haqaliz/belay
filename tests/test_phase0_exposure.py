@@ -4,8 +4,13 @@ Task 1 (`invariants.py`) made the `no-assertion-weakening` content rule write
 `expected["exposure"]` — `{"compared": N, "in_scope": M}`, or a partial `{"in_scope": M}`
 on the file-budget abstain, or nothing at all on the five early abstains and on every
 `read-only` path. This module carries that fact from the per-turn `Verdict` through
-`phase0`'s runner into `InstanceRecord`, its JSON, and the run-level `RunLedger`
-accessor, with ABSENCE intact throughout.
+`phase0`'s runner into `InstanceRecord` and its JSON, with ABSENCE intact throughout.
+(A run-level `RunLedger.exposure_summary()` accessor was added and then removed here —
+nothing ever consumed it, and it fit neither the single-ledger report (Task 3, which
+needed a per-instance breakdown its dict-of-sums shape couldn't express) nor the
+`combine` population report (Task 4, which needed per-CAPTURE sums and a per-INSTANCE
+ANY-reduction across ledgers, not a single ledger's own aggregate). See
+`docs/planning/a1-exposure-accounting/` and the Task 4 report for the reasoning.)
 
 The one decision every test here protects: `files_compared == 0` is a REAL, MEASURED
 finding (the rule was given nothing to judge), and MUST NOT be confused with
@@ -377,43 +382,3 @@ def test_errored_instance_reports_unrecorded_never_zero(tmp_path) -> None:
     inst = ledger.instances[0]
     assert inst.disposition is Disposition.ERRORED
     assert inst.exposure is None
-
-
-# --- RunLedger accessor, beside `not_covered_by_kind` -------------------------------------
-
-
-def test_run_ledger_exposure_summary_merges_recorded_instances_and_counts_them() -> None:
-    """`RunLedger.exposure_summary()` sums the per-instance dicts and counts how many
-    instances actually recorded one -- instances with `exposure is None` are excluded from
-    the sums AND from the count, mirroring the same absent-vs-zero discipline one level up.
-    """
-    a = _instance(
-        "trace-a",
-        Disposition.VERIFIED_CLEAN,
-        exposure={"files_compared": 3, "turns_judging": 1, "turns_recorded": 2},
-    )
-    b = _instance(
-        "trace-b",
-        Disposition.VERIFIED_FLAGGED,
-        exposure={"files_compared": 4, "turns_judging": 2, "turns_recorded": 2},
-    )
-    unrecorded = _instance("trace-c", Disposition.VERIFIED_CLEAN)
-    ledger = RunLedger(instances=[a, b, unrecorded])
-
-    summary = ledger.exposure_summary()
-
-    assert summary == {
-        "files_compared": 7,
-        "turns_judging": 3,
-        "turns_recorded": 4,
-        "instances_recorded": 2,
-    }
-
-
-def test_run_ledger_exposure_summary_is_none_when_no_instance_recorded_one() -> None:
-    """No instance ever recorded exposure -> the run-level summary is `None`, not a
-    fabricated all-zero dict.
-    """
-    ledger = RunLedger(instances=[_instance("trace-a", Disposition.VERIFIED_CLEAN)])
-
-    assert ledger.exposure_summary() is None

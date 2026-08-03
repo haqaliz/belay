@@ -174,6 +174,33 @@ class InstanceView:
         answers = {c.disposition for c in self.answering_captures()}
         return len(answers) > 1
 
+    def exposure_recorded_captures(self) -> tuple[Capture, ...]:
+        """This instance's captures that recorded an `exposure` fact at all (not `None`)."""
+        return tuple(c for c in self.captures if c.record.exposure is not None)
+
+    def exposure_unrecorded(self) -> bool:
+        """True iff NO capture of this instance ever recorded exposure.
+
+        The per-instance UNRECORDED state (§1.4): distinct from `is_exposed()` being False,
+        which can also mean every recorded capture found nothing in scope. A ledger from
+        before this aspect existed leaves every capture's `exposure` as `None`, and that
+        must read as "never measured", never as "measured and found nothing".
+        """
+        return not self.exposure_recorded_captures()
+
+    def is_exposed(self) -> bool:
+        """True iff ANY capture judged >= 1 file — the per-instance ANY-reduction (§1.4).
+
+        Mirrors `is_violating`'s worst-verdict-wins: an instance is exposed on the strength
+        of the capture that found something in scope, not averaged down by a capture that
+        found nothing. A capture that never recorded exposure contributes nothing either
+        way — it is not "0 files", it is absent from the question.
+        """
+        return any(
+            c.record.exposure.get("files_compared", 0) >= 1
+            for c in self.exposure_recorded_captures()
+        )
+
 
 @dataclass(frozen=True)
 class Population:
@@ -295,6 +322,47 @@ class Population:
     def disagreements(self) -> tuple[InstanceView, ...]:
         """Instances whose captures give different answers to the violation question."""
         return tuple(view for view in self.instances() if view.disagrees())
+
+    # --- exposure: per-instance ANY-reduction, per-capture sum (§1.4) --------------------
+
+    def exposed_instances(self) -> tuple[str, ...]:
+        """`trace_id`s of instances EXPOSED under the per-instance ANY-reduction, ordered."""
+        return tuple(view.trace_id for view in self.instances() if view.is_exposed())
+
+    def unrecorded_exposure_instances(self) -> tuple[str, ...]:
+        """`trace_id`s of instances where NO capture ever recorded exposure, ordered."""
+        return tuple(view.trace_id for view in self.instances() if view.exposure_unrecorded())
+
+    def no_opportunity_instances(self) -> tuple[str, ...]:
+        """`trace_id`s recorded but never exposed — the rule ran and found nothing in scope.
+
+        The third of the three states (§1.3), applied per instance: excludes both the
+        UNRECORDED instances (no capture ever measured) and the EXPOSED ones (some capture
+        found something), leaving instances whose every recorded capture judged zero files.
+        """
+        return tuple(
+            view.trace_id
+            for view in self.instances()
+            if not view.exposure_unrecorded() and not view.is_exposed()
+        )
+
+    def total_files_compared(self) -> int:
+        """`files_compared` SUMMED over every CAPTURE that recorded exposure — no dedup.
+
+        Matches `total_turns()`'s discipline (`:242-246`): an instance captured in two
+        stages contributes both captures' counts, because both really were verified.
+        Captures that never recorded exposure contribute nothing (not zero — absent).
+        """
+        return sum(
+            c.record.exposure.get("files_compared", 0)
+            for c in self.captures
+            if c.record.exposure is not None
+        )
+
+    def exposure_capture_count(self) -> int:
+        """How many CAPTURES (not instances) ever recorded an exposure fact — the alongside
+        denominator for `total_files_compared()`."""
+        return sum(1 for c in self.captures if c.record.exposure is not None)
 
     # --- the control partition ----------------------------------------------------------
 

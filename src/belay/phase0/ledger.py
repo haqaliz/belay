@@ -214,28 +214,6 @@ class RunLedger:
                 merged[kind] = merged.get(kind, 0) + count
         return merged
 
-    def exposure_summary(self) -> Optional[dict]:
-        """Per-instance `exposure` dicts summed across the run, or `None` if NONE recorded one.
-
-        Mirrors `not_covered_by_kind`'s merge, but must ALSO carry the same absent-vs-zero
-        discipline `InstanceRecord.exposure` protects, one level up: an instance with
-        `exposure is None` (unrecorded) is excluded from the sums AND from
-        `"instances_recorded"`, never coerced into a zero. If not a single instance ever
-        recorded exposure — the whole run predates this aspect, or declared only
-        `read-only` invariants — the run-level summary is `None`, not a fabricated
-        `{"files_compared": 0, ...}`; a caller must render "exposure unrecorded" rather
-        than "the rule judged nothing across this run".
-        """
-        recorded = [inst.exposure for inst in self.instances if inst.exposure is not None]
-        if not recorded:
-            return None
-        return {
-            "files_compared": sum(e.get("files_compared", 0) for e in recorded),
-            "turns_judging": sum(e.get("turns_judging", 0) for e in recorded),
-            "turns_recorded": sum(e.get("turns_recorded", 0) for e in recorded),
-            "instances_recorded": len(recorded),
-        }
-
     def unverified_by_cause(self) -> dict[str, int]:
         """`unverified_causes` merged across every instance, summed per bucket."""
         merged: dict[str, int] = {}
