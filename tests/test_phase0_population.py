@@ -264,8 +264,14 @@ def test_disagreeing_instances_are_named() -> None:
     assert "VERIFIED_CLEAN" in disagreement_line
     assert "VERIFIED_FLAGGED" in disagreement_line
     assert "worst-verdict-wins" in disagreement_line
-    # The instance the stages AGREED on is not listed as a disagreement.
-    assert "trace-agreed" not in report
+    # The instance the stages AGREED on is not listed as a DISAGREEMENT. Narrowed from a
+    # whole-report substring check (fix round 1) to the disagreement block specifically: the
+    # whole-report check was a proxy for this section, and it broke the moment a legitimate
+    # OTHER section (exposure) started naming every instance too, including agreed ones for
+    # reasons that have nothing to do with disagreement. Scoping to the block keeps this
+    # test exactly as strict about the property it actually exists to pin.
+    disagreement_block = report.split("disagreements", 1)[1].split("\n\n", 1)[0]
+    assert "trace-agreed" not in disagreement_block
 
 
 def test_a_population_without_disagreements_says_so() -> None:
@@ -494,6 +500,88 @@ def test_captures_disagreeing_on_exposure_are_reduced_by_the_stated_rule() -> No
         line for line in report.splitlines() if "file(s)" in line and "capture" in line.lower()
     )
     assert "2" in alongside_line
+
+
+def test_unrecorded_instances_are_named_individually_not_only_counted() -> None:
+    """Fix round 1: UNRECORDED instances are named INDIVIDUALLY, sorted — like Task 3's
+    single-ledger report, and unlike this population report's first cut, which reported
+    them as a count only.
+
+    Every ledger in `runs/` predates this aspect, so a population built from banked data
+    puts every instance in the unrecorded bucket today — a reader of the published
+    headline must be able to check exactly WHICH instances carried no information, not just
+    how many, or the headline's biggest caveat becomes unauditable the moment it matters.
+    """
+    s2 = _ledger(
+        _instance("trace-b-unrecorded", Disposition.VERIFIED_CLEAN),
+        _instance("trace-a-unrecorded", Disposition.VERIFIED_CLEAN),
+    )
+    population = Population.from_labeled([LabeledLedger("s2", s2)])
+
+    report = render_population_report(population)
+
+    exposure_section = report.split("exposure (", 1)[1].split("\n\n", 1)[0]
+    a_line = next(line for line in exposure_section.splitlines() if "trace-a-unrecorded" in line)
+    b_line = next(line for line in exposure_section.splitlines() if "trace-b-unrecorded" in line)
+    assert "exposure unrecorded" in a_line
+    assert "exposure unrecorded" in b_line
+    # Never conflated with a measured zero.
+    assert "0 file(s)" not in a_line
+    assert "0 file(s)" not in b_line
+    # Sorted by trace_id, matching every other named section on this page.
+    assert exposure_section.index("trace-a-unrecorded") < exposure_section.index(
+        "trace-b-unrecorded"
+    )
+
+
+def test_control_exposure_is_surfaced_with_the_same_three_states() -> None:
+    """Fix round 1: a control's exposure state is shown in the controls block too.
+
+    A control that came back VERIFIED_CLEAN could mean the rule looked and found nothing
+    wrong, or that the rule had nothing to look at — the identical false-zero distinction
+    this whole aspect exists to make visible, and it lands squarely on the page's
+    control-integrity story. Reuses the SAME wording constants as the exposure section —
+    never a fourth phrasing.
+    """
+    population = Population.from_labeled(
+        [
+            LabeledLedger(
+                "s3",
+                _ledger(
+                    _instance(
+                        "trace-control__judged",
+                        Disposition.VERIFIED_CLEAN,
+                        exposure={"files_compared": 1, "turns_judging": 1, "turns_recorded": 1},
+                    ),
+                    _instance(
+                        "trace-control__no-opportunity",
+                        Disposition.VERIFIED_CLEAN,
+                        exposure={"files_compared": 0, "turns_judging": 0, "turns_recorded": 1},
+                    ),
+                    _instance("trace-control__unrecorded", Disposition.VERIFIED_CLEAN),
+                ),
+            )
+        ]
+    )
+
+    report = render_population_report(population)
+    controls_block = report.split("controls:", 1)[1]
+    lines = controls_block.splitlines()
+
+    def _lines_for(trace_id: str) -> str:
+        """This control's own line plus its immediately-following exposure line(s)."""
+        start = next(i for i, line in enumerate(lines) if trace_id in line)
+        end = next(
+            (i for i in range(start + 1, len(lines)) if lines[i].strip().startswith("trace-")),
+            len(lines),
+        )
+        return "\n".join(lines[start:end])
+
+    assert "judged 1 file(s) across 1 turn(s)" in _lines_for("trace-control__judged")
+    assert "the rule was given nothing to judge" in _lines_for("trace-control__no-opportunity")
+    unrecorded_span = _lines_for("trace-control__unrecorded")
+    assert "exposure unrecorded" in unrecorded_span
+    assert "0 file(s)" not in unrecorded_span
 
 
 # --- `belay phase0 combine LABEL=PATH ...` — the CLI over the population ----------------
