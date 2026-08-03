@@ -1156,6 +1156,57 @@ def test_recorded_miss_note_is_preserved_across_a_relabel(tmp_path: Path) -> Non
     assert reloaded.recorded_miss == {"note": note}
 
 
+def test_declaring_a_miss_on_a_v2_case_bumps_the_schema_version(tmp_path: Path) -> None:
+    """A declaration written onto a pre-v3 case carries the version bump with it.
+
+    THE realistic path: every human-labeled case in existence today is `schema_version: 2`,
+    so the first real declaration will land on one. `set_label` round-trips through
+    `dataclasses.replace`, which preserves the version loaded from disk -- leaving
+    `{"schema_version": 2, "recorded_miss": {...}}`, a case that DECLARES a miss while
+    claiming a format with no such field. Pre-v3 code reading that ignores the declaration
+    and returns `MATCH`: the regression suite certifying a blind spot as agreement, which
+    is the exact silent misclassification the bump exists to prevent (`case.py:74-81`).
+    """
+    corpus = tmp_path / "corpus"
+    case = dataclasses.replace(_pass_case(), schema_version=2)
+    write_case(corpus / case.id, case)
+    on_disk = corpus / case.id / "case.json"
+    assert json.loads(on_disk.read_text(encoding="utf-8"))["schema_version"] == 2
+
+    note = "banked: unflagged weakening, declared by hand"
+    set_label(
+        corpus,
+        case.id,
+        "true-positive",
+        root_cause={"key": "scope-defect", "note": ""},
+        recorded_miss={"note": note},
+    )
+
+    data = json.loads(on_disk.read_text(encoding="utf-8"))
+    assert data["recorded_miss"] == {"note": note}
+    assert data["schema_version"] == CASE_SCHEMA_VERSION
+    assert load_case(corpus / case.id).schema_version == CASE_SCHEMA_VERSION
+
+
+def test_an_ordinary_relabel_leaves_the_schema_version_alone(tmp_path: Path) -> None:
+    """No declaration, no bump -- a relabel must not rewrite version metadata.
+
+    The other half of the rule above, and the reason it is conditioned on the declaration
+    rather than applied to every write: bumping here would restamp a v2 case as v3 on an
+    act that has nothing to do with the v3 field, asserting a format the case does not
+    carry.
+    """
+    corpus = tmp_path / "corpus"
+    case = dataclasses.replace(_pass_case(), schema_version=2)
+    write_case(corpus / case.id, case)
+
+    set_label(corpus, case.id, "false-positive")
+
+    data = json.loads((corpus / case.id / "case.json").read_text(encoding="utf-8"))
+    assert data["schema_version"] == 2
+    assert "recorded_miss" not in data
+
+
 def test_a_declaration_on_an_already_fail_case_is_rejected_by_set_label(tmp_path: Path) -> None:
     """`set_label` fails closed BEFORE writing when the stored verdict is already FAIL.
 

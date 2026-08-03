@@ -26,7 +26,13 @@ from __future__ import annotations
 import dataclasses
 from pathlib import Path
 
-from belay.corpus.case import _validate_recorded_miss, _validate_root_cause, load_case, write_case
+from belay.corpus.case import (
+    CASE_SCHEMA_VERSION,
+    _validate_recorded_miss,
+    _validate_root_cause,
+    load_case,
+    write_case,
+)
 
 #: The three REAL adjudications a human may assign. `pending` — the un-adjudicated default the
 #: engine writes — is deliberately absent: `label` means "adjudicate", so resetting to pending
@@ -72,6 +78,11 @@ def set_label(
     `None` on a re-label — preserves whatever was already on the case. There is no path
     from `case.expected`, a verdict, or `label` to the VALUE written here; `case.expected`
     is consulted only to VALIDATE the human's own claim, never to construct one.
+
+    Introducing a declaration onto a case that had none also BUMPS `schema_version` to
+    `CASE_SCHEMA_VERSION`, because a v3 field on a case still claiming v2 is read by pre-v3
+    code as an ordinary case. A relabel that writes no declaration leaves the version
+    exactly as loaded.
     """
     if label not in ADJUDICATIONS:
         known = ", ".join(sorted(ADJUDICATIONS))
@@ -104,8 +115,28 @@ def set_label(
             effective_miss, case_dir / "case.json", case.expected["reduced_status"]
         )
 
+    # A NEWLY introduced declaration carries the version bump with it. `replace` preserves
+    # the version loaded from disk, and every human-labeled case in existence today is v2 —
+    # so without this the realistic first declaration writes `{"schema_version": 2,
+    # "recorded_miss": {...}}`, which pre-v3 code reads as an ordinary case and classifies
+    # `MATCH`: the regression suite certifying a blind spot as agreement, exactly the silent
+    # misclassification the bump exists to make visible (`case.py:74-81`).
+    #
+    # Conditioned on the declaration being NEW, never applied to every write: an ordinary
+    # relabel writes no v3 field, so restamping its version would assert a format the case
+    # does not carry — the same "a default is never a declaration" rule the loader keeps.
+    # `max` rather than assignment, so this only ever moves the version FORWARD.
+    declaring = recorded_miss is not None and case.recorded_miss is None
+    schema_version = (
+        max(case.schema_version, CASE_SCHEMA_VERSION) if declaring else case.schema_version
+    )
+
     relabeled = dataclasses.replace(
-        case, human_label=label, root_cause=effective_cause, recorded_miss=effective_miss
+        case,
+        human_label=label,
+        root_cause=effective_cause,
+        recorded_miss=effective_miss,
+        schema_version=schema_version,
     )
     write_case(case_dir, relabeled)
     return case_dir
