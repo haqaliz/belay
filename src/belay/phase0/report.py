@@ -182,6 +182,64 @@ def _coverage_section(ledger: RunLedger) -> list[str]:
     return lines
 
 
+#: The `no opportunity` and `unrecorded` sentences, verbatim — decided in
+#: `docs/planning/a1-exposure-accounting/` and quoted here rather than composed inline, so
+#: every call site (and every test) reads the identical wording. `judged` has no constant
+#: because its two numbers (files, turns) vary per instance; the other two do not.
+_NO_OPPORTUNITY_SENTENCE = (
+    "the rule was given nothing to judge — this instance's silence carries no "
+    "information about the rule"
+)
+_UNRECORDED_EXPOSURE_SENTENCE = (
+    "exposure unrecorded — this ledger predates exposure accounting; this is NOT "
+    "a claim that the rule judged nothing"
+)
+
+
+def _exposure_line(inst) -> str:
+    """One instance's exposure sentence — exactly one of the three states, never blank.
+
+    `exposure is None` -> unrecorded. `files_compared == 0` -> no opportunity (the rule
+    ran and had nothing in scope). Otherwise -> judged, with its own file/turn counts:
+    this is the one state whose sentence is NOT a fixed constant, because "judged N
+    file(s) across K turn(s)" is a fact specific to this instance, not a shared phrase.
+    """
+    if inst.exposure is None:
+        return f"  {inst.trace_id}: {_UNRECORDED_EXPOSURE_SENTENCE}"
+    files_compared = inst.exposure.get("files_compared", 0)
+    if files_compared == 0:
+        return f"  {inst.trace_id}: {_NO_OPPORTUNITY_SENTENCE}"
+    turns_judging = inst.exposure.get("turns_judging", 0)
+    return f"  {inst.trace_id}: judged {files_compared} file(s) across {turns_judging} turn(s)"
+
+
+def _exposure_section(ledger: RunLedger) -> list[str]:
+    """Which of three things happened to EVERY instance's A1 content-rule judgment.
+
+    judged / no-opportunity / unrecorded — see `_exposure_line`. Placed OUTSIDE the
+    `instrument_suspect` branch in `render_report`, exactly as `_coverage_section` is:
+    zero exposure is a limit statement about what the rule was given to judge, not a
+    rate, and the headline being suppressed must not suppress it too.
+
+    Every instance is named on its own line, sorted by `trace_id` for determinism — a
+    "no opportunity" instance's clean disposition carries NO information about the rule,
+    and a reader must be able to check exactly WHICH instances that applies to, not just
+    how many. There is deliberately no bare count-only summary: a silent instance here
+    would read as though it had nothing to say, when in fact it has one of three things
+    to say and this section exists so it always says it.
+    """
+    lines = [
+        "exposure (A1 content-rule judgment coverage, per instance — a zero-exposure "
+        "instance's clean verdict carries NO information about the rule):"
+    ]
+    if not ledger.instances:
+        lines.append("  (no instances in this ledger)")
+        return lines
+    for inst in sorted(ledger.instances, key=lambda inst: inst.trace_id):
+        lines.append(_exposure_line(inst))
+    return lines
+
+
 def render_report(ledger: RunLedger, metrics: Metrics) -> str:
     """Render the human-readable Phase-0 report, in this fixed order:
 
@@ -200,6 +258,11 @@ def render_report(ledger: RunLedger, metrics: Metrics) -> str:
        the headline. A rate can be suppressed; what Belay does not observe never can, or a
        reader sees a status with no statement of its limits. It is read back from the
        ledger, never computed here, so `belay phase0 report` (a pure re-render) shows it.
+    2c. THE EXPOSURE SECTION, one line per instance naming which of three things happened
+       to the A1 content rule's judgment — judged / no-opportunity / unrecorded — never a
+       bare silence. Also placed OUTSIDE the `instrument_suspect` branch, for the identical
+       reason as 2b: zero exposure is a limit on what the rule was given to judge, not a
+       rate, so an instrument-suspect headline must not hide it.
     3. Per-turn FAIL rate (`fail_turns()/total_turns()`), same n/a discipline.
     4. UNVERIFIED rate by named cause (`unverified_by_cause()`), one line per bucket,
        plus the overall UNVERIFIED turn share.
@@ -227,6 +290,9 @@ def render_report(ledger: RunLedger, metrics: Metrics) -> str:
     lines.append("")
 
     lines.extend(_coverage_section(ledger))
+    lines.append("")
+
+    lines.extend(_exposure_section(ledger))
     lines.append("")
 
     fail_rate = _ratio(ledger.fail_turns(), ledger.total_turns())
