@@ -3,7 +3,9 @@
 `corpus run` re-verifies every stored case against the live engine and asserts it still
 reaches its recorded verdict. The corpus IS the regression suite: a case that no longer
 reaches its `expected` verdict is a caught DRIFT in a detector, and the run exits non-zero
-so the build breaks.
+so the build breaks — **unless the case DECLARES that its stored verdict records a MISS**,
+where the direction is inverted and reaching `expected` is the thing that is not agreement.
+Read the next section before quoting a green run.
 
 ## What a GREEN run means, and what it does NOT
 
@@ -31,7 +33,9 @@ against human labels, is where detection is measured.
 
 - A **REGRESSION** is a detector change that flipped a verdict — the engine now computes a
   different per-sub-verdict set than the case recorded. This is the signal the corpus exists
-  to emit, and it must fail CI.
+  to emit, and it must fail CI. (The one exception is a case that DECLARES a recorded miss
+  and whose flip is exactly the miss closing; see below. Every other flip, declared or not,
+  is a REGRESSION.)
 - A **SKIP** is "THIS box could not evaluate the case" — off the macOS Seatbelt substrate,
   the recorded server was not runnable / did not answer, a backend capability mismatch on
   restore. The case was not evaluated here, so it is neither a pass nor a regression, and a
@@ -40,7 +44,9 @@ against human labels, is where detection is measured.
 Conflating the two is the quiet failure: a naive "any non-match is a regression" would turn
 every non-darwin run RED, and a "SKIP is basically a pass" would let a real regression hide
 behind an environment excuse. So SKIP is decided FIRST and only for a closed set of
-environment/substrate causes; everything else that differs from `expected` is a REGRESSION.
+environment/substrate causes; everything else that differs from `expected` is a REGRESSION —
+again unless the case declares a recorded miss AND the difference is exactly the one exempted
+transition, which is `MISS_CLOSED` and exits 0.
 
 ## A case older than the `task_prestate` format is a REGRESSION, and that is correct
 
@@ -64,9 +70,9 @@ turn 0's, so the baseline is present and nothing degrades.)
 `belay phase0 run` ingests FLAGGED turns and nothing else, so a violation the detector MISSES
 never becomes a case by the bulk path. (`belay corpus add` enforces no such precondition —
 pointing it at a turn the detector verified clean is how one gets in at all.) A case may
-therefore DECLARE (`case.recorded_miss`)
-that its stored `expected` is a verdict the engine produced but a human adjudicated a MISS —
-its `expected.reduced_status` is the CLEAN verdict, and the clean verdict is the defect.
+therefore DECLARE (`case.recorded_miss`) that its stored `expected` is a verdict the engine
+produced but a human adjudicated a MISS — its `expected.reduced_status` is the CLEAN verdict,
+and the clean verdict is the defect.
 
 Comparing such a case against `expected` alone inverts both directions:
 

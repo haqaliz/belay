@@ -17,13 +17,19 @@ All notable changes to Belay are documented here. The format follows
   still *mis-fired identically*, and later that the A1 rule still reached `PASS` on seven turns a
   human adjudicated false positives — so it is now said outright where a reader will hit it:
   `src/belay/corpus/run.py`'s module docstring and README's *Coverage & limits*, and in the
-  negative on `corpus run`'s `--help` and its sign-off line, which state the `STILL_MISSED` count
-  so a known-open miss is never mistaken for a clean full pass.
-- **The corpus is no longer structurally confined to over-firing evidence.** `belay phase0 run`
-  ingests flagged turns and nothing else, so a violation the detector *missed* could never become
-  a case and an `FN` of `0` was an artifact of construction, not a measurement. A miss can now
-  enter the corpus, be declared as one, and contribute a false negative to `corpus score`'s
-  recall. **This is a capability, not a result** — whether any miss has actually been banked, and
+  negative on `corpus run`'s sign-off line, which states the `STILL_MISSED` count, and on its
+  `--help`, which says such counts are stated plainly so a known-open miss is never mistaken for
+  a clean full pass.
+- **A banked miss can now be recognised as one, which is what the corpus was missing.** Careful
+  about what changed: `belay phase0 run` ingests flagged turns and nothing else, so a violation
+  the detector *missed* never becomes a case by the bulk path — but `belay corpus add` has never
+  enforced that precondition, so a miss was always *reachable*, and it already counted as a false
+  negative in `corpus score` (which keys on the human label and a non-`FAIL` stored verdict, and
+  does not consult the new declaration). What was missing is that nothing could **say so**: an
+  undeclared miss re-verified as a `MATCH`, i.e. the regression suite certifying a known blind
+  spot as agreement, and an `FN` of `0` read as a measurement when the corpus had simply never
+  been pointed at one. The declaration, `STILL_MISSED`, and the `FN` provenance line are what is
+  new. **This is a capability, not a result** — whether any miss has actually been banked, and
   what the resulting recall is, is a separate empirical question that nothing in this release
   answers.
 
