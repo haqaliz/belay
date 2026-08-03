@@ -568,14 +568,146 @@ def _emit_verdict(verdict) -> None:
     The sub-verdicts are printed per AXIS (A1 / A2 / A3), not hard-coded to A2, so when
     A1 (C5) and A3 (C8) begin contributing sub-verdicts they render in the same shape
     without a rewrite here. Today only A2 speaks, and the loop shows exactly that.
+
+    Every A1/`invariant` sub-verdict also gets its own exposure line — what the content
+    rule actually judged (or why it has nothing to say), so a PASS/FAIL on this line is
+    never read as "the rule looked and found nothing wrong" when it may have looked at
+    zero files. See `_exposure_prose`.
     """
     tool = verdict.tool_name or "?"
     _emit(f"  turn {verdict.turn_index:<3} {tool:<18}{verdict.status.value}")
     for axis in _axes_in_order(verdict.sub_verdicts):
         for sub in (s for s in verdict.sub_verdicts if s.axis == axis):
             _emit(f"      {sub.axis} {sub.kind:<10}{sub.status.value:<12}{sub.message}")
+            if sub.axis == "A1" and sub.kind == "invariant":
+                _emit(f"          {_exposure_prose(sub.expected)}")
     if verdict.cause is not None:
         _emit(f"      cause: {verdict.cause}")
+
+
+#: The `no opportunity` and `unrecorded` sentences for the A1 content-rule exposure fact —
+#: hand-aligned with `belay.phase0.report`'s three-state vocabulary (judged / no-opportunity
+#: / unrecorded), NOT imported from it. Two reasons: those sentences there are module-private
+#: (`_NO_OPPORTUNITY_SENTENCE`/`_UNRECORDED_EXPOSURE_SENTENCE`, leading underscore — not this
+#: module's to reach into), and they are written for a RE-RENDERED LEDGER ("this ledger
+#: predates exposure accounting"), a framing that does not fit a live `belay verify` run —
+#: there is no old ledger here, only a fresh sub-verdict that either does or does not carry
+#: an exposure fact. Same three STATE NAMES on purpose, so a reader moving between `belay
+#: verify` and `belay phase0 report` is not learning a second vocabulary; the prose differs
+#: because the two surfaces have different honest things to say about WHY a fact is absent.
+_A1_NO_OPPORTUNITY_SENTENCE = (
+    "no opportunity — the rule was given nothing to judge; this carries no information "
+    "about the rule"
+)
+_A1_UNRECORDED_SENTENCE = (
+    "unrecorded — this check carries no exposure fact (a read-only rule, or judgment "
+    "never reached content comparison); this is NOT a claim that the rule judged nothing"
+)
+
+
+def _exposure_prose(expected) -> str:
+    """One A1 content-rule sub-verdict's exposure fact — never a fabricated zero.
+
+    Four renderings, not three: the file-budget abstain (Task 1's path 6) carries a REAL
+    `in_scope` count but no `compared` key at all. It is neither "judged" (nothing was
+    actually compared), nor "no opportunity" (something WAS there — the rule chose a
+    bounded abstention over reading it, which is a different fact), nor bare "unrecorded"
+    (a fact IS present: the in-scope count). Naming it separately is what keeps the
+    aggregate accumulator's `.get("compared", 0)` fallback — which exists only to make
+    summation total, never to describe one turn on its own — from reading back here as an
+    invented zero.
+    """
+    if not isinstance(expected, dict) or "exposure" not in expected:
+        return f"exposure: {_A1_UNRECORDED_SENTENCE}"
+    exposure = expected["exposure"]
+    if "compared" not in exposure:
+        in_scope = exposure.get("in_scope", 0)
+        return (
+            f"exposure: {in_scope} file(s) in scope, but comparison never began (a bounded "
+            f"abstention, not a claim of zero exposure)"
+        )
+    compared = exposure["compared"]
+    if compared == 0:
+        return f"exposure: {_A1_NO_OPPORTUNITY_SENTENCE}"
+    in_scope = exposure.get("in_scope", 0)
+    return f"exposure: judged {compared} file(s) ({in_scope} in scope)"
+
+
+def _exposure_summary(verdicts) -> Optional[dict]:
+    """Accumulate A1 content-rule exposure across every turn just verified.
+
+    Mirrors `belay.phase0.runner`'s per-turn accumulator exactly — same three fields, same
+    `.get("compared", 0)` fallback for a partial (budget-abstain) dict — so a number
+    computed here and a number `belay phase0 run` computes over the same trace never
+    silently diverge.
+
+    Per turn: gather every A1/`invariant` sub-verdict whose `expected` is a dict carrying
+    the `"exposure"` key. An empty gather leaves the turn OUT of every count — it
+    contributes nothing, not a zero. A non-empty gather counts the turn once toward
+    `turns_recorded` (never once per sub-verdict — a turn judged under both default
+    invariants, `tests` and `testing`, is one turn), sums `.get("compared", 0)` across its
+    members into `files_compared`, and counts the turn once toward `turns_judging` iff that
+    sum is `>= 1`.
+
+    Returns `None` when no turn ever recorded an exposure fact — never an all-zero dict,
+    which would read as "the rule ran everywhere and found nothing" instead of "the rule
+    never ran at all".
+    """
+    files_compared = 0
+    turns_judging = 0
+    turns_recorded = 0
+    for verdict in verdicts:
+        subs = [
+            s for s in verdict.sub_verdicts
+            if s.axis == "A1" and s.kind == "invariant"
+            and isinstance(s.expected, dict) and "exposure" in s.expected
+        ]
+        if not subs:
+            continue
+        turns_recorded += 1
+        turn_compared = sum(s.expected["exposure"].get("compared", 0) for s in subs)
+        files_compared += turn_compared
+        if turn_compared >= 1:
+            turns_judging += 1
+    if turns_recorded == 0:
+        return None
+    return {
+        "files_compared": files_compared,
+        "turns_judging": turns_judging,
+        "turns_recorded": turns_recorded,
+    }
+
+
+def _emit_exposure(verdicts) -> None:
+    """This run's A1 content-rule exposure — judged / no-opportunity / unrecorded, never a
+    silent gap.
+
+    Same discipline as `_emit_coverage`: unconditional, so a reader scanning statuses alone
+    still learns whether A1 judged anything on this run. `judged` is the one state whose
+    sentence is not a fixed constant (its numbers are run-specific), mirroring
+    `belay.phase0.report._exposure_line`.
+    """
+    total = len(verdicts)
+    summary = _exposure_summary(verdicts)
+    _emit()
+    _emit(
+        "  exposure (A1 content-rule judgment coverage — a zero-exposure PASS carries "
+        "NO information about the rule)"
+    )
+    if summary is None:
+        _emit(f"    {_A1_UNRECORDED_SENTENCE}")
+        return
+    if summary["files_compared"] == 0:
+        _emit(
+            f"    {_A1_NO_OPPORTUNITY_SENTENCE} "
+            f"({summary['turns_recorded']}/{total} turn(s) recorded an exposure fact)"
+        )
+        return
+    _emit(
+        f"    judged {summary['files_compared']} file(s) across "
+        f"{summary['turns_judging']}/{total} turn(s) "
+        f"({summary['turns_recorded']}/{total} turn(s) recorded an exposure fact)"
+    )
 
 
 def _axes_in_order(sub_verdicts) -> list[str]:
@@ -648,6 +780,11 @@ def _emit_aggregate(verdicts, Status) -> None:
     to serve: no surface renders a turn's status without also rendering what was outside
     coverage, or a PASS on a tool that declared `openWorldHint: false` reads as "the
     network was checked".
+
+    The exposure block follows the coverage block, also unconditionally — see
+    `_emit_exposure`. Same rule, a different dimension: a PASS with a `no opportunity` or
+    `unrecorded` A1 exposure carries no information about whether the content rule would
+    have caught a real weakening.
     """
     counts = {status: 0 for status in Status}
     for verdict in verdicts:
@@ -667,6 +804,7 @@ def _emit_aggregate(verdicts, Status) -> None:
         )
 
     _emit_coverage(verdicts, Status)
+    _emit_exposure(verdicts)
 
     fails = [v for v in verdicts if v.status is Status.FAIL]
     if fails:
