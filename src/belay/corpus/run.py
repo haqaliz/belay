@@ -3,8 +3,10 @@
 `corpus run` re-verifies every stored case against the live engine and asserts it still
 reaches its recorded verdict. The corpus IS the regression suite: a case that no longer
 reaches its `expected` verdict is a caught DRIFT in a detector, and the run exits non-zero
-so the build breaks — **unless the case DECLARES that its stored verdict records a MISS**,
-where the direction is inverted and reaching `expected` is the thing that is not agreement.
+so the build breaks — **unless the case DECLARES that its stored verdict records a MISS AND
+the divergence is exactly the one exempted transition**, where the direction is inverted and
+reaching `expected` is the thing that is not agreement. The declaration exempts that ONE
+transition, never the case: every other divergence on a declared case still breaks the build.
 Read the next section before quoting a green run.
 
 ## What a GREEN run means, and what it does NOT
@@ -14,20 +16,27 @@ already — it once certified that Belay still MIS-FIRES identically, then that 
 still reaches PASS on turns a human adjudicated false positives — and both times the record
 had to be corrected afterwards. So it is stated here rather than left to be inferred:
 
-    a green `corpus run` means "no case regressed, AND every recorded miss is still
-    recorded as missed".
+    a green `corpus run` means "no case REGRESSED". That is the whole claim.
 
-It does **NOT** mean *"the engine catches everything in the corpus"*. A green run coexists
-with known, DECLARED blindness: a `STILL_MISSED` case is a violation a human adjudicated
-real that the engine does not detect, it is green, and that is deliberate — a known-open
-miss is not a DRIFT, and failing the build on it would leave CI permanently red over a
-state the corpus exists to record. That is also exactly why `STILL_MISSED` is its own
-outcome rather than a `MATCH`: `MATCH` would certify blindness AS AGREEMENT, and a reader
-would take the green for coverage it does not have.
+It is literally `CorpusRun.has_regression`, and nothing else. In particular it does **NOT**
+mean *"the engine catches everything in the corpus"*, and it does **NOT** mean *"every
+recorded miss is still recorded as missed"* — a green run coexists with BOTH of the two
+declared-miss outcomes, in opposite directions:
 
-A green run is therefore a statement about **drift**, not about **coverage**. The
-`STILL_MISSED` count is printed on the sign-off line for that reason; `belay corpus score`,
-against human labels, is where detection is measured.
+- `STILL_MISSED` — known, DECLARED blindness: a violation a human adjudicated real that the
+  engine does not detect. It is green, and that is deliberate — a known-open miss is not a
+  DRIFT, and failing the build on it would leave CI permanently red over a state the corpus
+  exists to record. That is also exactly why `STILL_MISSED` is its own outcome rather than a
+  `MATCH`: `MATCH` would certify blindness AS AGREEMENT, and a reader would take the green
+  for coverage it does not have.
+- `MISS_CLOSED` — a recorded miss the sharpened detector now CATCHES. Also green, because CI
+  must not go red for a fix. In such a run a recorded miss is precisely NOT still missed,
+  which is why the green cannot carry that clause either.
+
+A green run is therefore a statement about **drift**, not about **coverage** and not about
+what is still missed. Whatever else a reader wants from a run has to be read off the outcome
+COUNTS, which is why they are printed and why the `STILL_MISSED` count also qualifies the
+sign-off line; `belay corpus score`, against human labels, is where detection is measured.
 
 ## The one property that carries this module: a SKIP is not a REGRESSION (and never a pass)
 
@@ -312,12 +321,14 @@ def _closes_the_miss(expected: dict, recomputed_set: dict) -> bool:
     legitimate close is "the invariant axis moved PASS -> FAIL and nothing else did", so two
     invariants moving together is a close, and one of two moving is not.
 
-    NOTE, a known and deliberate asymmetry: `patched` is built from the two top-level keys
-    `_recomputed_set` produces, so a stored `expected` carrying an UNKNOWN extra top-level key
-    could reach MISS_CLOSED while never being able to reach STILL_MISSED (which compares
-    `expected` whole). No writer in this repo produces such a case, the pre-existing rule
-    behaved identically, and closing it would mean this function asserting a schema that
-    `case.py` owns — so it is documented rather than fixed.
+    `patched` is built FROM `expected` (`{**expected, ...}`), not from the two top-level keys
+    `_recomputed_set` produces, and that one token is what keeps the two directions symmetric.
+    STILL_MISSED compares `expected` WHOLE, so a stored `expected` carrying an UNKNOWN extra
+    top-level key can never reach it; building the patch from the two known keys would have
+    let that same case reach MISS_CLOSED — the exempting outcome reachable, the non-exempting
+    one structurally not. Carrying the unknown key into `patched` makes equality fail and the
+    case a REGRESSION, which is strictly NARROWER than the alternative and asserts no schema
+    that `case.py` owns.
     """
     if expected.get("reduced_status") != "PASS":
         return False
@@ -327,6 +338,7 @@ def _closes_the_miss(expected: dict, recomputed_set: dict) -> bool:
         return False
 
     patched = {
+        **expected,
         "reduced_status": "FAIL",
         "sub_verdicts": [
             {**s, "status": "FAIL"} if (s["axis"], s["kind"]) == _A1_INVARIANT else s

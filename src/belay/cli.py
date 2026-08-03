@@ -1927,7 +1927,11 @@ def _parser() -> argparse.ArgumentParser:
     verify.set_defaults(func=_cmd_verify)
 
     corpus = subcommands.add_parser(
-        "corpus", help="the failure corpus: labeled, replayable cases from flagged runs"
+        "corpus",
+        help=(
+            "the failure corpus: labeled, replayable cases — turns the engine caught, and "
+            "turns a human says it missed"
+        ),
     ).add_subparsers(dest="action", required=True)
     corpus_add = corpus.add_parser(
         "add",

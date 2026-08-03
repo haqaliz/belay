@@ -9,13 +9,17 @@ All notable changes to Belay are documented here. The format follows
 
 ### Changed
 
-- **What a green `belay corpus run` means — again, so read this before quoting one.** It now means
-  *"no case regressed, **and** every recorded miss is still recorded as missed"*. It does **not**
-  mean *"the engine catches everything in the corpus"*: a green run coexists with known,
-  **declared** blindness, and that is the point of `STILL_MISSED` existing as its own outcome.
-  This reading has had to be corrected twice before — the same green once certified that Belay
-  still *mis-fired identically*, and later that the A1 rule still reached `PASS` on seven turns a
-  human adjudicated false positives — so it is now said outright where a reader will hit it:
+- **What a green `belay corpus run` means — again, so read this before quoting one.** It means
+  *"no case regressed"*, and that is the whole claim — literally `CorpusRun.has_regression`. It
+  does **not** mean *"the engine catches everything in the corpus"*: a green run coexists with
+  known, **declared** blindness, and that is the point of `STILL_MISSED` existing as its own
+  outcome. It does **not** mean *"every recorded miss is still recorded as missed"* either — a
+  miss that just closed (`MISS_CLOSED`) is green too, and in that run a recorded miss is
+  precisely *not* still missed. Anything past "nothing drifted" has to be read off the printed
+  outcome counts. This reading has had to be corrected twice before — the same green once
+  certified that Belay still *mis-fired identically*, and later that the A1 rule still reached
+  `PASS` on seven turns a human adjudicated false positives — so it is now said outright where a
+  reader will hit it:
   `src/belay/corpus/run.py`'s module docstring and README's *Coverage & limits*, and in the
   negative on `corpus run`'s sign-off line, which states the `STILL_MISSED` count, and on its
   `--help`, which says such counts are stated plainly so a known-open miss is never mistaken for
@@ -52,7 +56,10 @@ All notable changes to Belay are documented here. The format follows
   demanding exact equality rather than by inspecting a diff. Any other divergence — an A2 move, a
   `WARN`, an `UNVERIFIED` without an environment cause — is still a `REGRESSION`, on a declared
   case as much as on any other. `has_regression`, and therefore the exit contract, counts only
-  `REGRESSION`.
+  `REGRESSION`. **A documented limit:** nothing keeps a closed miss closed. The command tells you
+  to re-add a `MISS_CLOSED` case so the caught verdict becomes its new `expected`, but nothing
+  enforces or tracks that — until you do, a detector that re-breaks returns the case to
+  `STILL_MISSED` (green), not `REGRESSION`.
 - **`belay corpus score` names where a false negative came from**, reporting how many `FN`-
   contributing cases are a human-banked recorded miss — a known blind spot the stored verdict
   already reflects, not a detection that failed today. `corpus show` prints the declaration
@@ -60,11 +67,19 @@ All notable changes to Belay are documented here. The format follows
 
 ### Fixed
 
-- **`belay corpus add`'s help no longer claims a precondition it never enforced.** Four places
+- **`belay corpus add`'s help no longer claims a precondition it never enforced.** Five places
   said a case is composed from a *flagged* turn; nothing in the composition path has ever filtered
   on the recomputed verdict. A reader who trusted them went looking for a `FAIL` filter that does
   not exist and concluded the corpus structurally cannot hold a miss — the exact misconception
-  this release removes. No behaviour changed; the strings did.
+  this release removes. The fifth was the `corpus` sub-parser's own one-liner (*"labeled,
+  replayable cases from flagged runs"*), which renders on `belay --help` — the most-read surface,
+  and one an `add --help` test structurally cannot reach. No behaviour changed; the strings did.
+- **A stored `expected` carrying an unknown extra top-level key can no longer reach
+  `MISS_CLOSED`.** The miss-closing patch is now built *from* `expected` rather than from the two
+  top-level keys the recompute produces, so an unrecognised key rides into the patch and equality
+  fails. `STILL_MISSED` always compared `expected` whole, so such a case could previously reach
+  the exempting outcome while being structurally unable to reach the non-exempting one. The new
+  rule is strictly narrower — the extra case is now a `REGRESSION` — and asserts no schema.
 
 ## [0.11.0] - 2026-07-31
 

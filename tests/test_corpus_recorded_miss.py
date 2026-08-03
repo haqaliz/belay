@@ -508,6 +508,29 @@ def test_the_exempted_transition_starts_from_pass_not_from_any_status() -> None:
     assert classify_case(expected, recomputed, recorded_miss=DECLARED).outcome == REGRESSION
 
 
+def test_an_unknown_top_level_key_in_expected_cannot_reach_miss_closed() -> None:
+    """A stored `expected` the patch does not carry through is a REGRESSION, not a close.
+
+    `STILL_MISSED` compares against `expected` WHOLE, so an unknown extra top-level key can
+    never reach it. `MISS_CLOSED` must be held to the same standard, or a case shaped in a way
+    this module does not understand could reach the exempting outcome while being structurally
+    unable to reach the non-exempting one -- the escape widening on exactly the cases nobody
+    can read. Building the patch FROM `expected` closes that without asserting any schema:
+    the unknown key rides into the patch, equality against the recompute fails, and the case
+    breaks the build like every other divergence.
+    """
+    expected = {**_MISSED_EXPECTED, "some_future_field": {"written_by": "a later belay"}}
+
+    assert classify_case(expected, _caught_recompute(), recorded_miss=DECLARED).outcome == (
+        REGRESSION
+    )
+    # and the STILL_MISSED direction was already unreachable for such a case -- which is the
+    # asymmetry this closes, stated as the test's own premise.
+    assert classify_case(expected, _missed_recompute(), recorded_miss=DECLARED).outcome == (
+        REGRESSION
+    )
+
+
 # --- a TWO-invariant policy: every A1 entry is part of the transition, or none of it -----
 #
 # A policy may declare more than one invariant, so a turn can carry more than one
@@ -781,6 +804,45 @@ def test_the_clean_exit_line_says_a_miss_is_still_open(
     assert cli.main(["corpus", "run", str(tmp_path / "corpus")]) == 0
     out = capsys.readouterr().out
     assert "belay: no regressions (1 still missed)" in out, out
+
+
+def test_a_green_run_can_contain_a_miss_that_is_no_longer_missed(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """The counterexample to "green means every recorded miss is still missed".
+
+    That sentence was written into four places and it is FALSE, so it is pinned here in the
+    only form that cannot drift: a run whose only declared case is `MISS_CLOSED` is green,
+    and in it a recorded miss is precisely NOT still missed. Green means ONE thing -- no case
+    REGRESSED -- which is `CorpusRun.has_regression` and nothing else. Anything a green run
+    is read to certify beyond that has to be re-derived from the outcome counts, which is why
+    they are printed.
+    """
+    from belay import cli
+
+    (tmp_path / "corpus").mkdir()
+    run = CorpusRun(
+        results=[
+            CaseResult(case_id="kept", outcome=MATCH),
+            CaseResult(
+                case_id="closed-miss",
+                outcome=MISS_CLOSED,
+                divergences=list(
+                    classify_case(
+                        _MISSED_EXPECTED, _caught_recompute(), recorded_miss=DECLARED
+                    ).divergences
+                ),
+            ),
+        ]
+    )
+    assert run.has_regression is False, "the exit contract is REGRESSION-only"
+    assert run.still_missed == 0, "the declared case's miss CLOSED; nothing is still missed"
+    monkeypatch.setattr("belay.corpus.run.run_corpus", lambda _dir: run)
+
+    assert cli.main(["corpus", "run", str(tmp_path / "corpus")]) == 0
+    out = capsys.readouterr().out
+    assert "belay: no regressions" in out, out
+    assert "still missed" not in out.rsplit("belay:", 1)[-1], out
 
 
 def test_corpus_run_help_states_the_exit_contract_it_actually_has() -> None:
