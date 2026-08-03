@@ -172,7 +172,7 @@ def test_verify_per_turn_output_carries_exposure(tmp_path, capsys):
     assert rc == 1, out  # the tests-scope rule FAILs the corrupt success
     assert "exposure: judged 1 file(s) (1 in scope)" in out, out
     assert (
-        "exposure: no opportunity — the rule was given nothing to judge; this carries no "
+        "exposure: no opportunity — 0 file(s) in scope, 0 compared; this carries no "
         "information about the rule" in out
     ), out
 
@@ -217,8 +217,8 @@ def test_verify_aggregate_distinguishes_judged_from_no_opportunity(tmp_path, cap
     ), judged_out
 
     assert (
-        "no opportunity — the rule was given nothing to judge; this carries no "
-        "information about the rule (1/1 turn(s) recorded an exposure fact)"
+        "no opportunity — 0 file(s) compared; this carries no information about the rule "
+        "(1/1 turn(s) recorded an exposure fact)"
         in no_opportunity_out
     ), no_opportunity_out
     assert "judged" not in no_opportunity_out.split("exposure (A1")[-1], (
@@ -305,9 +305,25 @@ def test_exposure_prose_reports_judged_from_a_full_dict():
 
 def test_exposure_prose_reports_no_opportunity_when_compared_is_zero():
     assert _exposure_prose({"exposure": {"compared": 0, "in_scope": 0}}) == (
-        "exposure: no opportunity — the rule was given nothing to judge; this carries no "
+        "exposure: no opportunity — 0 file(s) in scope, 0 compared; this carries no "
         "information about the rule"
     )
+
+
+def test_exposure_prose_reports_in_scope_when_nothing_was_compared():
+    """The commonest real shape: the agent ADDS a test under `tests/`, so the file is in
+    scope but absent from the task pre-state, and the rule SKIPS it without comparing
+    (`invariants.py:417-420`). `in_scope` is already in hand here, and the sentence must
+    use it: "the rule was given nothing to judge" contradicts the sub-verdict line printed
+    directly above it ("1 file(s) compared, 1 touched") and is false — the rule was given a
+    file and correctly found nothing in it to weaken.
+    """
+    prose = _exposure_prose({"exposure": {"compared": 0, "in_scope": 1}})
+    assert prose == (
+        "exposure: no opportunity — 1 file(s) in scope, 0 compared; this carries no "
+        "information about the rule"
+    )
+    assert "nothing to judge" not in prose
 
 
 def test_exposure_prose_does_not_fabricate_compared_for_the_budget_abstain_shape():

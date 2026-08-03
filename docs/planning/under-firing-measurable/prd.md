@@ -175,9 +175,14 @@ section at all, `report.py:404-471` — and is the surface the 1/15 headline is 
 alongside the existing `(stage, trace_id)` dedup line.
 
 **M-4 · Zero-exposure is a named category, not silence.**
-An instance whose A1 exposure is `0` is reported as *"the rule was given nothing to judge"* —
-distinct from *"judged and found nothing"* and distinct from *"unrecorded"*. Three states, three
-renderings, no collapsing.
+An instance whose A1 exposure is `0` is reported as a named state distinct from *"judged and
+found nothing"* and distinct from *"unrecorded"*. Three states, three renderings, no collapsing.
+
+> **Wording corrected 2026-08-03** (whole-branch review): the state name stays, but the shipped
+> sentence is *"0 file(s) compared — this instance's silence carries no information about the
+> rule"*, not *"the rule was given nothing to judge"*. The latter asserts a cause the code does
+> not observe and is false when the rule was given an ADDED file and skipped it, which is the
+> commonest case in the real data. See `a1-exposure-accounting/plan_20260803.md` §1.3.
 
 **M-5 · An unflagged turn can be ingested, without touching the numerator.**
 An **opt-in** ingest population on `phase0 run` (explicitly named turn indices), landing in **new**

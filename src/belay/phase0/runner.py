@@ -212,9 +212,16 @@ def _verify_one_trace(
     replayed_any = False
 
     # Exposure accounting (Task 1's `expected["exposure"]` on an A1 sub-verdict, C5's
-    # `no-assertion-weakening` content rule). Tallied per TURN, like `not_covered_turns`
-    # above, not per sub-verdict, so a turn judged under two scoped invariants (the default
-    # `tests` + `testing` pair) contributes its files ONCE rather than double-counting.
+    # `no-assertion-weakening` content rule). WHAT IS AND IS NOT DEDUPLICATED, exactly:
+    # `turns_recorded` and `turns_judging` count the TURN once however many A1 sub-verdicts
+    # it carries (like `not_covered_turns` above), so a turn judged under both default
+    # scopes (`tests` + `testing`) is one turn, not two. `files_compared` is SUMMED across
+    # those sub-verdicts and is NOT deduplicated: a file matching both default scopes is
+    # counted twice. That is real, not hypothetical -- sympy has
+    # `sympy/testing/tests/test_*.py`, which is under a `testing` segment AND a `tests` one.
+    # Deliberate: the number answers "how many judgments did the rule make", and both rules
+    # really did judge that file. It is NOT a count of distinct files, and must never be
+    # read against a file count.
     exposure_files_compared = 0
     exposure_turns_judging = 0
     exposure_turns_recorded = 0

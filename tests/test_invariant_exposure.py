@@ -2,7 +2,7 @@
 
 `_evaluate_content_rule` already counts `compared` (files it judged) and `in_scope` (files
 the delta touched under scope) to build its PASS/FAIL prose. Nothing downstream can read
-those counts, so a PASS that judged zero files (the rule was given nothing to judge) is
+those counts, so a PASS that judged zero files (the rule reached no comparison) is
 indistinguishable from a PASS that judged and found nothing wrong — a "false zero" that
 this unit closes by putting the count Belay already has into `Verdict.expected["exposure"]`.
 

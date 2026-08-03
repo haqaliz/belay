@@ -13,9 +13,10 @@ ANY-reduction across ledgers, not a single ledger's own aggregate). See
 `docs/planning/a1-exposure-accounting/` and the Task 4 report for the reasoning.)
 
 The one decision every test here protects: `files_compared == 0` is a REAL, MEASURED
-finding (the rule was given nothing to judge), and MUST NOT be confused with
-`exposure is None` (this ledger — or this instance, or this turn — never recorded
-exposure at all, because it predates the field or A1 never ran). Collapsing the two
+finding (the content rule ran and reached zero comparisons — for one of several reasons
+the ledger does not record), and MUST NOT be confused with `exposure is None` (no fact
+was recorded at all: an old ledger, an ERRORED instance, no content rule in force, or
+turns that never replayed). Collapsing the two
 would let every ledger written before this aspect read as "the detector judged nothing",
 fabricating the exact finding this unit exists to establish honestly. This mirrors the
 `detector` field's pattern (`ledger.py:65-72, 228-239, 329-332`), NOT `not_covered_turns`'s
@@ -28,6 +29,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from belay import cli
 from belay.phase0.ledger import (
     Disposition,
     InstanceRecord,
@@ -353,6 +355,76 @@ def test_runner_partial_exposure_dict_without_compared_key_is_recorded_but_contr
 
     inst = ledger.instances[0]
     assert inst.exposure == {"files_compared": 0, "turns_judging": 0, "turns_recorded": 1}
+
+
+# --- parity: `belay verify`'s accumulator and the ledger's, on the same verdicts ----------
+
+
+def test_cli_exposure_summary_matches_the_ledger_accumulator_on_the_same_verdicts(
+    tmp_path,
+) -> None:
+    """`cli._exposure_summary` and `run_batch`'s accumulation are two hand-written copies
+    of one rule; `cli.py:639-642` promises they "never silently diverge" and nothing
+    enforced it. Same verdicts in, same dict out.
+
+    The four turns below are exactly the shapes that could diverge: two A1 sub-verdicts on
+    ONE turn (`turns_recorded` counts the turn once, `files_compared` sums both), a
+    recorded zero, the budget-abstain partial dict with no `compared` key, and a turn with
+    no A1 sub-verdict at all.
+    """
+    trace_dir = tmp_path / "traces"
+    corpus_dir = tmp_path / "corpus"
+    trace_path = _write_trace(trace_dir, "edit_file", 4)
+
+    verdicts = [
+        TurnVerdict(
+            turn_index=0,
+            tool_name="edit_file",
+            status=Status.PASS,
+            sub_verdicts=[
+                _a2_verdict(),
+                _a1_verdict(Status.PASS, {"exposure": {"compared": 2, "in_scope": 2}}),
+                _a1_verdict(Status.PASS, {"exposure": {"compared": 1, "in_scope": 1}}),
+            ],
+        ),
+        TurnVerdict(
+            turn_index=1,
+            tool_name="edit_file",
+            status=Status.PASS,
+            sub_verdicts=[_a1_verdict(Status.PASS, {"exposure": {"compared": 0, "in_scope": 1}})],
+        ),
+        TurnVerdict(
+            turn_index=2,
+            tool_name="edit_file",
+            status=Status.PASS,
+            sub_verdicts=[_a2_verdict()],
+        ),
+        TurnVerdict(
+            turn_index=3,
+            tool_name="edit_file",
+            status=Status.UNVERIFIED,
+            sub_verdicts=[_a1_verdict(Status.UNVERIFIED, {"exposure": {"in_scope": 600}})],
+            cause="in-scope-file-budget-exceeded",
+        ),
+    ]
+
+    ledger = run_batch(
+        trace_dir,
+        corpus_dir=corpus_dir,
+        server_command=["irrelevant"],
+        invariants=(),
+        captured_at=CAPTURED_AT,
+        verifier=_stem_verifier({trace_path.stem: verdicts}),
+        ingester=_noop_ingester,
+    )
+
+    assert cli._exposure_summary(verdicts) == ledger.instances[0].exposure
+    # Pinned, so a pair that agrees on the WRONG number still fails.
+    assert ledger.instances[0].exposure == {
+        "files_compared": 3,
+        "turns_judging": 1,
+        "turns_recorded": 3,
+    }
 
 
 # --- ERRORED: exposure is unrecorded, never a fabricated zero ----------------------------

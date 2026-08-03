@@ -75,12 +75,14 @@ def test_three_exposure_states_render_three_distinct_sentences() -> None:
 
     assert "judged 3 file(s) across 2 turn(s)" in report
     assert (
-        "the rule was given nothing to judge — this instance's silence carries no "
-        "information about the rule" in report
+        "0 file(s) compared — this instance's silence carries no information about "
+        "the rule" in report
     )
     assert (
-        "exposure unrecorded — this ledger predates exposure accounting; this is NOT "
-        "a claim that the rule judged nothing" in report
+        "exposure unrecorded — no exposure fact was recorded here (a ledger written "
+        "before exposure accounting, an ERRORED instance, no content rule in force, or "
+        "turns that never replayed); this is NOT a claim that the rule judged nothing"
+        in report
     )
 
     # Every instance's trace_id appears in the exposure section, attached to its
@@ -143,6 +145,57 @@ def test_unrecorded_exposure_is_never_rendered_as_zero() -> None:
     line = next(line for line in report.splitlines() if "trace-old" in line)
     assert "0 file(s)" not in line
     assert "unrecorded" in line
+
+
+def test_no_opportunity_sentence_states_the_count_and_claims_no_cause() -> None:
+    """`files_compared == 0` has several causes the ledger cannot tell apart, so the
+    sentence must state the COUNT and stop.
+
+    The rule SKIPS any in-scope file that is absent from the task pre-state
+    (`invariants.py:417-420`) — it is an addition, and there was nothing there to weaken —
+    so an agent ADDING one test under `tests/` produces `compared 0, in_scope 1`. Adding a
+    test is the commonest agent behaviour in this project's captured data, and for it "the
+    rule was given nothing to judge" is false: the rule was given a file and decided it.
+    The bounded file-budget abstain (`{"in_scope": M}`, no `compared` key) reaches this
+    state too. One sentence covers all of them only if it asserts no cause at all.
+    """
+    ledger = RunLedger(
+        instances=[
+            _instance(
+                "trace-additions-only",
+                exposure={"files_compared": 0, "turns_judging": 0, "turns_recorded": 1},
+            )
+        ]
+    )
+
+    report = render_report(ledger, _metrics())
+
+    line = next(line for line in report.splitlines() if "trace-additions-only" in line)
+    assert "0 file(s) compared" in line
+    assert "nothing to judge" not in line
+    assert "carries no information about the rule" in line
+
+
+def test_unrecorded_sentence_does_not_assert_an_old_ledger() -> None:
+    """`exposure is None` arises in a BRAND-NEW ledger too, so the sentence may not blame
+    a ledger that predates exposure accounting.
+
+    `run_batch` writes `exposure=None` for every ERRORED instance (`runner.py:158-172`),
+    and A1 records nothing at all under `--no-default-invariants`, under a `read-only`-only
+    policy, or on an instance whose turns never replayed. Stage 3 had ERRORED instances and
+    the coming re-mint will too. The load-bearing half — "this is NOT a claim that the rule
+    judged nothing" — must survive; only the fabricated cause goes.
+    """
+    ledger = RunLedger(
+        instances=[_instance("trace-errored", Disposition.ERRORED, exposure=None)]
+    )
+
+    report = render_report(ledger, _metrics())
+
+    line = next(line for line in report.splitlines() if "trace-errored" in line)
+    assert "predates" not in line
+    assert "ERRORED" in line
+    assert "this is NOT a claim that the rule judged nothing" in line
 
 
 def test_exposure_section_present_on_a_clean_run() -> None:

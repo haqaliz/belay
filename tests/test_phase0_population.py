@@ -412,7 +412,7 @@ def test_instance_is_exposed_if_any_capture_judged_a_file() -> None:
     view = population.instances()[0]
     assert view.is_exposed() is True
     assert view.exposure_unrecorded() is False
-    assert population.exposed_instances() == ("trace-x",)
+    assert view.trace_id == "trace-x"
 
 
 def test_instance_exposure_is_unrecorded_only_when_no_capture_recorded_it() -> None:
@@ -438,9 +438,9 @@ def test_instance_exposure_is_unrecorded_only_when_no_capture_recorded_it() -> N
     empty_population = Population.from_labeled([LabeledLedger("s2", empty)])
 
     old_view = population.instances()[0]
+    assert old_view.trace_id == "trace-old"
     assert old_view.exposure_unrecorded() is True
     assert old_view.is_exposed() is False
-    assert population.unrecorded_exposure_instances() == ("trace-old",)
 
     empty_view = empty_population.instances()[0]
     assert empty_view.exposure_unrecorded() is False
@@ -488,7 +488,7 @@ def test_captures_disagreeing_on_exposure_are_reduced_by_the_stated_rule() -> No
     )
     population = Population.from_labeled([LabeledLedger("s2", s2), LabeledLedger("s3", s3)])
 
-    assert population.exposed_instances() == ("trace-y",)
+    assert tuple(v.trace_id for v in population.instances() if v.is_exposed()) == ("trace-y",)
     assert population.total_files_compared() == 2
     assert population.exposure_capture_count() == 2
 
@@ -578,7 +578,7 @@ def test_control_exposure_is_surfaced_with_the_same_three_states() -> None:
         return "\n".join(lines[start:end])
 
     assert "judged 1 file(s) across 1 turn(s)" in _lines_for("trace-control__judged")
-    assert "the rule was given nothing to judge" in _lines_for("trace-control__no-opportunity")
+    assert "0 file(s) compared" in _lines_for("trace-control__no-opportunity")
     unrecorded_span = _lines_for("trace-control__unrecorded")
     assert "exposure unrecorded" in unrecorded_span
     assert "0 file(s)" not in unrecorded_span

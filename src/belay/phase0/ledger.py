@@ -75,11 +75,13 @@ _DEFAULT_DETECTOR = None
 #: never be confused. `not_covered_turns` defaults an absent key to `{}` (`ledger.py`
 #: below), which COLLAPSES "never recorded" into "recorded as empty"; that is survivable
 #: only because the report's prose refuses to claim either reading. It is NOT survivable
-#: here: `files_compared == 0` is a real, material finding — the A1 rule was given
-#: something to judge and judged nothing in it — while an absent `exposure` key means this
-#: ledger predates exposure accounting (every ledger written before this aspect, including
-#: every ledger in `runs/`). Defaulting the absence to a zeroed dict would fabricate the
-#: former from the latter. So there is deliberately no `_DEFAULT_EXPOSURE` sentinel dict:
+#: here: `files_compared == 0` is a real, material finding — the A1 content rule ran and
+#: reached zero comparisons — while an absent `exposure` key means NO fact was recorded at
+#: all. That absence has several causes and this field distinguishes none of them: a ledger
+#: written before exposure accounting (every ledger in `runs/`), an ERRORED instance
+#: (`runner.py`), a run with no content rule in force, or an instance whose turns never
+#: replayed. Defaulting the absence to a zeroed dict would fabricate the former from any of
+#: the latter. So there is deliberately no `_DEFAULT_EXPOSURE` sentinel dict:
 #: `_instance_from_json` reads `raw.get("exposure")` and lets a missing key resolve to the
 #: dataclass field's own `None` default, exactly as `detector` does for the whole ledger.
 

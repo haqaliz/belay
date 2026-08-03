@@ -182,25 +182,47 @@ def _coverage_section(ledger: RunLedger) -> list[str]:
     return lines
 
 
-#: The `no opportunity` and `unrecorded` sentences, verbatim — decided in
-#: `docs/planning/a1-exposure-accounting/` and quoted here rather than composed inline, so
-#: every call site (and every test) reads the identical wording. `judged` has no constant
-#: because its two numbers (files, turns) vary per instance; the other two do not.
+#: The `no opportunity` and `unrecorded` sentences, verbatim — quoted here rather than
+#: composed inline, so every call site (and every test) reads the identical wording.
+#: `judged` has no constant because its two numbers (files, turns) vary per instance; the
+#: other two do not.
+#:
+#: BOTH sentences state what the ledger holds and NAME no cause, because the ledger records
+#: none — and the causes the earlier wording asserted (`docs/planning/under-firing-
+#: measurable/a1-exposure-accounting/plan_20260803.md` §1.3) are false in reachable, common
+#: cases. This aspect exists so that a `0` and an ABSENT never collapse; a sentence that
+#: invents WHY a `0` happened is the same defect wearing prose.
+#:
+#: `files_compared == 0` is NOT "the rule was given nothing to judge": an in-scope file
+#: ABSENT from the task pre-state is SKIPPED without comparison (`invariants.py:417-420`,
+#: an addition has nothing it could have weakened), so an agent adding one test under
+#: `tests/` lands here with a file in hand — and adding a test is the commonest agent
+#: behaviour in this project's captured data. The bounded file-budget abstain reaches it
+#: too. What is true in every sub-case is the count, so the count is all this says.
+#:
+#: `exposure is None` is NOT "this ledger predates exposure accounting": a BRAND-NEW ledger
+#: writes it for every ERRORED instance (`runner.py:158-172`), for any run with no content
+#: rule in force (`--no-default-invariants`, or a `read-only`-only policy), and for an
+#: instance whose turns never replayed (A1 runs only on the REPLAYED path,
+#: `verify/turn.py`). Stage 3 had ERRORED instances and the coming re-mint will too. The
+#: possibilities are named without picking one; the disclaimer is the load-bearing half and
+#: stays verbatim.
 _NO_OPPORTUNITY_SENTENCE = (
-    "the rule was given nothing to judge — this instance's silence carries no "
-    "information about the rule"
+    "0 file(s) compared — this instance's silence carries no information about the rule"
 )
 _UNRECORDED_EXPOSURE_SENTENCE = (
-    "exposure unrecorded — this ledger predates exposure accounting; this is NOT "
-    "a claim that the rule judged nothing"
+    "exposure unrecorded — no exposure fact was recorded here (a ledger written before "
+    "exposure accounting, an ERRORED instance, no content rule in force, or turns that "
+    "never replayed); this is NOT a claim that the rule judged nothing"
 )
 
 
 def _exposure_line(inst) -> str:
     """One instance's exposure sentence — exactly one of the three states, never blank.
 
-    `exposure is None` -> unrecorded. `files_compared == 0` -> no opportunity (the rule
-    ran and had nothing in scope). Otherwise -> judged, with its own file/turn counts:
+    `exposure is None` -> unrecorded. `files_compared == 0` -> no opportunity (some turn
+    recorded a fact and the total compared came to zero — the ledger records the count,
+    not the reason). Otherwise -> judged, with its own file/turn counts:
     this is the one state whose sentence is NOT a fixed constant, because "judged N
     file(s) across K turn(s)" is a fact specific to this instance, not a shared phrase.
     """

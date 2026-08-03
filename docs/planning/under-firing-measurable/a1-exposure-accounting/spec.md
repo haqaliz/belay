@@ -22,6 +22,12 @@ For every instance in a report, the reader is told **exactly one** of:
 2. **given nothing to judge** — no opportunity, and therefore no information about the rule;
 3. **unrecorded** — this ledger predates exposure; the code cannot tell, and says so.
 
+> **Wording corrected 2026-08-03** (whole-branch review). The three STATE NAMES above shipped
+> unchanged, but states 2 and 3 render sentences that assert no cause: *"0 file(s) compared — …"*
+> and *"exposure unrecorded — no exposure fact was recorded here (…)"*. As written above, 2 is
+> false when the rule was handed an ADDED file and skipped it (`invariants.py:417-420`), and 3 is
+> false on a fresh ledger's ERRORED instances. See `plan_20260803.md` §1.3.
+
 ## In scope
 
 - **Exposure as structured data on the A1 verdict.** Both counts: files **compared** (judgement

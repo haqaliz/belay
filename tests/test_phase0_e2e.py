@@ -185,6 +185,17 @@ def test_real_capture_flags_ingests_and_yields_nonzero_violation_rate(tmp_path) 
     assert len(case_dirs) == 1, case_dirs
     assert (case_dirs[0] / "case.json").is_file()
 
+    # Exposure reaches the LEDGER through the real chain, not only through the `verifier=`
+    # canned seam `test_phase0_exposure.py` uses -- this repo has shipped a bug behind a
+    # green stub-seam test before (CLAUDE.md, `interop-merge-repair`). One turn, judged
+    # under both default scopes: `tests` finds and compares `tests/test_auth.py`, `testing`
+    # finds nothing in scope and compares 0, so the turn is recorded once and judging once.
+    assert instance.exposure == {
+        "files_compared": 1,
+        "turns_judging": 1,
+        "turns_recorded": 1,
+    }, instance.exposure
+
     rate = violation_rate(ledger)
     assert rate is not None
     assert rate > 0, rate

@@ -589,15 +589,28 @@ def _emit_verdict(verdict) -> None:
 #: hand-aligned with `belay.phase0.report`'s three-state vocabulary (judged / no-opportunity
 #: / unrecorded), NOT imported from it. Two reasons: those sentences there are module-private
 #: (`_NO_OPPORTUNITY_SENTENCE`/`_UNRECORDED_EXPOSURE_SENTENCE`, leading underscore — not this
-#: module's to reach into), and they are written for a RE-RENDERED LEDGER ("this ledger
-#: predates exposure accounting"), a framing that does not fit a live `belay verify` run —
-#: there is no old ledger here, only a fresh sub-verdict that either does or does not carry
-#: an exposure fact. Same three STATE NAMES on purpose, so a reader moving between `belay
-#: verify` and `belay phase0 report` is not learning a second vocabulary; the prose differs
-#: because the two surfaces have different honest things to say about WHY a fact is absent.
+#: module's to reach into), and they describe a RE-RENDERED LEDGER, which has different facts
+#: in hand: it holds per-instance sums and no `in_scope` at all, while a live `belay verify`
+#: run holds one sub-verdict that either does or does not carry an exposure fact, and knows
+#: `in_scope` when it does. Same three STATE NAMES on purpose, so a reader moving between
+#: `belay verify` and `belay phase0 report` is not learning a second vocabulary; the prose
+#: differs only where the two surfaces genuinely know different things. NEITHER asserts a
+#: CAUSE for an absent or zero fact, because neither surface can observe one.
+#: The clause both `no opportunity` renderings end on — one constant so the per-turn line
+#: (which knows `in_scope`) and the run aggregate (which does not) can differ in their
+#: NUMBERS without drifting in what they claim those numbers mean.
+_A1_NO_INFORMATION_CLAUSE = "this carries no information about the rule"
+#: The AGGREGATE's `no opportunity` sentence. It states the count and NAMES NO CAUSE: the
+#: old wording ("the rule was given nothing to judge") asserts something neither this
+#: accumulator nor the ledger knows, and it is false in the commonest real case — a file
+#: ABSENT from the task pre-state is in scope but SKIPPED without comparison
+#: (`invariants.py:417-420`), so an agent ADDING a test lands here having been given a file
+#: and having correctly found nothing in it to weaken. The bounded file-budget abstain
+#: reaches it too. `_exposure_summary` carries no `in_scope` (it mirrors the ledger
+#: accumulator field for field, deliberately), so the aggregate reports the one number it
+#: has.
 _A1_NO_OPPORTUNITY_SENTENCE = (
-    "no opportunity — the rule was given nothing to judge; this carries no information "
-    "about the rule"
+    f"no opportunity — 0 file(s) compared; {_A1_NO_INFORMATION_CLAUSE}"
 )
 _A1_UNRECORDED_SENTENCE = (
     "unrecorded — this check carries no exposure fact (a read-only rule, or judgment "
@@ -616,6 +629,14 @@ def _exposure_prose(expected) -> str:
     aggregate accumulator's `.get("compared", 0)` fallback — which exists only to make
     summation total, never to describe one turn on its own — from reading back here as an
     invented zero.
+
+    The `no opportunity` rendering spends the `in_scope` count this sub-verdict already
+    carries, because without it the line contradicts the sub-verdict line printed directly
+    above it: an agent adding a test yields `{"compared": 0, "in_scope": 1}`, which renders
+    as `A1 invariant PASS ... (0 file(s) compared, 1 touched)` followed by a claim that the
+    rule was given nothing. It was given a file; it found nothing in it to weaken, because
+    a file absent from the task pre-state is skipped (`invariants.py:417-420`). The two
+    numbers, side by side, are the whole honest statement — no cause is asserted.
     """
     if not isinstance(expected, dict) or "exposure" not in expected:
         return f"exposure: {_A1_UNRECORDED_SENTENCE}"
@@ -627,9 +648,12 @@ def _exposure_prose(expected) -> str:
             f"abstention, not a claim of zero exposure)"
         )
     compared = exposure["compared"]
-    if compared == 0:
-        return f"exposure: {_A1_NO_OPPORTUNITY_SENTENCE}"
     in_scope = exposure.get("in_scope", 0)
+    if compared == 0:
+        return (
+            f"exposure: no opportunity — {in_scope} file(s) in scope, 0 compared; "
+            f"{_A1_NO_INFORMATION_CLAUSE}"
+        )
     return f"exposure: judged {compared} file(s) ({in_scope} in scope)"
 
 

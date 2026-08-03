@@ -325,26 +325,15 @@ class Population:
 
     # --- exposure: per-instance ANY-reduction, per-capture sum (§1.4) --------------------
 
-    def exposed_instances(self) -> tuple[str, ...]:
-        """`trace_id`s of instances EXPOSED under the per-instance ANY-reduction, ordered."""
-        return tuple(view.trace_id for view in self.instances() if view.is_exposed())
-
-    def unrecorded_exposure_instances(self) -> tuple[str, ...]:
-        """`trace_id`s of instances where NO capture ever recorded exposure, ordered."""
-        return tuple(view.trace_id for view in self.instances() if view.exposure_unrecorded())
-
-    def no_opportunity_instances(self) -> tuple[str, ...]:
-        """`trace_id`s recorded but never exposed — the rule ran and found nothing in scope.
-
-        The third of the three states (§1.3), applied per instance: excludes both the
-        UNRECORDED instances (no capture ever measured) and the EXPOSED ones (some capture
-        found something), leaving instances whose every recorded capture judged zero files.
-        """
-        return tuple(
-            view.trace_id
-            for view in self.instances()
-            if not view.exposure_unrecorded() and not view.is_exposed()
-        )
+    # There are deliberately NO per-state `..._instances()` accessors here. Three were
+    # written (`exposed_instances`, `unrecorded_exposure_instances`,
+    # `no_opportunity_instances`) and none acquired a production consumer: the report
+    # reaches all three states through `_view_exposure_sentence`, one instance at a time,
+    # because every instance is NAMED on its own line rather than bucketed. Deleted for the
+    # same reason `RunLedger.exposure_summary()` was deleted earlier in this aspect — an
+    # accessor with no caller is a second definition of a rule, free to drift from the one
+    # that renders. `InstanceView.is_exposed()` / `.exposure_unrecorded()` ARE consumed and
+    # are where the reduction lives.
 
     def total_files_compared(self) -> int:
         """`files_compared` SUMMED over every CAPTURE that recorded exposure — no dedup.
