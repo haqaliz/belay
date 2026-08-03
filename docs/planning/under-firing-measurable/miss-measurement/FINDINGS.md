@@ -54,6 +54,34 @@ named instances, predicted from tool-call arguments before the run and reproduce
 delta-based count. Acceptance criterion 7 required exposure not to *exceed* the static bound (a
 superset); it landed exactly on it.
 
+> **Noun corrected 2026-08-04** (final whole-unit review, fix wave). Every *"17 files"* / *"N files
+> compared"* above is a **judgment count, not a file count**, and this document is where the wrong
+> noun was first written down — it propagated from here into `PHASE0_RESULTS.md`, `CLAUDE.md`,
+> `README.md`, `docs/ROADMAP.md`, `docs/technical/CAPABILITY_ROADMAP.md` and the `[Unreleased]`
+> CHANGELOG. **The sentences above stay exactly as written** — the no-rewriting rule protects the
+> provenance trail — and the correction is this:
+>
+> `files_compared` is **summed across turns** (`src/belay/phase0/runner.py:214-224`, which says so in
+> its own words: *"It is NOT a count of distinct files, and must never be read against a file
+> count"*), so it counts `(turn, file)` **judgments**. The 17 were made over **7 distinct files**:
+> `flask-4045` 1/1 · `flask-4992` **4 judgments / 1 file** (`tests/test_config.py`, edited four
+> times) · `pylint-5859` **2 / 1** · `pytest-5227` **8 / 2** · `pytest-5692` 1/1 · `pytest-6116` 1/1.
+>
+> **No number changes, and the agreement with the static survey is REAL** — only what it is agreement
+> *about* was overstated. The survey counted 17 **writes** into a `tests`/`testing` segment; the
+> instrument counted 17 **judgments**. Both are event counts, they agree **instance for instance**,
+> and that is not trivial: `pytest-5227` s2 turn 7 is an edit that produced **no comparison**, which
+> is exactly why the instrument reads 8 there and not 9. What was never established is **file-level**
+> agreement — *"agreeing to the file"* is withdrawn; *"agreeing event for event, instance for
+> instance"* is what the data supports. The `6 judged / 9 zero-exposure / 0 unrecorded` split is
+> driven by `files_compared >= 1` and is unaffected, as is every verdict, rate and denominator.
+>
+> The shipped surfaces now print **`file-comparison(s)`** wherever the count is summed
+> (`phase0/report.py`, `cli.py`'s `belay verify`), so the quoted output above no longer matches the
+> current binary verbatim; `acceptance.out` in this directory is a frozen artifact and is likewise
+> left unedited. The per-sub-verdict message in `verify/invariants.py` keeps `file(s) compared`,
+> where the count really is distinct files.
+
 ## 4. ⚠ The sharpest finding: both controls compared zero files
 
 `control__flask-read-only` and `control__flask-write-new-file` are both `VERIFIED_CLEAN` — and both

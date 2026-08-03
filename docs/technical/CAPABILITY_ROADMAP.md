@@ -450,9 +450,10 @@ value cases in the corpus, and the ones the Phase-0 number is made of.
 > `.status`.
 >
 > Re-verifying the same banked captures under the **same** detector reproduced the **same headline
-> (1/15 = 6.7%)** and added the fact underneath it: **17 files compared across 22/22 captures — 6
+> (1/15 = 6.7%)** and added the fact underneath it: **17 file-comparisons across 22/22 captures — 6
 > instances judged something, 9 compared ZERO, 0 `unrecorded`**, with the instrument reproducing an
-> independent static survey **exactly**. **Both clean controls compared 0 files**, so *"no detector
+> independent static survey **exactly, instance for instance**. **17 counts `(turn, file)` judgments,
+> not files** — they were made over **7 distinct files**, and file-level agreement is not claimed. **Both clean controls compared 0 files**, so *"no detector
 > false positive on a control"* has no support — the controls are **not void**, they simply carry
 > **no information about A1's precision**. The blindness clause **narrows** to the six judged
 > instances. At **human-adjudication grade, n=2**, the two held-out exposed-and-passed turns are

@@ -168,9 +168,11 @@ Summarised, non-authoritatively: **PROCEED** iff ≥3 ***independent*** hand-aud
 > *instances minted* and is detector-independent, so **PIVOT stands on the identical clause**. The
 > same banked captures were re-verified under the **same** shipped detector, once, under the freeze
 > protocol (`f9e9957` → `8ec398d`), and the headline is **unchanged at 1/15 = 6.7%**. What is new is
-> that a clean verdict now states whether the rule **had anything to judge**: **17 files compared
+> that a clean verdict now states whether the rule **had anything to judge**: **17 file-comparisons
 > across 22/22 captures — 6 instances judged something, 9 compared ZERO, 0 `unrecorded`** — with the
-> instrument's delta-based count reproducing an independent static survey **exactly**.
+> instrument's delta-based count reproducing an independent static survey **exactly**, instance for
+> instance. **17 counts `(turn, file)` judgments, not files**: they were made over **7 distinct
+> files**, and file-level agreement was never established.
 >
 > **Two published inferences are corrected, and neither moves the decision.** (1) **Both clean
 > controls compared zero files**, so *"no detector false positive on a control"* has no support —

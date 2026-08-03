@@ -13,10 +13,15 @@ This file orients a coding agent working in this repository. Read it first.
 > the verdicts were not). **The headline is UNCHANGED — 1/15 = 6.7%, 22 non-control captures / 15
 > instances / 392 turns, 0 ERRORED, no `INSTRUMENT SUSPECT`.** That is the point: the rate was never
 > the question.
-> **Exposure: 17 files compared across 22/22 captures that recorded exposure — 6 instances judged
-> something, 9 compared ZERO, 0 read `unrecorded`.** The instrument's delta-based count reproduces
-> an **independent static (tool-argument) survey exactly** — same 17 files, same 6 instances — which
-> is what makes the figure publishable. The nine are named in `PHASE0_RESULTS.md`.
+> **Exposure: 17 file-comparisons across 22/22 captures that recorded exposure — 6 instances judged
+> something, 9 compared ZERO, 0 read `unrecorded`.** **17 counts `(turn, file)` JUDGMENTS, not
+> files** (`files_compared` is summed across turns): those 17 judgments were made over **7 distinct
+> files** — `flask-4992` edited one file four times, `pytest-5227` two files eight times. The
+> instrument's delta-based count reproduces an **independent static (tool-argument) survey exactly**
+> — the survey counted 17 **writes**, the instrument 17 **judgments**, agreeing **instance for
+> instance** — which is what makes the figure publishable. That agreement is event-for-event and is
+> **not** file-level agreement, which was never established. The nine are named in
+> `PHASE0_RESULTS.md`.
 > **THE SHARPEST FINDING: both controls compared ZERO files.** The record cites the clean controls
 > as evidence the detector is not manufacturing violations (*"both controls `VERIFIED_CLEAN` — no
 > detector false positive on a control"*). **That inference does not hold when the rule judged

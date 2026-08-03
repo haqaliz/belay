@@ -7,7 +7,38 @@ All notable changes to Belay are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Declaring a recorded miss on an already-banked case no longer writes a v3 field under a v2
+  version.** `belay corpus label --recorded-miss-note` round-trips the case through
+  `dataclasses.replace`, which preserved the `schema_version` read from disk — and **every**
+  human-labeled case in existence is `schema_version: 2`, so the realistic first declaration wrote
+  `{"schema_version": 2, "recorded_miss": {…}}`. Pre-v3 code reading that ignores the field and
+  returns `MATCH`: the regression suite certifying a blind spot as agreement, which is the exact
+  silent misclassification the version bump exists to prevent. Introducing a declaration now carries
+  the bump with it; an ordinary relabel, which writes no v3 field, leaves the version exactly as
+  loaded.
+
 ### Changed
+
+- **The exposure count is reported as `file-comparison(s)`, not `file(s)` — the noun was wrong, the
+  number was not.** `files_compared` is summed across turns (`phase0/runner.py`, which already said
+  *"It is NOT a count of distinct files, and must never be read against a file count"*), so it counts
+  `(turn, file)` **judgments**. Every aggregate surface said "file(s)" anyway: `belay phase0 report`,
+  `belay phase0 combine`, `belay verify`, and the published record. **No count, threshold or verdict
+  changes** — the measured total is still 17, now correctly named, and it was made over **7 distinct
+  files**. The per-sub-verdict message in `verify/invariants.py` keeps `file(s) compared`, where the
+  count really is distinct files. The published claim that two methods agreed *"to the file"* is
+  narrowed to what was actually shown: the static survey counted 17 **writes**, the instrument 17
+  **judgments**, and they agree **event for event, instance for instance** — file-level agreement was
+  never established.
+- **`belay verify` no longer prints the state name `no opportunity` beside a non-zero in-scope
+  count.** `exposure: no opportunity — 1 file(s) in scope, 0 compared` contradicts itself: a file
+  *was* in scope. It now reads `exposure: 1 file(s) in scope, 0 file-comparison(s) — this carries no
+  information about the rule`, matching the phase-0 surfaces, which dropped the same "given nothing
+  to judge" framing for the same reason. The state name stays in the code; it is not a claim the
+  output can make about a turn where the rule was handed a file and correctly found nothing in it to
+  weaken.
 
 - **What a green `belay corpus run` means — again, so read this before quoting one.** It means
   *"no case regressed"*, and that is the whole claim — literally `CorpusRun.has_regression`. It
@@ -98,9 +129,12 @@ All notable changes to Belay are documented here. The format follows
   protocol over the same banked captures under the **same** detector (script `f9e9957` containing
   no result → verbatim output `8ec398d`; ledgers committed at `7ab5ba3` and re-derivable with
   `belay phase0 report`). **The headline is unchanged at 1/15 = 6.7%** — the rate was never the
-  question. What is new underneath it: **17 files compared across 22/22 captures — 6 instances
+  question. What is new underneath it: **17 file-comparisons across 22/22 captures — 6 instances
   judged something, 9 compared ZERO, 0 `unrecorded`**, with the instrument's delta-based count
-  reproducing an independent static survey **exactly**.
+  reproducing an independent static survey **exactly, instance for instance** — the survey counted
+  17 **writes**, the instrument 17 **judgments**. **17 is a count of `(turn, file)` judgments, NOT
+  of files**: they were made over **7 distinct files**, and file-level agreement was never
+  established and is not claimed.
 
   **State the control finding exactly and do not inflate it.** The controls are **not void** — they
   were captured, replayed and verified, and nothing about them is wrong. What is withdrawn is one
