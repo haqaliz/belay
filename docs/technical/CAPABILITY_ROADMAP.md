@@ -582,7 +582,8 @@ corpus on day 1 rather than starting empty.
 ## C7. Live console  ·  weeks 5–6
 
 **Why it is moat.** Not the moat itself — the *surface* through which the moat is legible.
-The streaming, steerable live-run feed is a proven shape (mirroring `contig watch`), and it
+The streaming, steerable live-run feed is a proven shape (mirroring a sibling project's
+`watch` command), and it
 is what makes the launch demo land: a green Langfuse trace beside Belay's red turn-7 verdict.
 It is also the "watch and steer" primitive the team/approval layer grows out of in Phase 2.
 
