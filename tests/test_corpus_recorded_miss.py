@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -505,6 +506,80 @@ def test_the_exempted_transition_starts_from_pass_not_from_any_status() -> None:
     assert classify_case(expected, recomputed, recorded_miss=DECLARED).outcome == REGRESSION
 
 
+# --- a TWO-invariant policy: every A1 entry is part of the transition, or none of it -----
+#
+# A policy may declare more than one invariant, so a turn can carry more than one
+# `("A1", "invariant")` sub-verdict. The rule patches EVERY one of them, so the guard has to
+# ask about EVERY one of them: a guard that only asks whether SOME entry is PASS would let a
+# second entry ride the exemption from any status at all -- the "anything -> FAIL" widening
+# the single-entry test above exists to prevent, reintroduced one entry over.
+
+_TWO_INVARIANT_CASES = [
+    pytest.param(
+        _expected(
+            "PASS",
+            [("A1", "invariant", "PASS"), ("A1", "invariant", "WARN"), ("A2", "effect", "PASS")],
+        ),
+        _turn(
+            Status.FAIL,
+            [
+                _sub("A1", "invariant", Status.FAIL),
+                _sub("A1", "invariant", Status.FAIL),
+                _sub("A2", "effect", Status.PASS),
+            ],
+        ),
+        REGRESSION,
+        id="one-invariant-was-PASS-the-other-WARN-so-WARN-to-FAIL-rides-along",
+    ),
+    pytest.param(
+        _expected(
+            "PASS",
+            [("A1", "invariant", "PASS"), ("A1", "invariant", "PASS"), ("A2", "effect", "PASS")],
+        ),
+        _turn(
+            Status.FAIL,
+            [
+                _sub("A1", "invariant", Status.FAIL),
+                _sub("A1", "invariant", Status.FAIL),
+                _sub("A2", "effect", Status.PASS),
+            ],
+        ),
+        MISS_CLOSED,
+        id="both-invariants-were-PASS-and-both-moved-the-legitimate-close",
+    ),
+    pytest.param(
+        _expected(
+            "PASS",
+            [("A1", "invariant", "PASS"), ("A1", "invariant", "PASS"), ("A2", "effect", "PASS")],
+        ),
+        _turn(
+            Status.FAIL,
+            [
+                _sub("A1", "invariant", Status.FAIL),
+                _sub("A1", "invariant", Status.PASS),
+                _sub("A2", "effect", Status.PASS),
+            ],
+        ),
+        REGRESSION,
+        id="both-invariants-were-PASS-but-only-one-moved",
+    ),
+]
+
+
+@pytest.mark.parametrize("expected, recomputed, want", _TWO_INVARIANT_CASES)
+def test_every_a1_invariant_entry_is_part_of_the_transition_or_none_of_it(
+    expected: dict, recomputed: TurnVerdict, want: str
+) -> None:
+    """Under a two-invariant policy the exemption is all-or-nothing on the A1 axis.
+
+    The legitimate close is "the invariant axis moved PASS -> FAIL and nothing else did", so
+    both entries moving together is `MISS_CLOSED`. A second entry that was not PASS, or that
+    did not move, means something OTHER than the exempted transition happened, and the case
+    breaks the build.
+    """
+    assert classify_case(expected, recomputed, recorded_miss=DECLARED).outcome == want
+
+
 # --- SKIP still wins first ------------------------------------------------------------
 
 
@@ -713,8 +788,6 @@ def test_corpus_run_help_states_the_exit_contract_it_actually_has() -> None:
     and that "an all-MATCH/SKIP run exits 0". Both are now false for a case that declares a
     recorded miss, and a user reading --help would meet two outcome names it never mentioned.
     """
-    import subprocess
-
     completed = subprocess.run(
         [sys.executable, "-m", "belay.cli", "corpus", "run", "--help"],
         capture_output=True,

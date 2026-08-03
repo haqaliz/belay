@@ -269,16 +269,31 @@ def _closes_the_miss(expected: dict, recomputed_set: dict) -> bool:
     patch, byte for byte.
 
     The two guards are what make it a TRANSITION rather than a destination. The stored verdict
-    must have been PASS overall AND have carried an A1 `invariant` sub-verdict at PASS, so an
-    A1 sub-verdict that materialises where the case recorded none (`None -> FAIL`, not
-    `PASS -> FAIL`) is a structural change to the axis set and stays a REGRESSION.
+    must have been PASS overall, and EVERY A1 `invariant` sub-verdict it carried must have
+    been PASS — so an A1 sub-verdict that materialises where the case recorded none
+    (`None -> FAIL`, not `PASS -> FAIL`) is a structural change to the axis set and stays a
+    REGRESSION, and a stored WARN can never be patched to FAIL and exempted.
+
+    **EVERY entry, not SOME entry.** A policy may declare more than one invariant, so a turn
+    can carry more than one `("A1", "invariant")` sub-verdict, and `patched` forces all of
+    them to FAIL. A guard asking only whether SOME entry was PASS would let a second entry at
+    WARN ride the exemption — the same "anything -> FAIL" widening, reintroduced one entry
+    over. All-or-nothing on the A1 axis is also the right reading of the transition: the
+    legitimate close is "the invariant axis moved PASS -> FAIL and nothing else did", so two
+    invariants moving together is a close, and one of two moving is not.
+
+    NOTE, a known and deliberate asymmetry: `patched` is built from the two top-level keys
+    `_recomputed_set` produces, so a stored `expected` carrying an UNKNOWN extra top-level key
+    could reach MISS_CLOSED while never being able to reach STILL_MISSED (which compares
+    `expected` whole). No writer in this repo produces such a case, the pre-existing rule
+    behaved identically, and closing it would mean this function asserting a schema that
+    `case.py` owns — so it is documented rather than fixed.
     """
     if expected.get("reduced_status") != "PASS":
         return False
     subs = expected.get("sub_verdicts", [])
-    if not any(
-        (s["axis"], s["kind"]) == _A1_INVARIANT and s["status"] == "PASS" for s in subs
-    ):
+    a1 = [s for s in subs if (s["axis"], s["kind"]) == _A1_INVARIANT]
+    if not a1 or any(s["status"] != "PASS" for s in a1):
         return False
 
     patched = {
