@@ -7,7 +7,154 @@ All notable changes to Belay are documented here. The format follows
 
 ## [Unreleased]
 
-_Nothing yet._
+### Fixed
+
+- **Declaring a recorded miss on an already-banked case no longer writes a v3 field under a v2
+  version.** `belay corpus label --recorded-miss-note` round-trips the case through
+  `dataclasses.replace`, which preserved the `schema_version` read from disk — and **every**
+  human-labeled case in existence is `schema_version: 2`, so the realistic first declaration wrote
+  `{"schema_version": 2, "recorded_miss": {…}}`. Pre-v3 code reading that ignores the field and
+  returns `MATCH`: the regression suite certifying a blind spot as agreement, which is the exact
+  silent misclassification the version bump exists to prevent. Introducing a declaration now carries
+  the bump with it; an ordinary relabel, which writes no v3 field, leaves the version exactly as
+  loaded.
+
+### Changed
+
+- **The exposure count is reported as `file-comparison(s)`, not `file(s)` — the noun was wrong, the
+  number was not.** `files_compared` is summed across turns (`phase0/runner.py`, which already said
+  *"It is NOT a count of distinct files, and must never be read against a file count"*), so it counts
+  `(turn, file)` **judgments**. Every aggregate surface said "file(s)" anyway: `belay phase0 report`,
+  `belay phase0 combine`, `belay verify`, and the published record. **No count, threshold or verdict
+  changes** — the measured total is still 17, now correctly named, and it was made over **7 distinct
+  files**. The per-sub-verdict message in `verify/invariants.py` keeps `file(s) compared`, where the
+  count really is distinct files. The published claim that two methods agreed *"to the file"* is
+  narrowed to what was actually shown: the static survey counted 17 **writes**, the instrument 17
+  **judgments**, and they agree **event for event, instance for instance** — file-level agreement was
+  never established.
+- **`belay verify` no longer prints the state name `no opportunity` beside a non-zero in-scope
+  count.** `exposure: no opportunity — 1 file(s) in scope, 0 compared` contradicts itself: a file
+  *was* in scope. It now reads `exposure: 1 file(s) in scope, 0 file-comparison(s) — this carries no
+  information about the rule`, matching the phase-0 surfaces, which dropped the same "given nothing
+  to judge" framing for the same reason. The state name stays in the code; it is not a claim the
+  output can make about a turn where the rule was handed a file and correctly found nothing in it to
+  weaken.
+
+- **What a green `belay corpus run` means — again, so read this before quoting one.** It means
+  *"no case regressed"*, and that is the whole claim — literally `CorpusRun.has_regression`. It
+  does **not** mean *"the engine catches everything in the corpus"*: a green run coexists with
+  known, **declared** blindness, and that is the point of `STILL_MISSED` existing as its own
+  outcome. It does **not** mean *"every recorded miss is still recorded as missed"* either — a
+  miss that just closed (`MISS_CLOSED`) is green too, and in that run a recorded miss is
+  precisely *not* still missed. Anything past "nothing drifted" has to be read off the printed
+  outcome counts. This reading has had to be corrected twice before — the same green once
+  certified that Belay still *mis-fired identically*, and later that the A1 rule still reached
+  `PASS` on seven turns a human adjudicated false positives — so it is now said outright where a
+  reader will hit it:
+  `src/belay/corpus/run.py`'s module docstring and README's *Coverage & limits*, and in the
+  negative on `corpus run`'s sign-off line, which states the `STILL_MISSED` count, and on its
+  `--help`, which says such counts are stated plainly so a known-open miss is never mistaken for
+  a clean full pass.
+- **A banked miss can now be recognised as one, which is what the corpus was missing.** Careful
+  about what changed: `belay phase0 run` ingests flagged turns and nothing else, so a violation
+  the detector *missed* never becomes a case by the bulk path — but `belay corpus add` has never
+  enforced that precondition, so a miss was always *reachable*, and it already counted as a false
+  negative in `corpus score` (which keys on the human label and a non-`FAIL` stored verdict, and
+  does not consult the new declaration). What was missing is that nothing could **say so**: an
+  undeclared miss re-verified as a `MATCH`, i.e. the regression suite certifying a known blind
+  spot as agreement, and an `FN` of `0` read as a measurement when the corpus had simply never
+  been pointed at one. The declaration, `STILL_MISSED`, and the `FN` provenance line are what is
+  new. **This is a capability, not a result** — whether any miss has actually been banked, and
+  what the resulting recall is, is a separate empirical question that nothing in this release
+  answers.
+
+### Added
+
+- **A corpus case can declare that its stored verdict records a MISS** — the engine returned clean
+  on a turn a human adjudicated a real violation, so the clean verdict *is* the defect. Declared
+  by a human via `belay corpus label --recorded-miss-note "…"` (case schema **v3**); the note is
+  **required**, mirroring the existing rule that a `true-positive` label requires a root cause — a
+  human asserting the engine missed something must say what. Presence of the field *is* the
+  declaration, absent is a normal case byte-for-byte, and there is no code path from a verdict, a
+  status, or a label to setting it. A declaration on a case whose stored verdict is already `FAIL`
+  is rejected at load and at label time: a miss that was caught is a contradiction.
+- **Two `belay corpus run` outcomes, reachable only for a declared case.** `STILL_MISSED` — the
+  engine still does not catch it; exit `0`, but deliberately **not** a `MATCH`, because `MATCH` on
+  a recorded miss certifies blindness as agreement. `MISS_CLOSED` — a sharpened detector now
+  catches it; exit `0`, so CI does not go red for a fix. The exemption covers **exactly one**
+  transition (the reduced status and the A1 `invariant` sub-verdict(s) both moving `PASS → FAIL`,
+  everything else byte-identical), decided by constructing that one patched expectation and
+  demanding exact equality rather than by inspecting a diff. Any other divergence — an A2 move, a
+  `WARN`, an `UNVERIFIED` without an environment cause — is still a `REGRESSION`, on a declared
+  case as much as on any other. `has_regression`, and therefore the exit contract, counts only
+  `REGRESSION`. **A documented limit:** nothing keeps a closed miss closed. The command tells you
+  to re-add a `MISS_CLOSED` case so the caught verdict becomes its new `expected`, but nothing
+  enforces or tracks that — until you do, a detector that re-breaks returns the case to
+  `STILL_MISSED` (green), not `REGRESSION`.
+- **`belay corpus score` names where a false negative came from**, reporting how many `FN`-
+  contributing cases are a human-banked recorded miss — a known blind spot the stored verdict
+  already reflects, not a detection that failed today. `corpus show` prints the declaration
+  (absent-vs-declared kept distinct) and `corpus list` carries a `recorded-miss` marker column.
+
+### Fixed
+
+- **`belay corpus add`'s help no longer claims a precondition it never enforced.** Five places
+  said a case is composed from a *flagged* turn; nothing in the composition path has ever filtered
+  on the recomputed verdict. A reader who trusted them went looking for a `FAIL` filter that does
+  not exist and concluded the corpus structurally cannot hold a miss — the exact misconception
+  this release removes. The fifth was the `corpus` sub-parser's own one-liner (*"labeled,
+  replayable cases from flagged runs"*), which renders on `belay --help` — the most-read surface,
+  and one an `add --help` test structurally cannot reach. No behaviour changed; the strings did.
+- **A stored `expected` carrying an unknown extra top-level key can no longer reach
+  `MISS_CLOSED`.** The miss-closing patch is now built *from* `expected` rather than from the two
+  top-level keys the recompute produces, so an unrecognised key rides into the patch and equality
+  fails. `STILL_MISSED` always compared `expected` whole, so such a case could previously reach
+  the exempting outcome while being structurally unable to reach the non-exempting one. The new
+  rule is strictly narrower — the extra case is now a `REGRESSION` — and asserts no schema.
+
+- **Record correction: the shipped `0.10.0` sentence "a violation the detector misses can never
+  become a case … the corpus cannot measure recall" is false as a capability statement, and its
+  first half was already false when it was written.** The `## [0.10.0]` entry below is left
+  **byte-identical** — Keep a Changelog does not rewrite shipped entries, and that entry handled
+  the `0.9.0` sentence the same way, by pointing back at it from the next release. `belay phase0
+  run` does ingest FAIL turns and nothing else, so a miss never arrives by the *bulk* path — but
+  `belay corpus add` has **never** enforced that precondition, and `metrics.py`'s FN branch was
+  implemented and unit-tested throughout. What was genuinely missing is that nothing could
+  **declare** a stored miss, which this release adds. **`FN 0` is now empirical rather than
+  structural.**
+
+- **Record correction: "both controls `VERIFIED_CLEAN` — no detector false positive on a control"
+  does not follow, because both controls compared ZERO files.** The measurement is published in
+  `docs/technical/PHASE0_RESULTS.md` → *Correction — 2026-08-04*, run once under the freeze
+  protocol over the same banked captures under the **same** detector (script `f9e9957` containing
+  no result → verbatim output `8ec398d`; ledgers committed at `7ab5ba3` and re-derivable with
+  `belay phase0 report`). **The headline is unchanged at 1/15 = 6.7%** — the rate was never the
+  question. What is new underneath it: **17 file-comparisons across 22/22 captures — 6 instances
+  judged something, 9 compared ZERO, 0 `unrecorded`**, with the instrument's delta-based count
+  reproducing an independent static survey **exactly, instance for instance** — the survey counted
+  17 **writes**, the instrument 17 **judgments**. **17 is a count of `(turn, file)` judgments, NOT
+  of files**: they were made over **7 distinct files**, and file-level agreement was never
+  established and is not claimed.
+
+  **State the control finding exactly and do not inflate it.** The controls are **not void** — they
+  were captured, replayed and verified, and nothing about them is wrong. What is withdrawn is one
+  **inference**: a control the rule never judged cannot demonstrate the rule does not over-fire.
+  The **blindness clause** is likewise **narrowed** to the six instances actually judged, and
+  **dissolves** for the other nine — there was never a question to answer there.
+
+  **Separately, in its own evidence grade — human adjudication, n=2, not execution:** the only two
+  held-out exposed-and-passed turns in the banked data (`pytest-dev__pytest-5692` s3 turn 8,
+  `pytest-dev__pytest-6116` s3 turn 15) are **additions, not weakenings**. **0 misses found of 2
+  adjudicated; sensitivity still unconfirmed** — never *"the rule has good recall"*, because **n=2
+  is not a base rate**, and **not comparable** to the recorded `recall 0.00 (0/1, n=1)`: different
+  detector, different population, different adjudication set. Consequently **no miss was banked**,
+  and the recorded-miss path added in this release ships **unexercised on real data**.
+
+  **What this is not.** **Not a gate run** — the pre-registered ≥50 clause counts *instances
+  minted* and is detector-independent, so **the 2026-07-29 PIVOT stands on the identical clause**
+  and **R1 remains OPEN and untested**. **Not a precision or recall number.** **No published number
+  was re-derived:** `4/16`, `precision 0.00`, `3/93`, `0% UNVERIFIED`, `recall 0.00` and `1/15` all
+  stand unedited; only annotations and new figures were added.
 
 ## [0.11.0] - 2026-07-31
 

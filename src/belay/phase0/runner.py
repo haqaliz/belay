@@ -164,6 +164,11 @@ def run_batch(
                 flagged_unaddable=[],
                 unverified_causes={},
                 error=str(exc),
+                # Decided explicitly, not left to the dataclass default: an ERRORED
+                # instance never reached the verification loop, so `exposure=None` here
+                # says "unrecorded", never "the rule judged nothing" -- a zeroed dict
+                # would assert the exact false finding this aspect exists to prevent.
+                exposure=None,
             )
         instances.append(instance)
 
@@ -206,6 +211,21 @@ def _verify_one_trace(
     verdicts: dict[int, TurnVerdict] = {}
     replayed_any = False
 
+    # Exposure accounting (Task 1's `expected["exposure"]` on an A1 sub-verdict, C5's
+    # `no-assertion-weakening` content rule). WHAT IS AND IS NOT DEDUPLICATED, exactly:
+    # `turns_recorded` and `turns_judging` count the TURN once however many A1 sub-verdicts
+    # it carries (like `not_covered_turns` above), so a turn judged under both default
+    # scopes (`tests` + `testing`) is one turn, not two. `files_compared` is SUMMED across
+    # those sub-verdicts and is NOT deduplicated: a file matching both default scopes is
+    # counted twice. That is real, not hypothetical -- sympy has
+    # `sympy/testing/tests/test_*.py`, which is under a `testing` segment AND a `tests` one.
+    # Deliberate: the number answers "how many judgments did the rule make", and both rules
+    # really did judge that file. It is NOT a count of distinct files, and must never be
+    # read against a file count.
+    exposure_files_compared = 0
+    exposure_turns_judging = 0
+    exposure_turns_recorded = 0
+
     for n in range(len(calls)):
         verdict = verifier(
             records,
@@ -226,6 +246,28 @@ def _verify_one_trace(
         # nothing.
         for kind in sorted({s.kind for s in verdict.sub_verdicts if s.status is Status.NOT_COVERED}):
             not_covered_turns[kind] = not_covered_turns.get(kind, 0) + 1
+
+        # A turn contributes to `turns_recorded` iff AT LEAST ONE A1 sub-verdict carried an
+        # `"exposure"` key at all -- a `read-only`-only turn, or one whose content rule hit
+        # one of the five early abstains (`invariants.py`'s `_evaluate_content_rule`), never
+        # carries the key and must never be coerced into a recorded zero. `files_compared`
+        # sums each such sub-verdict's `"compared"` count with `.get(..., 0)`, which is what
+        # makes the file-budget abstain's partial `{"in_scope": M}` (no `compared` key)
+        # contribute 0 files rather than raising or fabricating a count.
+        turn_exposures = [
+            s.expected["exposure"]
+            for s in verdict.sub_verdicts
+            if s.axis == "A1"
+            and s.kind == "invariant"
+            and isinstance(s.expected, dict)
+            and "exposure" in s.expected
+        ]
+        if turn_exposures:
+            exposure_turns_recorded += 1
+            turn_compared = sum(exp.get("compared", 0) for exp in turn_exposures)
+            exposure_files_compared += turn_compared
+            if turn_compared >= 1:
+                exposure_turns_judging += 1
 
         if verdict.status is Status.UNVERIFIED:
             # Bucket by the CANONICAL name, as the runner spec says this table does
@@ -253,6 +295,20 @@ def _verify_one_trace(
             replayed_any = True
 
     flagged_turns = [n for n in range(len(calls)) if verdicts[n].status is Status.FAIL]
+
+    # `exposure` stays `None` when NO turn recorded anything -- including the whole-instance
+    # case where A1 never ran at all (no invariants declared, or only `read-only`, which has
+    # no exposure concept). A zeroed dict there would assert "the rule judged nothing",
+    # which is a different, false, claim from "the rule was never asked to judge".
+    exposure = (
+        {
+            "files_compared": exposure_files_compared,
+            "turns_judging": exposure_turns_judging,
+            "turns_recorded": exposure_turns_recorded,
+        }
+        if exposure_turns_recorded > 0
+        else None
+    )
 
     flagged_addable: list[int] = []
     flagged_unaddable: list[dict] = []
@@ -299,6 +355,7 @@ def _verify_one_trace(
         unverified_causes=unverified_causes,
         error=None,
         not_covered_turns=not_covered_turns,
+        exposure=exposure,
     )
 
 

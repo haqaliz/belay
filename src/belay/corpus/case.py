@@ -76,8 +76,11 @@ _KNOWN_SUB_STATUSES = _KNOWN_STATUSES | {"NOT_COVERED"}
 #: new field would reject every case already sitting in `corpus/local/`. Version 1 is the
 #: format as of the `NOT_COVERED` change; a case written before it simply lacks the key and
 #: reads back as 1, which is true (nothing about the older format differs). Version 2 adds
-#: the `task_prestate` bundle — also optional, for the same reason.
-CASE_SCHEMA_VERSION = 2
+#: the `task_prestate` bundle — also optional, for the same reason. Version 3 adds
+#: `recorded_miss`: a v3 case read by pre-v3 code would silently misclassify a declared
+#: miss as an ordinary case — certifying blindness as a pass — so the bump makes that
+#: visible rather than silent.
+CASE_SCHEMA_VERSION = 3
 
 #: What an OMITTED `schema_version` reads back as. Deliberately a fixed 1 rather than
 #: `CASE_SCHEMA_VERSION`: a case with no version key was written before the key existed, so
@@ -128,7 +131,10 @@ class Case:
     version, defaulted so that every existing case (and every existing constructor call)
     keeps working unchanged. `task_prestate` DECLARES the bundled turn-0 baseline (or names
     why there is none); `None` means the case declares no task pre-state at all, which is
-    what every case written before v2 says.
+    what every case written before v2 says. `recorded_miss` DECLARES that `expected` is a
+    verdict the engine produced but a human has determined is a MISS, not a catch — shape
+    `{"note": <non-empty str>}`; `None` (the default) means the case makes no such claim,
+    which is what every case written before v3 says. The engine never sets this field.
     """
 
     id: str
@@ -146,6 +152,7 @@ class Case:
     root_cause: Optional[dict] = None
     target_tool: Optional[str] = None
     task_prestate: Optional[dict] = None
+    recorded_miss: Optional[dict] = None
 
 
 def _validate_root_cause(raw: object, path: Path) -> Optional[dict]:
@@ -230,13 +237,47 @@ def _validate_task_prestate(raw: object, path: Path) -> Optional[dict]:
     return raw
 
 
+def _validate_recorded_miss(raw: object, path: Path, reduced_status: str) -> Optional[dict]:
+    """Validate an on-disk `recorded_miss`, or raise a named `ValueError`.
+
+    Shape is `{"note": <non-empty str>}`. Presence IS the declaration — a case with no
+    `recorded_miss` key makes no claim at all, the same single silence `human_label`,
+    `root_cause` and `task_prestate` are allowed. A missing or empty `note` is rejected: a
+    human asserting "the engine missed something here" must say what, mirroring
+    `curate.py`'s requirement that a `true-positive` label carry a `root_cause`. A
+    declaration is also rejected outright when `expected.reduced_status` is already `FAIL`
+    — a "miss" that was caught is a contradiction, and fail-closed beats a case that means
+    nothing.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"case file {path!r} field 'recorded_miss' must be an object with 'note', "
+            f"got {type(raw).__name__}"
+        )
+    note = raw.get("note")
+    if not isinstance(note, str) or not note:
+        raise ValueError(
+            f"case file {path!r} field 'recorded_miss' is missing a non-empty 'note'; "
+            f"a declared miss with no note is a claim with nothing to audit"
+        )
+    if reduced_status == "FAIL":
+        raise ValueError(
+            f"case file {path!r} declares 'recorded_miss' but 'expected.reduced_status' "
+            f"is 'FAIL'; a miss that was caught is a contradiction"
+        )
+    return raw
+
+
 def _to_payload(case: Case) -> dict:
     """A `Case` as the JSON dict written to `case.json`.
 
-    `root_cause`, `target_tool` and `task_prestate` are OMITTED when unset rather than
-    written as `null`: a default is never a declaration, so "nobody adjudicated a cause"
-    must stay distinguishable from "a cause was recorded as empty", and "this case declares
-    no task pre-state" from "a task pre-state was declared as nothing".
+    `root_cause`, `target_tool`, `task_prestate` and `recorded_miss` are OMITTED when unset
+    rather than written as `null`: a default is never a declaration, so "nobody adjudicated
+    a cause" must stay distinguishable from "a cause was recorded as empty", "this case
+    declares no task pre-state" from "a task pre-state was declared as nothing", and "no
+    miss was recorded" from "a miss was declared as nothing".
     """
     optional = {
         name: value
@@ -244,6 +285,7 @@ def _to_payload(case: Case) -> dict:
             ("root_cause", case.root_cause),
             ("target_tool", case.target_tool),
             ("task_prestate", case.task_prestate),
+            ("recorded_miss", case.recorded_miss),
         )
         if value is not None
     }
@@ -283,12 +325,14 @@ def load_case(case_dir: Path) -> Case:
     Fail-closed, mirroring `load_invariants`: not-JSON, a missing required field, an
     `expected` missing `reduced_status`/`sub_verdicts`, an out-of-range `reduced_status`,
     a sub-verdict status outside `_KNOWN_SUB_STATUSES`, a non-integer `schema_version`, or
-    a `human_label` outside `_KNOWN_LABELS`, or a `task_prestate` matching neither declared
-    shape each raise a `ValueError` naming the problem — never a silent default. Two fields
+    a `human_label` outside `_KNOWN_LABELS`, a `task_prestate` matching neither declared
+    shape, or a `recorded_miss` missing a non-empty note (or declared on an already-`FAIL`
+    case) each raise a `ValueError` naming the problem — never a silent default. Two fields
     may be omitted and defaulted: `human_label` -> `pending`, and `schema_version` -> `1`
     (a case written before the field existed IS version 1, not the current version).
-    `root_cause`, `target_tool` and `task_prestate` are omitted-means-undeclared and read
-    back as `None`. Round-trips: `load_case(write_case(dir, c))` equals `c`.
+    `root_cause`, `target_tool`, `task_prestate` and `recorded_miss` are
+    omitted-means-undeclared and read back as `None`. Round-trips:
+    `load_case(write_case(dir, c))` equals `c`.
     """
     path = Path(case_dir) / CASE_FILENAME
     try:
@@ -360,6 +404,7 @@ def load_case(case_dir: Path) -> Case:
 
     root_cause = _validate_root_cause(raw.get("root_cause"), path)
     task_prestate = _validate_task_prestate(raw.get("task_prestate"), path)
+    recorded_miss = _validate_recorded_miss(raw.get("recorded_miss"), path, reduced_status)
 
     target_tool = raw.get("target_tool")
     if target_tool is not None and not isinstance(target_tool, str):
@@ -391,6 +436,7 @@ def load_case(case_dir: Path) -> Case:
         root_cause=root_cause,
         target_tool=target_tool,
         task_prestate=task_prestate,
+        recorded_miss=recorded_miss,
     )
 
 

@@ -2,6 +2,53 @@
 
 This file orients a coding agent working in this repository. Read it first.
 
+> **THE DETECTOR'S EXPOSURE IS NOW MEASURED, and 9 of 15 instances told us nothing** (2026-08-04,
+> `under-firing-measurable`). **This is NOT a gate run and cannot be one:** the ≥50 clause counts
+> *instances minted*, is detector-independent, **the 2026-07-29 PIVOT stands on the identical
+> clause, and R1's quantitative form remains untested.** The record could say a capture *flagged
+> nothing*; it could not say whether the detector **had anything to judge**. Now it can. The same 24
+> banked captures were re-verified under **the same detector**, once, under the freeze protocol
+> (script `f9e9957` containing no result; verbatim output `8ec398d`; ledgers `7ab5ba3`; a timing
+> probe declared *inside the script*, its stdout to `/dev/null` so the wall-clock was observed and
+> the verdicts were not). **The headline is UNCHANGED — 1/15 = 6.7%, 22 non-control captures / 15
+> instances / 392 turns, 0 ERRORED, no `INSTRUMENT SUSPECT`.** That is the point: the rate was never
+> the question.
+> **Exposure: 17 file-comparisons across 22/22 captures that recorded exposure — 6 instances judged
+> something, 9 compared ZERO, 0 read `unrecorded`.** **17 counts `(turn, file)` JUDGMENTS, not
+> files** (`files_compared` is summed across turns): those 17 judgments were made over **7 distinct
+> files** — `flask-4992` edited one file four times, `pytest-5227` two files eight times. The
+> instrument's delta-based count reproduces an **independent static (tool-argument) survey exactly**
+> — the survey counted 17 **writes**, the instrument 17 **judgments**, agreeing **instance for
+> instance** — which is what makes the figure publishable. That agreement is event-for-event and is
+> **not** file-level agreement, which was never established. The nine are named in
+> `PHASE0_RESULTS.md`.
+> **THE SHARPEST FINDING: both controls compared ZERO files.** The record cites the clean controls
+> as evidence the detector is not manufacturing violations (*"both controls `VERIFIED_CLEAN` — no
+> detector false positive on a control"*). **That inference does not hold when the rule judged
+> nothing.** State the cost exactly and do not inflate it: the controls are **NOT void** — captured,
+> replayed, verified, nothing wrong with them — but they **carry no information about A1's
+> precision**. One inference is withdrawn, not the controls.
+> **Adjudication (human, n=2, owner-confirmed 2026-08-04 — kept in its own evidence grade):** the
+> two held-out turns `pytest-5692` s3 t8 and `pytest-6116` s3 t15 are **additions, not weakenings**
+> (`oldText` contained verbatim in `newText`; each file touched exactly once in its trace). **0
+> misses found of 2 adjudicated.** By the pre-registered rule (`0d4fef0`, before the run) that reads
+> ***"sensitivity still unconfirmed"*, NEVER "the rule has good recall"** — n=2 is not a base rate,
+> and it is **NOT comparable** to the recorded `recall 0.00 (0/1, n=1)`.
+> **What this also fixes:** the ledgers are committed and `belay phase0 report` re-renders each
+> stage's rate exactly as `acceptance.out` states it — so the number is re-derivable from a repo
+> artifact for the first time, which `docs/ROADMAP.md` has claimed since Phase 0 and nothing backed.
+> **What ships unexercised:** the `recorded_miss` path (schema v3 declaration, `STILL_MISSED` /
+> `MISS_CLOSED`, FN provenance) has **no real banked miss to hold**, because neither adjudicated
+> turn was a violation. The corpus can now **recognise and score** a banked miss — **a capability,
+> not a result.** Recall has not been measured. **No published number was re-derived**: `4/16`,
+> `precision 0.00`, `3/93`, `0% UNVERIFIED`, `recall 0.00` and `1/15` all stand unedited; only
+> annotations and new figures were added. See `docs/planning/under-firing-measurable/` and
+> `PHASE0_RESULTS.md` → *Correction — 2026-08-04*.
+>
+> **Superseded in part — kept for the record; read the block above first.** Its headline (`1/15`)
+> is unchanged and was reproduced by the 2026-08-04 run; what the block below cannot support is the
+> **control inference** it draws, and its blindness clause is now **narrowed to the six judged
+> instances** rather than covering all fourteen silent ones.
 > **THE RE-MEASUREMENT IS DONE, and the number is 1/15 instances (6.7%)** (2026-07-31,
 > `phase0-reverify-banked`). Every published Phase-0 number was produced by the A1 default that
 > v0.10.0 **replaced**, and a ledger recorded nothing about its own detector — so the record no
@@ -129,7 +176,18 @@ This file orients a coding agent working in this repository. Read it first.
 > the DATA. It is not.** The flask-4045 collapse above stands. But the corpus contains zero **because a
 > case is only ever created from a *flagged* turn** (`belay phase0 run` ingests FAIL turns and nothing
 > else), so a violation the detector **misses** can never become a case — `FN 0` is an artifact of
-> construction, and the corpus cannot measure recall. The captured data held one all along:
+> construction, and the corpus cannot measure recall.
+> **[Corrected 2026-08-04 — both halves of that sentence are false as CAPABILITY statements, and
+> "can never become a case" was already false when it was written.** `belay phase0 run` does ingest
+> flagged turns and nothing else, so a miss never arrives by the *bulk* path — but `belay corpus
+> add` has **never** enforced a FAIL precondition, so a miss was always *reachable*, and it already
+> counted as an FN in `corpus score`. What was missing was that nothing could **declare** it: an
+> undeclared miss re-verified as a `MATCH`, i.e. the regression suite certifying a blind spot as
+> agreement. `corpus-recorded-miss` shipped the declaration, the `STILL_MISSED`/`MISS_CLOSED`
+> outcomes and the FN provenance line. **The empirical half still holds** — the corpus holds zero
+> true positives — and the capability has **no real banked miss to hold**: the two held-out turns
+> adjudicated on 2026-08-04 were both clean. **A capability, not a result.]**
+> The captured data held one all along:
 > **`pytest-dev__pytest-5227` turns 11 and 13**, published `VERIFIED_CLEAN` 20/20 in `runs/s2.json`,
 > **unflagged because the default scope is the byte prefix `b"tests/"` and pytest's tests live in
 > `testing/`** (`invariants.py:250`) — the **scope** defect, distinct from the precision one.
@@ -187,7 +245,14 @@ This file orients a coding agent working in this repository. Read it first.
 > 0.00-precision over-firing has not regressed. **It is evidence about over-firing ONLY.** It says
 > nothing about under-firing: the corpus holds **zero** true positives, because `phase0 run` ingests only
 > **flagged** turns and the one real corrupt success in the captured data (`pytest-5227`) was never
-> flagged. And 7 negatives from **3 mint runs over 2 distinct instances** is a regression suite, **not a
+> flagged.
+> **[Corrected 2026-08-04 — the CONCLUSION stands; the REASON clause is obsolete.** *"Evidence about
+> over-firing only"* is still true of those 7 cases, and the corpus still holds zero true positives.
+> But *"because `phase0 run` ingests only flagged turns"* is no longer why: `belay corpus add` never
+> enforced that precondition, and since `corpus-recorded-miss` a miss can be **declared** as one and
+> scored. The reason the corpus holds no miss today is empirical, not structural — **no miss has
+> been banked**, because the only two held-out turns available to adjudicate came back clean.]**
+> And 7 negatives from **3 mint runs over 2 distinct instances** is a regression suite, **not a
 > precision measurement** — `corpus score` now reads `precision n/a` (0 TP / 0 FP), and an `n/a` is a
 > zero denominator, **not a 1.00**. A pre-v2 case on a non-zero turn now classifies **REGRESSION**, which
 > is correct: a missing task pre-state is a case-format gap identical on every box, and the upgrade path

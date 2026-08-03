@@ -182,6 +182,100 @@ def _coverage_section(ledger: RunLedger) -> list[str]:
     return lines
 
 
+#: The `no opportunity` and `unrecorded` sentences, verbatim — quoted here rather than
+#: composed inline, so every call site (and every test) reads the identical wording.
+#: `judged` has no constant because its two numbers (comparisons, turns) vary per instance;
+#: the other two do not.
+#:
+#: THE NOUN IS `file-comparison(s)`, NEVER `file(s)`, on every aggregate surface in this
+#: module. `files_compared` is SUMMED across turns (`runner.py:214-224`), so it counts
+#: `(turn, file)` JUDGMENTS: one file edited on four turns contributes 4, and the published
+#: total of 17 is 17 judgments over 7 distinct files. The two are different quantities and
+#: the aggregate has no access to the second — it never sees a path, only a count — so the
+#: only honest thing it can name is the judgment. The per-sub-verdict message in
+#: `verify/invariants.py` keeps `file(s) compared`: there the count IS distinct files,
+#: because one judgment compares each in-scope file once.
+#:
+#: BOTH sentences state what the ledger holds and NAME no cause, because the ledger records
+#: none — and the causes the earlier wording asserted (`docs/planning/under-firing-
+#: measurable/a1-exposure-accounting/plan_20260803.md` §1.3) are false in reachable, common
+#: cases. This aspect exists so that a `0` and an ABSENT never collapse; a sentence that
+#: invents WHY a `0` happened is the same defect wearing prose.
+#:
+#: `files_compared == 0` is NOT "the rule was given nothing to judge": an in-scope file
+#: ABSENT from the task pre-state is SKIPPED without comparison (`invariants.py:417-420`,
+#: an addition has nothing it could have weakened), so an agent adding one test under
+#: `tests/` lands here with a file in hand — and adding a test is the commonest agent
+#: behaviour in this project's captured data. The bounded file-budget abstain reaches it
+#: too. What is true in every sub-case is the count, so the count is all this says.
+#:
+#: `exposure is None` is NOT "this ledger predates exposure accounting": a BRAND-NEW ledger
+#: writes it for every ERRORED instance (`runner.py:158-172`), for any run with no content
+#: rule in force (`--no-default-invariants`, or a `read-only`-only policy), and for an
+#: instance whose turns never replayed (A1 runs only on the REPLAYED path,
+#: `verify/turn.py`). Stage 3 had ERRORED instances and the coming re-mint will too. The
+#: possibilities are named without picking one; the disclaimer is the load-bearing half and
+#: stays verbatim.
+_NO_OPPORTUNITY_SENTENCE = (
+    "0 file-comparison(s) — this instance's silence carries no information about the rule"
+)
+_UNRECORDED_EXPOSURE_SENTENCE = (
+    "exposure unrecorded — no exposure fact was recorded here (a ledger written before "
+    "exposure accounting, an ERRORED instance, no content rule in force, or turns that "
+    "never replayed); this is NOT a claim that the rule judged nothing"
+)
+
+
+def _exposure_line(inst) -> str:
+    """One instance's exposure sentence — exactly one of the three states, never blank.
+
+    `exposure is None` -> unrecorded. `files_compared == 0` -> no opportunity (some turn
+    recorded a fact and the total compared came to zero — the ledger records the count,
+    not the reason). Otherwise -> judged, with its own comparison/turn counts:
+    this is the one state whose sentence is NOT a fixed constant, because "judged N
+    file-comparison(s) across K turn(s)" is a fact specific to this instance, not a shared
+    phrase. `files_compared` is a SUM over turns, so it counts JUDGMENTS, not distinct
+    files — see the noun rule above `_NO_OPPORTUNITY_SENTENCE`.
+    """
+    if inst.exposure is None:
+        return f"  {inst.trace_id}: {_UNRECORDED_EXPOSURE_SENTENCE}"
+    files_compared = inst.exposure.get("files_compared", 0)
+    if files_compared == 0:
+        return f"  {inst.trace_id}: {_NO_OPPORTUNITY_SENTENCE}"
+    turns_judging = inst.exposure.get("turns_judging", 0)
+    return (
+        f"  {inst.trace_id}: judged {files_compared} file-comparison(s) across "
+        f"{turns_judging} turn(s)"
+    )
+
+
+def _exposure_section(ledger: RunLedger) -> list[str]:
+    """Which of three things happened to EVERY instance's A1 content-rule judgment.
+
+    judged / no-opportunity / unrecorded — see `_exposure_line`. Placed OUTSIDE the
+    `instrument_suspect` branch in `render_report`, exactly as `_coverage_section` is:
+    zero exposure is a limit statement about what the rule was given to judge, not a
+    rate, and the headline being suppressed must not suppress it too.
+
+    Every instance is named on its own line, sorted by `trace_id` for determinism — a
+    "no opportunity" instance's clean disposition carries NO information about the rule,
+    and a reader must be able to check exactly WHICH instances that applies to, not just
+    how many. There is deliberately no bare count-only summary: a silent instance here
+    would read as though it had nothing to say, when in fact it has one of three things
+    to say and this section exists so it always says it.
+    """
+    lines = [
+        "exposure (A1 content-rule judgment coverage, per instance — a zero-exposure "
+        "instance's clean verdict carries NO information about the rule):"
+    ]
+    if not ledger.instances:
+        lines.append("  (no instances in this ledger)")
+        return lines
+    for inst in sorted(ledger.instances, key=lambda inst: inst.trace_id):
+        lines.append(_exposure_line(inst))
+    return lines
+
+
 def render_report(ledger: RunLedger, metrics: Metrics) -> str:
     """Render the human-readable Phase-0 report, in this fixed order:
 
@@ -200,6 +294,11 @@ def render_report(ledger: RunLedger, metrics: Metrics) -> str:
        the headline. A rate can be suppressed; what Belay does not observe never can, or a
        reader sees a status with no statement of its limits. It is read back from the
        ledger, never computed here, so `belay phase0 report` (a pure re-render) shows it.
+    2c. THE EXPOSURE SECTION, one line per instance naming which of three things happened
+       to the A1 content rule's judgment — judged / no-opportunity / unrecorded — never a
+       bare silence. Also placed OUTSIDE the `instrument_suspect` branch, for the identical
+       reason as 2b: zero exposure is a limit on what the rule was given to judge, not a
+       rate, so an instrument-suspect headline must not hide it.
     3. Per-turn FAIL rate (`fail_turns()/total_turns()`), same n/a discipline.
     4. UNVERIFIED rate by named cause (`unverified_by_cause()`), one line per bucket,
        plus the overall UNVERIFIED turn share.
@@ -227,6 +326,9 @@ def render_report(ledger: RunLedger, metrics: Metrics) -> str:
     lines.append("")
 
     lines.extend(_coverage_section(ledger))
+    lines.append("")
+
+    lines.extend(_exposure_section(ledger))
     lines.append("")
 
     fail_rate = _ratio(ledger.fail_turns(), ledger.total_turns())
@@ -282,6 +384,25 @@ _DEDUP_RULE = (
     "is NOT\n"
     "  evidence of a violation, and an instance that ERRORED in every stage was never "
     "verified."
+)
+
+#: The exposure merge rule (§1.4), printed beside `_DEDUP_RULE` for the identical reason:
+#: a reduction a reader cannot see on the page is a reduction they cannot audit. It
+#: deliberately mirrors `_DEDUP_RULE`'s own wording — "reduce by ANY" for the per-instance
+#: question, "SUMMED" for the per-capture one — because it IS the same shape of decision
+#: applied to a different fact: `is_violating()` and `is_exposed()` are both ANY-reductions
+#: over one instance's captures, and `total_turns()` and `total_files_compared()` are both
+#: sums over captures without dedup.
+_EXPOSURE_MERGE_RULE = (
+    "exposure merge rule: per INSTANCE, reduce by ANY (union) — an instance is EXPOSED "
+    "iff ANY of\n"
+    "  its captures judged >= 1 file, and its exposure is UNRECORDED iff NO capture ever "
+    "recorded\n"
+    "  one (never merely 'found nothing' — see the three states below). Per CAPTURE, "
+    "files_compared\n"
+    "  is SUMMED across captures with no dedup, matching total_turns(): an instance "
+    "captured in two\n"
+    "  stages contributes both captures' counts, because both really were verified."
 )
 
 
@@ -342,6 +463,74 @@ def _disagreement_section(population) -> list[str]:
     return lines
 
 
+def _view_exposure_sentence(view) -> str:
+    """One `InstanceView`'s exposure sentence, reduced across its captures per §1.4.
+
+    Exactly one of the three states `_exposure_line` uses for a single ledger — never a
+    fourth phrasing. Shared between the population exposure section and the controls
+    block (fix round 1) so both surfaces describe the same fact identically: a control
+    that came back VERIFIED_CLEAN needs the same judged/no-opportunity/unrecorded
+    distinction an ordinary instance does, or a reader cannot tell whether the instrument
+    actually looked at it. `judged`'s numbers are summed over every capture that recorded
+    exposure (not only the capture(s) that judged >= 1 file), so a disagreeing pair (one
+    capture found 2 files, a second found 0) reports the true total rather than hiding the
+    zero-capture's contribution.
+    """
+    if view.exposure_unrecorded():
+        return _UNRECORDED_EXPOSURE_SENTENCE
+    if not view.is_exposed():
+        return _NO_OPPORTUNITY_SENTENCE
+    recorded = view.exposure_recorded_captures()
+    files_compared = sum(c.record.exposure.get("files_compared", 0) for c in recorded)
+    turns_judging = sum(c.record.exposure.get("turns_judging", 0) for c in recorded)
+    return f"judged {files_compared} file-comparison(s) across {turns_judging} turn(s)"
+
+
+def _population_exposure_section(population) -> list[str]:
+    """Which of three things happened to every instance's A1 content-rule judgment, merged.
+
+    Reduced across each instance's captures by the ANY-reduction printed in
+    `_EXPOSURE_MERGE_RULE`. **Every instance is NAMED individually, all three states alike**
+    (fix round 1) — matching Task 3's discipline on the single-ledger report exactly, so the
+    two surfaces agree. Earlier this section reported unrecorded instances as a count only;
+    that hid the one fact this aspect exists to make checkable: every ledger in `runs/`
+    predates exposure accounting, so a population built from banked data puts effectively
+    every instance in the unrecorded bucket, and a reader must be able to see WHICH
+    instances that applies to, not just how many. Ordered by `trace_id`
+    (`measured.instances()` already sorts), so the naming is deterministic.
+
+    Computed over `population.measured()`, matching the HEADLINE/alongside/disagreements
+    sections above: a control is a known-answer instance run to check the instrument, not
+    a task the agent was measured on, and this section answers the identical question
+    ("what did the rule see") for the measured set only. Controls get the same fact in
+    their own block instead — see `_controls_section`.
+
+    Ends with the per-CAPTURE alongside total — summed, no dedup, matching
+    `total_turns()`'s discipline — so the reduction is auditable in both directions on the
+    same page the merge rule is printed on.
+    """
+    measured = population.measured()
+    lines = [
+        "exposure (A1 content-rule judgment coverage, per instance — reduced across "
+        "captures by the merge rule above):"
+    ]
+    views = measured.instances()
+    if not views:
+        lines.append("  (no instances in this population)")
+        return lines
+
+    for view in views:
+        lines.append(f"  {view.trace_id}: {_view_exposure_sentence(view)}")
+
+    lines.append(
+        "alongside, per CAPTURE (summed, no dedup) = "
+        f"{measured.total_files_compared()} file-comparison(s) across "
+        f"{measured.exposure_capture_count()}/{measured.capture_count()} capture(s) that "
+        "recorded exposure"
+    )
+    return lines
+
+
 #: What a FLAGGED control means HERE, spelled out in the output rather than left to docs.
 #: The meaning is context-dependent and nothing in the data encodes the context: in a FRESH
 #: MINT a failing control says the instrument was broken while capturing, and it VOIDS the
@@ -374,7 +563,14 @@ _NO_CONTROLS = (
 
 
 def _controls_section(population) -> list[str]:
-    """The controls, partitioned out of the headline and reported with their own counts."""
+    """The controls, partitioned out of the headline and reported with their own counts.
+
+    Each control also gets its `_view_exposure_sentence` (fix round 1): a control that
+    came back VERIFIED_CLEAN could mean the rule looked and found nothing wrong, or that
+    the rule had nothing in scope to look at — the identical false-zero distinction the
+    exposure section exists to make visible, applied here to the control-integrity story
+    specifically. Same three states, same wording constants, never a fourth phrasing.
+    """
     controls = population.controls()
     views = controls.instances()
     if not views:
@@ -395,6 +591,7 @@ def _controls_section(population) -> list[str]:
         )
         suffix = " -> DETECTOR FALSE POSITIVE" if view.is_violating() else ""
         lines.append(f"    {view.trace_id}: {outcomes}{suffix}")
+        lines.append(f"      exposure: {_view_exposure_sentence(view)}")
 
     if population.failing_controls():
         lines.append(_FAILING_CONTROL_MEANING)
@@ -415,8 +612,15 @@ def render_population_report(population) -> str:
        the headline. Both carry their denominator, and a 0 denominator is `n/a`, never a
        bare `0%` and never a conjured `100%`.
     5. DISAGREEMENTS, named, or the words "no disagreement".
-    6. CONTROLS, in their own block with their own counts and their ids named — or the
-       words "controls: none", never an omitted block. Steps 2-5 are computed over
+    5b. EXPOSURE — the merge rule (§1.4) printed beside the dedup rule, then one line per
+       instance, EVERY instance named individually regardless of state (judged /
+       no-opportunity / unrecorded — reduced across captures by ANY, matching Task 3's
+       single-ledger discipline exactly, fix round 1), then the per-CAPTURE alongside
+       total, summed with no dedup. Computed over `population.measured()`, exactly like
+       steps 2-5.
+    6. CONTROLS, in their own block with their own counts and their ids named — each also
+       carrying its own exposure sentence (fix round 1, same three states/wording as 5b) —
+       or the words "controls: none", never an omitted block. Steps 2-5 are computed over
        `population.measured()`, i.e. with the controls partitioned OUT: a control is a
        known-answer instance run to check the instrument, and it is clean by construction,
        so folding it into the headline drags the rate toward zero by exactly the number of
@@ -429,7 +633,10 @@ def render_population_report(population) -> str:
 
     Deterministic: no clock, no randomness, no network, no filesystem.
     """
-    lines = _population_detector_section(population) + ["", _DEDUP_RULE, ""]
+    lines = (
+        _population_detector_section(population)
+        + ["", _DEDUP_RULE, "", _EXPOSURE_MERGE_RULE, ""]
+    )
 
     # EVERY number below is over the MEASURED population — controls partitioned out. A
     # control is a known-answer instance run to check the instrument, not a task the agent
@@ -464,6 +671,9 @@ def render_population_report(population) -> str:
     # reduction. No control outcome is lost by that: the controls block below lists every
     # capture of every control by name and stage.
     lines.extend(_disagreement_section(measured))
+    lines.append("")
+
+    lines.extend(_population_exposure_section(population))
     lines.append("")
 
     lines.extend(_controls_section(population))

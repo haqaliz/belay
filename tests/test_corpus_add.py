@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -793,3 +794,97 @@ def test_add_case_records_the_target_tool(tmp_path):
     """The composed case carries the target turn's tool name."""
     case_dir = _add_synthetic(tmp_path)
     assert load_case(case_dir).target_tool == "edit_file"
+
+
+# --- help text must not assert a precondition the code never enforces -----------------
+#
+# `add_case` reads `verdict` at exactly one place (to build `expected`) and the CLI
+# handler applies no FAIL filter. Composing a case for a turn the detector did NOT flag
+# is a supported path -- it is how a recorded miss (`corpus label --recorded-miss-note`)
+# enters the corpus at all. The old help text claimed the opposite ("one flagged turn",
+# "the trace file the flagged turn is in"), which sends a reader looking for a filter
+# that was never there and, worse, concludes the corpus cannot hold a miss.
+
+
+def test_corpus_add_help_does_not_assert_a_flagged_turn_precondition() -> None:
+    """`belay corpus add --help` must not claim a flagged/FAIL precondition on the turn.
+
+    Asserted on the PARSER's help strings, because the wrong claim in --help is exactly
+    what would send a reader looking for a filter that does not exist.
+    """
+    completed = subprocess.run(
+        [sys.executable, "-m", "belay.cli", "corpus", "add", "--help"],
+        capture_output=True,
+        timeout=30,
+    )
+    out = completed.stdout.decode(errors="replace").lower()
+
+    assert completed.returncode == 0, completed.stderr.decode(errors="replace")
+    assert "flagged turn" not in out
+    assert "flagged run" not in out
+    # the manual unflagged-turn path must be documented where a user reading --help finds
+    # it, not merely absent of the false claim.
+    assert "need not" in out or "not be flagged" in out or "any turn" in out
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        pytest.param(["--help"], id="belay---help"),
+        pytest.param(["corpus", "--help"], id="belay-corpus---help"),
+    ],
+)
+def test_the_parent_help_surfaces_do_not_assert_a_flagged_precondition(argv) -> None:
+    """The same false claim must be absent from the surfaces that actually get read.
+
+    `corpus add --help` renders only the `add` sub-parser's own strings, so a test that
+    inspects it never reaches the `corpus` sub-parser's one-line `help=` -- which is what
+    `belay --help` and `belay corpus --help` print, and which said "cases from flagged runs".
+    That is the same precondition claim, on the most-read surface, and it was the last one
+    left standing after the sweep.
+    """
+    completed = subprocess.run(
+        [sys.executable, "-m", "belay.cli", *argv],
+        capture_output=True,
+        timeout=30,
+    )
+    out = completed.stdout.decode(errors="replace").lower()
+
+    assert completed.returncode == 0, completed.stderr.decode(errors="replace")
+    assert "flagged run" not in out, out
+    assert "flagged turn" not in out, out
+
+
+def test_add_case_composes_a_case_from_a_verdict_the_detector_passed(tmp_path):
+    """A CLEAN verdict really does compose a case, and `expected` stores it as PASS.
+
+    Four docstrings now assert that pointing `corpus add` at a turn the detector verified
+    clean "is how a recorded miss gets in at all" -- and until this test, nothing ever did
+    it. Every other add test here feeds a FAIL. The claim is the premise the whole
+    recorded-miss capability stands on, so it is pinned by execution rather than by four
+    comments agreeing with each other: the PASS is carried into `expected` unchanged, which
+    is the clean verdict a human then declares a miss against.
+    """
+    clean = TurnVerdict(
+        turn_index=0,
+        tool_name="edit_file",
+        status=Status.PASS,
+        sub_verdicts=[
+            Verdict("A2", "replay", Status.PASS, None, None, "the recorded reply reproduced"),
+            Verdict("A2", "effect", Status.PASS, ["tests/test_auth.py"], None, "declared-false"),
+            Verdict(
+                "A1", "invariant", Status.PASS,
+                ["tests/test_auth.py"], {"rule": "read-only", "scope": "tests/", "turn": 0},
+                "read-only invariant on 'tests/' held at turn 0",
+            ),
+        ],
+        cause=None,
+    )
+    assert clean.status is Status.PASS  # precondition: the verdict is NOT flagged
+
+    case_dir = _add_synthetic(tmp_path, verdict=clean)
+
+    case = load_case(case_dir)
+    assert case.expected["reduced_status"] == "PASS", case.expected
+    a1 = [s for s in case.expected["sub_verdicts"] if (s["axis"], s["kind"]) == ("A1", "invariant")]
+    assert a1 == [{"axis": "A1", "kind": "invariant", "status": "PASS"}], case.expected

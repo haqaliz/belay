@@ -288,7 +288,10 @@ def test_the_declaration_names_the_handle_and_both_bundled_filenames(tmp_path):
         "tree": "task_prestate",
         "manifest": "task_manifest.json",
     }, case.task_prestate
-    assert case.schema_version == CASE_SCHEMA_VERSION == 2
+    # This literal tracks CASE_SCHEMA_VERSION and moves with each deliberate bump (it was 2
+    # when this aspect landed; `recorded-miss` moved it to 3) -- not a loosening, the same
+    # two properties stay pinned.
+    assert case.schema_version == CASE_SCHEMA_VERSION == 3
 
 
 def test_a_case_without_a_task_prestate_key_loads_and_declares_nothing(tmp_path):

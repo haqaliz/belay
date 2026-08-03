@@ -71,6 +71,20 @@ _DEFAULT_NOT_COVERED: dict[str, int] = {}
 #: honest third answer is `None`, which every surface renders as the word "unrecorded".
 _DEFAULT_DETECTOR = None
 
+#: `exposure` follows `detector`'s pattern, NOT `not_covered_turns`'s — and the two must
+#: never be confused. `not_covered_turns` defaults an absent key to `{}` (`ledger.py`
+#: below), which COLLAPSES "never recorded" into "recorded as empty"; that is survivable
+#: only because the report's prose refuses to claim either reading. It is NOT survivable
+#: here: `files_compared == 0` is a real, material finding — the A1 content rule ran and
+#: reached zero comparisons — while an absent `exposure` key means NO fact was recorded at
+#: all. That absence has several causes and this field distinguishes none of them: a ledger
+#: written before exposure accounting (every ledger in `runs/`), an ERRORED instance
+#: (`runner.py`), a run with no content rule in force, or an instance whose turns never
+#: replayed. Defaulting the absence to a zeroed dict would fabricate the former from any of
+#: the latter. So there is deliberately no `_DEFAULT_EXPOSURE` sentinel dict:
+#: `_instance_from_json` reads `raw.get("exposure")` and lets a missing key resolve to the
+#: dataclass field's own `None` default, exactly as `detector` does for the whole ledger.
+
 
 @dataclass(frozen=True)
 class DetectorIdentity:
@@ -121,6 +135,19 @@ class InstanceRecord:
     Note it is NOT part of `turn_status_counts`: a turn's reduced status can never be
     NOT_COVERED (`verdict.reduce` drops it), so this is a second, orthogonal tally, and
     `total_turns()` — which sums `turn_status_counts` blindly — stays correct.
+
+    `exposure` is how many files the A1 content rule (`no-assertion-weakening`) actually
+    judged, summed from the `expected["exposure"]` fact each A1 sub-verdict may carry
+    (`invariants.py`'s `_evaluate_content_rule`). It is `None` — UNRECORDED — whenever no
+    turn ever carried that key: a ledger from before this aspect, an instance whose only
+    declared invariant is `read-only` (which has no exposure concept), or an instance with
+    no declared invariants at all. It is a `dict` — `{"files_compared": int,
+    "turns_judging": int, "turns_recorded": int}` — the moment even ONE turn recorded the
+    fact, and `files_compared` can legitimately be `0` in that dict (nothing was in scope
+    to judge). `None` and `{"files_compared": 0, ...}` are DIFFERENT claims and must never
+    be conflated — see `_DEFAULT_DETECTOR`'s comment for why this follows `detector`'s
+    pattern rather than `not_covered_turns`'s. Also NOT part of `turn_status_counts`, for
+    the identical reason `not_covered_turns` is not.
     """
 
     trace_id: str
@@ -132,6 +159,7 @@ class InstanceRecord:
     unverified_causes: dict[str, int]
     error: Optional[str]
     not_covered_turns: dict[str, int] = field(default_factory=dict)
+    exposure: Optional[dict] = None
 
 
 @dataclass(frozen=True)
@@ -198,8 +226,15 @@ class RunLedger:
 
 
 def _instance_to_json(inst: InstanceRecord) -> dict:
-    """One `InstanceRecord` as a plain JSON-able dict (disposition rendered as its name)."""
-    return {
+    """One `InstanceRecord` as a plain JSON-able dict (disposition rendered as its name).
+
+    `"exposure"` is OMITTED ENTIRELY when unrecorded — mirroring `to_json`'s treatment of
+    the ledger-level `"detector"` key, and for the identical reason: writing
+    `"exposure": null` would rewrite every pre-existing ledger's bytes on its next
+    re-render for no information gained, and would put a `null` where the honest answer is
+    that the key never existed.
+    """
+    payload = {
         "trace_id": inst.trace_id,
         "disposition": inst.disposition.name,
         "turn_status_counts": dict(inst.turn_status_counts),
@@ -210,6 +245,9 @@ def _instance_to_json(inst: InstanceRecord) -> dict:
         "error": inst.error,
         "not_covered_turns": dict(inst.not_covered_turns),
     }
+    if inst.exposure is not None:
+        payload["exposure"] = dict(inst.exposure)
+    return payload
 
 
 def _detector_to_json(detector: DetectorIdentity) -> dict:
@@ -272,6 +310,13 @@ def _instance_from_json(raw: object) -> InstanceRecord:
         # field here is fail-closed; this one must not be, or every ledger written before
         # the coverage boundary was recorded becomes unreadable.
         not_covered_turns=dict(raw.get("not_covered_turns", _DEFAULT_NOT_COVERED)),
+        # `raw.get("exposure")`, deliberately with NO default dict — see the comment beside
+        # `_DEFAULT_DETECTOR`. A missing key resolves to `None` (unrecorded); a present key
+        # is copied defensively, exactly as `not_covered_turns` is, so the loaded record
+        # never aliases the caller's payload dict.
+        exposure=(
+            dict(raw["exposure"]) if isinstance(raw.get("exposure"), dict) else raw.get("exposure")
+        ),
     )
 
 

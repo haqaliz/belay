@@ -1,206 +1,205 @@
-# Understanding — `feat/phase0-reverify-banked`
+# Phase-2 understanding — `under-firing-measurable`
 
-Written 2026-07-30 after a four-agent read-only dig (`dig-phase0-engine`, `dig-corpus-labels`,
-`dig-published-record`, `dig-banked-data`; all four returned). Every claim is either cited to
-`file:line` or was measured on disk in this session. Where an agent and my own measurement
-disagreed, both are recorded and the disagreement named.
+**Date:** 2026-08-03 · **Base:** `origin/master` @ `4e5634d` (v0.11.0)
+**Baseline confirmed in this worktree:** `uv run pytest` → **1238 passed, 1 skipped, 1 deselected**.
 
-> Replaces the predecessor note for `phase0-stage3-publish`, preserved in git history.
+Produced from four read-only dig agents (A1 exposure path, corpus lifecycle, banked-data
+exposure survey, repo conventions). Every claim below carries a citation; where a dig
+**overturned** the card's premise, it is marked ⚠ **CORRECTION**.
 
 ---
 
 ## 1. What the work is really asking
 
-Two deliverables sharing one execution:
+v0.11.0 measured **1/15 instances (6.7%)** under `no-assertion-weakening`. Fourteen instances
+flagged nothing, and the record cannot say whether that means *clean* or *blind*
+(`PHASE0_RESULTS.md` → blindness clause). This unit is supposed to make that separable, and
+to make a *missed* violation representable so under-firing can be regression-tested.
 
-1. **A measurement.** Re-verify the banked captures under the A1 rule that ships today
-   (`no-assertion-weakening`, `src/belay/verify/invariants.py:615`) and report the number with
-   its denominator. This is the only held-out real data the new rule has ever seen — it was
-   fitted on the 7 negative fixtures plus `pytest-5227`, and `README.md:183` correctly says its
-   precision is *"not yet measured"*.
-2. **A record correction.** Every published Phase-0 number was produced by the **replaced**
-   detector, so the record and the shipped code disagree. The repo already has a convention for
-   fixing that without destroying provenance (§6).
-
-**It is emphatically not a gate run.** PROCEED requires a denominator **≥50**
-(`docs/planning/phase0-live-mint/prd.md:58-71`), and that clause is *detector-independent* — it
-counts instances minted, not the rule that scored them. No re-verification of already-banked
-data can satisfy it. R1's quantitative form stays untested.
+The dig confirms the problem is real, but **relocates it**. Two of the three assumed defects
+are not where the card said they were.
 
 ---
 
-## 2. The population, measured — including a correction to my own card
+## 2. ⚠ CORRECTION — the corpus can ALREADY store a false negative
 
-Measured this session over `eval/mint/*/batch/trace-*.jsonl` in the
-`feat-verdict-coverage-status` worktree:
+The card asserted an unflagged turn *"can never become a case"*. That is true of the
+**automated** path only.
 
-| Stage | Captures | Turns (`tools/call`) | Notes |
+- `add_case` enforces **no precondition on `verdict.status`** — `verdict` is read at exactly
+  one place, `corpus/add.py:336-342`, to build the `expected` dict. It will compose a case
+  whose `expected.reduced_status` is `"PASS"`.
+- `belay corpus add --turn N` **applies no FAIL filter** in its handler (`cli.py:764-845`);
+  it verifies whatever turn you name and hands the verdict straight to `add_case`.
+- `corpus label --label true-positive --root-cause-key …` (`curate.py:34-83`) then produces
+  exactly the shape the FN cell needs.
+- `metrics.py` needs **no change at all**: `elif is_bad: fn += 1` (`metrics.py:242-243`) is
+  implemented *and already unit-tested* — `tests/test_corpus_metrics.py:95` constructs
+  `_case("PASS", "true-positive", "fn")` and asserts `fn == 1`.
+
+**So the storage half is nearly free.** What is actually missing:
+
+1. `phase0/runner.py:255` is the choke point —
+   `flagged_turns = [n for n in range(len(calls)) if verdicts[n].status is Status.FAIL]` — and
+   it is the *only* automated ingest population.
+2. The CLI **help text asserts a precondition the code does not have**: *"compose a
+   self-contained, labeled case from one flagged turn"* (`cli.py:1683`) and *"the trace file
+   the flagged turn is in"* (`cli.py:1699`), repeated at `add.py:1` and `add.py:272`. The
+   manual FN path exists, is undocumented, and is contradicted by its own help.
+
+### The real, deep defect the dig found: **`corpus run` inverts on a stored miss**
+
+A stored FN has `expected.reduced_status == "PASS"`. `classify_case` (`run.py:201-228`)
+compares the recomputed verdict against `expected` alone — it never consults `human_label`.
+Therefore:
+
+- **today** such a case reports **MATCH** — the regression suite would certify *"the engine
+  still misses this"* as a pass;
+- **the day the detector is sharpened to catch it**, the case flips to **REGRESSION** and
+  `belay corpus run` exits 1 (`cli.py:908-914`) — **CI goes red for a fix**.
+
+`run.py:31-35` pre-emptively forbids the cheap escape (*"Do not add a new SKIP cause to quiet
+that"*). An honest fix needs a deliberate decision: either a stored per-case notion of *"this
+expected verdict is a recorded MISS, not guarded behaviour"* (a `case.json` field ⇒ **schema
+v3**, under the existing fail-closed / omitted-means-undeclared discipline), or a **fourth
+outcome** beside MATCH/REGRESSION/SKIP (which touches `CorpusRun`'s counters and the
+`has_regression` exit contract, `run.py:145-161`). Classifying on `human_label` inside
+`run.py` is **not** an option — it would couple regression detection to the very labels the
+metric scores independently.
+
+**This is the hardest design question in the unit, and it did not exist in the card.**
+
+---
+
+## 3. The exposure gap is real, and larger than the card described
+
+`compared` lives only in `_evaluate_content_rule` (`invariants.py:320-468`) — the `read-only`
+rule has no exposure concept at all. Of its **nine** return paths, `compared` appears on
+**one**, and only inside an English message (`invariants.py:465-466`):
+
+| path | line | `in_scope` | `compared` | reported? |
+|---|---|---|---|---|
+| 5 early abstains | :359, :365, :371, :382, :388 | not computed | not computed | — (must read **absent**) |
+| file-budget abstain | :398 | computed | not initialised | count in prose only |
+| **FAIL** | :440 | ✔ | ✔ | **neither** |
+| abstain-after-judging | :451 | ✔ | ✔ | only `len(abstentions)` |
+| **PASS** | :459 | ✔ (structured, via `observed`) | ✔ | **prose only** |
+
+The FAIL path — the one an under-firing analysis most wants (*"it flagged 1 file; how many did
+it even look at?"*) — reports neither. Two semantics worth pinning: `compared` **includes
+deletions**, and it counts *judgement attempts*, not decided comparisons (a file whose
+pre-state won't parse increments at `:430` then returns UNVERIFIED from `_judge_file`).
+
+**`Verdict` needs no new field**: `expected` is already a free-form dict carrying `"cause"`
+(`invariants.py:352`), and `reduce` reads only `.status` (`verdict.py:96-114`). But **no
+serializer anywhere writes `observed` or `expected`** — a fact placed there reaches memory and
+nothing else (`corpus/add.py:336-342`, `corpus/run.py:164-172`, `interop/report.py:154-190`
+are the only three writers, and all three project to `(axis, kind, status)`).
+
+### ⚠ The back-compat hazard is material here, unlike its precedent
+
+`ledger.py:274` reads `not_covered_turns` as `raw.get(..., {})` — **absent collapses into
+empty at load**, and the distinction is recovered nowhere in code; it is handled purely by the
+report's *wording* (`report.py:173-177`, which refuses to claim either reading).
+
+**That trick does not transfer.** For exposure, *"0 files compared"* is a real and material
+finding — it **is** the under-firing claim — while *"not recorded"* is a format gap. Collapsing
+them would let every old ledger (i.e. the entire re-measurement population) read as *"the
+detector was silent because it compared nothing"*, **fabricating exactly the finding this unit
+exists to establish honestly.** The pattern to copy is `detector`: `Optional[…] = None`, absent
+→ `None`, and **omit the key from `to_json`** rather than writing null (`ledger.py:228-239`).
+
+Two further traps: never fold exposure into `turn_status_counts` (`total_turns()` sums it
+blindly and is the denominator of the FAIL rate, the UNVERIFIED share *and* the coverage
+fractions); and `runner.py:157-167` builds the **ERRORED** record positionally, where the
+honest answer is *absent*, not *0 compared*. Finally, `belay phase0 combine` renders **no**
+coverage section at all (`report.py:404-471`) — and that is the surface the 1/15 headline is
+published from, so a per-instance field needs a `Population` accessor written from scratch,
+with its merge rule (sum-over-captures vs reduce-over-instances) **chosen and stated**.
+
+---
+
+## 4. ⚠ The decisive finding: the held-out adjudication set is **2 turns**
+
+Static, argument-based survey of all 24 banked captures. Turn counts reproduce
+`acceptance.out` **exactly** (20/20/11/130/216 = 392 non-control), so the extraction is sound.
+
+- The filesystem server is the **only** tool surface — no shell tool was ever called, so there
+  are no `command_line`-embedded writes.
+- **17** real writes land on a `.py` file under a `tests`/`testing` **path segment**, across
+  **6 of 15** instances. **9 instances have zero exposure** — their silence carries *no
+  information about the rule*, and **no amount of re-verifying this data can change that.**
+- Of the 17: **7 flagged** (all `pytest-5227`, the fitted-on instance); **10 passed**.
+- Of those 10: 1 is `pytest-5227` s2 turn 8 (fitted-on, the known-correct PASS), and **7 are
+  exactly the 7 already-hand-adjudicated false positives** — `flask-4045` t8,
+  `flask-4992` t10/12/14/19, `pylint-5859` t6/11, i.e. the corpus's existing negative fixtures.
+
+**That leaves exactly two un-adjudicated held-out exposure turns in the entire banked corpus:**
+
+| instance | stage | ledger turn | file |
 |---|---|---|---|
-| `s1` / `s1b` / `s1p` | 1 / 1 / 1 | 20 / 20 / 11 | three independent mints of `pallets__flask-4045` |
-| `s2/batch` | 9 | 130 | 7 instances + **2 controls** |
-| `s3/batch` | 12 | 216 | 12 instances, **0 controls** |
-| **total** | **24** | **397** | 10.31 MB of traces; 4.7 GB of stage dirs |
+| `pytest-dev__pytest-5692` | s3 | 8 | `testing/test_junitxml.py` |
+| `pytest-dev__pytest-6116` | s3 | 15 | `testing/test_collection.py` |
 
-- **17 distinct trace ids** = 15 non-control instances + 2 controls.
-- **`s2/batch` ∩ `s3/batch` = 5 instances** (`flask-4992`, `requests-1963`, `pylint-5859`,
-  `pytest-5221`, `pytest-5227`), each pair differing in size *and* turn count — genuine
-  independent re-mints, not duplicated files.
-- Every trace has a sibling `.manifests/` dir, and **manifest count == turn count** in all 24.
-- All 24 recorded `source_root` paths **exist on disk today**.
+Both on instances never before examined. **n = 2.** That is the entire held-out recall
+denominator available without a new mint — and it is an *upper* bound, since a write that
+**creates** a test file cannot weaken anything and the survey cannot separate create-from-modify
+statically.
 
-> **Correction to `_card/issue.md` as first written.** I wrote "16 unique instances". Wrong.
-> The published **16** is a *sum of ledger rows* across four ledgers (`s1p` 1 +
-> `stage1-recheck` 1 + `s2` 9 + `s3-partial` 5), double-counting `flask-4045` and the two
-> instances shared by `s2.json`/`s3-partial.json`. The unique non-control population is **15**.
-> Both "5 overlapping" and "2 overlapping" appear in evidence and **both are true, of different
-> populations**: 5 in the captures on disk, 2 in the published ledgers. The card is now fixed.
-
-**The finding underneath it.** `s3-partial.json` ledgered only **5 of s3's 12** captures, so
-**7 captured instances appear in no ledger under `runs/` at all**. The re-verifiable population
-is therefore *larger and cleaner* than the published one, and at 397 turns there is no reason
-to reproduce the partial coverage.
-
-**The 56 failed s3 instances cannot contaminate anything.** `s3/checkpoint.json` records
-56 `failed` / 12 `captured`, all 56 reasons `Error code: 429`. All 56 have handshake-only traces
-with **zero** `tools/call`, and **none is in `batch/`** — so `phase0 run <stage>/batch` cannot
-pick them up. (Two are large — `django-12856` at 2.2 MB — but still zero tool calls.)
+**Read this correctly:** it does not make the unit pointless. It makes the unit *cheap and
+decisive* — two turns is a tractable adjudication, and the exposure accounting is what turns
+*"14 silent instances"* into *"9 never exposed, 5 exposed-and-passed, of which 7 turns were
+already adjudicated FP and 2 are new."* But it caps what any result can claim, and the PRD must
+pre-register that cap.
 
 ---
 
-## 3. Four capabilities the acceptance criteria need, and none exists
+## 5. ⚠ A separate integrity finding, not in the card
 
-This is the dig's core finding: **the unit is not "run a command and write up the output"** —
-each of (a)–(d) names behaviour the engine does not have.
+**The v0.11.0 ledgers do not exist.** No `reverify-*.json` is on disk in any worktree; the
+`corpus/reverify-20260731` directory is gone; `git ls-files` shows only the planning docs. The
+sole surviving record of the published **1/15** is the aggregate prose in
+`reverify-measurement/acceptance.out`, which contains **zero** per-turn lines and zero
+occurrences of `"file(s) compared"`.
 
-| # | Criterion | Status today | Citation |
-|---|---|---|---|
-| (a) | merged ledger + tested dedup | **absent.** No merge, no dedup, no multi-ledger `report`. `RunLedger` is a bare `list[InstanceRecord]`, so a naive concat double-counts every shared `trace_id` in every aggregate | `phase0/ledger.py:104-162`, `cli.py:1258-1273` |
-| (b) | ledger records rule identity | **absent — and no version field either.** Nine serialized fields, none naming a rule, config, or sha. An old-detector ledger is indistinguishable from a current one *by reading it* | `phase0/ledger.py:92-100,165-240` |
-| (c) | controls reported separately | **absent.** Controls are only a `control__` id prefix (`eval/instances/controls.py:89-150`); `report.py` has no control branch, so a control folds into the **headline violation rate** silently. "A FAILing control voids the mint" is prose, enforced nowhere in code | `phase0/report.py`, `phase0-live-mint/prd.md:73-85` |
-| (d) | re-ingest never overwrites a label | **absent — and the real behaviour is worse than an overwrite** (§4) | `corpus/add.py:266-284`, `phase0/runner.py:246-262` |
+`docs/ROADMAP.md` claims *"the **ledger → report path is fully reproducible** from fixed
+traces — anyone given the trace set reproduces the identical number"* and that the number *"is
+re-derivable by a stranger from a committed ledger (`belay phase0 report` is a pure
+re-render)"*. **No ledger was committed.** A ledger holds only trace ids, counts, dispositions
+and causes — no raw data — so committing one does not touch the no-raw-data-egress guardrail.
 
-Useful asymmetry for (b): `Case` **does** record `invariants` per case (`corpus/add.py:306`), so
-the corpus knows which rule flagged it while the ledger does not. That is the shape of the fix.
-
----
-
-## 4. The re-ingest hazard, traced end to end (highest severity)
-
-Running the stock command over the banked stages with the default `--corpus-dir` does real
-damage, and it surfaces as a *measurement result* rather than as an error:
-
-1. `runner.py:255` always passes `human_label="pending"` — a re-ingest that **succeeds** stamps
-   over a human adjudication.
-2. It does not succeed: `add.py:279` calls `shutil.copytree(..., case_dir / "prestate")` with
-   **no `dirs_exist_ok`**, so an existing case dir raises `FileExistsError`.
-3. That is **not** a `ValueError`, so `runner.py:261`'s handler misses it. It reaches
-   `run_batch`'s broad `except Exception` (`runner.py:147`) and the **entire instance** is
-   recorded `ERRORED` — every turn's data discarded, not just the colliding turn.
-4. `ERRORED` is **excluded from `violation_denominator()`** (CLEAN+FLAGGED only,
-   `ledger.py:114-120`), so the denominator silently *shrinks*; enough of them trips
-   `instrument_suspect()` (`report.py:65-87`) — **a fake `INSTRUMENT SUSPECT`, i.e. a fake
-   PIVOT**, the failure mode this repo already treats as load-bearing.
-5. `add.py:272` truncates `trace.jsonl` **before** the raise, leaving the case dir
-   half-overwritten: new trace, old `prestate/`, old `case.json`.
-
-The labels therefore survive **by accident** (the crash lands before `write_case`), at the cost
-of a corrupted case dir and a bogus ledger. There is **no `--no-ingest` flag**
-(`cli.py:1778-1847`); the only lever is `--corpus-dir`. No test covers a collision.
-
-**Backup caveat:** `corpus-labels-backup-20260729/` holds only 7 flat `case.json` files — no
-`trace.jsonl`, `prestate/`, or `task_prestate/`. It restores adjudications, not replayability.
+**Proposed scope addition, for the review gate:** emit and **commit** the ledger this unit's
+measurement produces, so the number it publishes is re-derivable from a repo artifact. Cheap,
+and it closes a claim the record currently cannot back.
 
 ---
 
-## 5. Feasibility — confirmed, with one honest unknown
+## 6. Wedge / axes / guardrail check
 
-```
-belay phase0 run <STAGE>/batch --ledger OUT.json --corpus-dir <scratch> \
-  --server node /Users/aliz/…/feat-phase0-mint-execution/eval/servers/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js '{workspace}'
-```
-
-- `--server` is a `REMAINDER` passthrough and the literal `{workspace}` token is substituted
-  per-trace with that trace's own recorded root (`cli.py:1835-1846`) — that is what lets **one**
-  command verify a heterogeneous batch.
-- Server entrypoint exists (28,217 bytes, ESM); `node` is v22.21.1. An absolute `trace_dir`
-  works — nothing in `run_batch` assumes repo-relative paths (`runner.py:131`, `:81-90`).
-- The filesystem server's recorded args are **workspace-relative** (`"path":
-  "src/flask/scaffold.py"`), so the `run_process`/`command_line` relocation edge case does not
-  apply to this server type.
-- Offline and keyless: no network, no randomness; the only clock read is `captured_at` at the
-  CLI boundary (`cli.py:1211`). So (e) is nearly free — but must still be **pinned by a test**,
-  since nothing enforces it.
-- **Honest unknown:** whether all 397 turns are single-root-relative is a replay-time answer;
-  only `s1` was spot-checked. Cross-root reads would degrade to `UNVERIFIED`, not to a false
-  PASS — the safe direction, and the UNVERIFIED-by-cause line would expose it.
-
-Wall-clock is driven by 397 restore+re-invoke+diff cycles, not by the 4.7 GB.
+- **Harness-side, no drift.** Nothing here authors or orchestrates an agent, and no verdict
+  comes from an LLM's opinion — exposure is a count produced by the same deterministic
+  comparison that produces the verdict, and adjudication is explicitly a *human* step kept in
+  its own evidence grade.
+- **Axis: A1 only.** No change to A2/A3 semantics, `verdict.reduce`, or the `NOT_COVERED`
+  boundary. `reduce` reads only `.status`, so exposure is invisible to it by construction.
+- **Moat #2 compounds:** the corpus gains the ability to hold a miss, which is what makes
+  under-firing regression-testable rather than merely narratable.
+- **Honesty contract:** the whole unit is an *absent-vs-zero* discipline problem. `UNVERIFIED`
+  is untouched; the new risk is a **0 that means "not recorded"** being read as a finding.
 
 ---
 
-## 6. Two conventions to follow, not reinvent
+## 7. Open questions for the requirements interview
 
-**The freeze protocol** — `invariant-rule-wiring/acceptance.sh` (committed `95e6ff8`, freezing
-`151a267`), verbatim from its header: *(1)* the frozen rule is committed FIRST, in a commit
-containing no result of the run; *(2)* the script is run ONCE and its output committed verbatim
-in the NEXT commit, whatever it says; *(3)* a second run is permitted ONLY if declared as such
-in the write-up. It prevents iterating against a held-out fixture and presenting the result as
-a first attempt. Fixture-agnostic, so it applies here unchanged.
-
-**The correction convention** — from `PHASE0_RESULTS.md:88-92,335-451` and the
-`Superseded — kept for the record` blocks: retrofit a **warning banner** above stale numbers;
-keep the original sentence and **append** an annotation beside it; add a literal **"what
-changed, and what did not"** table; state the **evidence grade** (execution vs human
-adjudication) explicitly; and **name what was deliberately left untouched, and why** — shipped
-`CHANGELOG` entries are never rewritten (the correction goes in the *next* entry) and dated
-planning docs stay stale on purpose, because they are the provenance trail.
-
----
-
-## 7. Pre-existing defects in the record — surfaced, NOT to be silently fixed
-
-Already parked by the repo, with reasons; fixing them here would be exactly the scope creep the
-convention forbids:
-
-- **The `16` denominator is internally inconsistent**, and the doc says so
-  (`PHASE0_RESULTS.md:104` vs `:109-111`; Open Item #1 at `:437-443`).
-- **`0% UNVERIFIED` is false as a whole-mint claim** and is already self-corrected in place
-  (`:164` vs `:174-186`): `s2` is 2/130, `stage1-recheck` 1/12, both *"replayed but result
-  unverified"*. **Detector-independent** — it will persist across the re-verify.
-- **"5 distinct runs" vs "3 runs contributed cases" vs "4 ingestion timestamps"** is
-  unreconciled and deliberately left so (Open Item #3, `:448-451`).
-
-Side staleness found: `CLAUDE.md`'s *"1005 tests"* is out of date — this branch measures
-**1198 passed, 1 skipped, 1 deselected**. And `README.md:183` is the one public sentence this
-unit's result will invalidate.
-
----
-
-## 8. Guardrail and axis check (`CLAUDE.md`)
-
-- **Axis:** measures **A1** only. Changes **no** verdict semantics — not A2, not A3, not
-  `verdict.reduce`, not the `NOT_COVERED` boundary. The A1 *rule* is out of scope: it is the
-  thing under measurement, and editing it mid-measurement is what the freeze protocol prevents.
-- **No agent framework, no LLM judge:** re-verification is pure re-execution, zero model calls;
-  the zero-LLM AST guard over `src/belay/verify/` is untouched.
-- **No raw-data egress:** captures and corpus stay in their worktrees, gitignored, referenced by
-  absolute path. Only the ledger, the report, and the write-up are committed.
-- **UNVERIFIED never PASS:** unchanged, and the UNVERIFIED-by-cause line must travel with the
-  number.
-
----
-
-## 9. Ambiguities for the interview (Phase 3)
-
-1. **Population unit — captures or instances?** 24 captures vs 15 unique non-control instances
-   (`flask-4045` minted 3×, five instances 2×). This decides the published denominator.
-2. **Dedup policy for a duplicated instance** (acceptance (a)): worst-verdict-wins, latest
-   capture wins, or report both? They are re-mints with different trajectories, so they can
-   legitimately disagree.
-3. **Where detector identity lives** (acceptance (b)): a new `RunLedger` field — a `src/belay/`
-   schema change needing back-compat that reads an old ledger as *unrecorded*, never as
-   *current* — or an out-of-band sidecar?
-4. **Is the `add_case` collision defect (§4) in scope**, or is a scratch `--corpus-dir` enough?
-   It is a real product defect, discovered here.
-5. **How far does "correct the published record" go** — the minimal correction plus
-   `README.md:183`, or also the parked Open Items in §7?
+1. **`corpus run` on a stored miss** (§2): schema-v3 case field, or a fourth outcome? This is
+   the unit's real design decision. A stored FN must not certify blindness as MATCH, and must
+   not turn CI red when the detector is fixed.
+2. **Merge rule for exposure across `combine`** (§3): sum-over-captures (matches
+   `total_turns()`) or reduce-over-instances (matches the violation denominator)? They differ,
+   and the headline is published from this surface.
+3. **Does `belay verify` surface exposure too**, or `phase0` only? (`cli.py:565-578`, `:597-633`)
+4. **Adjudicate the 2 held-out turns inside this unit, or scope it to the instrument?** n=2 is
+   cheap, but it is human judgment and belongs in its own evidence grade.
+5. **Commit the ledger?** (§5) — in or out of scope.
+6. **Should the 9 zero-exposure instances be reported as a named category** in the report, so
+   *"silent"* never again reads as *"clean"*?

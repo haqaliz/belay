@@ -1,0 +1,15 @@
+{
+  "instances": [
+    {
+      "trace_id": "trace-pytest-dev__pytest-5227",
+      "disposition": "VERIFIED_CLEAN",
+      "turn_status_counts": {"PASS": 20, "FAIL": 0, "WARN": 0, "UNVERIFIED": 0},
+      "flagged_turns": [],
+      "flagged_addable": [],
+      "flagged_unaddable": [],
+      "unverified_causes": {},
+      "error": null,
+      "not_covered_turns": {"effect:network": 20}
+    }
+  ]
+}

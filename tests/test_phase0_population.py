@@ -52,6 +52,7 @@ def _instance(
     unverified_causes: dict | None = None,
     error: str | None = None,
     not_covered_turns: dict | None = None,
+    exposure: dict | None = None,
 ) -> InstanceRecord:
     return InstanceRecord(
         trace_id=trace_id,
@@ -63,6 +64,7 @@ def _instance(
         unverified_causes=unverified_causes or {},
         error=error,
         not_covered_turns=not_covered_turns or {},
+        exposure=exposure,
     )
 
 
@@ -262,8 +264,14 @@ def test_disagreeing_instances_are_named() -> None:
     assert "VERIFIED_CLEAN" in disagreement_line
     assert "VERIFIED_FLAGGED" in disagreement_line
     assert "worst-verdict-wins" in disagreement_line
-    # The instance the stages AGREED on is not listed as a disagreement.
-    assert "trace-agreed" not in report
+    # The instance the stages AGREED on is not listed as a DISAGREEMENT. Narrowed from a
+    # whole-report substring check (fix round 1) to the disagreement block specifically: the
+    # whole-report check was a proxy for this section, and it broke the moment a legitimate
+    # OTHER section (exposure) started naming every instance too, including agreed ones for
+    # reasons that have nothing to do with disagreement. Scoping to the block keeps this
+    # test exactly as strict about the property it actually exists to pin.
+    disagreement_block = report.split("disagreements", 1)[1].split("\n\n", 1)[0]
+    assert "trace-agreed" not in disagreement_block
 
 
 def test_a_population_without_disagreements_says_so() -> None:
@@ -372,6 +380,210 @@ def test_population_report_states_each_stages_detector() -> None:
     current_block = report.split("s3:")[1]
     assert "no-assertion-weakening" in current_block
     assert "belay 0.10.0" in current_block
+
+
+# --- (8) exposure: per-instance ANY-reduction, per-capture sum, both reported ----------
+
+
+def test_instance_is_exposed_if_any_capture_judged_a_file() -> None:
+    """An instance is EXPOSED iff ANY of its captures judged >= 1 file — the ANY-reduction.
+
+    `trace-x`'s `s2` capture recorded exposure but judged nothing in scope; its `s3`
+    capture judged one file. Mirroring `is_violating`'s worst-verdict-wins reduction
+    (`population.py:137-146`), the instance is exposed on the strength of the capture that
+    found something, not averaged down by the capture that found nothing.
+    """
+    s2 = _ledger(
+        _instance(
+            "trace-x",
+            Disposition.VERIFIED_CLEAN,
+            exposure={"files_compared": 0, "turns_judging": 0, "turns_recorded": 1},
+        )
+    )
+    s3 = _ledger(
+        _instance(
+            "trace-x",
+            Disposition.VERIFIED_CLEAN,
+            exposure={"files_compared": 1, "turns_judging": 1, "turns_recorded": 1},
+        )
+    )
+    population = Population.from_labeled([LabeledLedger("s2", s2), LabeledLedger("s3", s3)])
+
+    view = population.instances()[0]
+    assert view.is_exposed() is True
+    assert view.exposure_unrecorded() is False
+    assert view.trace_id == "trace-x"
+
+
+def test_instance_exposure_is_unrecorded_only_when_no_capture_recorded_it() -> None:
+    """UNRECORDED iff NO capture recorded exposure at all — never merely "no files found".
+
+    `trace-old` predates exposure accounting in both stages: `exposure is None` on every
+    capture. That is a DIFFERENT claim from `trace-empty`, whose single capture DID record
+    exposure and found nothing in scope — the "no opportunity" state, not "unrecorded".
+    Collapsing the two would fabricate a measurement for a ledger that never took one.
+    """
+    old_s2 = _ledger(_instance("trace-old", Disposition.VERIFIED_CLEAN))
+    old_s3 = _ledger(_instance("trace-old", Disposition.VERIFIED_CLEAN))
+    empty = _ledger(
+        _instance(
+            "trace-empty",
+            Disposition.VERIFIED_CLEAN,
+            exposure={"files_compared": 0, "turns_judging": 0, "turns_recorded": 1},
+        )
+    )
+    population = Population.from_labeled(
+        [LabeledLedger("s2", old_s2), LabeledLedger("s3", old_s3)]
+    )
+    empty_population = Population.from_labeled([LabeledLedger("s2", empty)])
+
+    old_view = population.instances()[0]
+    assert old_view.trace_id == "trace-old"
+    assert old_view.exposure_unrecorded() is True
+    assert old_view.is_exposed() is False
+
+    empty_view = empty_population.instances()[0]
+    assert empty_view.exposure_unrecorded() is False
+    assert empty_view.is_exposed() is False
+
+
+def test_population_report_prints_the_exposure_merge_rule() -> None:
+    """The exposure merge rule is PRINTED, beside the dedup rule — not merely documented.
+
+    The dedup rule is printed in the output rather than left to a docstring
+    (`population.py:342-351`/`report.py:342-351`), and this aspect owes exposure the same
+    discipline: a reader who cannot see the reduction on the page cannot audit it.
+    """
+    population = Population.from_labeled(
+        [LabeledLedger("s2", _ledger(_instance("trace-a", Disposition.VERIFIED_CLEAN)))]
+    )
+
+    report = render_population_report(population)
+
+    assert "per INSTANCE, reduce by ANY" in report
+    assert "per CAPTURE" in report
+    assert "SUMMED" in report or "sum" in report.lower()
+
+
+def test_captures_disagreeing_on_exposure_are_reduced_by_the_stated_rule() -> None:
+    """One instance, one capture judged a file, one recorded nothing — BOTH numbers reported.
+
+    Per-instance: `trace-y` reduces to EXPOSED (ANY-reduction). Per-capture: the totals are
+    SUMMED across both captures without dedup, matching `total_turns()`'s discipline — the
+    same instance's two captures both contribute their own `files_compared`.
+    """
+    s2 = _ledger(
+        _instance(
+            "trace-y",
+            Disposition.VERIFIED_CLEAN,
+            exposure={"files_compared": 2, "turns_judging": 1, "turns_recorded": 1},
+        )
+    )
+    s3 = _ledger(
+        _instance(
+            "trace-y",
+            Disposition.VERIFIED_CLEAN,
+            exposure={"files_compared": 0, "turns_judging": 0, "turns_recorded": 1},
+        )
+    )
+    population = Population.from_labeled([LabeledLedger("s2", s2), LabeledLedger("s3", s3)])
+
+    assert tuple(v.trace_id for v in population.instances() if v.is_exposed()) == ("trace-y",)
+    assert population.total_files_compared() == 2
+    assert population.exposure_capture_count() == 2
+
+    report = render_population_report(population)
+    exposure_line = next(line for line in report.splitlines() if "trace-y" in line and "judged" in line)
+    assert "judged" in exposure_line
+
+    alongside_line = next(
+        line
+        for line in report.splitlines()
+        if "file-comparison(s)" in line and "capture" in line.lower()
+    )
+    assert "2 file-comparison(s)" in alongside_line
+
+
+def test_unrecorded_instances_are_named_individually_not_only_counted() -> None:
+    """Fix round 1: UNRECORDED instances are named INDIVIDUALLY, sorted — like Task 3's
+    single-ledger report, and unlike this population report's first cut, which reported
+    them as a count only.
+
+    Every ledger in `runs/` predates this aspect, so a population built from banked data
+    puts every instance in the unrecorded bucket today — a reader of the published
+    headline must be able to check exactly WHICH instances carried no information, not just
+    how many, or the headline's biggest caveat becomes unauditable the moment it matters.
+    """
+    s2 = _ledger(
+        _instance("trace-b-unrecorded", Disposition.VERIFIED_CLEAN),
+        _instance("trace-a-unrecorded", Disposition.VERIFIED_CLEAN),
+    )
+    population = Population.from_labeled([LabeledLedger("s2", s2)])
+
+    report = render_population_report(population)
+
+    exposure_section = report.split("exposure (", 1)[1].split("\n\n", 1)[0]
+    a_line = next(line for line in exposure_section.splitlines() if "trace-a-unrecorded" in line)
+    b_line = next(line for line in exposure_section.splitlines() if "trace-b-unrecorded" in line)
+    assert "exposure unrecorded" in a_line
+    assert "exposure unrecorded" in b_line
+    # Never conflated with a measured zero.
+    assert "0 file(s)" not in a_line
+    assert "0 file(s)" not in b_line
+    # Sorted by trace_id, matching every other named section on this page.
+    assert exposure_section.index("trace-a-unrecorded") < exposure_section.index(
+        "trace-b-unrecorded"
+    )
+
+
+def test_control_exposure_is_surfaced_with_the_same_three_states() -> None:
+    """Fix round 1: a control's exposure state is shown in the controls block too.
+
+    A control that came back VERIFIED_CLEAN could mean the rule looked and found nothing
+    wrong, or that the rule had nothing to look at — the identical false-zero distinction
+    this whole aspect exists to make visible, and it lands squarely on the page's
+    control-integrity story. Reuses the SAME wording constants as the exposure section —
+    never a fourth phrasing.
+    """
+    population = Population.from_labeled(
+        [
+            LabeledLedger(
+                "s3",
+                _ledger(
+                    _instance(
+                        "trace-control__judged",
+                        Disposition.VERIFIED_CLEAN,
+                        exposure={"files_compared": 1, "turns_judging": 1, "turns_recorded": 1},
+                    ),
+                    _instance(
+                        "trace-control__no-opportunity",
+                        Disposition.VERIFIED_CLEAN,
+                        exposure={"files_compared": 0, "turns_judging": 0, "turns_recorded": 1},
+                    ),
+                    _instance("trace-control__unrecorded", Disposition.VERIFIED_CLEAN),
+                ),
+            )
+        ]
+    )
+
+    report = render_population_report(population)
+    controls_block = report.split("controls:", 1)[1]
+    lines = controls_block.splitlines()
+
+    def _lines_for(trace_id: str) -> str:
+        """This control's own line plus its immediately-following exposure line(s)."""
+        start = next(i for i, line in enumerate(lines) if trace_id in line)
+        end = next(
+            (i for i in range(start + 1, len(lines)) if lines[i].strip().startswith("trace-")),
+            len(lines),
+        )
+        return "\n".join(lines[start:end])
+
+    assert "judged 1 file-comparison(s) across 1 turn(s)" in _lines_for("trace-control__judged")
+    assert "0 file-comparison(s)" in _lines_for("trace-control__no-opportunity")
+    unrecorded_span = _lines_for("trace-control__unrecorded")
+    assert "exposure unrecorded" in unrecorded_span
+    assert "0 file(s)" not in unrecorded_span
 
 
 # --- `belay phase0 combine LABEL=PATH ...` — the CLI over the population ----------------

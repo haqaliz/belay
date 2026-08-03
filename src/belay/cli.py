@@ -568,14 +568,181 @@ def _emit_verdict(verdict) -> None:
     The sub-verdicts are printed per AXIS (A1 / A2 / A3), not hard-coded to A2, so when
     A1 (C5) and A3 (C8) begin contributing sub-verdicts they render in the same shape
     without a rewrite here. Today only A2 speaks, and the loop shows exactly that.
+
+    Every A1/`invariant` sub-verdict also gets its own exposure line — what the content
+    rule actually judged (or why it has nothing to say), so a PASS/FAIL on this line is
+    never read as "the rule looked and found nothing wrong" when it may have looked at
+    zero files. See `_exposure_prose`.
     """
     tool = verdict.tool_name or "?"
     _emit(f"  turn {verdict.turn_index:<3} {tool:<18}{verdict.status.value}")
     for axis in _axes_in_order(verdict.sub_verdicts):
         for sub in (s for s in verdict.sub_verdicts if s.axis == axis):
             _emit(f"      {sub.axis} {sub.kind:<10}{sub.status.value:<12}{sub.message}")
+            if sub.axis == "A1" and sub.kind == "invariant":
+                _emit(f"          {_exposure_prose(sub.expected)}")
     if verdict.cause is not None:
         _emit(f"      cause: {verdict.cause}")
+
+
+#: The `no opportunity` and `unrecorded` sentences for the A1 content-rule exposure fact —
+#: hand-aligned with `belay.phase0.report`'s three-state vocabulary (judged / no-opportunity
+#: / unrecorded), NOT imported from it. Two reasons: those sentences there are module-private
+#: (`_NO_OPPORTUNITY_SENTENCE`/`_UNRECORDED_EXPOSURE_SENTENCE`, leading underscore — not this
+#: module's to reach into), and they describe a RE-RENDERED LEDGER, which has different facts
+#: in hand: it holds per-instance sums and no `in_scope` at all, while a live `belay verify`
+#: run holds one sub-verdict that either does or does not carry an exposure fact, and knows
+#: `in_scope` when it does. Same three STATE NAMES on purpose, so a reader moving between
+#: `belay verify` and `belay phase0 report` is not learning a second vocabulary; the prose
+#: differs only where the two surfaces genuinely know different things. NEITHER asserts a
+#: CAUSE for an absent or zero fact, because neither surface can observe one.
+#: The clause both `no opportunity` renderings end on — one constant so the per-turn line
+#: (which knows `in_scope`) and the run aggregate (which does not) can differ in their
+#: NUMBERS without drifting in what they claim those numbers mean.
+_A1_NO_INFORMATION_CLAUSE = "this carries no information about the rule"
+#: The AGGREGATE's `no opportunity` sentence. It states the count and NAMES NO CAUSE: the
+#: old wording ("the rule was given nothing to judge") asserts something neither this
+#: accumulator nor the ledger knows, and it is false in the commonest real case — a file
+#: ABSENT from the task pre-state is in scope but SKIPPED without comparison
+#: (`invariants.py:417-420`), so an agent ADDING a test lands here having been given a file
+#: and having correctly found nothing in it to weaken. The bounded file-budget abstain
+#: reaches it too. `_exposure_summary` carries no `in_scope` (it mirrors the ledger
+#: accumulator field for field, deliberately), so the aggregate reports the one number it
+#: has.
+#:
+#: `no opportunity` is the STATE NAME and stays in the code; it is deliberately NOT in the
+#: printed sentence, matching `phase0.report`'s constant of the same name. Printed beside
+#: a real in-scope count it contradicts itself — the per-turn line says a file WAS in scope
+#: — and it asserts the same absent cause the wording above was fixed to stop asserting.
+#:
+#: THE NOUN IS `file-comparison(s)`, NEVER `file(s)`, wherever the count is summed:
+#: `_exposure_summary` adds `compared` across turns, so its total counts `(turn, file)`
+#: JUDGMENTS and one file edited on four turns contributes 4. `in_scope` keeps `file(s)` —
+#: that one really is a per-judgment distinct-file count, and holding the two nouns apart
+#: on the same line is what tells a reader they are different quantities.
+_A1_NO_OPPORTUNITY_SENTENCE = f"0 file-comparison(s) — {_A1_NO_INFORMATION_CLAUSE}"
+_A1_UNRECORDED_SENTENCE = (
+    "unrecorded — this check carries no exposure fact (a read-only rule, or judgment "
+    "never reached content comparison); this is NOT a claim that the rule judged nothing"
+)
+
+
+def _exposure_prose(expected) -> str:
+    """One A1 content-rule sub-verdict's exposure fact — never a fabricated zero.
+
+    Four renderings, not three: the file-budget abstain (Task 1's path 6) carries a REAL
+    `in_scope` count but no `compared` key at all. It is neither "judged" (nothing was
+    actually compared), nor "no opportunity" (something WAS there — the rule chose a
+    bounded abstention over reading it, which is a different fact), nor bare "unrecorded"
+    (a fact IS present: the in-scope count). Naming it separately is what keeps the
+    aggregate accumulator's `.get("compared", 0)` fallback — which exists only to make
+    summation total, never to describe one turn on its own — from reading back here as an
+    invented zero.
+
+    The `no opportunity` rendering spends the `in_scope` count this sub-verdict already
+    carries, because without it the line contradicts the sub-verdict line printed directly
+    above it: an agent adding a test yields `{"compared": 0, "in_scope": 1}`, which renders
+    as `A1 invariant PASS ... (0 file(s) compared, 1 touched)` followed by a claim that the
+    rule was given nothing. It was given a file; it found nothing in it to weaken, because
+    a file absent from the task pre-state is skipped (`invariants.py:417-420`). The two
+    numbers, side by side, are the whole honest statement — no cause is asserted, and the
+    state name `no opportunity` is not printed for the same reason: beside `1 file(s) in
+    scope` it reads as a second, contradicting claim about the same turn.
+    """
+    if not isinstance(expected, dict) or "exposure" not in expected:
+        return f"exposure: {_A1_UNRECORDED_SENTENCE}"
+    exposure = expected["exposure"]
+    if "compared" not in exposure:
+        in_scope = exposure.get("in_scope", 0)
+        return (
+            f"exposure: {in_scope} file(s) in scope, but comparison never began (a bounded "
+            f"abstention, not a claim of zero exposure)"
+        )
+    compared = exposure["compared"]
+    in_scope = exposure.get("in_scope", 0)
+    if compared == 0:
+        return (
+            f"exposure: {in_scope} file(s) in scope, 0 file-comparison(s) — "
+            f"{_A1_NO_INFORMATION_CLAUSE}"
+        )
+    return f"exposure: judged {compared} file-comparison(s) ({in_scope} file(s) in scope)"
+
+
+def _exposure_summary(verdicts) -> Optional[dict]:
+    """Accumulate A1 content-rule exposure across every turn just verified.
+
+    Mirrors `belay.phase0.runner`'s per-turn accumulator exactly — same three fields, same
+    `.get("compared", 0)` fallback for a partial (budget-abstain) dict — so a number
+    computed here and a number `belay phase0 run` computes over the same trace never
+    silently diverge.
+
+    Per turn: gather every A1/`invariant` sub-verdict whose `expected` is a dict carrying
+    the `"exposure"` key. An empty gather leaves the turn OUT of every count — it
+    contributes nothing, not a zero. A non-empty gather counts the turn once toward
+    `turns_recorded` (never once per sub-verdict — a turn judged under both default
+    invariants, `tests` and `testing`, is one turn), sums `.get("compared", 0)` across its
+    members into `files_compared`, and counts the turn once toward `turns_judging` iff that
+    sum is `>= 1`.
+
+    Returns `None` when no turn ever recorded an exposure fact — never an all-zero dict,
+    which would read as "the rule ran everywhere and found nothing" instead of "the rule
+    never ran at all".
+    """
+    files_compared = 0
+    turns_judging = 0
+    turns_recorded = 0
+    for verdict in verdicts:
+        subs = [
+            s for s in verdict.sub_verdicts
+            if s.axis == "A1" and s.kind == "invariant"
+            and isinstance(s.expected, dict) and "exposure" in s.expected
+        ]
+        if not subs:
+            continue
+        turns_recorded += 1
+        turn_compared = sum(s.expected["exposure"].get("compared", 0) for s in subs)
+        files_compared += turn_compared
+        if turn_compared >= 1:
+            turns_judging += 1
+    if turns_recorded == 0:
+        return None
+    return {
+        "files_compared": files_compared,
+        "turns_judging": turns_judging,
+        "turns_recorded": turns_recorded,
+    }
+
+
+def _emit_exposure(verdicts) -> None:
+    """This run's A1 content-rule exposure — judged / no-opportunity / unrecorded, never a
+    silent gap.
+
+    Same discipline as `_emit_coverage`: unconditional, so a reader scanning statuses alone
+    still learns whether A1 judged anything on this run. `judged` is the one state whose
+    sentence is not a fixed constant (its numbers are run-specific), mirroring
+    `belay.phase0.report._exposure_line`.
+    """
+    total = len(verdicts)
+    summary = _exposure_summary(verdicts)
+    _emit()
+    _emit(
+        "  exposure (A1 content-rule judgment coverage — a zero-exposure PASS carries "
+        "NO information about the rule)"
+    )
+    if summary is None:
+        _emit(f"    {_A1_UNRECORDED_SENTENCE}")
+        return
+    if summary["files_compared"] == 0:
+        _emit(
+            f"    {_A1_NO_OPPORTUNITY_SENTENCE} "
+            f"({summary['turns_recorded']}/{total} turn(s) recorded an exposure fact)"
+        )
+        return
+    _emit(
+        f"    judged {summary['files_compared']} file-comparison(s) across "
+        f"{summary['turns_judging']}/{total} turn(s) "
+        f"({summary['turns_recorded']}/{total} turn(s) recorded an exposure fact)"
+    )
 
 
 def _axes_in_order(sub_verdicts) -> list[str]:
@@ -648,6 +815,11 @@ def _emit_aggregate(verdicts, Status) -> None:
     to serve: no surface renders a turn's status without also rendering what was outside
     coverage, or a PASS on a tool that declared `openWorldHint: false` reads as "the
     network was checked".
+
+    The exposure block follows the coverage block, also unconditionally — see
+    `_emit_exposure`. Same rule, a different dimension: a PASS with a `no opportunity` or
+    `unrecorded` A1 exposure carries no information about whether the content rule would
+    have caught a real weakening.
     """
     counts = {status: 0 for status in Status}
     for verdict in verdicts:
@@ -667,6 +839,7 @@ def _emit_aggregate(verdicts, Status) -> None:
         )
 
     _emit_coverage(verdicts, Status)
+    _emit_exposure(verdicts)
 
     fails = [v for v in verdicts if v.status is Status.FAIL]
     if fails:
@@ -851,12 +1024,25 @@ def _cmd_corpus_run(args: argparse.Namespace) -> int:
     Re-verifies every stored case against the live engine (the corpus IS the regression
     suite) and prints each case's outcome plus an aggregate. A REGRESSION shows its diverging
     axis/kind (expected -> got); a SKIP shows why the case could not be evaluated on this box.
-    The exit is non-zero IFF at least one case REGRESSED — a run that is all MATCH/SKIP exits
-    0, because a pure SKIP is partial coverage (a non-darwin box, an unavailable server), not
-    a CI failure. The SKIP count is stated plainly so partial coverage is never mistaken for
-    a clean full pass.
+    The exit is non-zero IFF at least one case REGRESSED — every other outcome exits 0,
+    because a pure SKIP is partial coverage (a non-darwin box, an unavailable server), not a
+    CI failure. Each non-MATCH count is stated plainly, with a line saying what it means, so
+    a partial or still-blind run is never mistaken for a clean full pass.
+
+    STILL_MISSED and MISS_CLOSED belong to cases that DECLARE their stored verdict is a
+    recorded miss. STILL_MISSED is the known state — the engine is still blind there — and it
+    is deliberately NOT reported as a MATCH, because MATCH on a recorded miss would read as
+    "the corpus agrees". MISS_CLOSED is a detector fix landing: the case's miss just closed,
+    which must not break the build.
     """
-    from belay.corpus.run import MATCH, REGRESSION, SKIP, run_corpus
+    from belay.corpus.run import (
+        MATCH,
+        MISS_CLOSED,
+        REGRESSION,
+        SKIP,
+        STILL_MISSED,
+        run_corpus,
+    )
 
     corpus_dir = Path(args.corpus_dir)
     if not corpus_dir.is_dir():
@@ -880,16 +1066,22 @@ def _cmd_corpus_run(args: argparse.Namespace) -> int:
     # they did the outcome abutted the id — `…-turn10MATCH` — which stops the line
     # parsing by eye and makes `grep MATCH` name a case you cannot recover.
     for result in run.results:
-        if result.outcome == REGRESSION:
-            _emit(f"  {result.case_id:<40} {REGRESSION}")
+        if result.outcome in (REGRESSION, MISS_CLOSED):
+            _emit(f"  {result.case_id:<40} {result.outcome}")
             for div in result.divergences:
                 where = div.kind if not div.axis else f"{div.axis} {div.kind}"
                 _emit(f"      {where:<24}{div.expected_status} -> {div.got_status}")
         elif result.outcome == SKIP:
             _emit(f"  {result.case_id:<40} {SKIP}")
             _emit(f"      {result.skip_reason}")
+        elif result.outcome in (MATCH, STILL_MISSED):
+            _emit(f"  {result.case_id:<40} {result.outcome}")
         else:
-            _emit(f"  {result.case_id:<40} {MATCH}")
+            # Fail SAFE, not AGREEABLE. A catch-all `else: MATCH` was tolerable with three
+            # outcomes; with five it is a direction, and an outcome this renderer has not been
+            # taught yet would be printed as agreement — the one claim this command must never
+            # make by accident. An unknown token a reader can grep beats a wrong word.
+            _emit(f"  {result.case_id:<40} {result.outcome} (unrecognised outcome)")
 
     _emit()
     _emit("aggregate")
@@ -897,6 +1089,8 @@ def _cmd_corpus_run(args: argparse.Namespace) -> int:
     _emit(f"  MATCH                 {run.matches}")
     _emit(f"  REGRESSION            {run.regressions}")
     _emit(f"  SKIP                  {run.skips}")
+    _emit(f"  STILL_MISSED          {run.still_missed}")
+    _emit(f"  MISS_CLOSED           {run.miss_closed}")
 
     _emit()
     if run.skips:
@@ -905,6 +1099,18 @@ def _cmd_corpus_run(args: argparse.Namespace) -> int:
             f"server unavailable, or capability mismatch). Coverage here was PARTIAL; a SKIP "
             f"is never a pass and never a regression."
         )
+    if run.still_missed:
+        _emit(
+            f"  {run.still_missed} case(s) are STILL_MISSED — each records a violation a human "
+            f"adjudicated real that the engine still does not catch. That is the known state, "
+            f"not agreement, which is why it is not counted as a MATCH."
+        )
+    if run.miss_closed:
+        _emit(
+            f"  {run.miss_closed} case(s) are MISS_CLOSED — a recorded miss that the engine now "
+            f"CATCHES. This is a detector fix landing, so it exits 0; re-add the case to bank "
+            f"the caught verdict as its new expected."
+        )
     if run.has_regression:
         _emit(
             f"belay: {run.regressions} case(s) REGRESSED — a recorded verdict no longer "
@@ -912,7 +1118,15 @@ def _cmd_corpus_run(args: argparse.Namespace) -> int:
             f"skip."
         )
         return 1
-    _emit("belay: no regressions" + (f" ({run.skips} skipped)" if run.skips else ""))
+    # "no regressions" is true but insufficient on its own: a SKIP means partial coverage and
+    # a STILL_MISSED means the engine is KNOWN blind on that case. Both qualify the sign-off
+    # line, so a reader skimming only the last line cannot mistake either for a full pass.
+    qualifiers = [
+        f"{run.skips} skipped" if run.skips else "",
+        f"{run.still_missed} still missed" if run.still_missed else "",
+    ]
+    stated = ", ".join(q for q in qualifiers if q)
+    _emit("belay: no regressions" + (f" ({stated})" if stated else ""))
     return 0
 
 
@@ -956,6 +1170,19 @@ def _cmd_corpus_score(args: argparse.Namespace) -> int:
 
     m = score(cases)
 
+    # `metrics.py` is unchanged: its FN branch (`human_label == "true-positive"` over a
+    # non-FAIL `expected`) already produces `m.fn`. This counts, among exactly those same
+    # FN cases, how many carry a HUMAN-declared `recorded_miss` -- so the FN line can name
+    # its own provenance rather than leaving a bare count a reader could mistake for a
+    # detection that just failed today, when it may be a banked, already-known gap.
+    fn_recorded_miss = sum(
+        1
+        for case in cases
+        if case.human_label == "true-positive"
+        and case.expected["reduced_status"] in ("PASS", "WARN")
+        and case.recorded_miss is not None
+    )
+
     _emit(f"belay corpus score {corpus_dir}")
     _emit()
     _emit(f"  {m.total} case(s) scored against HUMAN labels (no replay — stored verdicts only).")
@@ -964,6 +1191,14 @@ def _cmd_corpus_score(args: argparse.Namespace) -> int:
     _emit(f"  TP                    {m.tp}")
     _emit(f"  FP                    {m.fp}")
     _emit(f"  FN                    {m.fn}")
+    if m.fn:
+        _emit(
+            f"      {fn_recorded_miss}/{m.fn} FN case(s) are a RECORDED MISS — a human-banked"
+        )
+        _emit(
+            "      known blind spot the stored verdict already reflects, not a detection"
+        )
+        _emit("      that just failed today.")
     _emit(f"  TN                    {m.tn}")
     _emit()
     _emit("independent findings (the gate counts INDEPENDENT true positives, not raw TPs)")
@@ -996,10 +1231,11 @@ def _cmd_corpus_score(args: argparse.Namespace) -> int:
 def _cmd_corpus_label(args: argparse.Namespace) -> int:
     """`belay corpus label <case-id> --label ...` — adjudicate a case's HUMAN label.
 
-    Rewrites ONLY `human_label`; the engine's recorded `expected` verdict is untouched (the D3
-    boundary — a human adjudication never rewrites what the engine computed). `--label`'s
-    argparse choices already exclude `pending` and any unknown string, and `set_label` fails
-    closed a second time, so a bad label never lands on disk.
+    Rewrites ONLY `human_label` (and its supporting `root_cause`/`recorded_miss` fields); the
+    engine's recorded `expected` verdict is untouched (the D3 boundary — a human adjudication
+    never rewrites what the engine computed). `--label`'s argparse choices already exclude
+    `pending` and any unknown string, and `set_label` fails closed a second time, so a bad
+    label never lands on disk.
     """
     from belay.corpus.curate import set_label
 
@@ -1015,18 +1251,23 @@ def _cmd_corpus_label(args: argparse.Namespace) -> int:
         if args.root_cause_key
         else None
     )
+    recorded_miss = {"note": args.recorded_miss_note} if args.recorded_miss_note else None
 
     try:
-        case_dir = set_label(Path(args.corpus_dir), args.case_id, args.label, root_cause)
+        case_dir = set_label(
+            Path(args.corpus_dir), args.case_id, args.label, root_cause, recorded_miss
+        )
     except ValueError as exc:
         _emit(f"belay: {exc}")
         return 2
 
     _emit(f"belay corpus label: {case_dir}")
-    _emit(f"  human_label -> {args.label}")
+    _emit(f"  human_label   -> {args.label}")
     if root_cause is not None:
-        _emit(f"  root_cause  -> {root_cause['key']}")
-    _emit("  Only the human label changed; the engine's recorded verdict is untouched.")
+        _emit(f"  root_cause    -> {root_cause['key']}")
+    if recorded_miss is not None:
+        _emit(f"  recorded_miss -> {recorded_miss['note']}")
+    _emit("  Only the human's own fields changed; the engine's recorded verdict is untouched.")
     return 0
 
 
@@ -1059,14 +1300,29 @@ def _cmd_corpus_list(args: argparse.Namespace) -> int:
 
     # Size the id column to the widest id actually present. The real corpus ids
     # ("trace-pallets__flask-4992-turn10") overflow a fixed 32 and run straight into the
-    # next column, which reads as a different value entirely.
+    # next column, which reads as a different value entirely. Same reasoning now sizes the
+    # root-cause column, since a trailing recorded-miss marker follows it.
     id_width = max([len(d.name) for d, _ in cases] + [len("case-id")]) + 2
-    _emit(f"  {'case-id':<{id_width}}{'label':<16}{'verdict':<12}root-cause")
+    key_width = (
+        max(
+            [len(case.root_cause["key"]) if case.root_cause else 0 for _, case in cases]
+            + [len("root-cause")]
+        )
+        + 2
+    )
+    _emit(
+        f"  {'case-id':<{id_width}}{'label':<16}{'verdict':<12}"
+        f"{'root-cause':<{key_width}}recorded-miss"
+    )
     for case_dir, case in cases:
         key = case.root_cause["key"] if case.root_cause else ""
+        # A marker, not the note: the note can be long free text and `show` is where it's
+        # read in full. Invisible state on a case is how the next reader gets it wrong, so
+        # even a marker beats no signal at all.
+        miss = "MISS" if case.recorded_miss else ""
         _emit(
             f"  {case_dir.name:<{id_width}}{case.human_label:<16}"
-            f"{case.expected['reduced_status']:<12}{key}"
+            f"{case.expected['reduced_status']:<12}{key:<{key_width}}{miss}"
         )
     return 0
 
@@ -1101,6 +1357,12 @@ def _cmd_corpus_show(args: argparse.Namespace) -> int:
     else:
         _emit("  root_cause            (absent)")
     _emit(f"  target_tool           {case.target_tool or '(absent)'}")
+    # Same absent-vs-declared discipline as root_cause above: invisible state on a case is
+    # how the next reader mistakes a banked, known miss for a clean pass.
+    if case.recorded_miss:
+        _emit(f"  recorded_miss         {case.recorded_miss['note']}")
+    else:
+        _emit("  recorded_miss         (absent)")
     _emit(f"  expected status       {case.expected['reduced_status']}")
     _emit("  sub-verdicts")
     for sub in case.expected["sub_verdicts"]:
@@ -1676,11 +1938,15 @@ def _parser() -> argparse.ArgumentParser:
     verify.set_defaults(func=_cmd_verify)
 
     corpus = subcommands.add_parser(
-        "corpus", help="the failure corpus: labeled, replayable cases from flagged runs"
+        "corpus",
+        help=(
+            "the failure corpus: labeled, replayable cases — turns the engine caught, and "
+            "turns a human says it missed"
+        ),
     ).add_subparsers(dest="action", required=True)
     corpus_add = corpus.add_parser(
         "add",
-        help="compose a self-contained, labeled case from one flagged turn of a trace",
+        help="compose a self-contained, labeled case from one turn of a trace",
         description=(
             "Recompute one tools/call turn's verdict by RE-EXECUTION (the same verify_turn "
             "the verify surface runs, with the same effective A1 policy) and bundle it into "
@@ -1688,15 +1954,20 @@ def _parser() -> argparse.ArgumentParser:
             "case survives deletion of the original run), the A1 policy, and the recomputed "
             "expected verdict. A later `corpus run` re-replays the case and asserts it still "
             "reaches this verdict.\n\n"
+            "The turn need not be flagged: this command enforces NO precondition on the "
+            "recomputed verdict. The typical source is a turn `belay phase0 run` already "
+            "flagged FAIL, but pointing --turn at a turn the detector verified clean composes "
+            "a case for a MISS -- a violation you know is real but the engine did not catch. "
+            "Declare it as one afterward with `corpus label --recorded-miss-note`.\n\n"
             "The human label is a PASS-THROUGH: --label sets it, and its ABSENCE stores "
             "'pending'. The engine NEVER derives a label from the verdict it just computed — "
             "a case is labeled true/false-positive by a HUMAN, later, not by the engine that "
-            "flagged it. That separation is what keeps the corpus's precision honest.\n\n"
+            "computed the verdict. That separation is what keeps the corpus's precision honest.\n\n"
             "Manifests: point --manifest-dir at the gate's .manifests sibling, as with verify."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    corpus_add.add_argument("trace", help="the trace file (.jsonl) the flagged turn is in")
+    corpus_add.add_argument("trace", help="the trace file (.jsonl) the target turn is in")
     corpus_add.add_argument(
         "--turn",
         type=int,
@@ -1767,13 +2038,22 @@ def _parser() -> argparse.ArgumentParser:
             "Re-verify every case in the corpus against the live engine and assert each still "
             "reaches its recorded verdict. The corpus IS the regression suite: a case that no "
             "longer reproduces its per-sub-verdict SET (not merely its reduced status) is a "
-            "caught detector DRIFT, and the run exits NON-ZERO.\n\n"
+            "caught detector DRIFT — a REGRESSION — and the run exits NON-ZERO.\n\n"
             "A SKIP is kept distinct from a REGRESSION and is never a pass: a case this box "
             "cannot evaluate — off the macOS Seatbelt substrate, the recorded server not "
             "runnable, a backend capability mismatch on restore — is SKIPPED, not failed, so "
-            "the corpus does not fail CI on every non-darwin box. The run exits non-zero IFF "
-            "at least one case REGRESSED; an all-MATCH/SKIP run exits 0 with its SKIP count "
-            "stated plainly."
+            "the corpus does not fail CI on every non-darwin box.\n\n"
+            "Two further outcomes belong to a case that DECLARES a recorded miss — a stored "
+            "verdict the engine produced but a human adjudicated a MISS, so the clean verdict "
+            "IS the defect. STILL_MISSED means the engine still does not catch it: the known "
+            "state, deliberately not reported as a MATCH, because MATCH on a recorded miss "
+            "would read as agreement. MISS_CLOSED means a sharpened detector now catches it — "
+            "a fix landing, which must not break the build. Neither is reachable without the "
+            "declaration, and the exemption covers exactly one transition: any OTHER change on "
+            "a declared case is still a REGRESSION.\n\n"
+            "The run exits non-zero IFF at least one case REGRESSED; every other outcome "
+            "exits 0, with the SKIP and STILL_MISSED counts stated plainly so partial "
+            "coverage or a known-open miss is never mistaken for a clean full pass."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1847,6 +2127,17 @@ def _parser() -> argparse.ArgumentParser:
         help=(
             "free-text reasoning recorded beside the key (evidence, upstream commit, etc). "
             "Nothing groups on this; it is what a human reads. Requires --root-cause-key"
+        ),
+    )
+    corpus_label.add_argument(
+        "--recorded-miss-note",
+        default="",
+        help=(
+            "declare that this case's STORED verdict is a miss the engine produced, not a "
+            "catch a human is now agreeing with. Requires the case's stored verdict to not "
+            "already be FAIL (a miss that was caught is a contradiction). Preserved across "
+            "a later relabel unless this flag is given again -- omitting it does not erase "
+            "an existing declaration"
         ),
     )
     corpus_label.add_argument(
