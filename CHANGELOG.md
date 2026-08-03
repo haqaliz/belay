@@ -7,6 +7,10 @@ All notable changes to Belay are documented here. The format follows
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.12.0] - 2026-08-04
+
 ### Fixed
 
 - **Declaring a recorded miss on an already-banked case no longer writes a v3 field under a v2
