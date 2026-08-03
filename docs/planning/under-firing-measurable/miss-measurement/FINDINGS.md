@@ -128,3 +128,18 @@ human-labeled cases in the `feat-verdict-coverage-status` worktree were verified
 since every path it wrote is relative to this worktree. *Note: the `corpus-labels-backup-20260729`
 directory named in the card does not exist at that path, so the labels were checked directly rather
 than against a backup.*
+
+---
+
+## Appended 2026-08-04 — the §5 adjudication is CONFIRMED
+
+§5 above is kept unedited, including its *"PROPOSED, pending owner confirmation"* header, because
+it records what was true on 2026-08-03. **The owner confirmed both verdicts on 2026-08-04**:
+`pytest-dev__pytest-5692` s3 turn 8 and `pytest-dev__pytest-6116` s3 turn 15 are **additions, not
+weakenings**, so the rule's `PASS` is correct on both and **0 misses were found of 2 adjudicated**.
+
+The evidence grade is unchanged — **human adjudication, not execution** — and so is the reading:
+*"sensitivity still unconfirmed"*, never *"the rule has good recall"*. **n=2 is not a base rate**,
+and this is **not comparable** to the recorded `recall 0.00 (0/1, n=1)`.
+
+Published in `docs/technical/PHASE0_RESULTS.md` → *Correction — 2026-08-04*.

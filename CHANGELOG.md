@@ -81,6 +81,47 @@ All notable changes to Belay are documented here. The format follows
   the exempting outcome while being structurally unable to reach the non-exempting one. The new
   rule is strictly narrower — the extra case is now a `REGRESSION` — and asserts no schema.
 
+- **Record correction: the shipped `0.10.0` sentence "a violation the detector misses can never
+  become a case … the corpus cannot measure recall" is false as a capability statement, and its
+  first half was already false when it was written.** The `## [0.10.0]` entry below is left
+  **byte-identical** — Keep a Changelog does not rewrite shipped entries, and that entry handled
+  the `0.9.0` sentence the same way, by pointing back at it from the next release. `belay phase0
+  run` does ingest FAIL turns and nothing else, so a miss never arrives by the *bulk* path — but
+  `belay corpus add` has **never** enforced that precondition, and `metrics.py`'s FN branch was
+  implemented and unit-tested throughout. What was genuinely missing is that nothing could
+  **declare** a stored miss, which this release adds. **`FN 0` is now empirical rather than
+  structural.**
+
+- **Record correction: "both controls `VERIFIED_CLEAN` — no detector false positive on a control"
+  does not follow, because both controls compared ZERO files.** The measurement is published in
+  `docs/technical/PHASE0_RESULTS.md` → *Correction — 2026-08-04*, run once under the freeze
+  protocol over the same banked captures under the **same** detector (script `f9e9957` containing
+  no result → verbatim output `8ec398d`; ledgers committed at `7ab5ba3` and re-derivable with
+  `belay phase0 report`). **The headline is unchanged at 1/15 = 6.7%** — the rate was never the
+  question. What is new underneath it: **17 files compared across 22/22 captures — 6 instances
+  judged something, 9 compared ZERO, 0 `unrecorded`**, with the instrument's delta-based count
+  reproducing an independent static survey **exactly**.
+
+  **State the control finding exactly and do not inflate it.** The controls are **not void** — they
+  were captured, replayed and verified, and nothing about them is wrong. What is withdrawn is one
+  **inference**: a control the rule never judged cannot demonstrate the rule does not over-fire.
+  The **blindness clause** is likewise **narrowed** to the six instances actually judged, and
+  **dissolves** for the other nine — there was never a question to answer there.
+
+  **Separately, in its own evidence grade — human adjudication, n=2, not execution:** the only two
+  held-out exposed-and-passed turns in the banked data (`pytest-dev__pytest-5692` s3 turn 8,
+  `pytest-dev__pytest-6116` s3 turn 15) are **additions, not weakenings**. **0 misses found of 2
+  adjudicated; sensitivity still unconfirmed** — never *"the rule has good recall"*, because **n=2
+  is not a base rate**, and **not comparable** to the recorded `recall 0.00 (0/1, n=1)`: different
+  detector, different population, different adjudication set. Consequently **no miss was banked**,
+  and the recorded-miss path added in this release ships **unexercised on real data**.
+
+  **What this is not.** **Not a gate run** — the pre-registered ≥50 clause counts *instances
+  minted* and is detector-independent, so **the 2026-07-29 PIVOT stands on the identical clause**
+  and **R1 remains OPEN and untested**. **Not a precision or recall number.** **No published number
+  was re-derived:** `4/16`, `precision 0.00`, `3/93`, `0% UNVERIFIED`, `recall 0.00` and `1/15` all
+  stand unedited; only annotations and new figures were added.
+
 ## [0.11.0] - 2026-07-31
 
 ### Added

@@ -406,7 +406,18 @@ value cases in the corpus, and the ones the Phase-0 number is made of.
 > DATA.** The flask-4045 collapse above stands. But zero exists **because a case is only ever created
 > from a *flagged* turn** — `belay phase0 run` ingests FAIL turns and nothing else — so a violation
 > the detector **misses** can never become a case; `FN 0` is an artifact of construction and the
-> corpus **cannot measure recall**. The captured data held one all along:
+> corpus **cannot measure recall**.
+> **[Corrected 2026-08-04 — false as CAPABILITY statements, and "can never become a case" was
+> already false when written.** `belay phase0 run` does ingest only FAIL turns, so a miss never
+> arrives by the *bulk* path — but `belay corpus add` has **never** enforced that precondition, and
+> the FN branch in `metrics.py` was implemented and unit-tested throughout. What was missing was
+> that nothing could **declare** a stored miss, so an undeclared one re-verified as a `MATCH` — the
+> regression suite certifying a blind spot as agreement. `corpus-recorded-miss` shipped the schema
+> v3 declaration, the `STILL_MISSED` / `MISS_CLOSED` outcomes and the FN provenance line. **`FN 0`
+> is now empirical rather than structural: no miss has been banked**, because the only two held-out
+> turns available to adjudicate came back clean (2026-08-04, n=2). **A capability, not a result** —
+> recall is still unmeasured.]**
+> The captured data held one all along:
 > **`pytest-dev__pytest-5227` turns 11 and 13**, published `VERIFIED_CLEAN` 20/20 in `runs/s2.json`,
 > **unflagged because the default scope is the byte prefix `b"tests/"` and pytest's tests live in
 > `testing/`** (`src/belay/verify/invariants.py:250`). **Two evidence grades, never merged:**
@@ -428,6 +439,27 @@ value cases in the corpus, and the ones the Phase-0 number is made of.
 > is not a gate run. **The 2026-07-29 PIVOT stands and R1 stays untested** — testing it needs a
 > re-mint on instances the rule has never seen, which is now the next unit and is what this one
 > unblocked. See `PHASE0_RESULTS.md` → *Correction — 2026-07-31*.
+>
+> **STATUS 2026-08-04 — C5's A1 verdict now REPORTS ITS OWN EXPOSURE, and the gate is unchanged**
+> (`under-firing-measurable`). The A1 content rule carries, on every return path that has it, how
+> many in-scope files it actually **compared** — structured data, **absent (never `0`)** where the
+> path has no such concept, surviving serialization as an omitted key so an old ledger renders the
+> literal word `unrecorded` rather than fabricating a zero. It reaches `phase0 run`, `phase0
+> combine` (whose merge rule is printed in the output) and `belay verify`. **No verdict changed
+> value**; the change is additive to A1 and invisible to `verdict.reduce`, which reads only
+> `.status`.
+>
+> Re-verifying the same banked captures under the **same** detector reproduced the **same headline
+> (1/15 = 6.7%)** and added the fact underneath it: **17 files compared across 22/22 captures — 6
+> instances judged something, 9 compared ZERO, 0 `unrecorded`**, with the instrument reproducing an
+> independent static survey **exactly**. **Both clean controls compared 0 files**, so *"no detector
+> false positive on a control"* has no support — the controls are **not void**, they simply carry
+> **no information about A1's precision**. The blindness clause **narrows** to the six judged
+> instances. At **human-adjudication grade, n=2**, the two held-out exposed-and-passed turns are
+> **additions, not weakenings**: **0 misses found of 2; sensitivity still unconfirmed** — n=2 is not
+> a base rate and is **not comparable** to `recall 0.00 (0/1, n=1)`. **Not a gate run** (the ≥50
+> clause counts instances minted and is detector-independent), **not a precision number**, and **R1
+> stays untested**. See `PHASE0_RESULTS.md` → *Correction — 2026-08-04*.
 >
 > **Superseded, kept for the record —** **Decision: build `invariant-test-mutation-shape` next; do NOT mint the remaining ~34 instances
 > under a 0.00-precision detector.** Its rule must be *"modification that removes or weakens an
@@ -510,6 +542,37 @@ cannot clone by reading our source, and the thing that makes a better base model
 
 **Eval data captured:** this capability *is* the eval data. It seeds from Phase 0's audited
 corpus on day 1 rather than starting empty.
+
+> ### Status, 2026-08-04 — C6 is built, and it can now hold a MISS as well as a catch
+>
+> `belay corpus add` / `run` / `score` / `list` / `show` / `label` all ship; cases live under
+> gitignored `corpus/local/`. Three things above are now more specific than the plan could be:
+>
+> - **The case is not only a catch.** A case may **declare** that its stored verdict records a
+>   **miss** — the engine returned clean on a turn a human adjudicated a real violation, so the
+>   clean verdict *is* the defect (case schema **v3**). The declaration is a **human** act
+>   (`belay corpus label --recorded-miss-note`, note required); **there is no code path from a
+>   verdict, a status or a label to setting it**, mirroring the rule that the engine never labels
+>   its own cases.
+> - **`belay corpus add` was never restricted to flagged runs**, contrary to the bullet above and
+>   to five help strings that said so (now corrected). Nothing in the composition path ever
+>   filtered on the recomputed verdict. **`belay phase0 run` *is* so restricted** — it ingests FAIL
+>   turns and nothing else — which is why a miss never arrives by the *bulk* path, and why the
+>   opt-in named-turn ingest exists. That path **cannot move the violation numerator or
+>   denominator**, proven by test.
+> - **`corpus run` stopped inverting on a stored miss.** A declared miss reports `STILL_MISSED`
+>   (exit `0`, and deliberately **not** a `MATCH` — a `MATCH` there would certify blindness as
+>   agreement) or `MISS_CLOSED` when a sharpened detector catches it (exit `0`, so CI does not go
+>   red for a fix). Any other divergence is still a `REGRESSION`. A green run therefore means
+>   *"no case regressed"* and **nothing more** — not *"everything is caught"*, and not *"every
+>   recorded miss is still missed"*.
+>
+> **What is measured, and what is not.** `corpus score` reports recall with a real denominator and
+> names an FN's provenance. **No miss has been banked**, so recall remains unmeasured and
+> `precision` still reads `n/a` (0 TP / 0 FP — a zero denominator, **not** a 1.00). The corpus holds
+> 7 human-labeled negatives (over 2 distinct instances) plus 7 unlabeled `pending` cases from the
+> fitted-on instance. **This is a capability, not a result.** See `PHASE0_RESULTS.md` →
+> *Correction — 2026-08-04*.
 
 **Dependencies:** C1–C5.
 
