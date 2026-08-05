@@ -97,11 +97,31 @@ One deliberate exception: the **corpus cases' `server_command`** was re-pointed 
 standing caveat that *"the corpus is machine-bound through the SERVER"*. `expected`, `human_label`
 and `root_cause` were untouched.
 
-### Off-machine backup
+### Off-machine backup — BUILT, NOT YET UPLOADED
 
-A compressed archive is attached to the **`v0.13.0` GitHub Release** as
-`belay-eval-data-v0.13.0.tar.zst` — **226 MB**, down from 4.8 GB (**21.7x**; the snapshots are
-near-identical copies of the same source tree per turn, which `zstd --long=27` collapses).
+A compressed archive exists at **`~/dev/at/holder/belay-eval-data-v0.13.0.tar.zst`** — **226 MB**,
+down from 4.8 GB (**21.7x**; each turn snapshots a near-identical copy of the same source tree, which
+`zstd --long=27` collapses). Integrity checked with `zstd -t`, 688,870 entries, and confirmed to
+contain the corrected manifests.
+
+```
+sha256  4285f2bb2cabda1a36f998fbe127cf756a5756e68db8bbc66251825e665a6961
+```
+
+**It is NOT attached to the v0.13.0 release yet.** The upload is bandwidth-bound at roughly
+<75 KB/s — a 45 MB slice did not finish in ten minutes — so it needs a session that can hold the
+connection for the best part of an hour. A 5-byte probe asset uploaded instantly, so the mechanism
+works; only the throughput is the problem. To finish it:
+
+```sh
+gh release upload v0.13.0 ~/dev/at/holder/belay-eval-data-v0.13.0.tar.zst --clobber
+# if that is impractical, split and upload in pieces:
+#   split -b 45m -d -a 2 <archive> <archive>.part-
+#   for f in <archive>.part-??; do gh release upload v0.13.0 "$f" --clobber; done
+#   reassemble with: cat <archive>.part-?? > <archive>   (then check the sha256 above)
+```
+
+Restoring, once it is available:
 
 ```sh
 gh release download v0.13.0 -p 'belay-eval-data-*.tar.zst'
