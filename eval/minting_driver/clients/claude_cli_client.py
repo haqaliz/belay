@@ -92,9 +92,59 @@ SCRUBBED_ENV_VARS = (
     "ANTHROPIC_BASE_URL",
 )
 
-#: The system prompt handed to `--system-prompt`. A stub until Phase 3 writes the real
-#: response contract; `_build_prompt` states the shape inline for now.
-RESPONSE_CONTRACT_SYSTEM_PROMPT = "Reply with only a JSON object."
+#: The oracle's contract, handed to `--system-prompt`. This constant is the other half of
+#: `_parse_decision`: everything the parser accepts is stated here, and everything it
+#: refuses is forbidden here. The two drift apart in only one direction that matters — a
+#: contract that stops naming a shape the parser needs turns correct model behaviour into
+#: `ClaudeCliParseError`s and produces empty captures, so it is asserted by a test rather
+#: than left as prose.
+#:
+#: Passing our own also replaces Claude Code's default prompt, which is ~5.6x the prefix
+#: per call and version-coupled — see the module docstring's measured table.
+RESPONSE_CONTRACT_SYSTEM_PROMPT = (
+    "You are the decision oracle for one step of a software-engineering task. You do not "
+    "have tools. You propose exactly one action and something else executes it.\n"
+    "\n"
+    "Reply with ONE JSON object and nothing else. No prose before or after it, no "
+    "explanation, no markdown code fences (no ```), no more than one object.\n"
+    "\n"
+    "To act, reply with:\n"
+    '{"kind": "tool_call", "name": "<one of the tool names you were given>", '
+    '"arguments": {<arguments matching that tool\'s inputSchema>}}\n'
+    "\n"
+    "When the task is finished, reply with:\n"
+    '{"kind": "done", "reason": "<why you are stopping>"}\n'
+    "\n"
+    "The `name` must be one of the tool names given in the prompt, spelled exactly. Any "
+    "other reply cannot be executed and the step is lost."
+)
+
+#: The prompt's last section: the contract again, in the prompt itself. Last on purpose —
+#: it is the instruction the reply has to obey, and by turn 15 the transcript above it is
+#: long. Repeating it costs a few tokens; a reply in prose costs the turn.
+RESPONSE_CONTRACT_REMINDER = (
+    "## Your reply\n"
+    "ONE JSON object, nothing else — no prose, no code fences:\n"
+    '{"kind": "tool_call", "name": ..., "arguments": {...}}  or  '
+    '{"kind": "done", "reason": ...}'
+)
+
+#: The section headers of the single `-p` string. `claude -p` has no message array, so the
+#: whole conversation is re-serialized every turn and these labels are the only thing
+#: distinguishing the task from a file's contents.
+_TOOLS_HEADER = "## Tools you may propose (MCP tool schemas)"
+_CONVERSATION_HEADER = "## Conversation so far"
+
+#: Turn labels. A tool result pasted unlabelled reads as more of the user's request, which
+#: is prompt-injection-shaped even with a cooperative model; and a failed call read as a
+#: successful one has the oracle believe the file now contains the error text.
+TOOL_RESULT_LABEL = "[tool result]"
+TOOL_ERROR_LABEL = "[tool error]"
+ASSISTANT_LABEL = "[you replied]"
+
+#: `mcp.parse_tools_call_reply` renders a JSON-RPC error reply as content starting with
+#: this prefix — the same signal `anthropic_client.py:219` reads to set `is_error`.
+_TOOL_ERROR_PREFIX = "error:"
 
 #: The envelope's `usage` field names -> the recorded ones, exactly as
 #: `anthropic_client._USAGE_FIELDS` does it. Identity here too, and written out anyway so
@@ -277,8 +327,17 @@ class ClaudeCliModel:
         self._binary = binary
         self._timeout = timeout
 
-        # This instance's accounting, mirroring `anthropic_client.py`. Populated from
-        # Phase 2 onward; `None`, not `{}` — absent is not zero.
+        # The conversation, re-serialized into one prompt string every turn (there is no
+        # message array to send). Built incrementally behind a `_seen` cursor for the same
+        # reason `anthropic_client._ingest_new_messages` has one: `loop.py` passes the
+        # WHOLE history each turn, so re-reading it would duplicate every earlier turn on
+        # every later one.
+        self._system_message = ""
+        self._history: list[tuple[str, str]] = []
+        self._seen = 0
+
+        # This instance's accounting, mirroring `anthropic_client.py`. `None`, not `{}` —
+        # absent is not zero.
         self._request_count = 0
         self._usage: Optional[dict[str, int]] = None
 
@@ -332,6 +391,17 @@ class ClaudeCliModel:
         ]
 
     @property
+    def request_count(self) -> int:
+        """Invocations ISSUED across this instance's whole session.
+
+        Incremented before the call, exactly as the sibling clients count theirs: a call
+        that comes back an error still spent the subscription's allowance, and an
+        accounting that counted only successes would under-report the spend a stop-loss
+        exists to bound.
+        """
+        return self._request_count
+
+    @property
     def usage(self) -> Optional[dict[str, int]]:
         """Accumulated `{input_tokens, output_tokens}`, or `None` if never reported.
 
@@ -341,12 +411,58 @@ class ClaudeCliModel:
         """
         return None if self._usage is None else dict(self._usage)
 
-    def _build_prompt(self, messages: list[Message]) -> str:
-        """The single `-p` string. Minimal until Phase 3 gives it a stated layout."""
-        return "\n\n".join(message.content for message in messages)
+    def _ingest_new_messages(self, messages: list[Message]) -> None:
+        """Fold every `Message` this instance has not seen yet into the running transcript.
 
-    def _parse_envelope(self, stdout: str) -> ToolCall | Done:
-        """One `--output-format json` envelope -> one decision, or a named error.
+        Incremental behind `self._seen`, mirroring `anthropic_client._ingest_new_messages`.
+        The system message is held *aside* rather than appended: `loop.py` sends it every
+        turn, so appending it would repeat the task instructions once per turn and bury the
+        history that is actually new.
+        """
+        for message in messages[self._seen :]:
+            if message.role == "system":
+                self._system_message = message.content
+            elif message.role == "tool":
+                label = (
+                    TOOL_ERROR_LABEL
+                    if message.content.startswith(_TOOL_ERROR_PREFIX)
+                    else TOOL_RESULT_LABEL
+                )
+                self._history.append((label, message.content))
+            else:
+                self._history.append((f"[{message.role}]", message.content))
+        self._seen = len(messages)
+
+    def _build_prompt(self) -> str:
+        """The single `-p` string: the whole turn, in the order the plan fixed (§1).
+
+        `claude -p` takes one prompt and keeps no conversation of its own, so anything
+        missing from this string is missing from the oracle's world. Sections:
+
+        1. the task/system message — once, first;
+        2. the MCP tool schemas as JSON, **verbatim** — this is the entire substitute for
+           granting tools, so a summarized schema would have the model proposing calls
+           against a contract the server does not have;
+        3. the conversation so far, each turn labelled;
+        4. the response contract, last, because that is the instruction the reply obeys.
+        """
+        sections: list[str] = []
+        if self._system_message:
+            sections.append(self._system_message)
+        sections.append(
+            f"{_TOOLS_HEADER}\n{json.dumps(self._tools, indent=2, sort_keys=True)}"
+        )
+        transcript = "\n\n".join(f"{label}\n{content}" for label, content in self._history)
+        sections.append(f"{_CONVERSATION_HEADER}\n\n{transcript}" if transcript else _CONVERSATION_HEADER)
+        sections.append(RESPONSE_CONTRACT_REMINDER)
+        return "\n\n".join(sections)
+
+    def _parse_envelope(self, stdout: str) -> tuple[ToolCall | Done, str]:
+        """One `--output-format json` envelope -> one decision **and the reply text**.
+
+        The reply text comes back alongside the decision so `propose_next` can thread the
+        oracle's own words into the next prompt without re-parsing, and without this method
+        keeping state.
 
         The order of the checks is the contract, not an implementation detail (plan §1):
 
@@ -403,7 +519,7 @@ class ClaudeCliModel:
                 "ClaudeCliModel: the envelope's `result` is not a string, so there is no "
                 f"reply to read; got {type(result).__name__}."
             )
-        return self._parse_decision(result)
+        return self._parse_decision(result), result
 
     def _parse_decision(self, result: str) -> ToolCall | Done:
         """The `result` text -> `ToolCall` | `Done`, or a `ClaudeCliParseError`.
@@ -474,9 +590,14 @@ class ClaudeCliModel:
         return ToolCall(name=name, arguments=dict(arguments))
 
     def propose_next(self, messages: list[Message]) -> ToolCall | Done:
+        self._ingest_new_messages(messages)
+
+        # Counted BEFORE the call — a call that raises still spent the subscription's
+        # allowance. See `request_count`.
+        self._request_count += 1
         completed = self._runner(
             self._build_command(
-                prompt=self._build_prompt(messages),
+                prompt=self._build_prompt(),
                 system_prompt=RESPONSE_CONTRACT_SYSTEM_PROMPT,
             ),
             capture_output=True,
@@ -484,7 +605,14 @@ class ClaudeCliModel:
             env=self._build_env(),
             timeout=self._timeout,
         )
-        return self._parse_envelope(completed.stdout)
+        decision, reply = self._parse_envelope(completed.stdout)
+
+        # Thread the oracle's own reply into the next prompt, as `anthropic_client.py:259`
+        # does: `loop.py` appends only tool *results*, so without this the next turn shows
+        # a result with nothing that asked for it. Appended only after a successful parse —
+        # a failed attempt that a retry repeats must not leave a half-turn behind.
+        self._history.append((ASSISTANT_LABEL, reply.strip()))
+        return decision
 
     def _build_env(self) -> dict[str, str]:
         """The child's environment: this process's, minus `SCRUBBED_ENV_VARS`.
@@ -504,6 +632,7 @@ class ClaudeCliModel:
 
 
 __all__ = [
+    "ASSISTANT_LABEL",
     "ClaudeCliError",
     "ClaudeCliInvocationError",
     "ClaudeCliModel",
@@ -513,6 +642,9 @@ __all__ = [
     "DEFAULT_CLAUDE_CLI_MODEL",
     "DEFAULT_TIMEOUT_SECONDS",
     "PROVIDER_NAME",
+    "RESPONSE_CONTRACT_REMINDER",
     "RESPONSE_CONTRACT_SYSTEM_PROMPT",
     "SCRUBBED_ENV_VARS",
+    "TOOL_ERROR_LABEL",
+    "TOOL_RESULT_LABEL",
 ]

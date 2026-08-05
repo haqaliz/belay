@@ -45,6 +45,10 @@ from eval.minting_driver.clients.claude_cli_client import (
     DEFAULT_CLAUDE_CLI_MODEL,
     DEFAULT_TIMEOUT_SECONDS,
     PROVIDER_NAME,
+    RESPONSE_CONTRACT_REMINDER,
+    RESPONSE_CONTRACT_SYSTEM_PROMPT,
+    TOOL_ERROR_LABEL,
+    TOOL_RESULT_LABEL,
     ClaudeCliInvocationError,
     ClaudeCliModel,
     ClaudeCliParseError,
@@ -864,3 +868,284 @@ def test_total_cost_usd_is_never_read_stored_or_surfaced():
     state = repr(vars(client))
     assert "0.2491" not in state
     assert "cost" not in state.lower()
+
+
+# ---------------------------------------------------------------------------
+# The prompt: one string per turn, and it carries the whole conversation (criterion 10)
+# ---------------------------------------------------------------------------
+
+
+def test_the_system_prompt_states_the_response_contract():
+    """Criterion 10's oracle contract: `--system-prompt` says what a reply may be.
+
+    This constant *is* the parser's other half. Everything Phase 2 enforces —
+    `{"kind": "tool_call" | "done"}`, no prose, no fences — is only reachable if the model
+    was told, so a contract that drifts from the parser turns correct model behaviour into
+    `ClaudeCliParseError`s and empty captures.
+    """
+    contract = RESPONSE_CONTRACT_SYSTEM_PROMPT.lower()
+
+    assert '"kind"' in contract
+    assert "tool_call" in contract
+    assert "done" in contract
+    assert "arguments" in contract
+    assert "reason" in contract
+    assert "prose" in contract
+    assert "code fence" in contract or "```" in RESPONSE_CONTRACT_SYSTEM_PROMPT
+
+
+def test_the_response_contract_is_the_text_that_reaches_the_argv():
+    """The constant is not decoration — it is what `--system-prompt` actually carries.
+
+    Asserted through a recorded call rather than by reading the constant twice: a contract
+    defined and then not passed would leave the oracle running Claude Code's own default
+    prompt, which is the ~5.6x-larger prefix the module docstring measured.
+    """
+    runner = _runner_returning(_envelope())
+    _client(runner=runner).propose_next(list(FIRST_TURN))
+
+    assert _flag_value(runner.calls[0]["argv"], "--system-prompt") == RESPONSE_CONTRACT_SYSTEM_PROMPT
+
+
+def test_the_prompt_carries_the_system_message_the_tool_schemas_and_the_task():
+    """Criterion 10: `claude -p` takes one string, so everything has to be in it.
+
+    Unlike the SDK clients there is no native message array and no server-side
+    conversation: whatever is missing from this string is missing from the oracle's world.
+    """
+    runner = _runner_returning(_envelope())
+    _client(runner=runner).propose_next(list(FIRST_TURN))
+    prompt = _prompt_of(runner)
+
+    assert SYSTEM_MESSAGE in prompt
+    assert TASK_MESSAGE in prompt
+    assert json.dumps(TOOLS, indent=2, sort_keys=True) in prompt
+
+
+def test_the_tool_schemas_appear_verbatim():
+    """Criterion 10: the schemas are data in the prompt, unaltered.
+
+    They are the entire substitute for granting tools (`--tools ""`), so a summarized or
+    reshaped schema is a model proposing calls against a contract the MCP server does not
+    have. Serialized once, exactly, and asserted against that same serialization.
+    """
+    tools = [
+        {
+            "name": "edit_file",
+            "description": "Replace text in a file.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}, "newText": {"type": "string"}},
+                "required": ["path", "newText"],
+            },
+        }
+    ]
+    runner = _runner_returning(_envelope())
+    _client(runner=runner, tools=tools).propose_next(list(FIRST_TURN))
+
+    assert json.dumps(tools, indent=2, sort_keys=True) in _prompt_of(runner)
+
+
+def test_the_prompt_sections_are_in_the_stated_order():
+    """Criterion 10: task first, then schemas, then the conversation, then the contract.
+
+    The order is the layout the plan fixed (§1). The contract goes last on purpose — it is
+    the instruction the reply has to obey, and burying it above a growing transcript is how
+    a long trajectory starts answering in prose.
+    """
+    runner = _runner_returning(_envelope())
+    _client(runner=runner).propose_next(list(FIRST_TURN))
+    prompt = _prompt_of(runner)
+
+    assert (
+        prompt.index(SYSTEM_MESSAGE)
+        < prompt.index(json.dumps(TOOLS, indent=2, sort_keys=True))
+        < prompt.index(TASK_MESSAGE)
+        < prompt.index(RESPONSE_CONTRACT_REMINDER)
+    )
+    assert prompt.rstrip().endswith(RESPONSE_CONTRACT_REMINDER)
+
+
+def test_the_system_message_appears_once_and_first():
+    """Criterion 10: `loop.py` sends the system message every turn; it is rendered once.
+
+    The whole conversation is re-serialized each turn, so an ingest that appended the
+    system message per turn would repeat the task instructions N times by turn N —
+    growing the prefix without adding information, and burying the actual history.
+    """
+    runner = _runner_returning(
+        _envelope('{"kind": "tool_call", "name": "read_file", "arguments": {"path": "a"}}'),
+        _envelope(),
+    )
+    client = _client(runner=runner)
+    messages = list(FIRST_TURN)
+
+    client.propose_next(messages)
+    messages.append(Message(role="tool", content="file contents", tool_result={}))
+    client.propose_next(messages)
+
+    prompt = _prompt_of(runner, 1)
+    assert prompt.count(SYSTEM_MESSAGE) == 1
+    assert prompt.index(SYSTEM_MESSAGE) == 0
+
+
+def test_a_second_turn_includes_the_first_turns_tool_result():
+    """Criterion 10: turn N+1 sees what turn N's tool call actually returned.
+
+    This is the criterion in one assertion, and it is the difference between an agent and
+    a slot machine: an oracle that cannot see the result of its own last call cannot make
+    a second decision that depends on it, and every turn is a fresh guess at turn 1.
+    """
+    runner = _runner_returning(
+        _envelope('{"kind": "tool_call", "name": "read_file", "arguments": {"path": "util.py"}}'),
+        _envelope(),
+    )
+    client = _client(runner=runner)
+    messages = list(FIRST_TURN)
+
+    client.propose_next(messages)
+    messages.append(Message(role="tool", content="def add(a, b): return a - b", tool_result={}))
+    client.propose_next(messages)
+
+    assert "def add(a, b): return a - b" in _prompt_of(runner, 1)
+    assert "def add(a, b): return a - b" not in _prompt_of(runner, 0)
+
+
+def test_the_tool_result_is_labelled_as_a_result_not_pasted_as_the_task():
+    """Criterion 10: a result is labelled, so the oracle can tell it from an instruction.
+
+    Unlabelled, a file's contents pasted into the prompt reads as more of the user's
+    request — which is prompt-injection-shaped even with a cooperative model, and simply
+    confusing with a real repository in the transcript.
+    """
+    runner = _runner_returning(
+        _envelope('{"kind": "tool_call", "name": "read_file", "arguments": {"path": "a"}}'),
+        _envelope(),
+    )
+    client = _client(runner=runner)
+    messages = list(FIRST_TURN)
+
+    client.propose_next(messages)
+    messages.append(Message(role="tool", content="the file body", tool_result={}))
+    client.propose_next(messages)
+    prompt = _prompt_of(runner, 1)
+
+    assert TOOL_RESULT_LABEL in prompt
+    assert prompt.index(TOOL_RESULT_LABEL) < prompt.index("the file body")
+
+
+def test_a_failed_tool_call_is_labelled_as_an_error():
+    """Criterion 10: a failed call is threaded as a failure, not as a result.
+
+    `mcp.parse_tools_call_reply` renders a JSON-RPC error as `error: ...` content. An
+    oracle that reads that as a successful result concludes the file now says
+    "error: ..." and edits accordingly — mirroring `anthropic_client.py`'s `is_error` flag
+    on the tool-result block.
+    """
+    runner = _runner_returning(
+        _envelope('{"kind": "tool_call", "name": "read_file", "arguments": {"path": "a"}}'),
+        _envelope(),
+    )
+    client = _client(runner=runner)
+    messages = list(FIRST_TURN)
+
+    client.propose_next(messages)
+    messages.append(Message(role="tool", content="error: no such file", tool_result={}))
+    client.propose_next(messages)
+    prompt = _prompt_of(runner, 1)
+
+    assert TOOL_ERROR_LABEL in prompt
+    assert "no such file" in prompt
+
+
+def test_a_second_turn_includes_what_the_model_itself_last_said():
+    """Criterion 10: the oracle's own last reply is threaded back, like the SDK clients do.
+
+    `anthropic_client.py:259` keeps the assistant turn for the same reason: without it the
+    next prompt shows a tool result with nothing that asked for it, and the model has to
+    re-infer which call it made. `loop.py` only appends tool results, so this is the
+    client's job.
+    """
+    reply = '{"kind": "tool_call", "name": "read_file", "arguments": {"path": "util.py"}}'
+    runner = _runner_returning(_envelope(reply), _envelope())
+    client = _client(runner=runner)
+    messages = list(FIRST_TURN)
+
+    client.propose_next(messages)
+    messages.append(Message(role="tool", content="contents", tool_result={}))
+    client.propose_next(messages)
+    prompt = _prompt_of(runner, 1)
+
+    assert reply in prompt
+    assert prompt.index(reply) < prompt.index("contents")
+
+
+def test_ingest_is_incremental_and_never_duplicates_a_turn():
+    """Criterion 10: the `_seen` cursor, mirroring `anthropic_client.py:200`.
+
+    `loop.py` passes the *whole* history every turn. Re-ingesting it would duplicate every
+    earlier turn on every later one — quadratic prefix growth, and a transcript in which
+    the same tool result appears three times looks like three identical calls.
+    """
+    runner = _runner_returning(
+        _envelope('{"kind": "tool_call", "name": "read_file", "arguments": {"path": "a"}}'),
+        _envelope('{"kind": "tool_call", "name": "read_file", "arguments": {"path": "b"}}'),
+        _envelope(),
+    )
+    client = _client(runner=runner)
+    messages = list(FIRST_TURN)
+
+    client.propose_next(messages)
+    messages.append(Message(role="tool", content="first result", tool_result={}))
+    client.propose_next(messages)
+    messages.append(Message(role="tool", content="second result", tool_result={}))
+    client.propose_next(messages)
+    prompt = _prompt_of(runner, 2)
+
+    assert prompt.count(TASK_MESSAGE) == 1
+    assert prompt.count("first result") == 1
+    assert prompt.count("second result") == 1
+
+
+# ---------------------------------------------------------------------------
+# request_count: counted before the call (criterion: per-instance accounting)
+# ---------------------------------------------------------------------------
+
+
+def test_request_count_starts_at_zero():
+    """Nothing has been spent before the first turn — and it is `0`, not `None`."""
+    assert _client(runner=_runner_returning(_envelope())).request_count == 0
+
+
+def test_request_count_is_incremented_before_the_call_not_after():
+    """A call that raises still spent the subscription's allowance.
+
+    Asserted from *inside* the runner, which is the only place that can tell the difference:
+    by the time `propose_next` returns, both orderings look identical. The 2026-07-24 lesson
+    is that a request which comes back an error still counted against the cap, so an
+    accounting that counted only successes would under-report exactly the spend a stop-loss
+    exists to bound.
+    """
+    observed: list[int] = []
+
+    def runner(argv, **kwargs):
+        observed.append(client.request_count)
+        raise RuntimeError("the call failed")
+
+    client = _client(runner=runner)
+
+    with pytest.raises(RuntimeError):
+        client.propose_next(list(FIRST_TURN))
+
+    assert observed == [1]
+    assert client.request_count == 1
+
+
+def test_request_count_counts_every_turn():
+    """Per instance, across the whole session — one client is built per instance."""
+    client = _client(runner=_runner_returning(_envelope()))
+
+    client.propose_next(list(FIRST_TURN))
+    client.propose_next(list(FIRST_TURN))
+
+    assert client.request_count == 2
