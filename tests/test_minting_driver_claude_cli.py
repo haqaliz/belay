@@ -1,10 +1,23 @@
-"""`ClaudeCliModel` — the argv it builds and the environment it hands the child.
+"""`ClaudeCliModel` — the argv, the child env, the envelope it parses, and how it fails.
 
 Phase 1 of `claude-cli-model` covers exactly two constructed artifacts: the **command
 line** and the **child environment**. Both are asserted directly, never by observing a
 live run — no `claude` binary is spawned by anything in this file, no network is touched,
 and no subscription is consumed. The seam is `runner=`, a callable with `subprocess.run`'s
 shape; every test that needs one injects a fake that records what it was handed.
+
+Phases 2–4 add the other half: one JSON envelope in, one `ToolCall | Done` out — or a
+**named error**, never a fabricated `Done` (criterion 3). The same `runner=` seam carries
+all of it: a fake that returns a completed-process-shaped object exercises parsing, a fake
+that *raises* exercises classification. Nothing here spawns a process either.
+
+**Error classification is asserted end to end through the real
+`resilience.classify_error`**, never by asserting a class name. The class name is not the
+contract — the *bucket the shared classifier lands on* is, and it is decided by base
+classes whose behaviour is counter-intuitive in both directions (see
+`test_the_exception_hierarchy_trap_runs_in_both_directions`). A test that asserted
+`isinstance(exc, ClaudeCliTimeoutError)` would have been green against the exact bug the
+plan's correction box caught.
 
 **The negative assertions here are the load-bearing ones.** `--bare`, `--max-turns`,
 `--dangerously-skip-permissions` and `--add-dir` must each stay *absent*, and the three
@@ -21,8 +34,10 @@ which is the exact condition criterion 13 was written for.
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
@@ -30,8 +45,13 @@ from eval.minting_driver.clients.claude_cli_client import (
     DEFAULT_CLAUDE_CLI_MODEL,
     DEFAULT_TIMEOUT_SECONDS,
     PROVIDER_NAME,
+    ClaudeCliInvocationError,
     ClaudeCliModel,
+    ClaudeCliParseError,
+    ClaudeCliToolAttemptError,
+    ClaudeCliUnknownToolError,
 )
+from eval.minting_driver.model import Done, Message, ToolCall
 
 #: The three environment variables the child must never see. All three occupy a
 #: credential-or-routing precedence slot in the CLI's own resolution order, so scrubbing
@@ -85,6 +105,106 @@ def _flag_value(argv: list[str], flag: str) -> str:
     index = occurrences[0]
     assert index + 1 < len(argv), f"{flag!r} has no value in {argv!r}"
     return argv[index + 1]
+
+
+# ---------------------------------------------------------------------------
+# Phase 2+ helpers: a runner that returns envelopes, and a runner that raises
+# ---------------------------------------------------------------------------
+
+#: The conversation `loop.py` hands a model on its first turn: one system message, then
+#: the task. Built the same way here so the prompt tests exercise the real shape.
+SYSTEM_MESSAGE = "You are minting a Phase-0 capture."
+TASK_MESSAGE = "Fix the failing test in util.py."
+FIRST_TURN = [
+    Message(role="system", content=SYSTEM_MESSAGE),
+    Message(role="user", content=TASK_MESSAGE),
+]
+
+
+def _completed(stdout: str, *, returncode: int = 0, stderr: str = "") -> SimpleNamespace:
+    """A `subprocess.CompletedProcess`-shaped object — only the three fields read.
+
+    A `SimpleNamespace` rather than a real `CompletedProcess` for the same reason the
+    sibling clients' fakes are namespaces: the client reads exactly `.returncode`,
+    `.stdout` and `.stderr`, and a fake that can express *only* those cannot accidentally
+    pass by supplying something the real boundary does not.
+    """
+    return SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
+
+
+def _envelope(result: str = '{"kind": "done", "reason": "finished"}', **overrides) -> str:
+    """One `claude -p --output-format json` envelope, as the CLI prints it.
+
+    Defaults are the *success* shape (`is_error: false`, `subtype: "success"`, no
+    denials); every test overrides only the field it is about, so a test named for
+    `permission_denials` cannot accidentally be passing because of `is_error`.
+    """
+    envelope = {
+        "type": "result",
+        "subtype": "success",
+        "is_error": False,
+        "num_turns": 1,
+        "result": result,
+        "session_id": "0000-test",
+        "permission_denials": [],
+    }
+    envelope.update(overrides)
+    return json.dumps(envelope)
+
+
+def _runner_returning(*stdouts: str, returncode: int = 0, stderr: str = ""):
+    """A runner handing back one recorded envelope per call, and recording every call.
+
+    The recorded calls are the *only* way these tests see the prompt: the argv is data the
+    client constructed, so asserting on it is asserting on the real thing rather than on a
+    re-derivation of it.
+    """
+    calls: list[dict] = []
+
+    def runner(argv, **kwargs):
+        calls.append({"argv": list(argv), **kwargs})
+        index = min(len(calls) - 1, len(stdouts) - 1)
+        return _completed(stdouts[index], returncode=returncode, stderr=stderr)
+
+    runner.calls = calls  # type: ignore[attr-defined]
+    return runner
+
+
+def _runner_raising(exc: BaseException):
+    """A runner that raises instead of returning — the Phase 4 boundary.
+
+    The exceptions a real `subprocess.run` raises (`FileNotFoundError`,
+    `subprocess.TimeoutExpired`) are raised *by the call*, so this is the only faithful
+    way to exercise how the client re-raises them.
+    """
+
+    def runner(argv, **kwargs):
+        raise exc
+
+    return runner
+
+
+def _client(*, runner, tools: list[dict] | None = None, **overrides) -> ClaudeCliModel:
+    """A `ClaudeCliModel` over a given runner — the Phase 2+ counterpart of `_model`."""
+    kwargs = {
+        "model": DEFAULT_CLAUDE_CLI_MODEL,
+        "tools": TOOLS if tools is None else tools,
+        "runner": runner,
+    }
+    kwargs.update(overrides)
+    return ClaudeCliModel(**kwargs)
+
+
+def _propose(result_or_stdout: str, *, raw: bool = False, tools: list[dict] | None = None):
+    """One `propose_next` over one envelope. `raw=True` passes stdout through untouched."""
+    stdout = result_or_stdout if raw else _envelope(result_or_stdout)
+    client = _client(runner=_runner_returning(stdout), tools=tools)
+    return client.propose_next(list(FIRST_TURN))
+
+
+def _prompt_of(runner, index: int = 0) -> str:
+    """The `-p` value of the recorded call at `index`."""
+    return _flag_value(runner.calls[index]["argv"], "-p")
 
 
 # ---------------------------------------------------------------------------
@@ -376,3 +496,371 @@ def test_the_timeout_is_owned_by_the_client():
     assert DEFAULT_TIMEOUT_SECONDS == 600.0
     assert _model().timeout == DEFAULT_TIMEOUT_SECONDS
     assert _model(timeout=30.0).timeout == 30.0
+
+
+# ---------------------------------------------------------------------------
+# The envelope -> ToolCall | Done (criteria 1, 2)
+# ---------------------------------------------------------------------------
+
+
+def test_a_well_formed_reply_maps_to_a_tool_call():
+    """Criterion 1: a well-formed response maps to a `ToolCall` with name and arguments.
+
+    The oracle cannot *make* a tool call — `--tools ""` guarantees that — so the only thing
+    a turn can produce is a proposal in text. If that text does not become a `ToolCall`,
+    nothing crosses the recorded MCP boundary and the mint captures nothing.
+    """
+    step = _propose('{"kind": "tool_call", "name": "read_file", "arguments": {"path": "/repo/util.py"}}')
+
+    assert step == ToolCall(name="read_file", arguments={"path": "/repo/util.py"})
+
+
+def test_tool_call_arguments_arrive_as_a_dict_not_a_json_string():
+    """Criterion 1: `arguments` is a dict by the time `loop.py` sees it.
+
+    `loop.py:117` hands `step.arguments` straight to `tools_call`, which puts it in the
+    JSON-RPC `params`. A JSON *string* there would reach the MCP server as a string and be
+    rejected — a whole instance lost to a type nobody converted.
+    """
+    step = _propose('{"kind": "tool_call", "name": "read_file", "arguments": {"path": "a"}}')
+
+    assert isinstance(step, ToolCall)
+    assert isinstance(step.arguments, dict)
+
+
+def test_a_tool_call_with_no_arguments_key_yields_an_empty_dict():
+    """A zero-argument tool call is legitimate; an absent `arguments` is not an error.
+
+    The MCP server is the authority on whether a call is missing a required argument, and
+    its rejection is recorded in the capture. Guessing arguments here would be worse.
+    """
+    step = _propose('{"kind": "tool_call", "name": "read_file"}')
+
+    assert step == ToolCall(name="read_file", arguments={})
+
+
+def test_a_completion_reply_maps_to_done():
+    """Criterion 2: a completion response maps to `Done`, carrying the stated reason."""
+    step = _propose('{"kind": "done", "reason": "the test passes now"}')
+
+    assert step == Done(reason="the test passes now")
+
+
+def test_prose_around_the_json_object_is_tolerated():
+    """Criterion 1: the object is extracted from surrounding prose, not required to be alone.
+
+    Models narrate. Rejecting a correct decision because it arrived with a sentence in
+    front of it would throw away real turns — tolerance here is not laxity, because the
+    *kind* is still read from the object and never inferred from the prose.
+    """
+    step = _propose(
+        'I should read the file first.\n'
+        '{"kind": "tool_call", "name": "read_file", "arguments": {"path": "a"}}\n'
+        'Then I will decide.'
+    )
+
+    assert step == ToolCall(name="read_file", arguments={"path": "a"})
+
+
+def test_a_code_fenced_json_object_is_tolerated():
+    """Criterion 1: a fenced block is prose too — the fence is not part of the JSON."""
+    step = _propose('```json\n{"kind": "done", "reason": "all set"}\n```')
+
+    assert step == Done(reason="all set")
+
+
+def test_a_brace_that_is_not_json_does_not_stop_the_search():
+    """Criterion 1: a `{` in the prose is skipped, not treated as the payload's start.
+
+    A naive "find the first `{`" extractor fails on any reply that mentions a set or a
+    dict in passing, and the failure mode is a `ClaudeCliParseError` on a turn the model
+    got right.
+    """
+    step = _propose('the set {a, b} matters. {"kind": "done", "reason": "ok"}')
+
+    assert step == Done(reason="ok")
+
+
+def test_an_object_without_a_kind_is_skipped_in_favour_of_one_with_it():
+    """Criterion 1: the payload is the object that declares a `kind`, not merely the first.
+
+    Models sometimes emit a scratch object before the decision. Taking the first object
+    unconditionally would read that scratch as the reply and raise on a good turn.
+    """
+    step = _propose('{"thinking": "which file?"} {"kind": "done", "reason": "ok"}')
+
+    assert step == Done(reason="ok")
+
+
+# ---------------------------------------------------------------------------
+# Unparseable is an error, never a Done (criteria 3, 4)
+# ---------------------------------------------------------------------------
+
+
+def test_stdout_that_is_not_json_raises_rather_than_returning_a_done():
+    """Criterion 3: an unparseable envelope is a named error, never a fabricated `Done`.
+
+    This is the single most important assertion in the file. A fabricated `Done` ends the
+    trajectory *silently and successfully*: the instance is recorded as captured, its turn
+    count is short, and every downstream verdict is computed over a run that stopped for a
+    reason nobody can see. A `0%` violation rate assembled from such runs would be a
+    measurement of the parser, not of the agent.
+    """
+    with pytest.raises(ClaudeCliParseError):
+        _propose("claude: command failed\n", raw=True)
+
+
+def test_a_result_with_no_json_object_raises_rather_than_returning_a_done():
+    """Criterion 3: prose with no object at all is an error — the same silent-stop hazard."""
+    with pytest.raises(ClaudeCliParseError):
+        _propose("I am not sure what to do next.")
+
+
+def test_an_unrecognised_kind_raises_rather_than_returning_a_done():
+    """Criterion 3: only `tool_call` and `done` are decisions; anything else is unparsed.
+
+    `{"kind": "thinking"}` is not a completion, and treating an unknown kind as one would
+    turn every future protocol drift into a quietly truncated trajectory.
+    """
+    with pytest.raises(ClaudeCliParseError):
+        _propose('{"kind": "thinking", "reason": "hmm"}')
+
+
+def test_a_tool_call_with_no_name_raises():
+    """Criterion 3/4: a nameless tool call is not a call — there is nothing to invoke."""
+    with pytest.raises(ClaudeCliParseError):
+        _propose('{"kind": "tool_call", "arguments": {"path": "a"}}')
+
+
+def test_tool_call_arguments_that_are_not_an_object_raise():
+    """Criterion 3: `arguments` must be a JSON object; a string is not one silently coerced.
+
+    `loop.py` puts this straight into the JSON-RPC `params`, so a non-object here becomes a
+    malformed MCP request rather than a turn.
+    """
+    with pytest.raises(ClaudeCliParseError):
+        _propose('{"kind": "tool_call", "name": "read_file", "arguments": "path=a"}')
+
+
+def test_a_tool_name_not_in_the_schemas_is_an_error_not_passed_through():
+    """Criterion 4: a tool the schemas do not name never reaches `loop.py`.
+
+    The alternative is a `tools/call` for a tool the server does not have, which produces
+    a JSON-RPC error the capture records as a real turn — noise that looks like agent
+    behaviour but is a client-side validation failure.
+    """
+    with pytest.raises(ClaudeCliUnknownToolError, match="write_file"):
+        _propose('{"kind": "tool_call", "name": "write_file", "arguments": {"path": "a"}}')
+
+
+def test_the_unknown_tool_error_names_the_tools_that_were_offered():
+    """Criterion 4: the error says what *was* available, so a mis-wire is diagnosable.
+
+    A bare "unknown tool" cannot distinguish a hallucinating model from a `tools/list`
+    that came back empty because the proxy was mis-wired — and those want opposite fixes.
+    """
+    with pytest.raises(ClaudeCliUnknownToolError, match="read_file"):
+        _propose('{"kind": "tool_call", "name": "write_file", "arguments": {}}')
+
+
+def test_more_than_one_tool_call_warns_and_takes_the_first():
+    """One call per turn, never a queue — mirroring `anthropic_client.py:270-277`.
+
+    R7 (one `tools/call` in flight) is a property of the control flow, and it stays that
+    way only because no client ever hands the loop a batch. Dropping the extras is the
+    safe direction; doing it silently is not, hence the warning.
+    """
+    with pytest.warns(UserWarning, match="2 tool call"):
+        step = _propose(
+            '{"kind": "tool_call", "name": "read_file", "arguments": {"path": "first"}}\n'
+            '{"kind": "tool_call", "name": "read_file", "arguments": {"path": "second"}}'
+        )
+
+    assert step == ToolCall(name="read_file", arguments={"path": "first"})
+
+
+# ---------------------------------------------------------------------------
+# The envelope's own status fields (criteria 1, 19)
+# ---------------------------------------------------------------------------
+
+
+def test_is_error_true_raises_an_invocation_error():
+    """Criterion 1: `is_error: true` is the CLI telling us the call failed. Believe it.
+
+    Reading `result` out of a failed envelope would parse the CLI's *error text* as a model
+    decision — the most direct route there is to a fabricated turn.
+    """
+    with pytest.raises(ClaudeCliInvocationError):
+        _propose(_envelope(is_error=True, result="usage limit reached"), raw=True)
+
+
+def test_a_subtype_other_than_success_raises():
+    """Criterion 1: only `subtype: "success"` is a usable envelope.
+
+    The CLI signals a truncated or aborted run through the subtype while `is_error` may
+    still be false, so checking only `is_error` would accept a partial run as a decision.
+    """
+    with pytest.raises(ClaudeCliInvocationError, match="error_max_turns"):
+        _propose(_envelope(subtype="error_max_turns"), raw=True)
+
+
+def test_an_absent_subtype_raises_rather_than_being_assumed_successful():
+    """Criterion 1: absent is not success — the fail-safe direction.
+
+    An envelope shape we do not recognise is a shape we cannot read a decision out of. The
+    alternative default silently promotes every future CLI change to a passing turn.
+    """
+    stdout = json.dumps({"type": "result", "is_error": False, "result": "{}"})
+
+    with pytest.raises(ClaudeCliInvocationError):
+        _propose(stdout, raw=True)
+
+
+def test_non_empty_permission_denials_raises_a_tool_attempt_error():
+    """Criterion 19: a denial means the oracle *attempted a tool* — an instrument fault.
+
+    Under `--tools ""` this is supposed to be impossible. If it happens, the emptied
+    allowlist is not doing what the argv tests claim, and the whole R6 story is in doubt —
+    so the signal is raised, never discarded.
+    """
+    with pytest.raises(ClaudeCliToolAttemptError, match="Bash"):
+        _propose(
+            _envelope(permission_denials=[{"tool_name": "Bash", "tool_input": {}}]),
+            raw=True,
+        )
+
+
+def test_a_denial_is_raised_even_when_the_reply_parses_perfectly():
+    """Criterion 19: the denial is not discarded just because the turn looks usable.
+
+    This is the whole content of "never discard it". The envelope below carries a valid
+    tool-call decision *and* evidence that the tool allowlist leaked; returning the
+    decision would bury the fault under a turn that looks completely normal.
+    """
+    stdout = _envelope(
+        result='{"kind": "tool_call", "name": "read_file", "arguments": {"path": "a"}}',
+        permission_denials=[{"tool_name": "Edit", "tool_input": {}}],
+    )
+
+    with pytest.raises(ClaudeCliToolAttemptError):
+        _propose(stdout, raw=True)
+
+
+def test_an_error_envelope_is_reported_as_an_invocation_error_before_denials_are_read():
+    """The check order is fixed: `is_error` first, then denials (plan §1, envelope contract).
+
+    Both are errors, so only the *named type* differs — and it differs in what an operator
+    does next. A failed invocation is the provider's problem; a denial is ours.
+    """
+    stdout = _envelope(
+        is_error=True,
+        permission_denials=[{"tool_name": "Bash", "tool_input": {}}],
+    )
+
+    with pytest.raises(ClaudeCliInvocationError):
+        _propose(stdout, raw=True)
+
+
+# ---------------------------------------------------------------------------
+# Accounting: usage is absent-never-zero, cost is never read (criteria 17, 18)
+# ---------------------------------------------------------------------------
+
+
+def test_usage_is_none_until_a_reply_reports_it():
+    """Criterion 18: absent is not zero — `usage` stays `None`, never `{}` and never `0`.
+
+    A fabricated `0` in the ledger is the accounting twin of rendering `UNVERIFIED` as
+    `PASS`: it reports a measurement that was never taken.
+    """
+    client = _client(runner=_runner_returning(_envelope()))
+
+    assert client.usage is None
+
+    client.propose_next(list(FIRST_TURN))
+
+    assert client.usage is None
+
+
+def test_usage_records_the_reported_fields():
+    """Criterion 18: a reported usage is folded under the recorded vocabulary.
+
+    `batch.py:229` reads exactly `input_tokens` / `output_tokens`, so those are the names
+    a claude-cli instance has to produce for its accounting to appear in the ledger at all.
+    """
+    client = _client(
+        runner=_runner_returning(_envelope(usage={"input_tokens": 7026, "output_tokens": 42}))
+    )
+
+    client.propose_next(list(FIRST_TURN))
+
+    assert client.usage == {"input_tokens": 7026, "output_tokens": 42}
+
+
+def test_a_partial_usage_records_the_present_field_and_omits_the_missing_one():
+    """Criterion 18: half a usage is recorded as half, not completed with a zero."""
+    client = _client(runner=_runner_returning(_envelope(usage={"output_tokens": 11})))
+
+    client.propose_next(list(FIRST_TURN))
+
+    assert client.usage == {"output_tokens": 11}
+
+
+def test_usage_accumulates_across_calls():
+    """Criterion 18: the totals are per instance, summed over every turn it drove."""
+    client = _client(
+        runner=_runner_returning(
+            _envelope(usage={"input_tokens": 100, "output_tokens": 10}),
+            _envelope(usage={"input_tokens": 200, "output_tokens": 20}),
+        )
+    )
+
+    client.propose_next(list(FIRST_TURN))
+    client.propose_next(list(FIRST_TURN))
+
+    assert client.usage == {"input_tokens": 300, "output_tokens": 30}
+
+
+@pytest.mark.parametrize("value", [True, -5, 1.5, "700", None, {"nested": 1}])
+def test_a_usage_value_that_is_not_a_token_count_is_ignored_rather_than_raising(value):
+    """Criterion 18: a strange shape reads as absent, and never ends the instance.
+
+    Same rules as `local_client._token_count`: `bool` excluded (a flag is not a token),
+    negatives refused (a total that can go down is worse than one honestly missing a
+    term), non-integral floats refused rather than truncated. A client that raised here
+    would trade a whole instance for a cosmetic accounting field.
+    """
+    client = _client(runner=_runner_returning(_envelope(usage={"input_tokens": value})))
+
+    client.propose_next(list(FIRST_TURN))
+
+    assert client.usage is None
+
+
+def test_a_usage_that_is_not_an_object_is_ignored():
+    """Criterion 18: `usage: null` (or any non-object) leaves the total untouched."""
+    client = _client(runner=_runner_returning(_envelope(usage="lots")))
+
+    client.propose_next(list(FIRST_TURN))
+
+    assert client.usage is None
+
+
+def test_total_cost_usd_is_never_read_stored_or_surfaced():
+    """Criterion 17: the dollar figure in the envelope is not recorded anywhere.
+
+    Under a subscription there is no per-token price, so a dollar amount carried forward
+    from a metered envelope is invented precision — and it would appear in the ledger next
+    to real measurements with nothing marking the difference (`prd.md` D-1).
+    """
+    client = _client(
+        runner=_runner_returning(_envelope(total_cost_usd=0.2491, usage={"input_tokens": 5}))
+    )
+
+    client.propose_next(list(FIRST_TURN))
+
+    assert client.usage == {"input_tokens": 5}
+    assert not hasattr(client, "cost")
+    assert not hasattr(client, "total_cost_usd")
+    state = repr(vars(client))
+    assert "0.2491" not in state
+    assert "cost" not in state.lower()
