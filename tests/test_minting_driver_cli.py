@@ -39,6 +39,7 @@ from eval.minting_driver.entrypoint import (
     DEFAULT_PROVIDER,
     DEFAULT_REGISTRY_PATH,
     DEFAULT_REQUEST_TIMEOUT,
+    PROVIDERS,
     MintConfigError,
 )
 from eval.minting_driver.resilience import (
@@ -398,6 +399,33 @@ def test_cli_rejects_an_unknown_provider(capsys: pytest.CaptureFixture[str]) -> 
             ["batch", "--root", "r", "--model", TEST_MODEL, "--provider", "openai"]
         )
     assert "openai" in capsys.readouterr().err
+
+
+def test_cli_accepts_the_claude_cli_provider(tmp_path: Path) -> None:
+    """`--provider claude-cli` parses and reaches the config — with NO edit to `cli.py`.
+
+    The flag's `choices=list(PROVIDERS)` is what makes registering a provider in
+    `entrypoint.py` register its CLI value too. Asserted because "no edit was needed" is a
+    claim about this parser, and the way it stops being true is a future refactor that
+    hard-codes the two original names back into the `choices` list.
+
+    Every registered provider is walked, so the same slip on any of them fails here.
+    """
+    for provider in PROVIDERS:
+        cfg = build_config(
+            [
+                "batch",
+                "--root",
+                str(tmp_path / provider),
+                "--model",
+                TEST_MODEL,
+                "--provider",
+                provider,
+            ]
+        )
+        assert cfg.provider == provider
+
+    assert "claude-cli" in PROVIDERS
 
 
 # --------------------------------------------------------------------------------------

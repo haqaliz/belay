@@ -176,11 +176,11 @@ minting driver's live path only runs on macOS.
 
 ## BYOK model clients
 
-Two thin `Model` implementations (`eval/minting_driver/model.py`'s `Protocol`), neither
-imported by the driver core (`loop.py`, `session.py`) and neither exercised in CI — both
-lazy-import their SDK *inside* `__init__`, so importing the module never requires the SDK
-to be installed (`tests/test_minting_driver_clients_import.py` asserts this by checking
-`sys.modules`).
+Three thin `Model` implementations (`eval/minting_driver/model.py`'s `Protocol`), none
+imported by the driver core (`loop.py`, `session.py`) and none exercised in CI — the two
+SDK-backed ones lazy-import their SDK *inside* `__init__`, so importing the module never
+requires the SDK to be installed (`tests/test_minting_driver_clients_import.py` asserts
+this by checking `sys.modules`).
 
 - **`AnthropicModel`** (`eval/minting_driver/clients/anthropic_client.py`) — wraps the
   Anthropic Messages API with tool-use. Reads `ANTHROPIC_API_KEY` from the environment
@@ -189,13 +189,21 @@ to be installed (`tests/test_minting_driver_clients_import.py` asserts this by c
   OpenAI-compatible `/chat/completions` endpoint (Ollama, llama.cpp's server, vLLM).
   Reads `OPENAI_BASE_URL` / `OPENAI_API_KEY` from the environment, falling back to a local
   sentinel key when unset (most local runtimes don't validate the key at all).
+- **`ClaudeCliModel`** (`eval/minting_driver/clients/claude_cli_client.py`) — runs the
+  `claude` CLI as a subprocess on the operator's **own subscription**, so a mint needs no
+  metered key at all. Imports **no SDK whatsoever** (its boundary is a process, not a
+  client object) and reads **no credential**: see "The subscription path" under "Running a
+  mint" for the setup and, more importantly, for its stated limits.
 
-Both are installed via the **non-default** `eval` dependency group — never pulled in by a
-plain `uv sync`:
+The first two are installed via the **non-default** `eval` dependency group — never pulled
+in by a plain `uv sync`:
 
 ```bash
 uv sync --group eval
 ```
+
+`--provider claude-cli` needs neither group: it depends on the `claude` CLI being on
+`PATH`, not on any Python package.
 
 This matches the repo's BYOK guardrails (`CLAUDE.md`): never a vendor-default key, nothing
 proxied through Belay's own infrastructure, and no raw agent state ever leaves the box —
@@ -272,7 +280,8 @@ uv run python -m eval.minting_driver batch \
 
 Both take the same flags: `--root` (**required, no default**), `--model` (**required, no
 default**), `--registry`, `--clones-dir`, `--checkpoint` (default
-`<root>/checkpoint.json`), `--provider` (default `openai-compat`), `--request-timeout`
+`<root>/checkpoint.json`), `--provider` (`openai-compat` | `anthropic` | `claude-cli`,
+default `openai-compat` — see "The subscription path" for the third), `--request-timeout`
 (default `120.0`), `--max-steps`, `--max-attempts` (default `3`), `--retry-base-delay`
 (default `1.0`), `--server-root`, and `--verify`.
 `python -m eval.minting_driver one --help` is authoritative.
@@ -319,6 +328,86 @@ caused by operator setup rather than by the agents being measured:
 
 `BELAY_EVAL_MODEL` is **not** an entry-point knob — it is read only by
 `tests/test_minting_driver_smoke.py`. Use `--model`.
+
+### The subscription path (`--provider claude-cli`)
+
+A third provider that mints on the operator's **own Claude subscription** instead of a
+metered API key. Everything the other two paths guarantee still holds — the traces, the
+gated proxy, the bridge, the verdicts are all unchanged — because this is a `Model`
+implementation behind the same seam and **nothing in `loop.py` or `batch.py` was touched to
+add it** (asserted by a pinned-hash test in `tests/test_minting_driver_claude_cli.py`).
+
+```bash
+# setup: the CLI on PATH, logged in ONCE, interactively, as yourself
+claude --version                      # must resolve; the client spawns `claude`
+claude                                # log in if you have not: OAuth / keychain
+
+# then mint, with no key exported and none needed
+uv run python -m eval.minting_driver batch \
+  --root eval/mint/stage4 --registry eval/instances/selected.json \
+  --provider claude-cli --model claude-opus-5
+```
+
+`--model` is required here exactly as elsewhere, and it must be a **full id**
+(`claude-opus-5`), never an alias (`opus`): an alias resolves to whatever is newest at call
+time, so two mints reporting the same string would not have run the same model. The
+client's default constant is a full id for the same reason.
+
+**No API key is read or passed.** `resolve_credentials("claude-cli")` returns an empty
+mapping and touches no environment variable at all (a test substitutes a recording mapping
+for `os.environ` to prove it), and the client goes further: it **removes**
+`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_BASE_URL` from the child's
+environment, by *absence* rather than by setting them empty — an empty string still occupies
+its precedence slot. This matters because a leaked key produces a run that **succeeds and
+looks identical** while silently billing per token; there is no output you could inspect
+afterwards to tell the two apart. You do **not** need to `unset` anything by hand.
+
+**`--tools ""` and `--strict-mcp-config` are what keep the capture complete.** The oracle is
+granted no built-in tool and inherits none of *your* MCP servers; the MCP tool schemas
+travel as **data inside the prompt**, so the model can propose a call it cannot make, and
+every edit is executed by the driver through the recorded proxy (R6). Either flag missing is
+a path around the boundary — an inherited filesystem server would let the oracle edit files
+without the trace ever seeing them, and the mint would be missing exactly the turns that
+matter. Both are asserted on the constructed argv. R7 ("never more than one `tools/call` in
+flight") stays `loop.py`'s control flow; the client's part is that it returns **at most one**
+decision per call, and warns-and-drops rather than queueing if a reply states more.
+
+**`--bare` must never be added.** Its own help says *"OAuth and keychain are never read"*:
+it reads like the isolation flag and would break authentication outright. Asserted absent,
+deliberately — the failure it prevents is a plausible future "improvement".
+
+**`--max-turns` is a no-op, so the bound is elsewhere.** Probed 2026-08-05: absent from
+`--help`, accepted silently, and `--max-turns 1` still produced `num_turns: 2`. The mint's
+actual bounds are the harness's `--max-steps` (default `12`) **plus** the client-owned
+subprocess timeout (`DEFAULT_TIMEOUT_SECONDS = 600.0` per invocation). A wedged call raises
+a `TimeoutError` subclass, which the shared classifier calls `transient` and the retry
+breaker retries; a missing `claude` binary classifies `terminal` and costs one instance, not
+the queue.
+
+Other stated limits, so nothing here is discovered the hard way:
+
+- **`--max-tokens` is refused, not ignored.** The CLI has no reply-length flag, so
+  `make_model_factory(..., provider="claude-cli", max_tokens=...)` is a named
+  `MintConfigError` rather than a cap that was silently never applied.
+- **`total_cost_usd` is never read.** The envelope carries it; nothing stores or reports it.
+  Under a subscription there is no per-token price, and a currency figure would be
+  fabricated precision presented as a measurement (`prd.md` D-1).
+- **The undocumented CLI surface can change under us** (`prd.md` R-7). Every flag the client
+  depends on is asserted on the constructed argv, so a *removed* flag surfaces as a failing
+  test — but a flag that is still accepted while **meaning something new** would not. That
+  residual is named, not fixed.
+- **What a subscription usage limit looks like is still unknown.** Nothing pattern-matches
+  one, so such a failure reads `terminal` (safe: one instance, queue intact) unless the CLI's
+  text happens to carry a recognisable rate-limit shape. The first real limit encountered is
+  a finding to write down.
+
+> ⚠️ **The Terms-of-Service position is a stated assumption, not a settled fact**
+> (`docs/planning/subscription-model-client/prd.md` R-5). Anthropic's docs bar third-party
+> developers from *offering* claude.ai login for their products, and are **silent** on
+> running one's own eval on one's own subscription and on unattended batch automation. The
+> owner re-affirmed the assumption on 2026-08-05 with the live smoke explicitly in view;
+> **the re-affirmation does not convert it into a settled fact**, and it belongs in the
+> limitations section of any published write-up that uses a number minted this way.
 
 ### `eval/.mint_key` and `eval/resume_mint.sh` — an operator convention, not a feature
 

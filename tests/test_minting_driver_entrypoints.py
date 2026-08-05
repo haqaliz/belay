@@ -20,6 +20,8 @@ mistake that produces an empty mint, which `belay phase0 run` reads as
 
 from __future__ import annotations
 
+import os
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -32,6 +34,10 @@ from eval.minting_driver import transport as transport_module
 from eval.minting_driver.batch import run_mint
 from eval.minting_driver.checkpoint import Checkpoint, load_checkpoint
 from eval.minting_driver.clients.anthropic_client import AnthropicModel
+from eval.minting_driver.clients.claude_cli_client import (
+    DEFAULT_CLAUDE_CLI_MODEL,
+    ClaudeCliModel,
+)
 from eval.minting_driver.clients.local_client import LocalOpenAICompatModel
 from eval.minting_driver.entrypoint import (
     DEFAULT_REQUEST_TIMEOUT,
@@ -68,6 +74,25 @@ ENTRYPOINT_SOURCE = (
 #: cap, no edit). A placeholder id is correct here — no test in this file makes a live
 #: call; what is under test is that the value must be *supplied*.
 TEST_MODEL = "test-pro-model"
+
+
+#: The `client=` injection seam of `ClaudeCliModel`, which is a **callable with
+#: `subprocess.run`'s shape** rather than an SDK object — the boundary there is a process.
+#: Never invoked by any test in this file: what is under test is the wiring, and calling it
+#: would be a spawned subprocess in a unit test.
+def _never_called_runner(*args: object, **kwargs: object) -> object:
+    raise AssertionError("no `claude` invocation may happen in this test")
+
+
+#: A minimal MCP `tools/list` result, as the loop's transport would have fetched it. The
+#: CLI client serializes these into the prompt as data rather than granting them.
+CLAUDE_CLI_TOOLS = (
+    {
+        "name": "read_file",
+        "description": "Read a file.",
+        "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}},
+    },
+)
 
 
 class FakeOpenAIClient:
@@ -276,6 +301,199 @@ def test_unknown_provider_is_a_named_error(tmp_path: Path) -> None:
     """A typo'd provider is refused at config time, listing the known providers."""
     with pytest.raises(MintConfigError, match="provider"):
         MintConfig(root=tmp_path / "mint", provider="openai", model=TEST_MODEL)
+
+    # And at both of the other two doors, because `make_model_factory` and
+    # `resolve_credentials` are called directly from Python as well as through a config:
+    # a closed set enforced in only one of the three places is a closed set with a hole.
+    with pytest.raises(MintConfigError, match="provider"):
+        make_model_factory(provider="openai", model=TEST_MODEL, client=object())
+    with pytest.raises(MintConfigError, match="provider"):
+        resolve_credentials("openai")
+
+
+# --------------------------------------------------------------------------------------
+# `claude-cli` — the third provider (aspect `claude-cli-model`, criteria 7/13)
+# --------------------------------------------------------------------------------------
+
+
+class RecordingEnviron(dict):
+    """A `dict` that records every key it is asked about — the "reads nothing" seam.
+
+    `resolve_credentials("claude-cli")` returning `{}` is not on its own evidence that it
+    read nothing: a branch that looked a key up and then discarded it would return the
+    same empty dict. Substituted for `entrypoint.os.environ` so a lookup is *observable*,
+    which is what makes the assertion about behaviour rather than about a return value.
+    """
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)  # type: ignore[arg-type]
+        self.reads: list[str] = []
+
+    def get(self, key: str, default: object = None) -> object:  # type: ignore[override]
+        self.reads.append(key)
+        return super().get(key, default)
+
+    def __getitem__(self, key: str) -> object:
+        self.reads.append(key)
+        return super().__getitem__(key)
+
+    def __contains__(self, key: object) -> bool:
+        self.reads.append(str(key))
+        return super().__contains__(key)
+
+
+def test_claude_cli_is_a_registered_provider(tmp_path: Path) -> None:
+    """`claude-cli` is a value of `PROVIDERS`, so it is a legal `--provider` and config.
+
+    Registration is a one-line change and the whole point of the aspect: without it the
+    subscription client exists and nothing can select it.
+    """
+    assert "claude-cli" in entrypoint_module.PROVIDERS
+    # The two metered providers are NOT replaced — this path is additive, and the mint
+    # must still be runnable on a key when a key is what the operator has.
+    assert entrypoint_module.PROVIDERS == ("openai-compat", "anthropic", "claude-cli")
+
+    cfg = MintConfig(
+        root=tmp_path / "mint", model=DEFAULT_CLAUDE_CLI_MODEL, provider="claude-cli"
+    )
+    assert cfg.provider == "claude-cli"
+
+
+def test_claude_cli_credentials_read_nothing_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`resolve_credentials("claude-cli")` returns `{}` *and looks at no variable*.
+
+    Criteria 7 and 13. All three credential/routing variables are SET first — a test that
+    passed only because the developer had none exported would be evidence of nothing, and
+    this operator's box really does carry a metered key. The assertion is two-sided: the
+    returned mapping is empty, and no value of any of the three appears anywhere in it.
+
+    `anthropic` also returns `{}`, and for a *different* reason — its vendor SDK reads its
+    own key. Here nothing reads a key at all, because the CLI authenticates from the
+    operator's OAuth/keychain profile. The two branches must not be merged.
+    """
+    recording = RecordingEnviron(os.environ)
+    secrets = {
+        "ANTHROPIC_API_KEY": "sk-ant-must-never-be-read",
+        "ANTHROPIC_AUTH_TOKEN": "oauth-token-must-never-be-read",
+        "ANTHROPIC_BASE_URL": "https://proxy.invalid",
+    }
+    recording.update(secrets)
+    monkeypatch.setattr(entrypoint_module.os, "environ", recording)
+
+    credentials = resolve_credentials("claude-cli")
+
+    assert credentials == {}
+    for value in secrets.values():
+        assert value not in credentials.values()
+    assert recording.reads == [], (
+        "resolve_credentials('claude-cli') touched the environment: "
+        f"{recording.reads!r}. This path must not be able to pick up a metered key even "
+        "by accident — a leaked one produces a run that succeeds and looks identical "
+        "while billing per token"
+    )
+
+
+def test_claude_cli_factory_builds_a_fresh_client_and_wrapper_per_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A NEW `ClaudeCliModel` inside a NEW `RetryingModel`, on every factory call.
+
+    The identity assertions are the point: `ClaudeCliModel` re-serializes the whole
+    conversation into one `-p` string from `_history`, so a hoisted client would hand
+    instance N instance N-1's transcript *inside the prompt*, and a hoisted wrapper would
+    bill instance 1's retries to instance 40 in `run-accounting`.
+
+    The environment holds a metered key throughout, and the built client is still the CLI
+    one — provider selection is the argument, never the key.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-should-not-matter")
+
+    factory = make_model_factory(
+        provider="claude-cli",
+        model=DEFAULT_CLAUDE_CLI_MODEL,
+        client=_never_called_runner,
+    )
+    first = factory(list(CLAUDE_CLI_TOOLS))
+    second = factory(list(CLAUDE_CLI_TOOLS))
+
+    assert isinstance(first, RetryingModel)
+    assert isinstance(second, RetryingModel)
+    assert first is not second
+    inner_first, inner_second = first._inner, second._inner
+    assert isinstance(inner_first, ClaudeCliModel)
+    assert isinstance(inner_second, ClaudeCliModel)
+    assert inner_first is not inner_second
+
+    # Distinct transcript OBJECTS, not merely equal empty ones — a shared list is exactly
+    # how "cache the client, it's the same config" leaks one instance's prompt into the
+    # next one's.
+    assert inner_first._history is not inner_second._history
+    assert inner_first._seen == 0 and inner_second._seen == 0
+    assert inner_first.request_count == 0 and inner_second.request_count == 0
+
+    # The wrapper's retry budget is genuinely its own. Mutated directly rather than by
+    # provoking a retry, because provoking one would mean a real `time.sleep`.
+    assert first.retry_count == 0 and second.retry_count == 0
+    first._retry_count = 7
+    assert second.retry_count == 0
+
+    # The factory's shared `client=` seam reaches the client as `runner=` — the parameter
+    # is NOT renamed (it is pinned by every other test in this file), it is mapped, and
+    # the mapping is what keeps this provider offline in tests.
+    assert inner_first._runner is _never_called_runner
+    assert inner_second._runner is _never_called_runner
+
+    # The tools list is copied per client, and the model id is recorded off the object
+    # that will make the calls rather than off the config.
+    assert inner_first._tools == list(CLAUDE_CLI_TOOLS)
+    assert inner_first._tools is not inner_second._tools
+    assert inner_first.model == DEFAULT_CLAUDE_CLI_MODEL
+    assert inner_first.provider == "claude-cli"
+
+
+def test_claude_cli_factory_needs_no_credentials_at_all(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With no `client=` injected and NO variable set, the factory still builds.
+
+    The other two providers fail here by design (`MissingCredentialsError` /
+    the SDK's own error). This one must not: "runs on credentials the operator already
+    has" is the user outcome, and an accidental credential requirement on this path would
+    make the subscription route unusable for exactly the reason it exists.
+
+    The built client's default `runner` is `subprocess.run` — nothing calls it here, so no
+    `claude` binary is spawned and no subscription is consumed.
+    """
+    for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+
+    model = make_model_factory(
+        provider="claude-cli", model=DEFAULT_CLAUDE_CLI_MODEL
+    )(list(CLAUDE_CLI_TOOLS))
+
+    assert isinstance(model, RetryingModel)
+    assert isinstance(model._inner, ClaudeCliModel)
+    assert model._inner._runner is subprocess.run
+
+
+def test_claude_cli_factory_refuses_a_max_tokens_it_cannot_honour() -> None:
+    """`max_tokens` is a named error on this provider, never silently dropped.
+
+    The CLI exposes no reply-length bound, so accepting the knob would leave a caller
+    believing they had capped a reply that is uncapped. Refused loudly at factory-build
+    time, which is before any instance is prepped or driven.
+    """
+    with pytest.raises(MintConfigError, match="max_tokens"):
+        make_model_factory(
+            provider="claude-cli",
+            model=DEFAULT_CLAUDE_CLI_MODEL,
+            client=_never_called_runner,
+            max_tokens=4096,
+        )
 
 
 # --------------------------------------------------------------------------------------
@@ -583,12 +801,15 @@ def test_fresh_model_client_per_instance(monkeypatch: pytest.MonkeyPatch) -> Non
 def test_factory_wraps_every_provider_in_the_retry_breaker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """BOTH providers come out of the factory behind `RetryingModel`.
+    """EVERY provider comes out of the factory behind `RetryingModel` — all three.
 
     The quota circuit breaker only exists on the path the mint actually takes. A wrapper
     on `openai-compat` and a bare model on `anthropic` is a breaker that works in tests
     and burns the queue live — which is the exact 2026-07-24 failure it was built for
-    (`eval/minting_driver/resilience.py`, module docstring).
+    (`eval/minting_driver/resilience.py`, module docstring). `claude-cli` is in the same
+    list for the same reason and one of its own: its only retryable failure
+    (`ClaudeCliTimeoutError`) is *wrapped specifically* so the breaker can retry it, which
+    buys nothing if no breaker is installed on the path.
     """
     monkeypatch.setenv("OPENAI_BASE_URL", "https://example.invalid/v1")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
@@ -608,6 +829,24 @@ def test_factory_wraps_every_provider_in_the_retry_breaker(
     )([])
     assert isinstance(anthropic, RetryingModel)
     assert isinstance(anthropic._inner, AnthropicModel)
+
+    # The subscription path. No credential is resolved for it at all, so this branch is
+    # reachable with nothing exported.
+    claude_cli = make_model_factory(
+        provider="claude-cli",
+        model=DEFAULT_CLAUDE_CLI_MODEL,
+        client=_never_called_runner,
+    )(list(CLAUDE_CLI_TOOLS))
+    assert isinstance(claude_cli, RetryingModel)
+    assert isinstance(claude_cli._inner, ClaudeCliModel)
+
+    # Every provider in the registered set is covered above — so adding a fourth without
+    # wrapping it fails here rather than in a live mint's queue.
+    assert set(entrypoint_module.PROVIDERS) == {
+        "openai-compat",
+        "anthropic",
+        "claude-cli",
+    }
 
 
 def test_retry_knobs_reach_the_wrapper(monkeypatch: pytest.MonkeyPatch) -> None:
