@@ -10,6 +10,13 @@ mint, but their SDK imports must never leak into the core import graph, and thei
 must stay importable even in an environment where the SDKs are absent (a lazy
 `import anthropic`/`import openai` INSIDE `__init__`, not at module top).
 
+The third client, `clients/claude_cli_client.py`, satisfies the same contract by a
+different and stronger route: its boundary is a `subprocess`, so it imports **no** SDK at
+any point, lazily or otherwise. That is asserted here rather than assumed — and asserted
+as "nothing outside the standard library", not merely "not those two SDKs", because the
+plausible future import on that path (a vendor exception type, to recognise a subscription
+usage limit) is one nobody would think to add to a two-name denylist.
+
 Every assertion here runs in a **subprocess** — mirroring the approach
 `tests/test_import_guard.py` uses for `src/belay` (a static AST walk there; a fresh
 interpreter here) — because `sys.modules` state leaks across tests in a shared process:
@@ -105,6 +112,58 @@ def test_local_client_module_importable_without_openai_installed() -> None:
         "assert 'openai' not in sys.modules, "
         "'openai imported at module load, not lazily inside __init__'\n"
         "assert hasattr(m, 'LocalOpenAICompatModel')\n"
+        "print('OK')\n"
+    )
+    result = _run(code)
+
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    assert "OK" in result.stdout
+
+
+def test_claude_cli_client_module_imports_no_sdk_at_all() -> None:
+    """`clients/claude_cli_client.py` imports **no** SDK — not lazily, not at all.
+
+    Its boundary is a `subprocess`, not a vendor client, so the isolation contract holds
+    here by construction rather than by a lazy `import` inside `__init__`. That is the
+    strongest form of the guarantee in this file and it is **asserted rather than assumed**:
+    an SDK import would be an easy and plausible future addition — reaching for
+    `anthropic`'s exception types to recognise a subscription usage limit is exactly the
+    shape it would take — and it would put a third-party dependency behind a path whose
+    entire selling point is running on credentials the operator already has.
+
+    Constructing `ClaudeCliModel` is deliberately part of this test, unlike the two above:
+    there is no `__init__`-time import to keep lazy, so there is nothing to protect by
+    leaving it unexercised, and doing it here proves the *whole* module is SDK-free rather
+    than only its import. No `claude` binary is spawned — nothing calls `propose_next`.
+    """
+    code = (
+        # The baseline is taken BEFORE the import, so what is measured is what this module
+        # pulled in — not whatever the interpreter starts with.
+        "import sys\n"
+        "before = set(sys.modules)\n"
+        "import eval.minting_driver.clients.claude_cli_client as m\n"
+        "pulled = {name.split('.')[0] for name in set(sys.modules) - before}\n"
+        # Stronger than naming the two SDKs: NOTHING outside the standard library and this
+        # repo's own trees may enter the graph. A future `import httpx` to talk to a local
+        # endpoint would fail here even though it is neither `anthropic` nor `openai`.
+        "third_party = sorted(\n"
+        "    name for name in pulled\n"
+        # `belay` is NOT on this allowlist either: `eval/` may not import the product tree
+        # (guardrail #1), and this client has no reason to be the first place that does.
+        "    if name not in sys.stdlib_module_names and name != 'eval'\n"
+        ")\n"
+        "assert not third_party, f'the CLI client imported {third_party}'\n"
+        "assert 'anthropic' not in sys.modules, "
+        "'the CLI client pulled in the anthropic SDK; its boundary is a subprocess'\n"
+        "assert 'openai' not in sys.modules\n"
+        "assert hasattr(m, 'ClaudeCliModel')\n"
+        # A real construction, with a runner that would fail loudly if anything called it.
+        "def never(*a, **k):\n"
+        "    raise AssertionError('no claude invocation may happen here')\n"
+        "model = m.ClaudeCliModel(model=m.DEFAULT_CLAUDE_CLI_MODEL, tools=[], "
+        "runner=never)\n"
+        "assert model.provider == m.PROVIDER_NAME\n"
+        "assert 'anthropic' not in sys.modules and 'openai' not in sys.modules\n"
         "print('OK')\n"
     )
     result = _run(code)

@@ -34,9 +34,12 @@ which is the exact condition criterion 13 was written for.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import subprocess
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -1387,3 +1390,148 @@ def test_the_original_failure_is_kept_as_the_cause():
     raised = _raised(_runner_raising(original))
 
     assert raised.__cause__ is original
+
+
+# --------------------------------------------------------------------------------------
+# Criteria 11 and 12 — the two properties that must not silently erode
+# --------------------------------------------------------------------------------------
+
+#: Repo root. `eval/` and `tests/` both live directly under it.
+REPO_ROOT = Path(__file__).parent.parent
+
+#: The sha256 of every driver-core file this aspect promised not to touch (criterion 11),
+#: as bytes on disk.
+#:
+#: **A pinned content hash, deliberately, rather than a `git diff` against the merge base.**
+#: Three reasons, in order of weight:
+#:
+#: 1. A merge-base check goes **vacuous the moment this branch lands**: once the work is in
+#:    `master`, `merge-base(HEAD, master)` *is* `HEAD`, the diff is empty forever after, and
+#:    a later edit to `loop.py` would sail past a test that still looks like it guards it.
+#:    A hash keeps failing for any edit, on any branch, at any time.
+#: 2. It needs no git at all — no `master` ref (a shallow CI clone may not have one), no
+#:    working tree, no subprocess.
+#: 3. Updating it is a visible, reviewable line in a diff. That friction is the feature:
+#:    criterion 11 says these two files are not this aspect's business, and if a future
+#:    aspect legitimately changes one, re-pinning the hash is how it says so out loud.
+#:
+#: The cost is honest and small: an unrelated edit to either file fails THIS test, whose
+#: message says what to do about it.
+UNMODIFIED_DRIVER_CORE = {
+    "eval/minting_driver/loop.py": (
+        "1e6b4dabab811ac88cb1322a14202b019b7427f82a89c136c2cc40cdb54a3b98"
+    ),
+    "eval/minting_driver/batch.py": (
+        "0e4d036989ff4f6a5bf8326613d766a182b13423a01d71efbef06db4983975ab"
+    ),
+}
+
+
+def test_loop_and_batch_are_unmodified_by_this_aspect():
+    """Criterion 11: `loop.py` and `batch.py` are byte-for-byte untouched.
+
+    They are the sequential, single-in-flight, error-contained core: `loop.py` is where
+    "never more than one `tools/call` in flight" (R7) lives as control flow, and `batch.py`
+    is where per-instance containment and the checkpoint's re-arm rule live. A client is
+    supposed to be reachable through the `Model` seam without either of them moving — if
+    registering this provider had needed an edit there, the design had drifted toward
+    Option A (`prd.md` §3), and the right response was to stop, not to edit.
+
+    See `UNMODIFIED_DRIVER_CORE` for why this is a pinned hash and not a `git diff`.
+    """
+    for relative_path, expected in UNMODIFIED_DRIVER_CORE.items():
+        path = REPO_ROOT / relative_path
+        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        assert actual == expected, (
+            f"{relative_path} has changed (sha256 {actual}, pinned {expected}).\n"
+            f"The `claude-cli-model` aspect promised these two files are untouched "
+            f"(criterion 11): they carry single-in-flight (R7) and per-instance "
+            f"containment, and a new client must reach the loop through the `Model` seam "
+            f"without either moving. If an edit here is genuinely intended by a LATER "
+            f"aspect, re-pin the hash in the same commit — deliberately a visible line in "
+            f"the diff, so the promise is withdrawn out loud rather than by silence."
+        )
+
+
+def test_the_unmodified_guard_actually_notices_an_edit():
+    """The guard above is only worth its line count if it FAILS on a changed byte.
+
+    A hash test that compares a value to itself passes forever; this asserts the mechanism
+    by hashing the real bytes plus one appended newline — the smallest edit anybody could
+    make — and requiring the pinned value to reject it. Nothing is written to disk.
+    """
+    for relative_path, expected in UNMODIFIED_DRIVER_CORE.items():
+        edited = (REPO_ROOT / relative_path).read_bytes() + b"\n"
+        assert hashlib.sha256(edited).hexdigest() != expected
+
+
+#: The `manual`-marked live smoke that exists TODAY. This aspect adds no live test of its
+#: own — `live-smoke-confirmation` does — so criterion 12's *mechanism* (marker + the
+#: default `addopts`) is asserted on the one manual test in the suite. Whatever the later
+#: aspect adds inherits exactly this mechanism, and a test that asserted "some manual test
+#: exists" instead would have to be edited when it lands.
+MANUAL_SMOKE_TEST_PATH = "tests/test_minting_driver_smoke.py"
+
+
+def _collect(*extra_args: str) -> subprocess.CompletedProcess:
+    """Collect-only pytest over the manual smoke file, in a fresh interpreter.
+
+    A subprocess for the same reason `tests/test_minting_driver_clients_import.py` uses
+    one: the property under test is what a **default `pytest` invocation** does, and that
+    cannot be observed from inside a run whose options are already fixed. `cwd` is the repo
+    root so the real `pyproject.toml` — with the real `addopts` — is the rootdir config.
+    Collection only: nothing is executed, nothing is spent.
+    """
+    return subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            MANUAL_SMOKE_TEST_PATH,
+            "--collect-only",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            *extra_args,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        cwd=REPO_ROOT,
+    )
+
+
+def test_the_manual_smoke_is_deselected_by_a_default_run():
+    """Criterion 12: a default `pytest` DESELECTS the manual live test — observed, not assumed.
+
+    Asserting `pytest.mark.manual` is present would prove only that somebody wrote a
+    marker; the property that matters is that the default `addopts = "-m 'not manual'"`
+    (`pyproject.toml`) acts on it, so no live model call, no real MCP server and no spend
+    can be triggered by running the suite the way CI runs it.
+
+    Two-sided on purpose. The default run must deselect it, and `-m manual` must select the
+    very same test — otherwise a deselection could just as well mean the file no longer
+    collects anything at all, which is what a rename or a broken import looks like.
+    """
+    default_run = _collect()
+
+    # Exit 5 is pytest's "no tests ran" — every test in the file was deselected. Not 0,
+    # which would mean something in a manual-marked file was still collected.
+    assert default_run.returncode == 5, (
+        f"a default run did not deselect the whole manual smoke file\n"
+        f"stdout:\n{default_run.stdout}\nstderr:\n{default_run.stderr}"
+    )
+    assert "deselected" in default_run.stdout
+    assert MANUAL_SMOKE_TEST_PATH not in default_run.stdout, (
+        "a manual-marked test was collected by a default run: it spends against a real "
+        "model and spawns real MCP servers"
+    )
+
+    opted_in = _collect("-m", "manual")
+
+    assert opted_in.returncode == 0, (
+        f"`-m manual` collected nothing, so the deselection above is not evidence about "
+        f"the marker — the file may simply be empty or unimportable\n"
+        f"stdout:\n{opted_in.stdout}\nstderr:\n{opted_in.stderr}"
+    )
+    assert MANUAL_SMOKE_TEST_PATH in opted_in.stdout
