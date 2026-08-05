@@ -154,6 +154,54 @@ by side without that sentence attached is the failure mode this rule exists to p
 established that it would return ≈166/166 and that its stop-branch could never fire; it was
 replaced before anything was run — `prd.md` D-6, `exposure-forecast/spec.md`.)*
 
+#### Rule B has been APPLIED — 2026-08-05, row 1: fund the mint
+
+> **This note only ADDS a figure. No published number is re-derived or edited** — `1/15`, the 17
+> judgments, `precision 0.00`, `recall 0.00`, `4/16`, `3/93` and the `0% UNVERIFIED` headline all
+> stand exactly as published.
+
+The forecast ran under the freeze protocol: script committed at **`f82d12f`** containing no result,
+invocation and verbatim output at **`83028e2`**
+(`docs/planning/subscription-model-client/exposure-forecast/acceptance.{sh,out}`). Offline, once,
+byte-identical on re-run. It **reproduces `plan_20260805.md` §0 exactly**, which is what makes it
+publishable rather than merely produced.
+
+| population | statements mentioning ≥1 frozen token |
+|---|---|
+| pool (166) | **59/166 = 35.5%** |
+| **launched, real only (65)** | **29/65 = 44.6%** ← the decision-relevant figure: the mint drives `selected.json` |
+| controls (3) | 0/3, partitioned out of both headlines |
+| `unknown` | 0/166 and 0/65 — stated, because absent is not zero |
+
+**Reading — Rule B row 1, "a substantial share": FUND THE MINT.** Nearly half the instances a mint
+would actually drive describe tests, an assertion, a failing case, a traceback or a reproduction in
+their own text. The stop-branch does not fire, and it *could* have — unlike the surface count this
+rule replaced.
+
+**The asymmetry was honoured, not merely quoted.** This lands on the **stronger** side: a high
+score is reasonable evidence the population *can* produce exposure. The run supplies its own proof
+of the direction — **flask forecasts 0/1 while v0.12.0 measured 2/2 instances judged, 5
+judgments** — so **44.6% is a floor, not an estimate.**
+
+**Row 3 also fires, partially, and is reported rather than resolved:** sphinx (8/13 = 61.5%) and
+sympy (20/56 = 35.7%) forecast high and were measured at 0 judged, which row 3 reads as *agent
+behaviour, not task supply* and which **does not by itself block the mint** — but the measured n
+there is **1 instance each**, a real observation and a worthless rate. Where the measured set is
+thickest the two agree in direction (pytest 6/7 vs 3/4 judged; pylint 3/3 vs 1/3).
+
+**Two secondary results.** (1) The launched 65 score **higher** than the pool (44.6% vs 35.5%),
+because the draw's rebalancing away from the django+sympy 83% moved it toward the repos that
+describe tests; the two are never averaged. (2) `task_string` scores **57/166** against the
+statement's **59/166** — 2 statement-only, 0 task-only — so the signal the agent is *handed* is
+slightly smaller than the signal in the benchmark text, consistent with `derive_task_string`'s
+1500-char truncation, and the fixed framing contributes none of its own.
+
+**What it is not:** not a gate run (the ≥50 clause counts *instances minted* and is
+detector-independent), not a prediction of conduct, and **not comparable** to the 17 judgments.
+Also recorded: this PRD's and the spec's *"n=15 across 5 repos"* is wrong — the 15 named instances
+span **6**; the script derives the count from the transcribed table rather than reconciling it. The
+full reading is in `exposure-forecast/spec.md` → *The reading — 2026-08-05*.
+
 ---
 
 ## 3. What is being built, and what it is not

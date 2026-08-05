@@ -106,7 +106,11 @@ than a high score is for "go". The published output must say this in its own tex
    thing counted, different population, different model.
 9. **The freeze protocol holds** — tooling commit contains no result.
 10. **The cross-reference against v0.12.0 is computed and reported once, after the token set is
-    frozen**, and is labelled **calibration, never validation** (n=15 across 5 repos).
+    frozen**, and is labelled **calibration, never validation** (n=15 across ~~5~~ **6** repos —
+    *corrected 2026-08-05: this spec and `plan_20260805.md` §1 both said 5; the 15 instances named
+    in `PHASE0_RESULTS.md` span **6** — flask 2, pylint 3, pytest 4, requests 4, sphinx 1, sympy 1.
+    The script derives the count from the transcribed table and prints it, and says in its own
+    output that it does; nothing was reconciled by adjusting a figure*).
 11. **No published number is re-derived or edited.** `1/15`, the 17 judgments, `precision 0.00`,
     `recall 0.00`, `4/16`, `3/93` all stand untouched; this aspect only *adds* a figure.
 
@@ -131,4 +135,65 @@ than a high score is for "go". The published output must say this in its own tex
 - **Open:** should `task_string` be scanned as well as `problem_statement`, or is the statement
   alone the honest input? The agent receives both. **Recommendation: scan both, report both
   separately**, so the reader can see whether the signal is coming from the task framing or the
-  bug report.
+  bug report. **CLOSED 2026-08-05 by measurement:** both were scanned and reported separately, and
+  the statement is the field that carries the signal — `task_string` scores **57/166** against the
+  statement's **59/166**, i.e. **2 statement-only, 0 task-only**. The framing introduces none of
+  its own signal (`TASK_PREFIX` contains no token, derived rather than assumed), and the two the
+  task loses are consistent with `derive_task_string`'s 1500-char truncation: on those two, the
+  signal sits past the cut and **the agent is never shown it**.
+
+---
+
+## The reading — 2026-08-05, under PRD §2.1 Rule B
+
+**The measurement.** Script frozen at `f82d12f` containing no result; invocation and verbatim
+output at `83028e2` (`acceptance.sh` / `acceptance.out`). Run once, offline, byte-identical on
+re-run. It **reproduces `plan_20260805.md` §0 exactly** — 59/166, django 22/82, sympy 20/56,
+sphinx 8/13, pytest 6/7, pylint 3/3, requests 0/4, flask 0/1, statement length min 239 / median
+787 / max 1970 — which is the check that the instrument is sound, and nothing was adjusted on
+either side to obtain it.
+
+| population | statements mentioning ≥1 frozen token |
+|---|---|
+| **pool** (`pool.json`) | **59/166 = 35.5%** |
+| **launched, real only** (`selected.json`) | **29/65 = 44.6%** |
+| controls, partitioned out | 0/3 |
+| `unknown` (absent/empty statement) | 0/166 and 0/65 — stated, not omitted |
+
+**The decision-relevant figure is the launched 44.6%**, not the pool's 35.5%: the mint drives
+`selected.json`, and the ≥50 denominator would be filled from those 65. The two are **not**
+averaged and neither is derived from the other — the draw rebalanced composition (django 82/166 =
+49.4% of the pool vs 19/65 = 29.2% of the launch), which is precisely why the launched figure is
+the higher one.
+
+**Rule B row 1 fires: FUND THE MINT.** Nearly half of the instances a mint would actually drive
+describe tests, an assertion, a failing case, a traceback or a reproduction in their own text.
+That is not *"very few"* under any reading, so the stop-branch does not fire — and note this is a
+**decision rule with a live stop-branch**, unlike the design in the 🔴 box above.
+
+**The asymmetry, honoured rather than quoted.** Rule B pre-registers that a **high** score is
+reasonable evidence the population *can* produce exposure while a **low** score is *weaker*
+evidence it cannot. The reading here lands on the **stronger** side of that asymmetry, and the
+measurement supplies its own proof of the direction: **flask forecasts 0/1 and v0.12.0 measured
+2/2 instances judged with 5 judgments.** So **44.6% is a floor on the share of launched tasks that
+describe test work, not an estimate of it** — the true share can only be higher, never lower.
+
+**Rule B row 3 also fires, partially, and is reported rather than resolved.** sphinx forecasts
+8/13 = 61.5% and sympy 20/56 = 35.7%, yet both were measured at **0 judged**. By row 3 that gap is
+*agent behaviour, not task supply*, and **does not by itself block the mint** — but the measured n
+on those two repos is **1 instance each**, so the gap is a real observation and a worthless rate.
+Where the measured set is thickest the two agree in direction: pytest 6/7 forecast against 3/4
+instances judged, pylint 3/3 against 1/3.
+
+**What this reading is NOT.** It is **not a gate run** — the PROCEED clause counts *instances
+minted*, is detector-independent, and no offline survey can satisfy it. It is **not a prediction**
+that 29 instances will produce exposure; it counts task text, never conduct. It is **not
+comparable** to v0.12.0's 17 judgments (different thing counted, different population, different
+model — no model at all here). And it **re-derives nothing**: `1/15`, the 17 judgments, `precision
+0.00`, `recall 0.00`, `4/16`, `3/93` and the `0% UNVERIFIED` headline all stand exactly as
+published; this aspect only *adds* a figure.
+
+**The residual risk the forecast cannot touch.** 36/65 launched statements mention nothing, and
+this instrument cannot say whether those tasks would invite a test edit anyway — the flask
+counter-example proves that at least some do. The forecast raises the floor under the funding
+decision; it does not narrow the ceiling.
