@@ -1,0 +1,230 @@
+======================================================================================
+EXPOSURE FORECAST -- what the task descriptions say, and what they cannot
+======================================================================================
+
+  pool      eval/instances/pool.json  (166 instances)
+  launched  eval/instances/selected.json  (68 records = 65 real, 3 controls)
+
+  eval/scripts/forecast_exposure.py -- stdlib only, offline: no network, no API
+  key, no model call, no clone, no clock, no randomness. Same inputs, same bytes.
+
+--------------------------------------------------------------------------------------
+0. THE FROZEN TOKEN SET
+--------------------------------------------------------------------------------------
+  9 tokens, matched case-insensitively on word-prefix:
+    test, tests, testing, pytest, assert, assertion, failing, traceback, reproduc
+
+  Committed as FORECAST_TOKENS in this script BEFORE the cross-reference in
+  section 6 was computed, and not revised after it (spec criteria 6 and 10).
+  Several entries are prefixes of others -- the first already subsumes the next
+  two -- so 9 tokens are fewer than 9 distinct matchers. The set is printed
+  exactly as frozen, never deduplicated: a tidied set is no longer the set these
+  figures were produced under. Word-prefix means a word must START with a token,
+  so `protest` and `unittest` do not match. That miss is a documented under-count
+  (see section 9), not a fix waiting to happen: widening the rule after seeing
+  which way it moves the number is exactly the overfitting criteria 6 and 10 exist
+  to make visible.
+
+--------------------------------------------------------------------------------------
+1. POOL -- the 166 strict-eligible registry instances
+--------------------------------------------------------------------------------------
+  The population a mint could draw from. Read the per-repo shape, not only the
+  headline -- an aggregate alone hides the concentration:
+  its 2 largest repos (django/django + sympy/sympy) hold 138/166 = 83.1%.
+
+  problem_statement mentions >=1 frozen token: 59/166 = 35.5%
+  unknown (missing or empty problem_statement): 0/166 = 0.0%  <- ABSENT IS NOT ZERO
+  mentions among instances that carry text: 59/166 = 35.5%
+
+  per repo (problem_statement):
+    django/django       22/82 = 26.8%        unknown 0/82
+    sympy/sympy         20/56 = 35.7%        unknown 0/56
+    sphinx-doc/sphinx   8/13 = 61.5%         unknown 0/13
+    pytest-dev/pytest   6/7 = 85.7%          unknown 0/7
+    psf/requests        0/4 = 0.0%           unknown 0/4
+    pylint-dev/pylint   3/3 = 100.0%         unknown 0/3
+    pallets/flask       0/1 = 0.0%           unknown 0/1
+
+  problem_statement length in chars, over the 166 that carry text:
+    min 239 · median 787 (upper of the two middles when the count is even) · max 1970
+
+--------------------------------------------------------------------------------------
+2. LAUNCHED -- the 65 real instances actually drawn
+--------------------------------------------------------------------------------------
+  REPORTED SEPARATELY AND NEVER AVERAGED WITH THE POOL. The draw deliberately
+  rebalanced composition, so the two populations are not the same shape and a
+  combined or averaged figure is a category error rather than a summary. The
+  denominators below are the launched set's own; nothing here is derived from
+  section 1 and section 1 is not adjusted by anything here.
+
+  problem_statement mentions >=1 frozen token: 29/65 = 44.6%
+  unknown (missing or empty problem_statement): 0/65 = 0.0%  <- ABSENT IS NOT ZERO
+  mentions among instances that carry text: 29/65 = 44.6%
+
+  per repo (problem_statement):
+    django/django       6/19 = 31.6%         unknown 0/19
+    sympy/sympy         6/18 = 33.3%         unknown 0/18
+    sphinx-doc/sphinx   8/13 = 61.5%         unknown 0/13
+    pytest-dev/pytest   6/7 = 85.7%          unknown 0/7
+    psf/requests        0/4 = 0.0%           unknown 0/4
+    pylint-dev/pylint   3/3 = 100.0%         unknown 0/3
+    pallets/flask       0/1 = 0.0%           unknown 0/1
+
+  composition, pool vs launched (why they are never averaged):
+    django/django       pool 82/166 = 49.4%         launched 19/65 = 29.2%
+    sympy/sympy         pool 56/166 = 33.7%         launched 18/65 = 27.7%
+    sphinx-doc/sphinx   pool 13/166 = 7.8%          launched 13/65 = 20.0%
+    pytest-dev/pytest   pool 7/166 = 4.2%           launched 7/65 = 10.8%
+    psf/requests        pool 4/166 = 2.4%           launched 4/65 = 6.2%
+    pylint-dev/pylint   pool 3/166 = 1.8%           launched 3/65 = 4.6%
+    pallets/flask       pool 1/166 = 0.6%           launched 1/65 = 1.5%
+
+--------------------------------------------------------------------------------------
+3. CONTROLS -- partitioned out of both headlines above
+--------------------------------------------------------------------------------------
+  Following the `belay phase0 combine` precedent: a control is an instrument
+  check, not a member of the sample the number describes, so it is never in a
+  headline denominator. Its own tally is reported here instead of dropped.
+
+  controls in the launched set: 3/68 = 4.4%
+  controls whose statement mentions >=1 token: 0/3 = 0.0%
+  controls in the pool: 0/166 = 0.0%
+
+    control__flask-read-only  (pallets/flask)
+    control__flask-write-new-file  (pallets/flask)
+    control__requests-read-then-write  (psf/requests)
+
+--------------------------------------------------------------------------------------
+4. problem_statement vs task_string -- tallied SEPARATELY
+--------------------------------------------------------------------------------------
+  The agent receives both, so both are reported and a reader can see which field
+  carries the signal. `task_string` is a mechanical truncate-and-prefix of the
+  statement (eval/instances/tasks.py, 1500-char budget), so a statement-only hit
+  is signal that sits past the cut and the agent is never shown; a task_string-only
+  hit would mean the fixed framing introduced the signal itself.
+
+  pool:
+    problem_statement: 59/166 = 35.5%       unknown 0/166
+    task_string:       57/166 = 34.3%       unknown 0/166
+    both fields:       57/166 = 34.3%
+    statement only:    2/166 = 1.2%
+    task_string only:  0/166 = 0.0%
+    neither:           107/166 = 64.5%
+
+  launched (real only):
+    problem_statement: 29/65 = 44.6%        unknown 0/65
+    task_string:       29/65 = 44.6%        unknown 0/65
+    both fields:       29/65 = 44.6%
+    statement only:    0/65 = 0.0%
+    task_string only:  0/65 = 0.0%
+    neither:           36/65 = 55.4%
+
+--------------------------------------------------------------------------------------
+5. SURFACE FLOOR -- a FLOOR, never a finding
+--------------------------------------------------------------------------------------
+  One blunt line per repo confirming an in-scope path segment exists at all. This
+  is the residue of this aspect's REJECTED first design, which proposed counting
+  .py files under a tests/testing segment at base_commit: every repo here has one,
+  so it would have returned ~166/166 and its stop-branch could never fire. It is
+  kept only so this output cannot be read as claiming no in-scope surface exists,
+  and it is reported as a floor, never a finding. Derived from the repo name via a
+  committed mapping transcribed from the aspect spec -- NOT by cloning anything in
+  this run, and NOT a re-implementation of the A1 scope rule.
+
+  repos with a recorded in-scope segment: 7/7 = 100.0%
+
+    django/django       tests/
+    pallets/flask       tests/
+    psf/requests        tests/
+    pylint-dev/pylint   tests/
+    pytest-dev/pytest   testing/
+    sphinx-doc/sphinx   tests/
+    sympy/sympy         sympy/**/tests/
+
+--------------------------------------------------------------------------------------
+6. CALIBRATION against v0.12.0's MEASURED exposure -- CALIBRATION, NEVER VALIDATION
+--------------------------------------------------------------------------------------
+  The measured set, from PHASE0_RESULTS.md -> Correction 2026-08-04:
+    n=15 instances across 6 repos, 17 (turn, file) judgments over 7 distinct files
+    6/15 instances judged something · 9/15 compared ZERO · 0/15 unrecorded
+    repos measured: pallets/flask, psf/requests, pylint-dev/pylint, pytest-dev/pytest,
+                    sphinx-doc/sphinx, sympy/sympy
+
+  This is a CALIBRATION POINT, NEVER A VALIDATION. 15 measured instances cannot
+  validate a 166-instance predictor, and fitting the token set to them would be
+  overfitting dressed as calibration -- which is why the set was frozen first.
+  Nothing published is re-derived here: the 17 judgments, 1/15, precision 0.00,
+  recall 0.00, 4/16 and 3/93 all stand exactly as published. A repo v0.12.0 never
+  measured reads `not measured`, NEVER 0 -- absent is not zero here either.
+
+  django/django       forecast 22/82 = 26.8%    measured not measured
+  pallets/flask       forecast 0/1 = 0.0%       measured judged 2/2 instances · 5 judgments
+  psf/requests        forecast 0/4 = 0.0%       measured judged 0/4 instances · 0 judgments
+  pylint-dev/pylint   forecast 3/3 = 100.0%     measured judged 1/3 instances · 2 judgments
+  pytest-dev/pytest   forecast 6/7 = 85.7%      measured judged 3/4 instances · 10 judgments
+  sphinx-doc/sphinx   forecast 8/13 = 61.5%     measured judged 0/1 instances · 0 judgments
+  sympy/sympy         forecast 20/56 = 35.7%    measured judged 0/1 instances · 0 judgments
+
+  Read each mismatch, do not resolve it. Where a row's forecast is high and its
+  measured column was low, prd.md §2.1 Rule B row 3 applies: the gap is agent
+  behaviour, not task supply, and it does not by itself block the mint. Where a
+  row's forecast is low and its measured column was high, the signal under-counted
+  -- section 9, and the reason a low forecast is the weaker of the two readings.
+
+  NOTE ON n: this aspect's spec and plan both say `n=15 across 5 repos`. The 15
+  named instances span 6 repos, listed above. The count derived
+  from the committed table governs; the spec's parenthetical is corrected in the spec
+  rather than reconciled by adjusting anything here.
+
+--------------------------------------------------------------------------------------
+7. UNKNOWN -- absent is not zero
+--------------------------------------------------------------------------------------
+  An instance with a missing or empty problem_statement is `unknown`: it is not a
+  mention and it is not a non-mention, so it is excluded from the informative
+  denominator in sections 1 and 2 rather than folded into the `does not mention`
+  bucket. The same rule the exposure ledger enforces. Counted and named here.
+
+  pool:     unknown 0/166 = 0.0%
+  launched: unknown 0/65 = 0.0%
+
+    (none: every instance in both populations carries statement text)
+
+--------------------------------------------------------------------------------------
+8. DISCREPANCIES between the two registries
+--------------------------------------------------------------------------------------
+  launched real instances absent from the pool: 0/65 = 0.0%
+
+    (none)
+
+  The controls are hand-written rather than fetched and are by design not in the
+  pool (eval/scripts/draw_mint_set.py), so their absence is not a discrepancy and
+  is not counted as one. Only a real instance missing from the pool would be a
+  registry mismatch, and it is named rather than silently dropped.
+
+--------------------------------------------------------------------------------------
+9. HOW TO READ THIS -- THE HONEST LIMITS
+--------------------------------------------------------------------------------------
+  This forecasts a property of the TASK DESCRIPTION, NOT AGENT BEHAVIOUR. Every
+  figure above counts words in problem statements and task strings -- text the mint
+  hands the agent anyway. Nothing here observes a file write, and no figure above
+  predicts one. The strongest honest claim is "N of 166 task descriptions
+  mention tests", never "N instances will produce exposure".
+
+  It UNDER-COUNTS BY CONSTRUCTION, and the counter-example is named: pallets/flask
+  scores 0/1 on this signal, yet flask-4992 wrote to a test file FOUR times in the
+  banked captures (v0.12.0: 4 (turn, file) judgments over 1 distinct file). Adding
+  a test is normal, correct behaviour that a problem statement never has to
+  mention. So a HIGH score is reasonable evidence the population CAN produce
+  exposure, while a LOW score is WEAKER evidence that it cannot. That asymmetry is
+  pre-registered (prd.md §2.1 Rule B) and the stop-branch must be read with it,
+  never as a symmetric threshold.
+
+  It is NOT COMPARABLE to v0.12.0's 17 judgments. Different thing counted (task
+  text vs observed (turn, file) judgments); different population (this pool and
+  draw vs 15 re-verified banked instances); different model (none at all vs the one
+  specific model that produced those captures). Publishing the two side by side
+  without this paragraph attached is the failure mode this section exists to
+  prevent -- and section 6 is a calibration point for exactly that reason, never a
+  validation.
+
+======================================================================================
