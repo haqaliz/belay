@@ -87,7 +87,13 @@ DEFAULT_PROVIDER = "openai-compat"
 
 #: Every provider the entry point knows how to build. A value outside this set is a
 #: config error, not a silent fallback.
-PROVIDERS = ("openai-compat", "anthropic")
+#:
+#: `claude-cli` is the subscription path (`clients/claude_cli_client.py`): it drives the
+#: `claude` CLI as a subprocess on credentials the operator already holds, so a mint can
+#: run without a metered key. It is a member of this tuple and nothing more — chosen only
+#: by an explicit `--provider`, never because some credential happens to be exported,
+#: which is rule 1 of this module's docstring and applies to all three equally.
+PROVIDERS = ("openai-compat", "anthropic", "claude-cli")
 
 #: Bounded so a misbehaving model cannot loop forever on one instance; generous enough
 #: for read -> edit -> read-back on a real repository.
@@ -285,9 +291,29 @@ def resolve_credentials(provider: str) -> dict[str, str]:
     decided that. For `openai-compat` both the base URL and the API key are required and
     a blank value counts as missing (the sentinel fallback in the client is exactly the
     silent failure this prevents). For `anthropic` the vendor SDK reads its own key from
-    the environment and reports its own error, so nothing is resolved here.
+    the environment and reports its own error, so nothing is resolved here. For
+    `claude-cli` nothing is resolved here either, **and for a different reason** — see the
+    two branches below, which must not be merged.
     """
     if provider == "anthropic":
+        # Empty because the credential is somebody else's job: the vendor SDK reads its
+        # own key out of the environment inside `AnthropicModel.__init__` and raises its
+        # own error when it is absent. A key IS required on this path; it just is not
+        # resolved here.
+        return {}
+    if provider == "claude-cli":
+        # Empty because there is NO credential on this path at all, and this branch
+        # therefore reads nothing whatsoever from the environment. The `claude` CLI
+        # authenticates from the operator's own OAuth/keychain profile, and the client
+        # scrubs the metered-credential and base-URL variables out of the child env
+        # (`clients/claude_cli_client.py`, `SCRUBBED_ENV_VARS`) precisely so an exported
+        # key cannot be picked up and billed by a run that would otherwise look identical.
+        #
+        # **Do not merge this with the `anthropic` branch above.** They return the same
+        # value for opposite reasons — one defers a required credential to an SDK, the
+        # other has none to defer — and a single combined branch would make a future
+        # reader's "well, this one reads a key, so let me resolve it here" an easy and
+        # silent regression of criterion 7.
         return {}
     if provider != "openai-compat":
         raise MintConfigError(
@@ -334,18 +360,24 @@ def make_model_factory(
     "cache the client, it's the same config" is the obvious future refactor and it is
     wrong (`batch.py`'s `ModelFactory` docstring says the same).
 
-    **Both providers are wrapped in `RetryingModel`, and the wrapper is built INSIDE the
+    **EVERY provider is wrapped in `RetryingModel`, and the wrapper is built INSIDE the
     factory** — never hoisted out of it, for the same reason the client is not, plus one
     of its own: a hoisted wrapper would accumulate `retry_count` across instances, so
     `run-accounting` would bill instance 1's retries to instance 40. Wrapping only one
     provider would be worse than wrapping neither, because the breaker would look
     installed while `--provider anthropic` still fed the whole queue into a quota wall
-    (`resilience.py`, module docstring: 56 instances in 3m48s).
+    (`resilience.py`, module docstring: 56 instances in 3m48s). `claude-cli` is no
+    exception: `ClaudeCliTimeoutError` is deliberately given a `TimeoutError` base so the
+    shared classifier calls it `transient`, and that classification buys nothing unless a
+    breaker is installed on the path to act on it.
 
     Credentials are resolved ONCE, here, so a missing key fails before any instance is
     prepped or driven rather than once per instance. `client` is the test injection seam
     (`clients/local_client.py`): when given, no SDK is imported and no credentials are
-    needed.
+    needed. On `claude-cli` there is nothing to resolve — that path reads no credential at
+    all — and `client` is mapped to the client's `runner=` seam, because its boundary is a
+    subprocess rather than an SDK object. The **parameter is not renamed**: it is one
+    shared surface across three providers, and every caller and test names it `client`.
 
     `model` is a REQUIRED keyword — there is no `DEFAULT_MODEL` to fall back to, for the
     reason recorded next to `DEFAULT_PROVIDER` (`STAGE2_FINDINGS.md:25-39`: the old
@@ -356,7 +388,48 @@ def make_model_factory(
             f"unknown provider {provider!r}; known providers: {list(PROVIDERS)}"
         )
 
+    if provider == "claude-cli" and max_tokens is not None:
+        # Refused rather than dropped. The `claude` CLI has no reply-length flag, so
+        # accepting this would leave the caller believing they had bounded a reply that is
+        # unbounded — the same dishonesty as rendering an unmeasured quantity as a zero.
+        # Raised at factory-build time, before any instance is prepped or driven.
+        raise MintConfigError(
+            "provider 'claude-cli' cannot honour max_tokens: the CLI exposes no "
+            "reply-length bound, and silently ignoring the value would report a cap that "
+            "was never applied. Its bounds are the harness's max_steps and the client's "
+            "own subprocess timeout."
+        )
+
     credentials = resolve_credentials(provider) if client is None else {}
+
+    if provider == "claude-cli":
+        from eval.minting_driver.clients.claude_cli_client import ClaudeCliModel
+
+        def claude_cli_factory(tools: list[dict]) -> Any:
+            # A NEW model object on every call — never hoisted, never cached. This client
+            # accumulates the conversation as a transcript it re-serializes into one `-p`
+            # string every turn (`_history`/`_seen`), because `claude -p` has no message
+            # array of its own: a hoisted client would put instance N-1's transcript
+            # inside instance N's prompt, where nothing downstream could see it.
+            #
+            # No credentials are spread in here, on any branch. There are none:
+            # `resolve_credentials('claude-cli')` reads nothing and returns `{}`, and the
+            # client scrubs the metered-credential variables out of the child env itself.
+            kwargs: dict[str, Any] = {"model": model, "tools": list(tools)}
+            if client is not None:
+                # The shared `client=` seam, mapped to this client's own name for it. The
+                # boundary here is a process, so the injected object is a callable with
+                # `subprocess.run`'s shape rather than an SDK client.
+                kwargs["runner"] = client
+            # A NEW wrapper too, around a NEW client — see the docstring: hoisting either
+            # one leaks state across instances.
+            return RetryingModel(
+                ClaudeCliModel(**kwargs),
+                max_attempts=max_attempts,
+                base_delay=base_delay,
+            )
+
+        return claude_cli_factory
 
     if provider == "openai-compat":
         from eval.minting_driver.clients.local_client import LocalOpenAICompatModel
