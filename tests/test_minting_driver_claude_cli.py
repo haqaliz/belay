@@ -49,13 +49,17 @@ from eval.minting_driver.clients.claude_cli_client import (
     RESPONSE_CONTRACT_SYSTEM_PROMPT,
     TOOL_ERROR_LABEL,
     TOOL_RESULT_LABEL,
+    ClaudeCliBinaryMissingError,
+    ClaudeCliError,
     ClaudeCliInvocationError,
     ClaudeCliModel,
     ClaudeCliParseError,
+    ClaudeCliTimeoutError,
     ClaudeCliToolAttemptError,
     ClaudeCliUnknownToolError,
 )
 from eval.minting_driver.model import Done, Message, ToolCall
+from eval.minting_driver.resilience import classify_error
 
 #: The three environment variables the child must never see. All three occupy a
 #: credential-or-routing precedence slot in the CLI's own resolution order, so scrubbing
@@ -1149,3 +1153,237 @@ def test_request_count_counts_every_turn():
     client.propose_next(list(FIRST_TURN))
 
     assert client.request_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Error classification, asserted through the SHARED classifier (criteria 5, 6)
+# ---------------------------------------------------------------------------
+
+
+def _raised(runner) -> BaseException:
+    """The exception one `propose_next` over `runner` raises — for classifying it."""
+    client = _client(runner=runner)
+    with pytest.raises(Exception) as caught:  # noqa: PT011 - the type IS what is under test
+        client.propose_next(list(FIRST_TURN))
+    return caught.value
+
+
+def test_the_exception_hierarchy_trap_runs_in_both_directions():
+    """Criteria 5 and 6: the two base classes a naive wrapper gets exactly backwards.
+
+    `subprocess.TimeoutExpired` is **not** a `TimeoutError` — its MRO is
+    `(TimeoutExpired, SubprocessError, Exception)` — so re-raising it as-is falls past
+    `resilience.classify_error` rule 5 to rule 6 and reads **`terminal`**: a wedged call
+    that a bounded retry would very likely have survived instead costs the instance.
+
+    `FileNotFoundError` **is** an `OSError`, so re-raising *it* as-is hits rule 5 and reads
+    **`transient`**: a missing `claude` binary gets retried twice with backoff, on every
+    instance in the queue, for a condition that cannot succeed.
+
+    Both are inverted by choosing base classes, and `resilience.py` is not touched. This
+    test asserts the trap itself so the next reader sees why the bases look odd.
+    """
+    assert not isinstance(subprocess.TimeoutExpired("claude", 1.0), TimeoutError)
+    assert isinstance(FileNotFoundError(2, "no such file"), OSError)
+
+    # Unwrapped, the shared classifier lands both on the WRONG bucket:
+    assert classify_error(subprocess.TimeoutExpired("claude", 1.0)) == "terminal"
+    assert classify_error(FileNotFoundError(2, "no such file")) == "transient"
+
+    # Wrapped by this client, it lands both on the right one:
+    assert classify_error(ClaudeCliTimeoutError("wedged")) == "transient"
+    assert classify_error(ClaudeCliBinaryMissingError("no claude")) == "terminal"
+    assert not isinstance(ClaudeCliBinaryMissingError("no claude"), OSError)
+
+
+def test_a_missing_binary_classifies_terminal():
+    """Criteria 5, 6: a spawn failure is `terminal` — `claude` will not appear on retry #2.
+
+    Asserted through the real `classify_error`, not by naming the class: the class name is
+    not the contract, the bucket is, and a test on the name would have been green against
+    the `FileNotFoundError`-is-an-`OSError` bug above.
+    """
+    raised = _raised(_runner_raising(FileNotFoundError(2, "No such file or directory", "claude")))
+
+    assert isinstance(raised, ClaudeCliBinaryMissingError)
+    assert classify_error(raised) == "terminal"
+
+
+def test_the_missing_binary_error_names_the_binary_it_looked_for():
+    """A spawn failure has exactly one useful fact in it: which path was not found."""
+    client = _client(runner=_runner_raising(FileNotFoundError(2, "nope", "claude")), binary="/opt/claude")
+
+    with pytest.raises(ClaudeCliBinaryMissingError, match="/opt/claude"):
+        client.propose_next(list(FIRST_TURN))
+
+
+def test_a_timeout_classifies_transient():
+    """Criterion 5: a wedged call is worth the bounded retry `RetryingModel` already owns.
+
+    `--max-turns` does not bound a run, so this timeout is the *only* thing that stops a
+    wedged child from hanging the whole sequential batch. Being `transient` is what makes
+    the interruption cost one retry instead of one instance.
+    """
+    raised = _raised(_runner_raising(subprocess.TimeoutExpired("claude", 600.0)))
+
+    assert isinstance(raised, ClaudeCliTimeoutError)
+    assert classify_error(raised) == "transient"
+
+
+def test_the_timeout_error_names_the_bound_it_exceeded():
+    """The recorded reason has to say *how long* was waited, or it is not diagnosable."""
+    client = _client(runner=_runner_raising(subprocess.TimeoutExpired("claude", 30.0)), timeout=30.0)
+
+    with pytest.raises(ClaudeCliTimeoutError, match="30"):
+        client.propose_next(list(FIRST_TURN))
+
+
+def test_a_spawn_failure_that_is_not_a_missing_binary_also_classifies_terminal():
+    """Criterion 6: any other `OSError` from the spawn is `terminal`, not rule 5's transient.
+
+    A non-executable or unreadable `claude` raises `PermissionError`, which **is** an
+    `OSError` and would therefore be retried twice on every instance in the queue. A
+    permissions problem does not fix itself between attempt 1 and attempt 3.
+    """
+    raised = _raised(_runner_raising(PermissionError(13, "Permission denied", "claude")))
+
+    assert classify_error(raised) == "terminal"
+
+
+def test_a_non_zero_exit_classifies_terminal():
+    """Criteria 5, 6: the CLI exiting non-zero is a failed invocation, and it is `terminal`."""
+    raised = _raised(_runner_returning(_envelope(), returncode=1, stderr="unknown flag"))
+
+    assert isinstance(raised, ClaudeCliInvocationError)
+    assert classify_error(raised) == "terminal"
+
+
+def test_the_non_zero_exit_error_carries_the_exit_code_and_stderr():
+    """Both facts, because neither alone identifies the failure.
+
+    `run_mint` records `str(exc)` as the instance's reason, and that string is all a
+    resumed mint has to go on — a bare "the call failed" is indistinguishable between a
+    typo in the argv and an expired OAuth session, which want opposite fixes.
+    """
+    raised = _raised(_runner_returning("", returncode=2, stderr="Invalid API key"))
+
+    assert "2" in str(raised)
+    assert "Invalid API key" in str(raised)
+
+
+def test_a_non_zero_exit_is_reported_even_when_stdout_holds_a_usable_envelope():
+    """The exit code is believed over the envelope's contents.
+
+    An envelope printed alongside a failed exit describes a run the CLI itself says did not
+    succeed; parsing a decision out of it would manufacture a turn from a failure.
+    """
+    stdout = _envelope('{"kind": "tool_call", "name": "read_file", "arguments": {"path": "a"}}')
+    raised = _raised(_runner_returning(stdout, returncode=1))
+
+    assert isinstance(raised, ClaudeCliInvocationError)
+
+
+def test_malformed_json_classifies_terminal():
+    """Criterion 6: an unparseable envelope is `terminal` — never retried, never a `Done`."""
+    raised = _raised(_runner_returning("claude: something went wrong"))
+
+    assert isinstance(raised, ClaudeCliParseError)
+    assert classify_error(raised) == "terminal"
+
+
+def test_a_schema_invalid_tool_call_classifies_terminal():
+    """Criteria 4, 6: a tool name the schemas do not carry is `terminal`.
+
+    Retrying would re-run an identical prompt against a model that just chose a tool that
+    does not exist; the third attempt is not more likely than the first, and each one
+    spends the subscription's allowance.
+    """
+    raised = _raised(
+        _runner_returning(_envelope('{"kind": "tool_call", "name": "rm_rf", "arguments": {}}'))
+    )
+
+    assert isinstance(raised, ClaudeCliUnknownToolError)
+    assert classify_error(raised) == "terminal"
+
+
+def test_an_error_envelope_classifies_terminal():
+    """Criterion 6: the CLI's own `is_error` is `terminal` by default, never `transient`."""
+    raised = _raised(_runner_returning(_envelope(is_error=True, result="something failed")))
+
+    assert classify_error(raised) == "terminal"
+
+
+def test_a_tool_attempt_classifies_terminal():
+    """Criterion 19 + 6: an instrument fault must stop the instance, not be retried.
+
+    Retrying a run whose allowlist leaked would produce more turns under the same leak —
+    more capture that cannot be trusted, which is worse than none.
+    """
+    raised = _raised(
+        _runner_returning(_envelope(permission_denials=[{"tool_name": "Bash", "tool_input": {}}]))
+    )
+
+    assert classify_error(raised) == "terminal"
+
+
+def test_a_usage_limit_shaped_failure_classifies_terminal_never_transient():
+    """Criterion 6 / spec: a subscription usage limit is `terminal` where unrecognisable.
+
+    The shape a subscription cap takes is undocumented (spec open question 3), so nothing
+    here pattern-matches it. What matters is the *direction* of the unknown: `terminal`
+    costs one instance and keeps the queue eligible, while `transient` spends the retry
+    ladder against a wall — the 2026-07-24 failure in miniature.
+    """
+    raised = _raised(
+        _runner_returning(
+            _envelope(is_error=True, result="Claude usage limit reached. Resets at 3pm.")
+        )
+    )
+
+    assert classify_error(raised) == "terminal"
+
+
+def test_every_named_error_this_client_raises_is_terminal_except_the_timeout():
+    """Criterion 6, stated over the whole family rather than one member at a time.
+
+    A new error class added to this module inherits `terminal` from `ClaudeCliError`
+    (a `RuntimeError`), which is the fail-safe direction. This test is what notices if
+    someone gives one of them an `OSError`-shaped base "for consistency".
+    """
+    terminal_family = [
+        ClaudeCliError("unrecognised"),
+        ClaudeCliInvocationError("failed call"),
+        ClaudeCliToolAttemptError("a tool was attempted"),
+        ClaudeCliParseError("unreadable"),
+        ClaudeCliUnknownToolError("no such tool"),
+        ClaudeCliBinaryMissingError("no binary"),
+    ]
+
+    assert [classify_error(exc) for exc in terminal_family] == ["terminal"] * 6
+    assert classify_error(ClaudeCliTimeoutError("wedged")) == "transient"
+
+
+def test_an_unrecognised_runner_failure_is_re_raised_unchanged_and_is_terminal():
+    """Criterion 6: a failure this client does not understand is not reinterpreted.
+
+    Re-raised as the same object, so `run_mint`'s `except Exception` records exactly the
+    `str(exc)` it would have recorded anyway — and `terminal`, because retrying an error we
+    cannot name is how the queue got burned in the first place.
+    """
+    original = ValueError("something nobody anticipated")
+    raised = _raised(_runner_raising(original))
+
+    assert raised is original
+    assert classify_error(raised) == "terminal"
+
+
+def test_the_original_failure_is_kept_as_the_cause():
+    """The wrapped exception keeps its `__cause__`, so the traceback still names the spawn.
+
+    Without it, a `ClaudeCliBinaryMissingError` deep in a batch log says what we concluded
+    and not what actually happened.
+    """
+    original = FileNotFoundError(2, "No such file or directory", "claude")
+    raised = _raised(_runner_raising(original))
+
+    assert raised.__cause__ is original

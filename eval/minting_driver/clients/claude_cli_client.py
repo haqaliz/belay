@@ -44,6 +44,34 @@ the cost one, since a mint driven under one prompt version is not re-runnable un
 next. (The cost figures are the *measurement* that justified the flag; no dollar amount is
 computed or stored by this client — `prd.md` D-1.)
 
+**How failures classify, and why the base classes look odd.** Every named error here goes
+through the *shared* `resilience.classify_error` — this module adds no classification rules
+of its own — and the bucket it lands on is decided entirely by its base class. Two of them
+are counter-intuitive in opposite directions, and getting either wrong is silent:
+
+* `subprocess.TimeoutExpired` is **not** a `TimeoutError` (MRO:
+  `TimeoutExpired -> SubprocessError -> Exception`), so re-raising it unchanged falls to
+  rule 6 and classifies `terminal` — a wedged call costs an instance instead of a retry.
+  Hence `ClaudeCliTimeoutError(ClaudeCliError, TimeoutError)`.
+* `FileNotFoundError` **is** an `OSError`, so re-raising *it* unchanged hits rule 5 and
+  classifies `transient` — a missing binary retried twice on every instance in the queue.
+  Hence `ClaudeCliBinaryMissingError`, a plain `RuntimeError` and deliberately not an
+  `OSError`.
+
+Everything else derives from `ClaudeCliError(RuntimeError)` and is therefore `terminal`,
+the fail-safe direction (criterion 6): one instance lost, queue intact.
+
+**Known residual — a subscription cap's shape is still unknown** (spec open question 3).
+Nothing here pattern-matches one, so a failed invocation reads `terminal`, which is the
+safe default. The one exception is inherited: `classify_error`'s recorded-string fallback
+treats a bare `429` token in the message as a rate-limit blip, so an invocation error whose
+CLI text happens to contain `429` **without** a period-cap word (`RESOURCE_EXHAUSTED`, a
+daily `quotaId`, …) classifies `transient` and spends the bounded retry. A 429 *with* one
+already classifies `quota` and stops the batch. This is `resilience.py` behaving as
+designed for HTTP 429s and is not worked around here — inventing a token list for a shape
+nobody has observed would be overfitting dressed as a fix. The first real limit hit by
+`live-smoke-confirmation` is the finding that closes it.
+
 **The env carries no key.** `_build_env` copies `os.environ` and removes three variables
 by **absence, never by empty string** — an empty value still occupies its precedence slot.
 `ANTHROPIC_API_KEY` is set on this operator's box, and a leaked one produces a run that
@@ -202,6 +230,33 @@ class ClaudeCliParseError(ClaudeCliError):
     the trajectory silently *and successfully*: the instance is recorded as captured, and
     every verdict downstream is computed over a run that stopped for a reason nobody can
     see.
+    """
+
+
+class ClaudeCliBinaryMissingError(ClaudeCliError):
+    """The `claude` binary could not be spawned (a `FileNotFoundError`, or any other
+    `OSError` from the spawn).
+
+    **The base class is load-bearing and deliberately not `OSError`.**
+    `FileNotFoundError` *is* an `OSError`, so re-raising it unchanged would hit
+    `resilience.classify_error` rule 5 and classify **`transient`** — a missing binary
+    retried twice with backoff, on every instance in the queue, for a condition that can
+    never succeed. As a plain `RuntimeError` it reaches rule 6 and classifies `terminal`.
+    """
+
+
+class ClaudeCliTimeoutError(ClaudeCliError, TimeoutError):
+    """The invocation exceeded the client-owned bound, wrapping `subprocess.TimeoutExpired`.
+
+    **The `TimeoutError` mix-in is load-bearing.** `subprocess.TimeoutExpired` is *not* a
+    `TimeoutError` — its MRO is `(TimeoutExpired, SubprocessError, Exception)` — so
+    re-raising it unchanged falls past `resilience.classify_error` rule 5 to rule 6 and
+    classifies **`terminal`**, spending a whole instance on a wedged call that a bounded
+    retry would very likely have survived. Mixing in `TimeoutError` lands it on rule 5 →
+    `transient`, which is the retry `RetryingModel` already owns.
+
+    This is the one member of the family that is not `terminal`, and it is the *only*
+    reason to give any of them a base outside `ClaudeCliError`.
     """
 
 
@@ -595,16 +650,52 @@ class ClaudeCliModel:
         # Counted BEFORE the call — a call that raises still spent the subscription's
         # allowance. See `request_count`.
         self._request_count += 1
-        completed = self._runner(
-            self._build_command(
-                prompt=self._build_prompt(),
-                system_prompt=RESPONSE_CONTRACT_SYSTEM_PROMPT,
-            ),
-            capture_output=True,
-            text=True,
-            env=self._build_env(),
-            timeout=self._timeout,
+        command = self._build_command(
+            prompt=self._build_prompt(),
+            system_prompt=RESPONSE_CONTRACT_SYSTEM_PROMPT,
         )
+        try:
+            completed = self._runner(
+                command,
+                capture_output=True,
+                text=True,
+                env=self._build_env(),
+                timeout=self._timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            # Re-raised as a `TimeoutError` subclass on purpose — `TimeoutExpired` is not
+            # one, and unwrapped it would classify `terminal`. See `ClaudeCliTimeoutError`.
+            raise ClaudeCliTimeoutError(
+                f"ClaudeCliModel: {self._binary!r} did not finish within "
+                f"{self._timeout} seconds and was killed."
+            ) from exc
+        except OSError as exc:
+            # Every spawn failure, not only a missing file: a non-executable `claude`
+            # raises `PermissionError`, which IS an `OSError` and would therefore be
+            # retried by rule 5 — and a permissions problem does not fix itself between
+            # attempt 1 and attempt 3. Wrapped into the `RuntimeError` family, both are
+            # `terminal`. `TimeoutExpired` is caught first above and is not an `OSError`,
+            # so this clause cannot shadow it.
+            raise ClaudeCliBinaryMissingError(
+                f"ClaudeCliModel: could not spawn {self._binary!r} ({exc}). The mint's "
+                "subscription path needs the `claude` CLI on PATH (or an explicit "
+                "`binary=`), and no retry will conjure it."
+            ) from exc
+        # Every other exception the runner raises is left ALONE: re-raised as the same
+        # object so `run_mint`'s `except Exception` records exactly the `str(exc)` it would
+        # have recorded, and classified `terminal` by rule 6 — retrying a failure we cannot
+        # name is how the 56-instance queue burned on 2026-07-24.
+
+        if completed.returncode != 0:
+            # The exit code is believed over the envelope's contents: an envelope printed
+            # alongside a failed exit describes a run the CLI itself says did not succeed,
+            # and parsing a decision out of it would manufacture a turn from a failure.
+            raise ClaudeCliInvocationError(
+                f"ClaudeCliModel: {self._binary!r} exited {completed.returncode}. "
+                f"stderr={str(completed.stderr)[:400]!r} "
+                f"stdout={str(completed.stdout)[:400]!r}"
+            )
+
         decision, reply = self._parse_envelope(completed.stdout)
 
         # Thread the oracle's own reply into the next prompt, as `anthropic_client.py:259`
@@ -633,10 +724,12 @@ class ClaudeCliModel:
 
 __all__ = [
     "ASSISTANT_LABEL",
+    "ClaudeCliBinaryMissingError",
     "ClaudeCliError",
     "ClaudeCliInvocationError",
     "ClaudeCliModel",
     "ClaudeCliParseError",
+    "ClaudeCliTimeoutError",
     "ClaudeCliToolAttemptError",
     "ClaudeCliUnknownToolError",
     "DEFAULT_CLAUDE_CLI_MODEL",
