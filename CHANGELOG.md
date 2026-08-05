@@ -9,6 +9,64 @@ All notable changes to Belay are documented here. The format follows
 
 _Nothing yet._
 
+## [0.13.0] - 2026-08-05
+
+### Added
+
+- **A third mint provider, so the Phase-0 mint no longer needs a metered API key.** `ClaudeCliModel`
+  (`eval/minting_driver/clients/claude_cli_client.py`) drives the `claude` CLI as a subprocess on
+  credentials the operator already holds. The mint had no affordable path — the entry point
+  registered two metered providers and Stage 3 died on a **daily** cap — and this removes that
+  blocker without changing what a capture proves. **eval-only: no `src/belay/` change, no capability,
+  no verdict on any axis.**
+  **R6 and R7 still hold by construction, not by policy.** The oracle is granted **no tools**
+  (`--tools ""` **and** `--strict-mcp-config`, each asserted separately on the constructed argv), the
+  MCP schemas travel as *data in the prompt*, and `loop.py`/`batch.py` are **byte-unmodified** behind
+  a pinned content hash plus a meta-test that the guard notices an edit. A content hash rather than a
+  merge-base diff, deliberately: a merge-base check goes vacuous the moment the branch lands.
+  **No API key is read or passed**, asserted on the constructed **child env** rather than only the
+  argv — `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_BASE_URL` are scrubbed **by
+  absence, never by empty string**, because an empty value still occupies its precedence slot. The
+  test sets all three before asserting absence: one that passed only on a machine without a key would
+  certify nothing. Stdlib-only, so the zero-dependency contract holds trivially rather than by
+  discipline. **96 tests, all 20 acceptance criteria; suite 1342 → 1492.**
+- **An offline exposure forecast** (`eval/scripts/forecast_exposure.py`): **29/65 launched task
+  descriptions mention test work (44.6%)**, pool 59/166 (35.5%), controls partitioned out, `unknown`
+  counted and stated. Deterministic, no network, no model, and it reproduces an independently derived
+  figure exactly — which is the check that the instrument is sound.
+
+### Changed
+
+- **`--max-turns` is treated as a no-op and the client owns its own bound.** Probed: the flag is
+  absent from `claude --help`, is accepted silently, and `--max-turns 1` still produced `num_turns:
+  2`. The bound is `DEFAULT_MAX_STEPS` plus a client-owned subprocess timeout.
+- **Error classification is wired through base-class selection rather than a new branch in the
+  shared classifier.** `subprocess.TimeoutExpired` is **neither** a `TimeoutError` **nor** an
+  `OSError`, so it would have classified `terminal`; `FileNotFoundError` **is** an `OSError`, so a
+  missing binary would have classified `transient` and been retried twice for a condition that can
+  never succeed. `resilience.py` is untouched: `ClaudeCliTimeoutError` derives from `TimeoutError`
+  and `ClaudeCliBinaryMissingError` deliberately does not derive from `OSError`. Asserted end to end
+  through the real `classify_error`, never by class name — the class name is what misled here.
+- **`max_tokens` on the subscription path is refused rather than ignored.** The CLI exposes no
+  reply-length flag, and accepting the value would report a cap that does not exist.
+
+### Notes
+
+- **This release does not run the mint, fill the ≥50 denominator, clear the Phase-0 gate, or test
+  R1.** All four stand exactly where 0.12.0 left them, and `4/16`, `precision 0.00`, `3/93`,
+  `recall 0.00`, `1/15` and the 17-judgment exposure figure are unedited.
+- **One live instance was driven as the unit's exit criterion**, once, under the freeze protocol:
+  `pytest-dev__pytest-7432` on `claude-opus-5`, 87.4 s, trajectory `search_files → search_files →
+  read_text_file → edit_file → read_text_file`, 5 turns all PASS, no `INSTRUMENT SUSPECT`. A real
+  write crossed the MCP boundary. **"The path works at n=1"** — never *"edit quality is good"*.
+- **That run's sharpest finding argues against its own release's forecast.** Exposure was **zero**:
+  the agent edited `src/_pytest/skipping.py` — **source, not tests**. An agent *correctly* fixing a
+  bug edits source, so low exposure may be a property of **the work** rather than of the instance
+  draw. The forecast's claim that 44.6% is a **floor** was **withdrawn the same day**: `pytest-7432`
+  is one of the 29 it counted and produced zero, so with one error in each direction the sign of the
+  bias is unknown. The pre-registered decision (fund the mint) is unchanged; only its warrant is
+  weaker.
+
 ## [0.12.0] - 2026-08-04
 
 ### Fixed
