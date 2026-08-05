@@ -97,37 +97,31 @@ One deliberate exception: the **corpus cases' `server_command`** was re-pointed 
 standing caveat that *"the corpus is machine-bound through the SERVER"*. `expected`, `human_label`
 and `root_cause` were untouched.
 
-### Off-machine backup — BUILT, NOT YET UPLOADED
+### Off-machine backup — uploaded and verified
 
-A compressed archive exists at **`~/dev/at/holder/belay-eval-data-v0.13.0.tar.zst`** — **226 MB**,
-down from 4.8 GB (**21.7x**; each turn snapshots a near-identical copy of the same source tree, which
-`zstd --long=27` collapses). Integrity checked with `zstd -t`, 688,870 entries, and confirmed to
-contain the corrected manifests.
+**`belay-eval-data-v0.13.0.tar.zst` is attached to the [v0.13.0 GitHub Release]** — **226 MB**, down
+from 4.8 GB (**21.7x**; each turn snapshots a near-identical copy of the same source tree, which
+`zstd --long=27` collapses). `zstd -t` clean, 688,870 entries, and confirmed to contain the corrected
+manifests rather than a mid-fix state. Verified present on the release as `state: uploaded`, not
+inferred from an exit code — the upload runs as `cmd && gh release view`, whose status reports the
+*view*, so a failed upload can still exit 0. Check the asset list.
 
 ```
 sha256  4285f2bb2cabda1a36f998fbe127cf756a5756e68db8bbc66251825e665a6961
 ```
 
-**It is NOT attached to the v0.13.0 release yet.** The upload is bandwidth-bound at roughly
-<75 KB/s — a 45 MB slice did not finish in ten minutes — so it needs a session that can hold the
-connection for the best part of an hour. A 5-byte probe asset uploaded instantly, so the mechanism
-works; only the throughput is the problem. To finish it:
-
-```sh
-gh release upload v0.13.0 ~/dev/at/holder/belay-eval-data-v0.13.0.tar.zst --clobber
-# if that is impractical, split and upload in pieces:
-#   split -b 45m -d -a 2 <archive> <archive>.part-
-#   for f in <archive>.part-??; do gh release upload v0.13.0 "$f" --clobber; done
-#   reassemble with: cat <archive>.part-?? > <archive>   (then check the sha256 above)
-```
-
-Restoring, once it is available:
+Restoring:
 
 ```sh
 gh release download v0.13.0 -p 'belay-eval-data-*.tar.zst'
+shasum -a 256 belay-eval-data-v0.13.0.tar.zst     # must match the sha above
 mkdir -p ~/dev/at/holder && tar -I 'zstd -d --long=27' -xf belay-eval-data-v0.13.0.tar.zst -C ~/dev/at/holder
 # then recreate the three symlinks above, or nothing will replay
 ```
+
+Re-uploading after a rebuild: `gh release upload v0.13.0 <archive> --clobber`. Expect it to be slow
+— throughput here measured under ~75 KB/s, so 226 MB takes the better part of an hour and needs a
+session that can hold the connection.
 
 **This is durability, not portability.** The archive restores *your* evidence after disk loss. It
 does **not** let anyone else verify these claims: the paths are absolute and user-specific, and the
