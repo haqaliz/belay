@@ -44,6 +44,45 @@
 >
 > **No published number is re-derived or edited by this run.** `4/16`, `precision 0.00`, `3/93`,
 > `recall 0.00`, `1/15` and the 17-judgment exposure figure all stand untouched.
+>
+> ### And the forecast landed — M5 met. Rule B row 1 fires: FUND. The warrant is weaker than the forecast first claimed.
+>
+> Script frozen `f82d12f` (no result), verbatim output `83028e2`, run once, offline. It
+> **reproduces the independently-derived figures exactly** — 59/166 and every per-repo row — which
+> is the check that the instrument is sound.
+>
+> | population | statements mentioning ≥1 frozen token |
+> |---|---|
+> | pool (166) | 59/166 = **35.5%** |
+> | **launched, real only (65)** | **29/65 = 44.6%** ← the decision-relevant figure |
+> | controls | 0/3, partitioned out |
+> | `unknown` | 0/166 and 0/65 — stated, not omitted |
+>
+> The **launched** figure is higher than the pool's because the draw rebalanced away from django
+> (49.4% of the pool, 29.2% of the launch), which is the low-signal repo. **Rule B row 1 fires:
+> nearly half the instances a mint would actually drive describe test work in their own text. That
+> is not "very few", so the stop-branch does not fire — and unlike the design in the forecast's 🔴
+> box, this rule has a stop-branch that *could* have fired.**
+>
+> **Two findings from the run, neither of which changes the decision.** (1) `task_string` scores
+> **57/166** against the statement's **59/166** — 2 statement-only, 0 task-only — and the two it
+> loses sit **past `derive_task_string`'s 1500-char truncation**, so on those the agent is never
+> shown the signal. A real finding about the driver. (2) sphinx (61.5%) and sympy (35.7%) forecast
+> high but measured **0 judged** — Rule B row 3 — though at n=1 measured each that is *a real
+> observation and a worthless rate*.
+>
+> **⚠️ CORRECTION, same day — the forecast's "floor" claim is withdrawn.** The forecast reasoned
+> that 44.6% is a **floor** because the signal only ever under-counts, citing `flask-4992` (forecast
+> 0/1, measured 2/2 judged — a false **negative**). **The smoke refutes the direction**:
+> `pytest-7432` is **one of the 29/65 the forecast counted**, is the **only one of those 29 ever
+> driven**, and produced **zero** exposure — a false **positive** on the forecast's own positive
+> set. With one error in each direction the **sign of the bias is unknown**, so 44.6% is a
+> measurement of task text with an **unmeasured relationship to exposure**, not a bound either way.
+> **The decision stands (FUND); only the warrant weakens.** Do not overcorrect into a stop.
+>
+> **The honest one-liner:** *29 of 65 launched task descriptions mention test work; the one
+> forecast-positive instance ever driven produced no exposure; the relationship between the two is
+> unmeasured.*
 
 ---
 

@@ -197,3 +197,49 @@ published; this aspect only *adds* a figure.
 this instrument cannot say whether those tasks would invite a test edit anyway — the flask
 counter-example proves that at least some do. The forecast raises the floor under the funding
 decision; it does not narrow the ceiling.
+
+---
+
+### CORRECTION — 2026-08-05, same day: the "floor" claim above does not hold
+
+**The reading above was written without knowledge of the live smoke, which ran concurrently in
+`live-smoke-confirmation`. That run refutes the floor.**
+
+The floor argument requires the signal's errors to be **one-directional** — that it only ever
+*under*-counts, so the true share can only be higher. Its evidence was `flask`: forecast **0/1**,
+measured **2/2 instances judged**. A false **negative**.
+
+The smoke supplies the opposite error, and it lands on this forecast's **own positive set**:
+
+| instance | forecast | measured exposure | error |
+|---|---|---|---|
+| `pallets__flask-4992` | **0/1** — statement mentions nothing | **judged**, 4 writes to a test file | false **negative** |
+| `pytest-dev__pytest-7432` | **positive** — statement mentions tests | **ZERO** files compared | false **positive** |
+
+`pytest-7432` is **in `selected.json`**, is **not a control**, and its statement **matches a frozen
+token** — so it is literally **one of the 29/65** this reading counted. It is also the **only one of
+those 29 ever driven**, and it compared zero files, because the agent edited
+`src/_pytest/skipping.py`: source, not tests.
+
+**What this does and does not change.**
+
+- **The decision is UNCHANGED. Rule B row 1 still fires: FUND THE MINT.** 44.6% is not *"very
+  few"* under any reading, so the stop-branch still does not fire. **Do not overcorrect this
+  correction into a stop.**
+- **The warrant is weaker.** "44.6% is a **floor**, the true share can only be higher" must be
+  withdrawn. With one error in each direction, **the sign of the bias is unknown**, so 44.6% is a
+  measurement of **task text with an unknown-signed relationship to exposure** — not a bound in
+  either direction.
+- **Neither counter-example is a rate.** n=1 each, and they come from **different models** (flask
+  from the Gemini-era captures, `pytest-7432` from `claude-opus-5`) and different trajectories. They
+  are enough to refute a *directional* claim, which needs the errors to line up, and nowhere near
+  enough to establish one of their own.
+- **The deeper worry, recorded not resolved.** An agent *correctly* fixing a bug edits **source**,
+  not tests. If that is typical, a task can describe tests at length and still produce no in-scope
+  write — which is exactly the shape `pytest-7432` took, and it would make low exposure a property
+  of **the work**, not of the draw or of the task text. That is R-3, still open, now with one live
+  observation behind it.
+
+**The honest one-line summary, superseding the floor sentence above:** *29 of 65 launched task
+descriptions mention test work; the one forecast-positive instance ever driven produced no exposure;
+the relationship between the two is unmeasured.*
