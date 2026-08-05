@@ -34,6 +34,87 @@ direction"): every action the model takes this way crosses the proxy boundary an
 recorded as a trace turn. Anything the model did through a built-in tool instead would be
 invisible to Belay — this driver exists specifically so that doesn't happen.
 
+## Where the banked eval data lives
+
+**All captures, corpus cases, ledgers and the pinned MCP servers live OUTSIDE this repo**, at
+`~/dev/at/holder/belay/`. They are gitignored by nature — raw agent run-state is never committed —
+and they used to sit inside git worktrees, where `git worktree remove` would have destroyed them.
+Moved out on 2026-08-06.
+
+| Path | What |
+|---|---|
+| `~/dev/at/holder/belay/corpus-local/` | the 7 hand-labeled cases behind `precision 0.00` |
+| `~/dev/at/holder/belay/mint/` | `s1`, `s1b`, `s1p`, `s2`, `s3`, plus `live-smoke-claude-cli` (the v0.13.0 `pytest-7432` smoke) |
+| `~/dev/at/holder/belay/runs/` | the published ledgers |
+| `~/dev/at/holder/belay/servers/` | the pinned MCP servers every trace names by absolute path |
+
+**Why outside the repo and not just gitignored inside it.** `git clean -xfd` deletes gitignored
+files. Inside the repo, one routine `git clean` would destroy 4.8 GB of unregenerable evidence.
+Outside, the blast radius is three symlinks.
+
+### ⚠️ The symlinks are load-bearing — replay does not work without them
+
+The traces record the **original worktree absolute paths**, and those bytes are the primary record.
+Three symlinks make those paths resolve to the new home:
+
+```sh
+for w in feat-verdict-coverage-status feat-phase0-mint-execution feat-subscription-model-client; do
+  mkdir -p ".claude/worktrees/$w"
+  ln -sfn ~/dev/at/holder/belay ".claude/worktrees/$w/eval"
+done
+```
+
+**DO NOT "fix" the recorded paths by rewriting the manifests.** This was tried on 2026-08-06 and
+**measurably breaks replay**: rewriting `s1p`'s manifests to point at the new location took it from
+**0/11 UNVERIFIED to 7/11**, because the manifest's `source_root` must agree with what the trace
+recorded for relocation to match. An over-broad revert then broke the smoke capture the same way
+(5/5 UNVERIFIED) until its manifests were restored to their true original prefix. The symlink is
+the correct mechanism precisely because it changes no recorded byte.
+
+### Verified working, after the source worktrees were deleted
+
+```
+belay corpus run ~/dev/at/holder/belay/corpus-local          -> 7/7 MATCH, 0 REGRESSION, 0 SKIP
+belay phase0 run  .../mint/s1p/batch                         -> VERIFIED_CLEAN, 0/11 UNVERIFIED
+belay phase0 run  .../mint/live-smoke-claude-cli/batch       -> VERIFIED_CLEAN, 0/5 UNVERIFIED,
+                                                                exposure 0 file-comparison(s)
+```
+
+Usage:
+
+```sh
+belay corpus run ~/dev/at/holder/belay/corpus-local
+
+belay phase0 run ~/dev/at/holder/belay/mint/<stage>/batch --ledger out.json --no-ingest \
+  --server node ~/dev/at/holder/belay/servers/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js '{workspace}'
+
+export BELAY_EVAL_SERVER_ROOT=~/dev/at/holder/belay/servers   # driver + live smokes
+```
+
+One deliberate exception: the **corpus cases' `server_command`** was re-pointed to
+`~/dev/at/holder/belay/servers`, so the corpus needs no symlink at all. That is safe because
+`server_command` is machine-binding metadata rather than recorded behaviour, and it retires the
+standing caveat that *"the corpus is machine-bound through the SERVER"*. `expected`, `human_label`
+and `root_cause` were untouched.
+
+### Off-machine backup
+
+A compressed archive is attached to the **`v0.13.0` GitHub Release** as
+`belay-eval-data-v0.13.0.tar.zst` — **226 MB**, down from 4.8 GB (**21.7x**; the snapshots are
+near-identical copies of the same source tree per turn, which `zstd --long=27` collapses).
+
+```sh
+gh release download v0.13.0 -p 'belay-eval-data-*.tar.zst'
+mkdir -p ~/dev/at/holder && tar -I 'zstd -d --long=27' -xf belay-eval-data-v0.13.0.tar.zst -C ~/dev/at/holder
+# then recreate the three symlinks above, or nothing will replay
+```
+
+**This is durability, not portability.** The archive restores *your* evidence after disk loss. It
+does **not** let anyone else verify these claims: the paths are absolute and user-specific, and the
+substrate is macOS/Seatbelt-only, so `belay corpus run` on another box reports `SKIP`. Making the
+evidence portable is real, separate work — the machine-binding through absolute paths would have to
+go first, and as recorded above, naively rewriting those paths is exactly what breaks replay.
+
 ## The MCP servers (pinned, pre-installed)
 
 Two servers, each pinned to an exact version and **pre-installed** into a gitignored
