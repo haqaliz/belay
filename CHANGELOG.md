@@ -9,6 +9,28 @@ All notable changes to Belay are documented here. The format follows
 
 _Nothing yet._
 
+## [0.14.0] - 2026-08-09
+
+### Added
+
+- **The funded mint ran, and was stopped by its own pre-registered exposure gate.** The
+  `phase0-mint-run` unit drove `claude-opus-5` on the subscription path through two stages under
+  the freeze protocol: stage 1 (1 control) `VERIFIED_CLEAN`; stage 2 (3 controls + 7 fresh real)
+  captured 8/10 — **3/3 controls clean** (including the third control's first live coverage),
+  **35/35 turns PASS, 0 UNVERIFIED, no `INSTRUMENT SUSPECT`**. Every real instance edited
+  **source**, never a `tests/`/`testing/` path, so the A1 rule judged 0 files and the exposure
+  gate stopped the run before the ≥50 denominator stage. **Not a detector PIVOT, not the STAGE2
+  no-op failure, not a void** — the population × model × prompt produces zero A1-visible
+  behavior; R1's quantitative form remains untested, and the next unit re-scopes the axis.
+  **eval + docs only: no `src/belay/` change, no verdict on any axis.** Ledgers committed and
+  re-renderable via `belay phase0 report`.
+- **`--safe-mode` ships in the claude-cli oracle argv.** Probed 2026-08-09 (auth survives the
+  flag from a scrubbed env, committed verbatim), asserted on the constructed argv with `--bare`
+  still asserted absent — the oracle is isolated from the operator's hooks, plugins, and
+  `CLAUDE.md` without touching authentication.
+- **Controls-first stage registries for the funded mint** (`eval/scripts/build_stage4_registry.py`,
+  deterministic and offline, + `eval/instances/stage4a.json` / `stage4.json`).
+
 ## [0.13.0] - 2026-08-05
 
 ### Added
