@@ -89,6 +89,19 @@ class TraceClosed(Exception):
     """
 
 
+class TraceClaimError(Exception):
+    """A `claim` record could not be appended to a trace file.
+
+    Named, rather than the `FileNotFoundError` or `json.JSONDecodeError` that
+    a naive read would surface from inside `append_claim_record`. The
+    distinction matters: an unrecorded claim is an unjudged instance, and the
+    driver must be able to tell "the claim did not land and nothing judged
+    this instance" from "the trace vanished" or "the trace was corrupted". All
+    three are one refusal, so that a missing or malformed trace can never
+    masquerade as a completed claim append.
+    """
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -371,3 +384,78 @@ class TraceWriter:
             self._closed = True
             os.close(self._fd)
             self._fd = -1
+
+
+def append_claim_record(path: Path, *, text: str | None = None) -> int:
+    """Append one `claim` record to a closed trace file; return its `seq`.
+
+    The trajectory rule needs the agent's final success claim to judge, but
+    the proxy only records what crossed the wire, and the claim never does —
+    the model client parses `Done` itself. This is the format's answer: the
+    minting driver appends the claim **after the proxy has exited**, so the
+    envelope is reproduced here rather than going through a `TraceWriter`
+    (whose fd is long closed). The envelope matches `_append_locked`'s shape
+    exactly except for `observation_point: "session"` — the observer is the
+    driver, not the proxy, and the record must not lie about who saw what.
+
+    `seq` continues the capture's sequence: it is read from the last recorded
+    line, so appends are strictly increasing and never duplicate or gap. A
+    missing file, an empty file, an unparseable last line, or a last line
+    whose `seq` is absent, not an int, or negative raises `TraceClaimError` —
+    an unrecorded claim is an unjudged instance and must not masquerade as
+    anything else.
+
+    `text` is the claim text when there is one; the key is **absent** (never
+    `""`) when `text` is `None` or whitespace-only, because an empty string
+    would occupy a meaning it doesn't have.
+
+    **Only for appending after the writer has closed.** This function reads
+    and appends to the file directly, with no lock of its own: it is for the
+    sequential, post-close driver path, never for racing a live writer.
+    """
+    try:
+        data = path.read_bytes()
+    except FileNotFoundError:
+        raise TraceClaimError(f"no trace file to append a claim to: {path}") from None
+    lines = [line for line in data.split(b"\n") if line.strip()]
+    if not lines:
+        raise TraceClaimError(
+            f"the trace file is empty, so no claim can continue its sequence: {path}"
+        )
+    try:
+        last = json.loads(lines[-1])
+    except json.JSONDecodeError as exc:
+        raise TraceClaimError(
+            f"the last recorded line is not a record, so the claim cannot be "
+            f"numbered: {exc}"
+        ) from None
+    if not isinstance(last, dict) or "seq" not in last:
+        raise TraceClaimError(
+            "the last recorded line has no usable `seq`, so the claim cannot be "
+            "numbered in the capture's sequence"
+        )
+    seq = last["seq"]
+    if not isinstance(seq, int) or isinstance(seq, bool) or seq < 0:
+        raise TraceClaimError(
+            f"the last recorded `seq` is {seq!r}, not a non-negative int, so the "
+            f"claim cannot be numbered in the capture's sequence"
+        )
+    record: dict[str, Any] = {"kind": "claim"}
+    if text is not None and text.strip():
+        record["text"] = text
+    line = json.dumps(
+        {
+            "v": SCHEMA_VERSION,
+            **record,
+            "seq": seq + 1,
+            "t_in": _now(),
+            "observation_point": "session",
+        },
+        ensure_ascii=False,
+    )
+    fd = os.open(path, os.O_APPEND | os.O_WRONLY)
+    try:
+        _write_all(fd, line.encode("utf-8") + b"\n")
+    finally:
+        os.close(fd)
+    return seq + 1
