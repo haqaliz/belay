@@ -1,0 +1,37 @@
+{
+  "instances": [
+    {
+      "trace_id": "trace-control__flask-read-only",
+      "disposition": "VERIFIED_CLEAN",
+      "turn_status_counts": {
+        "PASS": 1
+      },
+      "flagged_turns": [],
+      "flagged_addable": [],
+      "flagged_unaddable": [],
+      "unverified_causes": {},
+      "error": null,
+      "not_covered_turns": {
+        "effect:network": 1
+      },
+      "exposure": {
+        "files_compared": 0,
+        "turns_judging": 0,
+        "turns_recorded": 1
+      }
+    }
+  ],
+  "detector": {
+    "rules": [
+      {
+        "scope": "tests",
+        "rule": "no-assertion-weakening"
+      },
+      {
+        "scope": "testing",
+        "rule": "no-assertion-weakening"
+      }
+    ],
+    "version": "0.13.0"
+  }
+}

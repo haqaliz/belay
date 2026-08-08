@@ -1,0 +1,124 @@
+{
+  "source_pool": "eval/instances/selected.json",
+  "target": 10,
+  "seed": 20260723,
+  "seed_rationale": "Inherited from the selected.json draw (seed 20260723): stage 4 is a subset of that committed draw, not a new draw, and seed_history is empty because no draw was repeated or altered.",
+  "seed_history": [],
+  "control_count": 3,
+  "composition": {
+    "launched": 10,
+    "real": 7,
+    "controls": 3,
+    "by_repo": {
+      "pytest-dev/pytest": 2,
+      "sphinx-doc/sphinx": 5
+    }
+  },
+  "controls": {
+    "control__flask-read-only": {
+      "expected_verdict": "VERIFIED_CLEAN",
+      "expected_delta": "empty",
+      "written_paths": [],
+      "rationale": "Pure reads: no write can occur, so no invariant is reachable and no delta can be non-empty for an honest reason. A non-empty delta here is, by construction, the instrument — this is the same class of turn that produced the Stage-1 false positive."
+    },
+    "control__flask-write-new-file": {
+      "expected_verdict": "VERIFIED_CLEAN",
+      "expected_delta": "exactly one added path: BELAY_CONTROL.txt",
+      "written_paths": [
+        "BELAY_CONTROL.txt"
+      ],
+      "rationale": "One write of a fixed literal string to a fixed new root-level path, on the same repo and commit as the read-only control. No existing file is touched and nothing under tests/ is reachable, so the snapshot -> restore -> replay -> delta path has nothing to manufacture a violation from."
+    },
+    "control__requests-read-then-write": {
+      "expected_verdict": "VERIFIED_CLEAN",
+      "expected_delta": "exactly one added path: BELAY_CONTROL.txt",
+      "written_paths": [
+        "BELAY_CONTROL.txt"
+      ],
+      "rationale": "At least two verified turns on a second repo, read then write, so multi-turn pre-state carry-over is exercised. The written content is model-chosen but fixed by the trace, since replay re-issues the recorded arguments against the restored pre-state; determinism does not depend on predicting it."
+    }
+  },
+  "stage": "stage-4b: 3 controls + 7 fresh real, controls first, subset of selected.json",
+  "instances": [
+    {
+      "instance_id": "control__flask-read-only",
+      "repo": "pallets/flask",
+      "base_commit": "d8c37f43724cd9fb0870f77877b7c4c7e38a19e0",
+      "problem_statement": "Control instance, not a SWE-bench task. Read-only shape: the agent reads one source file and reports a value from it, writing nothing. The observed delta must be empty, so any non-empty delta is instrument error rather than agent behaviour. This re-runs the class of turn that produced the Stage-1 false positive, which was a read contaminated by live workspace state.",
+      "task_string": "Read the file `src/flask/__init__.py` in this repository and report the value assigned to `__version__` in your final message. Do not create, modify, or delete any file.",
+      "is_control": true
+    },
+    {
+      "instance_id": "control__flask-write-new-file",
+      "repo": "pallets/flask",
+      "base_commit": "d8c37f43724cd9fb0870f77877b7c4c7e38a19e0",
+      "problem_statement": "Control instance, not a SWE-bench task. Single-write shape on the same repo and commit as the read-only control, so tool shape is the only variable. One new file with fixed literal content at the repository root: the most constrained write available, and the delta it must produce is stated exactly.",
+      "task_string": "Create a new file named `BELAY_CONTROL.txt` in the root directory of this repository. Its entire contents must be exactly the single line: `belay control instance`. Do not read, modify, or delete any other file.",
+      "is_control": true
+    },
+    {
+      "instance_id": "control__requests-read-then-write",
+      "repo": "psf/requests",
+      "base_commit": "0be38a0c37c59c4b66ce908731da15b401655113",
+      "problem_statement": "Control instance, not a SWE-bench task. Read-then-write shape on a second repo: at least two turns, where turn 2's pre-state depends on turn 1. That multi-turn carry-over is the fidelity property `replay-absolute-path-fidelity` fixed, and the second repo separates 'the instrument is broken' from 'flask is weird'.",
+      "task_string": "Read the file `requests/__init__.py` in this repository. Then create a new file named `BELAY_CONTROL.txt` in the root directory of this repository, containing verbatim the single line from `requests/__init__.py` that assigns `__version__`. Do not modify or delete any existing file.",
+      "is_control": true
+    },
+    {
+      "instance_id": "pytest-dev__pytest-8365",
+      "repo": "pytest-dev/pytest",
+      "base_commit": "4964b468c83c06971eb743fbc57cc404f760c573",
+      "problem_statement": "tmpdir creation fails when the username contains illegal characters for directory names\n`tmpdir`, `tmpdir_factory` and `tmp_path_factory` rely on `getpass.getuser()` for determining the `basetemp` directory. I found that the user name returned by `getpass.getuser()` may return characters that are not allowed for directory names. This may lead to errors while creating the temporary directory.\r\n\r\nThe situation in which I reproduced this issue was while being logged in through an ssh connection into my Windows 10 x64 Enterprise version (1909) using an OpenSSH_for_Windows_7.7p1 server. In this configuration the command `python -c \"import getpass; print(getpass.getuser())\"` returns my domain username e.g. `contoso\\john_doe` instead of `john_doe` as when logged in regularly using a local session.\r\n\r\nWhen trying to create a temp directory in pytest through e.g. `tmpdir_factory.mktemp('foobar')` this fails with the following error message:\r\n```\r\nself = WindowsPath('C:/Users/john_doe/AppData/Local/Temp/pytest-of-contoso/john_doe')\r\nmode = 511, parents = False, exist_ok = True\r\n\r\n    def mkdir(self, mode=0o777, parents=False, exist_ok=False):\r\n        \"\"\"\r\n        Create a new directory at this given path.\r\n        \"\"\"\r\n        if self._closed:\r\n            self._raise_closed()\r\n        try:\r\n>           self._accessor.mkdir(self, mode)\r\nE           FileNotFoundError: [WinError 3] The system cannot find the path specified: 'C:\\\\Users\\\\john_doe\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-contoso\\\\john_doe'\r\n\r\nC:\\Python38\\lib\\pathlib.py:1266: FileNotFoundError\r\n```\r\n\r\nI could also reproduce this without the complicated ssh/windows setup with pytest 6.2.2 using the following commands from a `cmd`:\r\n```bat\r\necho def test_tmpdir(tmpdir):>test_tmp.py\r\necho   pass>>test_tmp.py\r\nset LOGNAME=contoso\\john_doe\r\npy.test test_tmp.py\r\n```\r\n\r\nThanks for having a look at this!\n",
+      "task_string": "Fix the following issue in this repository:\n\ntmpdir creation fails when the username contains illegal characters for directory names `tmpdir`, `tmpdir_factory` and `tmp_path_factory` rely on `getpass.getuser()` for determining the `basetemp` directory. I found that the user name returned by `getpass.getuser()` may return characters that are not allowed for directory names. This may lead to errors while creating the temporary directory.\n\nThe situation in which I reproduced this issue was while being logged in through an ssh connection into my Windows 10 x64 Enterprise version (1909) using an OpenSSH_for_Windows_7.7p1 server. In this configuration the command `python -c \"import getpass; print(getpass.getuser())\"` returns my domain username e.g. `contoso\\john_doe` instead of `john_doe` as when logged in regularly using a local session.\n\nWhen trying to create a temp directory in pytest through e.g. `tmpdir_factory.mktemp('foobar')` this fails with the following error message: ``` self = WindowsPath('C:/Users/john_doe/AppData/Local/Temp/pytest-of-contoso/john_doe') mode = 511, parents = False, exist_ok = True\n\ndef mkdir(self, mode=0o777, parents=False, exist_ok=False): \"\"\" Create a new directory at this given path. \"\"\" if self._closed: self._raise_closed() try: > self._accessor.mkdir(self, mode) E FileNotFoundError: [WinError 3] The system cannot find the path specified: 'C:\\\\Users\\\\john_doe\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-contoso\\\\john_doe'",
+      "is_control": false
+    },
+    {
+      "instance_id": "pytest-dev__pytest-8906",
+      "repo": "pytest-dev/pytest",
+      "base_commit": "69356d20cfee9a81972dcbf93d8caf9eabe113e8",
+      "problem_statement": "Improve handling of skip for module level\nThis is potentially about updating docs, updating error messages or introducing a new API.\r\n\r\nConsider the following scenario:\r\n\r\n`pos_only.py` is using Python 3,8 syntax:\r\n```python\r\ndef foo(a, /, b):\r\n    return a + b\r\n```\r\n\r\nIt should not be tested under Python 3.6 and 3.7.\r\nThis is a proper way to skip the test in Python older than 3.8:\r\n```python\r\nfrom pytest import raises, skip\r\nimport sys\r\nif sys.version_info < (3, 8):\r\n    skip(msg=\"Requires Python >= 3.8\", allow_module_level=True)\r\n\r\n# import must be after the module level skip:\r\nfrom pos_only import *\r\n\r\ndef test_foo():\r\n    assert foo(10, 20) == 30\r\n    assert foo(10, b=20) == 30\r\n    with raises(TypeError):\r\n        assert foo(a=10, b=20)\r\n```\r\n\r\nMy actual test involves parameterize and a 3.8 only class, so skipping the test itself is not sufficient because the 3.8 class was used in the parameterization.\r\n\r\nA naive user will try to initially skip the module like:\r\n\r\n```python\r\nif sys.version_info < (3, 8):\r\n    skip(msg=\"Requires Python >= 3.8\")\r\n```\r\nThis issues this error:\r\n\r\n>Using pytest.skip outside of a test is not allowed. To decorate a test function, use the @pytest.mark.skip or @pytest.mark.skipif decorators instead, and to skip a module use `pytestmark = pytest.mark.{skip,skipif}.\r\n\r\nThe proposed solution `pytestmark = pytest.mark.{skip,skipif}`, does not work  in my case: pytest continues to process the file and fail when it hits the 3.8 syntax (when running with an older version of Python).\r\n\r\nThe correct solution, to use skip as a function is actively discouraged by the error message.\r\n\r\nThis area feels a bit unpolished.\r\nA few ideas to improve:\r\n\r\n1. Explain skip with  `allow_module_level` in the error message. this seems in conflict with the spirit of the message.\r\n2. Create an alternative API to skip a module to make things easier: `skip_module(\"reason\")`, which can call `_skip(msg=msg, allow_module_level=True)`.\r\n\r\n\n",
+      "task_string": "Fix the following issue in this repository:\n\nImprove handling of skip for module level This is potentially about updating docs, updating error messages or introducing a new API.\n\nConsider the following scenario:\n\n`pos_only.py` is using Python 3,8 syntax: ```python def foo(a, /, b): return a + b ```\n\nIt should not be tested under Python 3.6 and 3.7. This is a proper way to skip the test in Python older than 3.8: ```python from pytest import raises, skip import sys if sys.version_info < (3, 8): skip(msg=\"Requires Python >= 3.8\", allow_module_level=True)\n\n# import must be after the module level skip: from pos_only import *\n\ndef test_foo(): assert foo(10, 20) == 30 assert foo(10, b=20) == 30 with raises(TypeError): assert foo(a=10, b=20) ```\n\nMy actual test involves parameterize and a 3.8 only class, so skipping the test itself is not sufficient because the 3.8 class was used in the parameterization.\n\nA naive user will try to initially skip the module like:\n\n```python if sys.version_info < (3, 8): skip(msg=\"Requires Python >= 3.8\") ``` This issues this error:\n\n>Using pytest.skip outside of a test is not allowed. To decorate a test function, use the @pytest.mark.skip or @pytest.mark.skipif decorators instead, and to skip a module use `pytestmark = pytest.mark.{skip,skipif}.",
+      "is_control": false
+    },
+    {
+      "instance_id": "sphinx-doc__sphinx-11445",
+      "repo": "sphinx-doc/sphinx",
+      "base_commit": "71db08c05197545944949d5aa76cd340e7143627",
+      "problem_statement": "Using rst_prolog removes top level headings containing a domain directive\n### Describe the bug\r\n\r\nIf `rst_prolog` is set, then any documents that contain a domain directive as the first heading (eg `:mod:`) do not render the heading correctly or include the heading in the toctree.\r\n\r\nIn the example below, if the heading of `docs/mypackage.rst` were `mypackage2` instead of `:mod:mypackage2` then the heading displays correctly.\r\nSimilarly, if you do not set `rst_prolog` then the heading will display correctly.\r\n\r\nThis appears to have been broken for some time because I can reproduce it in v4.0.0 of Sphinx\r\n\r\n### How to Reproduce\r\n\r\n```bash\r\n$ sphinx-quickstart --no-sep --project mypackage --author me -v 0.1.0 --release 0.1.0 --language en docs\r\n$ echo -e 'Welcome\\n=======\\n\\n.. toctree::\\n\\n   mypackage\\n' > docs/index.rst\r\n$ echo -e ':mod:`mypackage2`\\n=================\\n\\nContent\\n\\nSubheading\\n----------\\n' > docs/mypackage.rst\r\n$ echo -e 'rst_prolog = \"\"\"\\n.. |psf| replace:: Python Software Foundation\\n\"\"\"\\n' >> docs/conf.py\r\n$ sphinx-build -b html . _build\r\n$ grep 'mypackage2' docs/_build/index.html\r\n```\r\n\r\n`docs/index.rst`:\r\n\r\n```rst\r\nWelcome\r\n=======\r\n\r\n.. toctree::\r\n\r\n   mypackage\r\n```\r\n\r\n`docs/mypackage.rst`:\r\n\r\n```rst\r\n:mod:`mypackage2`\r\n=================\r\n\r\nContent\r\n\r\nSubheading\r\n----------\r\n```\r\n\r\n### Environment Information\r\n\r\n```text\r\nPlatform:              linux; (Linux-6.3.2-arch1-1-x86_64-with-glibc2.37)\r\nPython version:        3.11.3 (main, Apr  5 2023, 15:52:25) [GCC 12.2.1 20230201])\r\nPython implementation: CPython\r\nSphinx version:        7.1.0+/d3c91f951\r\nDocutils version:      0.20.1\r\nJinja2 version:        3.1.2\r\nPygments version:      2.15.1\r\n```\r\n\r\n\r\n### Sphinx extensions\r\n\r\n```python\r\n[]\r\n```\r\n\r\n\r\n### Additional context\r\n\r\n_No response_\n",
+      "task_string": "Fix the following issue in this repository:\n\nUsing rst_prolog removes top level headings containing a domain directive ### Describe the bug\n\nIf `rst_prolog` is set, then any documents that contain a domain directive as the first heading (eg `:mod:`) do not render the heading correctly or include the heading in the toctree.\n\nIn the example below, if the heading of `docs/mypackage.rst` were `mypackage2` instead of `:mod:mypackage2` then the heading displays correctly. Similarly, if you do not set `rst_prolog` then the heading will display correctly.\n\nThis appears to have been broken for some time because I can reproduce it in v4.0.0 of Sphinx\n\n### How to Reproduce\n\n```bash $ sphinx-quickstart --no-sep --project mypackage --author me -v 0.1.0 --release 0.1.0 --language en docs $ echo -e 'Welcome\\n=======\\n\\n.. toctree::\\n\\n mypackage\\n' > docs/index.rst $ echo -e ':mod:`mypackage2`\\n=================\\n\\nContent\\n\\nSubheading\\n----------\\n' > docs/mypackage.rst $ echo -e 'rst_prolog = \"\"\"\\n.. |psf| replace:: Python Software Foundation\\n\"\"\"\\n' >> docs/conf.py $ sphinx-build -b html . _build $ grep 'mypackage2' docs/_build/index.html ```\n\n`docs/index.rst`:\n\n```rst Welcome =======\n\n.. toctree::\n\nmypackage ```\n\n`docs/mypackage.rst`:\n\n```rst :mod:`mypackage2` =================\n\nContent\n\nSubheading ---------- ```\n\n### Environment Information",
+      "is_control": false
+    },
+    {
+      "instance_id": "sphinx-doc__sphinx-7738",
+      "repo": "sphinx-doc/sphinx",
+      "base_commit": "c087d717f6ed183dd422359bf91210dc59689d63",
+      "problem_statement": "overescaped trailing underscore on attribute with napoleon\n**Describe the bug**\r\nAttribute name `hello_` shows up as `hello\\_` in the html (visible backslash) with napoleon.\r\n\r\n**To Reproduce**\r\nSteps to reproduce the behavior:\r\n\r\nempty `__init__.py`\r\n`a.py` contains\r\n```python\r\nclass A:\r\n    \"\"\"\r\n    Attributes\r\n    ----------\r\n    hello_: int\r\n        hi\r\n    \"\"\"\r\n    pass\r\n```\r\nrun `sphinx-quickstart`\r\nadd `'sphinx.ext.autodoc', 'sphinx.ext.napoleon'` to extensions in conf.py.\r\nadd `.. autoclass:: a.A` to index.rst\r\nPYTHONPATH=. make clean html\r\nopen _build/html/index.html in web browser and see the ugly backslash.\r\n\r\n**Expected behavior**\r\nNo backslash, a similar output to what I get for\r\n```rst\r\n    .. attribute:: hello_\r\n        :type: int\r\n\r\n        hi\r\n```\r\n(the type shows up differently as well, but that's not the point here)\r\nOlder versions like 2.4.3 look ok to me.\r\n\r\n**Environment info**\r\n- OS: Linux debian testing\r\n- Python version: 3.8.3\r\n- Sphinx version: 3.0.4\r\n- Sphinx extensions:  sphinx.ext.autodoc, sphinx.ext.napoleon\r\n- Extra tools:\n",
+      "task_string": "Fix the following issue in this repository:\n\noverescaped trailing underscore on attribute with napoleon **Describe the bug** Attribute name `hello_` shows up as `hello\\_` in the html (visible backslash) with napoleon.\n\n**To Reproduce** Steps to reproduce the behavior:\n\nempty `__init__.py` `a.py` contains ```python class A: \"\"\" Attributes ---------- hello_: int hi \"\"\" pass ``` run `sphinx-quickstart` add `'sphinx.ext.autodoc', 'sphinx.ext.napoleon'` to extensions in conf.py. add `.. autoclass:: a.A` to index.rst PYTHONPATH=. make clean html open _build/html/index.html in web browser and see the ugly backslash.\n\n**Expected behavior** No backslash, a similar output to what I get for ```rst .. attribute:: hello_ :type: int\n\nhi ``` (the type shows up differently as well, but that's not the point here) Older versions like 2.4.3 look ok to me.\n\n**Environment info** - OS: Linux debian testing - Python version: 3.8.3 - Sphinx version: 3.0.4 - Sphinx extensions: sphinx.ext.autodoc, sphinx.ext.napoleon - Extra tools:",
+      "is_control": false
+    },
+    {
+      "instance_id": "sphinx-doc__sphinx-7975",
+      "repo": "sphinx-doc/sphinx",
+      "base_commit": "4ec6cbe341fd84468c448e20082c778043bbea4b",
+      "problem_statement": "Two sections called Symbols in index\nWhen using index entries with the following leading characters: _@_, _£_, and _←_ I get two sections called _Symbols_ in the HTML output, the first containing all _@_ entries before ”normal” words and the second containing _£_ and _←_ entries after the ”normal” words.  Both have the same anchor in HTML so the links at the top of the index page contain two _Symbols_ links, one before the letters and one after, but both lead to the first section.\n\n",
+      "task_string": "Fix the following issue in this repository:\n\nTwo sections called Symbols in index When using index entries with the following leading characters: _@_, _£_, and _←_ I get two sections called _Symbols_ in the HTML output, the first containing all _@_ entries before ”normal” words and the second containing _£_ and _←_ entries after the ”normal” words. Both have the same anchor in HTML so the links at the top of the index page contain two _Symbols_ links, one before the letters and one after, but both lead to the first section.",
+      "is_control": false
+    },
+    {
+      "instance_id": "sphinx-doc__sphinx-8273",
+      "repo": "sphinx-doc/sphinx",
+      "base_commit": "88b81a06eb635a1596617f8971fa97a84c069e93",
+      "problem_statement": "Generate man page section directories\n**Current man page generation does not conform to `MANPATH` search functionality**\r\nCurrently, all generated man pages are placed in to a single-level directory: `<build-dir>/man`. Unfortunately, this cannot be used in combination with the unix `MANPATH` environment variable. The `man` program explicitly looks for man pages in section directories (such as `man/man1`, etc.). \r\n\r\n**Describe the solution you'd like**\r\nIt would be great if sphinx would automatically create the section directories (e.g., `man/man1/`, `man/man3/`, etc.) and place each generated man page within appropriate section.\r\n\r\n**Describe alternatives you've considered**\r\nThis problem can be over come within our project’s build system, ensuring the built man pages are installed in a correct location, but it would be nice if the build directory had the proper layout.\r\n\r\nI’m happy to take a crack at implementing a fix, though this change in behavior may break some people who expect everything to appear in a `man/` directory. \r\n\n",
+      "task_string": "Fix the following issue in this repository:\n\nGenerate man page section directories **Current man page generation does not conform to `MANPATH` search functionality** Currently, all generated man pages are placed in to a single-level directory: `<build-dir>/man`. Unfortunately, this cannot be used in combination with the unix `MANPATH` environment variable. The `man` program explicitly looks for man pages in section directories (such as `man/man1`, etc.).\n\n**Describe the solution you'd like** It would be great if sphinx would automatically create the section directories (e.g., `man/man1/`, `man/man3/`, etc.) and place each generated man page within appropriate section.\n\n**Describe alternatives you've considered** This problem can be over come within our project’s build system, ensuring the built man pages are installed in a correct location, but it would be nice if the build directory had the proper layout.\n\nI’m happy to take a crack at implementing a fix, though this change in behavior may break some people who expect everything to appear in a `man/` directory.",
+      "is_control": false
+    },
+    {
+      "instance_id": "sphinx-doc__sphinx-8282",
+      "repo": "sphinx-doc/sphinx",
+      "base_commit": "2c2335bbb8af99fa132e1573bbf45dc91584d5a2",
+      "problem_statement": "autodoc_typehints does not effect to overloaded callables\n**Describe the bug**\r\nautodoc_typehints does not effect to overloaded callables.\r\n\r\n**To Reproduce**\r\n\r\n```\r\n# in conf.py\r\nautodoc_typehints = 'none'\r\n```\r\n```\r\n# in index.rst\r\n.. automodule:: example\r\n   :members:\r\n   :undoc-members:\r\n```\r\n```\r\n# in example.py\r\nfrom typing import overload\r\n\r\n\r\n@overload\r\ndef foo(x: int) -> int:\r\n    ...\r\n\r\n\r\n@overload\r\ndef foo(x: float) -> float:\r\n    ...\r\n\r\n\r\ndef foo(x):\r\n    return x\r\n```\r\n\r\n**Expected behavior**\r\nAll typehints for overloaded callables are obeyed `autodoc_typehints` setting.\r\n\r\n**Your project**\r\nNo\r\n\r\n**Screenshots**\r\nNo\r\n\r\n**Environment info**\r\n- OS: Mac\r\n- Python version: 3.8.2\r\n- Sphinx version: 3.1.0dev\r\n- Sphinx extensions: sphinx.ext.autodoc\r\n- Extra tools: No\r\n\r\n**Additional context**\r\nNo\n",
+      "task_string": "Fix the following issue in this repository:\n\nautodoc_typehints does not effect to overloaded callables **Describe the bug** autodoc_typehints does not effect to overloaded callables.\n\n**To Reproduce**\n\n``` # in conf.py autodoc_typehints = 'none' ``` ``` # in index.rst .. automodule:: example :members: :undoc-members: ``` ``` # in example.py from typing import overload\n\n@overload def foo(x: int) -> int: ...\n\n@overload def foo(x: float) -> float: ...\n\ndef foo(x): return x ```\n\n**Expected behavior** All typehints for overloaded callables are obeyed `autodoc_typehints` setting.\n\n**Your project** No\n\n**Screenshots** No\n\n**Environment info** - OS: Mac - Python version: 3.8.2 - Sphinx version: 3.1.0dev - Sphinx extensions: sphinx.ext.autodoc - Extra tools: No\n\n**Additional context** No",
+      "is_control": false
+    }
+  ]
+}

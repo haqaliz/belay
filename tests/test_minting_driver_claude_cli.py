@@ -261,6 +261,23 @@ def test_argv_carries_strict_mcp_config():
     assert "--strict-mcp-config" in _argv()
 
 
+def test_argv_carries_safe_mode():
+    """`--safe-mode`: the oracle is isolated from hooks, plugins, and `CLAUDE.md`.
+
+    Probed 2026-08-09 (`probe-safemode.out`): auth survives the flag from a scrubbed
+    env, so it ships. A mint whose oracle inherits the operator's `CLAUDE.md` is not
+    reproducible on another box. Asserted exactly once and positioned inside the
+    isolation flag block; `--bare` is the flag that *would* break the subscription
+    path, and it stays absent (asserted separately as a non-event).
+    """
+    argv = _argv()
+
+    assert argv.count("--safe-mode") == 1
+    assert argv.index("--strict-mcp-config") < argv.index("--safe-mode")
+    assert argv.index("--safe-mode") < argv.index("--no-session-persistence")
+    assert "--bare" not in argv
+
+
 def test_argv_disables_session_persistence():
     """`--no-session-persistence`: a full mint would otherwise leave ~800 session files.
 

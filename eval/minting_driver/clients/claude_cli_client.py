@@ -440,6 +440,7 @@ class ClaudeCliModel:
             "--tools",
             "",
             "--strict-mcp-config",
+            "--safe-mode",
             "--no-session-persistence",
             "--system-prompt",
             system_prompt,

@@ -1,85 +1,96 @@
-# Phase-2 understanding — `subscription-model-client`
+# Understanding — phase0-mint-run
 
-**Date:** 2026-08-05 · **Base:** `origin/master` @ `d4c7647` (v0.12.0 + 2 doc commits)
-**Baseline confirmed in this worktree:** `uv run pytest` → **1342 passed, 1 skipped, 1 deselected**
-(1343/1344 collected).
+Date: 2026-08-09. Replaces the stale `subscription-model-client` understanding (that unit is
+merged; the file was never rewritten).
 
-> **Replaces the predecessor's note.** This file previously held the Phase-2 understanding for
-> `feat/under-firing-measurable` (2026-08-03, baseline 1238). That unit merged at `7bcd82b` and
-> released v0.12.0; its note is superseded here rather than deleted from history.
+## What this unit really is
 
----
+The **execution, audit, and publish of the Phase-0 gate mint** on the funded subscription
+path. The deliverable is not a capability and not new engine code: it is a filled
+`PHASE0_RESULTS.md` decision line (PROCEED or PIVOT) backed by a fresh run's number. The
+machinery is all shipped and is consumed as-is:
 
-## What the work is really asking
+- **Minting:** `python -m eval.minting_driver {one|batch}` with `--provider claude-cli`,
+  staged registries, checkpoint/resume with `no_observation` re-arm, gated capture,
+  sequential single-in-flight drive, fresh client per instance, request_timeout 120 s
+  (`eval/minting_driver/`, `eval/README.md`).
+- **Verification:** `belay phase0 run --ledger … --server node <fs-server> '{workspace}'`
+  (no `--`), `combine`, `report` — pure re-render, `INSTRUMENT SUSPECT` defense, per-instance
+  exposure reporting (`src/belay/phase0/`, `src/belay/verify/`).
+- **Audit:** `belay corpus add/run/score/list/show/label` with root-cause keys and
+  independence grouping (`src/belay/corpus/`).
+- **Draw:** `selected.json` — 68 records = 65 real + 3 controls, seed `20260723` committed.
 
-Not *"write a client"*. The unit exists to **remove the last blocker between Phase 0 and a
-denominator**. `entrypoint.py:90` registers two metered providers; Stage 3 died on a daily cap; the
-≥50 PROCEED clause counts *instances minted* and is detector-independent. So: no subscription
-client → no affordable mint → **R1's quantitative form stays untested indefinitely**.
+## Affected areas
 
-## Affected area
+- `eval/minting_driver/` + `eval/instances/` + `eval/README.md` (runbook) — execution surface.
+- `docs/technical/PHASE0_RESULTS.md`, `PHASE0_AUDIT.md`, `docs/ROADMAP.md` — publish surface.
+- `docs/planning/phase0-live-mint/` + `phase0-mint-execution/` (audit-and-publish specs,
+  gate criteria) — governing requirements.
+- Possibly `eval/minting_driver/clients/claude_cli_client.py` + one test, IF `--safe-mode`
+  is decided into the shipped argv (eval-side only; the card's "consume the engine as-is"
+  constraint covers `src/belay/`, which must not change).
 
-`eval/` **only**. No `src/belay/` change, no C1–C9 capability, **no verdict on any axis**, no
-product surface. The driver is a *consumer* of the engine; a client that needed the engine to
-change would be reaching across a boundary.
+## State summary (from the dig, all file-cited)
 
-## What I verified rather than assumed
+**SHIPPED and to be consumed as-is:** funded client (20 criteria green; smoke `363fac2` →
+`91f1e21`, `claude-opus-5`, 5 turns, 1 real `edit_file`, 0 UNVERIFIED, VERIFIED_CLEAN);
+entry points; draw; gated capture; quota breaker; replay batch rooting; ledger schema with
+detector + exposure; canonical gate criteria committed at `bde2678` (prd-level at
+`4d06f52b`, 2026-07-21, predating every mint — the card's "criteria predate the first
+Stage-3 mint commit" check resolves at the prd level, and the doc-level disclosure is
+already in `PHASE0_RESULTS.md:44-61`).
 
-| Claim | Status |
-|---|---|
-| `CLAUDE.md`: *"1238 tests"* | **STALE.** Actual: 1342/1/1. Superseded going forward; no published number re-derived |
-| Spec: headless subscription auth works (v2.1.220, 2026-07-28) | **Re-confirmed today** on v2.1.221, and additionally from a **scrubbed** `env -i` subprocess — so it does not depend on a Claude Code session |
-| Dependencies `quota-circuit-breaker` + `run-accounting` are built | **Confirmed** — `resilience.py:220 classify_error`, accounting wired at `batch.py:72-89`, `checkpoint.py:121` |
-| The `Model` seam | `propose_next(list[Message]) -> ToolCall \| Done` (`model.py:46-54`). Template is `anthropic_client.py`: `provider`/`model`/`request_count`/`usage`, `_seen` cursor, count-before-call, absent-never-zero, one-call-per-turn guardrail |
-| Registry contains gold patches | **FALSE** — `pool.json`/`selected.json` carry only `base_commit`, `instance_id`, `is_control`, `problem_statement`, `repo`, `task_string`. This killed the first forecast design |
+**Published numbers that stand unedited until this gate run supersedes them:** `4/16`,
+`precision 0.00`, `3/93`, `recall 0.00`, `1/15`, 17 judgments, decision PIVOT.
 
-## Contradictions found between the 2026-07-28 spec and reality
+## Open decisions (this unit's to make — the interview must resolve these)
 
-The spec predates four things. None invalidate it; all change the build.
+1. **Mint model** — default candidate `claude-opus-5` (D-2 precedent + smoke evidence the
+   full id works at n=1: `live-smoke-confirmation/acceptance.out`). R-6: 12 banked s3
+   instances ran on `gemini-3.1-pro-preview`; a single-model re-mint of all 68 is
+   "the mint's call" and the card's "run the ~65–70-instance batch through `claude -p`"
+   reads as a full fresh run.
+2. **`--safe-mode` in the shipped argv** — unprobed, absent from code and tests today.
+   Probably right for reproducibility (isolates hooks/plugins/`CLAUDE.md` without touching
+   auth, P2 evidence) — but it is a change to `claude_cli_client._build_command` + a test,
+   and it must be probed before being adopted.
+3. **Stop-loss / abort threshold** — `phase0-gate-readiness/prd.md:125-128` required one
+   "committed before any Stage-3 run"; none exists anywhere. The subscription limit shape is
+   unknown (R-4): unrecognised errors classify `terminal`, and the first real limit is "a
+   finding for the mint unit". ~11 h wall-clock estimate (68 × ~10 min).
+4. **`--max-steps`** — default 12 (`entrypoint.py:100`); Stages 1–3 ran `--max-steps 20`;
+   the smoke ran at 12. Must be chosen and stated.
+5. **Controls FIRST** — not enforced by code (`selected.json` appends controls last; the
+   driver preserves registry order). Must be achieved via `one` invocations or a
+   controls-first registry. The third control (`control__requests-read-then-write`) has
+   **never** been driven live.
 
-1. **`--strict-mcp-config` is unmentioned and required.** Without it the operator's own MCP servers
-   are inherited into the oracle — a filesystem path bypassing the proxy, i.e. an **R6 hole**.
-2. **`--tools ""` exists** and is a stronger primitive than the denylist the spec implies: an
-   allowlist emptied, not an enumeration of what to forbid.
-3. **`--bare` is a trap.** It looks like the isolation flag; its help says *"OAuth and keychain are
-   never read"*, which would break the entire subscription path. Now a **negative** assertion.
-4. **`--max-turns` is a no-op** — absent from `--help`, accepted silently, did not bound a run.
-5. **`--json-schema` now exists** — rejected, with its measured ~89 s vs ~6–9 s cost as the reason.
+## Ambiguities and contradictions to flag (not paper over)
 
-Plus one conflict inside the repo's own rules: the envelope carries **`total_cost_usd`** (read
-$0.248 on a *subscription* run) while `run-accounting` states no dollar amount is ever computed or
-stored. Resolved by **dropping it** (PRD D-1).
+- `_card/understanding.md` was stale (subscription-model-client); this note replaces it.
+- RUNBOOK ledger/case examples still describe an older format
+  (`docs/planning/phase0-corpus-run/RUNBOOK.md:304-318,348` vs the shipped schema).
+- README "re-run `npm view`" note conflicts with code-pinned versions
+  (`eval/README.md:168-174` vs `servers.py:61-74`) — pins win.
+- This worktree has no `eval/servers/` and is not in the banked-data symlink list
+  (`eval/README.md:55-72`): install or symlink servers, and `mkdir -p runs` before
+  `belay phase0 run` (an absent ledger dir discards a completed run).
+- The smoke's zero-exposure finding (`pytest-7432` edited source, `files_compared: 0`)
+  strengthens R-3: a near-zero mint result must be published under the pre-registered
+  reading rules as **uninterpretable about agents**, never as evidence of honesty.
+- The exposure forecast's 44.6% (29/65) has an **unmeasured** relationship to exposure
+  (floor claim withdrawn 2026-08-05).
 
-## The drop-gate, and why it is discharged
+## Verdict axes
 
-`spec.md:6-10` pre-committed to dropping this aspect if the audit said the blunt `tests/` invariant
-— not sample size — was the problem. **The audit did say that** (2026-07-29, `precision 0.00`).
-The condition is nonetheless discharged because the defect was then fixed (v0.10.0) and measured
-twice (v0.11.0 `1/15`; v0.12.0 exposure: **9 of 15 instances judged nothing**). `ROADMAP.md:310`:
-*"only a re-mint reaches them."* **The bottleneck moved from the rule to the data** — and that
-sentence has to be checkable, not taken on trust, which is why the PRD tabulates the three steps.
+No axis changes. A1/A2 are the instruments of the measurement (defaults on:
+`no-assertion-weakening` on `tests`+`testing` segments); A3 untouched and disabled.
 
-## Ambiguity found, and how it was resolved
+## Guardrail check
 
-The unit as briefed was one aspect. Two were added:
-
-- **`exposure-forecast`** — because v0.12.0's result implies a mint at n≥50 could return *another*
-  uninterpretable near-zero after ~11 h. **My first design for it was wrong** (a test-directory
-  surface count returns ≈166/166 and could never fire its stop-branch); self-critique caught it and
-  it was re-based on the instances' own problem statements, **measured to vary at 59/166 = 36%**
-  before being specified.
-- **`live-smoke-confirmation`** — the spec's one-instance rule promoted from *mitigation* to
-  *deliverable*, because the headline risk (prompted tool-calls degrading edit behaviour) is
-  untestable by any of the 12 offline criteria, all of which fake the subprocess.
-
-## Guardrail check against `CLAUDE.md`
-
-- **Not an agent framework.** The oracle is given **no tools**; the harness owns the loop.
-  `loop.py`/`batch.py` unmodified is an acceptance criterion, not an intention.
-- **Not a bare LLM judge.** The model here is the **subject under observation**, not a verifier.
-  Nothing in this unit computes or influences a verdict.
-- **Moat.** It does not deepen the replay engine directly — it unblocks the *data* the corpus and
-  the Phase-0 number depend on, which is moat #2's supply line.
-- **No raw-data egress.** Everything but the single smoke is offline; the smoke sends a task
-  description and tool schemas the agent already receives.
-- **R6/R7 preserved by construction**, and asserted on the constructed argv and env.
+No agent framework (the oracle is a no-tools completion subprocess), no LLM judge (verdicts
+are replay-grounded), no raw-data egress (traces/corpus stay gitignored and on-box;
+committed artifacts are ledgers/acceptance outputs only), honest verdicts (UNVERIFIED never
+PASS; INSTRUMENT SUSPECT never a 0%), zero runtime deps preserved. A `--safe-mode` argv
+change is eval-side only and keeps all 20 criteria testable offline via the `runner=` seam.
