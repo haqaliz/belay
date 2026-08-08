@@ -471,6 +471,13 @@ decision per call, and warns-and-drops rather than queueing if a reply states mo
 it reads like the isolation flag and would break authentication outright. Asserted absent,
 deliberately — the failure it prevents is a plausible future "improvement".
 
+**`--safe-mode` is shipped, probed 2026-08-09** (`docs/planning/phase0-mint-run/oracle-argv-safe-mode/probe-safemode.out`):
+the full mint argv plus `--safe-mode`, from a scrubbed env (`env -i HOME PATH USER`), exits 0
+with `result:"OK"` and the API-key vars absent from the child environment. It isolates the
+oracle from the operator's hooks, plugins, and `CLAUDE.md` without touching auth — a mint
+whose oracle inherits the operator's `CLAUDE.md` is not reproducible on another box. Unlike
+`--bare` it is asserted **present** on the constructed argv; `--bare` stays asserted absent.
+
 **`--max-turns` is a no-op, so the bound is elsewhere.** Probed 2026-08-05: absent from
 `--help`, accepted silently, and `--max-turns 1` still produced `num_turns: 2`. The mint's
 actual bounds are the harness's `--max-steps` (default `12`) **plus** the client-owned

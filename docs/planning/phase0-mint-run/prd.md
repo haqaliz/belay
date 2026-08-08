@@ -62,6 +62,12 @@ designed around reporting that outcome correctly, never as evidence of agent hon
 suspiciously high rate is the outcome to distrust first, §3). Clearing the gate by any means
 other than the pre-registered criteria. Producing any Phase-1 surface.
 
+### Decision log (dated; OQ closure)
+
+| Date | Decision |
+|---|---|
+| 2026-08-09 | **OQ2 CLOSED — `--safe-mode` ships.** Probe `probe-safemode.out`: full mint argv + `--safe-mode` from a scrubbed env → exit 0, `result:"OK"`, key vars absent from child env. Added to `_build_command` with a criterion test; `--bare` stays absent. Mint model `claude-opus-5` full id (smoke-proven, D-2); `--max-steps 20`; stop-loss = Rule A stages; banked Gemini captures = historical note only |
+
 ### 2.1 Pre-registered reading rules — fixed BEFORE anything is run
 
 **Rule A — stage gating.** Each stage gates on the next before it launches:
