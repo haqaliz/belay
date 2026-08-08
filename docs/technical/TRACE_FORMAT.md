@@ -238,6 +238,67 @@ Mid-stream, an incomplete buffer is not a loss — the rest of the frame is stil
 nothing is recorded until a newline arrives. Only at EOF does the same silence become data
 loss, which is why only EOF names it.
 
+## The `claim` record
+
+```jsonc
+{
+  "v": 1,
+  "kind": "claim",
+  "seq": 45,                       // last recorded seq + 1 — strict, never a gap or duplicate
+  "text": "…",                     // the agent's final success claim; the key is ABSENT (never "") when there is none
+  "t_in": "...",
+  "observation_point": "session"   // the observer is the DRIVER, not the proxy — see below
+}
+```
+
+The agent's **final success claim**, recorded at session close by the minting driver —
+**after the proxy has exited**. The trajectory rule ("the suite must be executed before a
+success claim") needs the claim to judge, and the proxy cannot supply it: the model client
+parses the agent's `Done` inside the driver, so the claim never crosses the MCP boundary and
+nothing on the wire could ever observe it. `append_claim_record` (`src/belay/trace.py`)
+writes this record directly into the closed trace file, continuing the capture's own `seq`
+sequence, so the claim rides inside `trace.jsonl` like any other record.
+
+**`observation_point: "session"` — never `"proxy"`, and the difference is load-bearing.**
+Every other record in this file says `"proxy"`: its observer was the proxy, and its `t_in`
+is when *the proxy* saw the frame. This record's observer is the driver, who saw the model
+client's `Done` — neither the agent nor the wire. Saying `"session"` states exactly that:
+the claim was observed at session close, outside the connection window the proxy records,
+and a reader must not mistake its `seq` or `t_in` for a proxy observation. The value is a
+fact about who saw what, and this format does not ship small lies.
+
+**`text` is the claim text; when there is none, the key is absent (never `""`).** An empty
+string would occupy a meaning it does not have: "no claim" and "an empty claim" are
+different facts, and a reader cannot tell them apart if one empty string stands for both.
+The driver records `Done.reason` when it is non-empty and omits the key otherwise.
+
+**The append rule: `seq` = last recorded `seq + 1`.** `append_claim_record` reads the last
+line of the file for the prior `seq`, so appends are strictly increasing — never a
+duplicate, never a gap. It is for the **closed** trace only: it reads and appends with no
+lock of its own, and is written only after the writer has closed (racing a live writer is
+out of contract). A missing file, an empty file, an unparseable last line, or a last `seq`
+that is absent, not an int, or negative raises a named **`TraceClaimError`**, never a
+silent failure — an unrecorded claim is an unjudged instance, and the driver must be able
+to tell "the claim did not land and nothing judged this instance" from "the trace
+vanished".
+
+This is also why the record lands **after** `close` and carries a higher `seq` than it.
+The `connection_window` guarantee — no frame observed into a closed trace — is about
+*observation*; the claim is not an observation, it is the driver speaking after the window
+shut, and the window's pair stays the last *proxy-written* statement about the live period.
+
+**A claim record exists iff the run stopped with a `Done`.** `max_steps` or error
+termination writes **no claim record**: nothing was claimed, and an absent record is that
+fact stated honestly — a reader must not read it as "the claim was lost".
+
+**Readers treat it as a non-frame record, exactly like the other non-frame kinds.**
+Frame-scoped consumers pass it over precisely as they do `connection_window` and
+`capture_error` — `belay.index` keeps only `kind == "frame"`, and replay never gathers a
+claim: it is not a frame, correlates to nothing, and there is no turn to re-run. And
+because `claim` is in no writer's `KINDS` registry — the writer never records it, only the
+post-close driver does — a kind-enumerating reader treats it under the unknown-kind rule
+below: skip it, and record that you skipped it.
+
 ## `belay/jcs-v1` — the canonical form, and its honest limits
 
 RFC 8785 (JSON Canonicalization Scheme) **semantics**: sorted keys, no insignificant
