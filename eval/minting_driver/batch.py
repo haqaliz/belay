@@ -94,8 +94,21 @@ output_tokens, model, provider}`. Three rules travel with it:
 **No dollar amount is computed or stored.** Under a subscription there is no per-token
 price; inventing one would be fabricated precision. Requests + tokens + wall-clock only.
 
-Eval-only. Touches nothing under `src/belay/`; composes `bridge`, `checkpoint`, `workspace`,
-`session`, `capture`, and the instance registry, and changes none of them.
+**The claim record is appended at session close.** The trajectory rule ("the suite must
+be executed before a success claim") needs the claim to judge, and the claim never
+crosses the proxy: the model client parses `Done` itself and the loop returns on it.
+So `run_mint` keeps the `Transcript` (it used to be discarded) and, when the session
+stopped with a `Done`, appends the claim record to the capture trace BEFORE
+`bridge_capture` (`claims.py`), so the record rides inside `trace.jsonl` through the
+bridge with zero bridge changes. Claim text is `Done.reason` when non-empty; the
+`text` key is absent otherwise. `max_steps` or error termination writes no claim —
+nothing was claimed. And when no capture trace exists, the driver skips the append
+rather than crashing: a fake-transport run must not fail because there is no trace to
+claim into, and must not invent one either.
+
+Eval-only. Touches nothing under `src/belay/`; composes `bridge`, `checkpoint`,
+`workspace`, `session`, `capture`, `claims`, and the instance registry, and changes
+none of them.
 """
 
 from __future__ import annotations
@@ -108,6 +121,7 @@ from typing import Callable, Optional, Sequence, Union
 from eval.instances.registry import InstanceRecord
 from eval.minting_driver.bridge import bridge_capture
 from eval.minting_driver.capture import gated_env, proxy_command
+from eval.minting_driver.claims import record_session_claim
 from eval.minting_driver.checkpoint import Checkpoint, load_checkpoint
 from eval.minting_driver.model import Model
 from eval.minting_driver.resilience import QuotaExhausted, TransientExhausted
@@ -295,6 +309,12 @@ def run_mint(
     keep two servers from ever sharing a trace dir. `transport_factory` (default: real
     `StdioMcp`) and `discover_tools` are injectable seams so tests exercise the real
     `run_session`/`bridge` path with no subprocess, no git, no spend.
+
+    Each session's `Transcript` is kept, not discarded: when the run stopped with a `Done`,
+    the claim record (text = `Done.reason`, absent-never-empty) is appended to the capture
+    trace before the bridge, so the trajectory rule will find it inside the bridged
+    `trace.jsonl`. A `max_steps` or error termination appends nothing, and a session with no
+    capture trace is skipped, not crashed on — see the module docstring.
     """
     # `None` is NOT "no timeout": it falls through `run_session` -> `run_task` ->
     # `transport.request`'s `DEFAULT_TIMEOUT = 10.0`, silently capping every live turn at
@@ -355,7 +375,7 @@ def run_mint(
             # reported a spend figure. Still a FRESH model per instance: the binding is
             # per-iteration, so no conversation state bleeds between instances.
             model = model_factory(tools)
-            run_session(
+            transcript = run_session(
                 model,
                 server_command=proxy_command(raw_command),
                 env=env,
@@ -365,6 +385,17 @@ def run_mint(
                 transport_factory=transport_factory,
                 request_timeout=request_timeout,
             )
+            # The claim record: when the session stopped with a `Done`, the model
+            # claimed success, and that claim is the trajectory rule's only evidence
+            # of it — it never crossed the proxy (the client parses `Done` itself).
+            # Appended BEFORE the bridge so the record rides inside `trace.jsonl`
+            # through the rename with zero bridge changes. `max_steps` or an error
+            # termination writes nothing: nothing was claimed. When no capture trace
+            # exists (a session that wrote nothing) the driver skips the append
+            # rather than crashing — an unrecorded claim is skipped, never raised,
+            # and never fabricated.
+            if transcript.stop_reason == "done" and transcript.done is not None:
+                record_session_claim(layout.trace_dir, text=transcript.done.reason)
             trace_path = bridge_capture(
                 instance_id=record.instance_id,
                 trace_dir=layout.trace_dir,

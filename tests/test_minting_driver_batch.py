@@ -70,9 +70,12 @@ def _record(instance_id: str, *, task: str = "make the edit") -> InstanceRecord:
 class StubPrepare:
     """A workspace-prep stand-in: makes the layout dirs (NO git) and drops a fake trace file.
 
-    The fake `trace-*.jsonl` is what the real `bridge_capture` moves — with no gated proxy
-    running, nothing else would write one. Records the instances it prepared, in order, so a
-    test can assert which instances were driven vs skipped.
+    The fake `trace-*.jsonl` is what the real `bridge_capture` moves — with no gated
+    proxy running, nothing else would write one. Its one record carries a `seq` (0),
+    because `run_mint` now appends the claim record to a captured session's trace and
+    `append_claim_record` numbers it as `last seq + 1` — a seq-less line would read as
+    a malformed capture and flip the instance to `failed`. Records the instances it
+    prepared, in order, so a test can assert which instances were driven vs skipped.
     """
 
     def __init__(self, *, write_trace: bool = True) -> None:
@@ -86,7 +89,10 @@ class StubPrepare:
         layout.snapshot_dir.mkdir(parents=True, exist_ok=True)
         if self._write_trace:
             (layout.trace_dir / "trace-20260722T000000Z-abcd1234.jsonl").write_text(
-                '{"turn": 0}\n', encoding="utf-8"
+                '{"v": 1, "kind": "connection_window", "phase": "open", '
+                '"seq": 0, "t_in": "2026-07-22T00:00:00+00:00", '
+                '"observation_point": "proxy"}\n',
+                encoding="utf-8",
             )
         self.prepared.append(record.instance_id)
         return layout
