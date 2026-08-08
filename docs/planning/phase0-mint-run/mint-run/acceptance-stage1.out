@@ -1,0 +1,11 @@
+minted 1 captured, 0 failed, 0 no_observation, 0 never-driven of 1 instance(s)
+  batch dir:  /Users/aliz/dev/at/belay/.claude/worktrees/feat-phase0-mint-run/eval/mint/s4a/batch
+  checkpoint: /Users/aliz/dev/at/belay/.claude/worktrees/feat-phase0-mint-run/eval/mint/s4a/checkpoint.json
+  accounting: 1 of 1 instance(s) recorded
+    wall-clock:     14.1s
+    model requests: 2 (0 retries)
+    tokens:         4 in / 99 out, over 1 of 1 recorded instance(s)
+    models:         claude-opus-5 (1)
+
+verify with:
+  belay phase0 run /Users/aliz/dev/at/belay/.claude/worktrees/feat-phase0-mint-run/eval/mint/s4a/batch --ledger runs/phase0.json --corpus-dir corpus/local --server node /Users/aliz/dev/at/holder/belay/servers/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js '{workspace}'
