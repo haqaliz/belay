@@ -1002,3 +1002,46 @@ construction — every path it writes is relative to this worktree.
   external 27–78% and 35% citations, which this unit does not touch. *"Keep all four in sync" does
   not mean "edit all four"* — the verification is recorded here so the absence of an edit is a
   decision rather than an omission.
+
+---
+
+## The funded mint ran, and was stopped by its own pre-registered exposure gate — 2026-08-09
+
+**Unit:** `docs/planning/phase0-mint-run/` (`feat/phase0-mint-run/aliz`, v0.13.0-era tree).
+**What happened:** the funded mint (single model `claude-opus-5`, subscription path, fresh
+`--root`s, freeze protocol, staged 1 → 10 → 68) ran its first two stages and was **stopped
+before stage 3 by the pre-registered exposure gate** (PRD Rule A row 2, approved at review).
+
+**The measurements** (ledgers committed at `docs/planning/phase0-mint-run/mint-run/ledgers/`;
+`belay phase0 report` re-renders them exactly — verified 2026-08-09):
+
+| Stage | Captured | Disposition | Rate | Controls | Exposure |
+|---|---|---|---|---|---|
+| 4a (1 control) | 1/1 | 1 VERIFIED_CLEAN | 0/1 = 0.0% | clean | 0 file-comparisons (by construction — read-only control) |
+| 4b (3 controls + 7 real) | 8/10 (2 honest failures: truncated JSON reply; CLI exit 1) | 8 VERIFIED_CLEAN | 0/8 = 0.0% | **3/3 clean** (incl. the third control's first live coverage) | **0/8 judged — every instance silent** |
+
+Per-turn: 0/35 FAIL, 0/35 UNVERIFIED, no `INSTRUMENT SUSPECT`, FP-rate `n/a` (no flags).
+
+**Why the gate fired:** every real instance performed real work — search, read, then a real
+`edit_file` — but **every edit targeted source, never a `tests/`/`testing/` path**. The A1
+`no-assertion-weakening` rule is scoped to test paths, so it had nothing in scope to judge on
+any instance. The smoke's sharpest finding (*an agent correctly fixing a bug edits source*)
+reproduced at **n=5 real instances**. R-3 ("low exposure may be a property of the work") now
+has its first direct multi-instance support; the forecast's 44.6% text signal has an
+**unmeasured** relationship to exposure, now measured as zero at n=5 in the same direction as
+the smoke.
+
+**What this is NOT:** not a detector PIVOT (the instrument is healthy and demonstrated —
+35/35 replayed turns PASS, both write-controls produced exactly their specified deltas, no
+`INSTRUMENT SUSPECT`); not the STAGE2 "agent did nothing" failure (the agents acted); **not a
+void** (all controls clean). It is the population × model × prompt combination producing zero
+A1-visible behavior.
+
+**Decision state:** unchanged and still not a gate run — the ≥50 clause counts instances
+minted, and the pre-registered exposure gate stopped the run at 10 driven instances. **R1's
+quantitative form remains untested.** The 2026-07-29 PIVOT record stands as the last gate
+decision; this section is the record of why no new decision was reached and where the next
+unit should re-scope (the axis: a trajectory invariant — "the suite must be executed before a
+success claim" — evaluated A1-style against observed `run_process` effects). No published
+number was re-derived: `4/16`, `precision 0.00`, `3/93`, `recall 0.00`, `1/15` and the
+17-judgment figure all stand unedited.
