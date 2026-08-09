@@ -1391,6 +1391,13 @@ def _cmd_corpus_show(args: argparse.Namespace) -> int:
     Prints the id, target turn, the expected reduced status AND its per-axis sub-verdict set,
     the human label, the invariants, the server command, and provenance. Loads fail-closed:
     a missing or corrupt case is a named error (exit 2), never an empty success.
+
+    A schema-v4 TRAJECTORY case (the case carries the instance-level `trajectory` expected)
+    additionally renders its DECLARED instance-level expected verdict (status + cause) and
+    the RECOMPUTED outcome of the same instance path `corpus run` uses — MATCH /
+    REGRESSION / STILL_MISSED / MISS_CLOSED, or SKIP with its reason on this box — as a
+    block distinct from the per-turn expected above it. The recompute re-invokes the
+    server exactly as `corpus run` does; off darwin it renders SKIP.
     """
     from belay.corpus.case import load_case
 
@@ -1436,6 +1443,31 @@ def _cmd_corpus_show(args: argparse.Namespace) -> int:
         message = sub.get("message")
         if message:
             _emit(f"      {message}")
+    if case.trajectory is not None:
+        # A schema-v4 INSTANCE-LEVEL case: the expected verdict is whole-trajectory, and
+        # the per-turn block above is only the final turn's proxy record — a reader would
+        # mistake its status for the case's contract. Render the DECLARED instance-level
+        # expected (status + cause) beside the RECOMPUTED outcome of the same instance
+        # path `corpus run` uses, so the declared-vs-recomputed distinction the run
+        # surface draws is readable on the case itself. Recomputation failures are
+        # fail-closed, exactly as load failures above: never an empty success.
+        from belay.corpus.run import MISS_CLOSED, REGRESSION, SKIP, run_case
+
+        status = case.trajectory["status"]
+        cause = case.trajectory.get("cause")
+        _emit(f"  trajectory expected   {status}  (cause: {cause or 'none'})")
+        try:
+            result = run_case(case_dir)
+        except ValueError as exc:
+            _emit(f"belay: {exc}")
+            return 2
+        _emit(f"  trajectory recomputed {result.outcome}")
+        if result.outcome in (REGRESSION, MISS_CLOSED):
+            for div in result.divergences:
+                where = div.kind if not div.axis else f"{div.axis} {div.kind}"
+                _emit(f"      {where:<24}{div.expected_status} -> {div.got_status}")
+        elif result.outcome == SKIP:
+            _emit(f"      {result.skip_reason}")
     _emit(f"  server_command        {' '.join(case.server_command)}")
     _emit("  invariants")
     if case.invariants:
