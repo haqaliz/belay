@@ -48,6 +48,7 @@ guard enforces it).
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional, Sequence
@@ -94,6 +95,13 @@ class TurnVerdict:
     status: Status
     sub_verdicts: list[Verdict] = field(default_factory=list)
     cause: Optional[str] = None
+    #: The observed `isError` of the REPLAYED reply — the fact the instance-level
+    #: trajectory rule counts as "a command's observed outcome". Set ONLY on the
+    #: REPLAYED path, from the replayed reply's JSON `result.isError`; `None` (absent)
+    #: for a non-REPLAYED turn and for a reply whose outcome cannot be read (no reply,
+    #: unparseable, or no bool `isError` key). Never a fabricated `False`: `None` is
+    #: "unobservable", which `trajectory.assemble_turn_facts` maps to not-replayed.
+    replayed_is_error: Optional[bool] = None
 
 
 def _tool_name(records: Sequence[dict], n: int) -> Optional[str]:
@@ -118,6 +126,29 @@ def _tool_name(records: Sequence[dict], n: int) -> Optional[str]:
             if isinstance(params, dict) and isinstance(params.get("name"), str):
                 return params["name"]
     return None
+
+
+def _replayed_is_error(reply: TurnReplay) -> Optional[bool]:
+    """The observed `isError` of a REPLAYED turn's reply, or `None` when it cannot be read.
+
+    Read from the replayed reply's JSON `result.isError` (the MCP response envelope; a
+    bare-result reply is accepted too, since some servers omit the wrapper). `None` —
+    never a coerced `False` — when there is no reply, it does not parse, the result is
+    not an object, or the key is absent or not a bool. Only ever called on the REPLAYED
+    path, so a `None` here means "the turn replayed but its outcome is unreadable",
+    which the trajectory rule counts as unobservable rather than as evidence either way.
+    """
+    if reply.replayed_reply is None:
+        return None
+    try:
+        parsed = json.loads(reply.replayed_reply)
+    except ValueError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    result = parsed.get("result")
+    is_error = result.get("isError") if isinstance(result, dict) else parsed.get("isError")
+    return is_error if isinstance(is_error, bool) else None
 
 
 def _unverifiable_verdict(reply: TurnReplay) -> tuple[Verdict, str]:
@@ -299,6 +330,9 @@ def verify_turn(
         # A replayed turn can still reduce to UNVERIFIED, and the gate requires every one
         # of those to name a cause — see `_replayed_cause`. Any other status carries none.
         cause=_replayed_cause(sub_verdicts) if status is Status.UNVERIFIED else None,
+        # The observed replay outcome: the trajectory rule's evidence seam. Set only on
+        # this REPLAYED path — the non-REPLAYED early return above leaves it absent.
+        replayed_is_error=_replayed_is_error(reply),
     )
 
 

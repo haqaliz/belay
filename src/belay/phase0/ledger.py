@@ -160,6 +160,12 @@ class InstanceRecord:
     error: Optional[str]
     not_covered_turns: dict[str, int] = field(default_factory=dict)
     exposure: Optional[dict] = None
+    #: The instance-level A1 trajectory verdict (`suite-before-success-claim`), held as a
+    #: serialized summary `{"status": <name>, "cause": <named abstain or None>,
+    #: "evidence_count": int}`. `None` — UNRECORDED — whenever the rule was not declared
+    #: for the run, exactly `exposure`'s absent-never-zero pattern. Phase 3 computes and
+    #: holds it; serialization into the ledger JSON is the next phase's wiring.
+    trajectory: Optional[dict] = None
 
 
 @dataclass(frozen=True)

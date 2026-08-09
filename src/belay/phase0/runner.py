@@ -60,17 +60,22 @@ are reused verbatim -- this module composes them, and changes none of them.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable, Optional, Sequence
 
 from belay.corpus.add import add_case
 from belay.index import derive_correlation, tool_calls
 from belay.phase0.ledger import Disposition, InstanceRecord, RunLedger
 from belay.replay.client import DEFAULT_TIMEOUT
-from belay.replay.reader import read_trace
+from belay.replay.reader import ReadResult, read_trace
 from belay.replay.report import canonical_cause
-from belay.verify.invariants import Invariant
+from belay.verify.invariants import INSTANCE_LEVEL_RULES, Invariant
+from belay.verify.trajectory import (
+    assemble_turn_facts,
+    evaluate_trajectory_invariant,
+    extract_claim,
+)
 from belay.verify.turn import TurnVerdict, verify_turn
-from belay.verify.verdict import Status
+from belay.verify.verdict import Status, Verdict
 
 #: The `unverified_causes` bucket for a turn whose `TurnVerdict.cause` is `None` -- should
 #: not happen for a real UNVERIFIED verdict (`verify_turn` always names a cause), but a fake
@@ -201,7 +206,8 @@ def _verify_one_trace(
     `flagged_turns` list and the disposition are computed exactly as before, and only the
     two ingest-outcome buckets are left empty.
     """
-    records = list(read_trace(trace_path).records)
+    read_result: ReadResult = read_trace(trace_path)
+    records = list(read_result.records)
     calls = tool_calls(derive_correlation(records))
     manifest_dir = manifest_dir_for(trace_path)
 
@@ -345,6 +351,38 @@ def _verify_one_trace(
     else:
         disposition = Disposition.NO_VERIFIABLE_TURNS
 
+    # INSTANCE-LEVEL rules (the trajectory seam): evaluated ONCE per instance, after the
+    # turn loop, from the narrow facts seam — the claim record (the reader's skips) plus
+    # per-turn replayed facts — never raw records (`test_no_invariant_is_ever_sourced_
+    # from_a_trace`). The verdict is COMPUTED AND HELD here as a serialized summary on
+    # the instance record; disposition/ledger/report wiring is the next phase, so it
+    # changes no disposition today and the key is present ONLY when the rule was
+    # declared. A run_process turn after the claim's seq is never evidence — the claim
+    # is the final statement, so its seq is the boundary.
+    trajectory: Optional[dict] = None
+    trajectory_invariants = [inv for inv in invariants if inv.rule in INSTANCE_LEVEL_RULES]
+    if trajectory_invariants:
+        claim_text, claim_seq = extract_claim(read_result.skips)
+        turn_facts = assemble_turn_facts(records, verdicts)
+        trajectory_verdict: Optional[Verdict] = None
+        for inv in trajectory_invariants:
+            trajectory_verdict = evaluate_trajectory_invariant(
+                inv,
+                claim_text=claim_text,
+                claim_seq=claim_seq,
+                turn_facts=turn_facts,
+            )
+        expected = (
+            trajectory_verdict.expected
+            if trajectory_verdict is not None and isinstance(trajectory_verdict.expected, dict)
+            else {}
+        )
+        trajectory = {
+            "status": trajectory_verdict.status.name if trajectory_verdict is not None else "UNVERIFIED",
+            "cause": expected.get("cause"),
+            "evidence_count": len(expected.get("evidence") or []),
+        }
+
     return InstanceRecord(
         trace_id=source_trace_id,
         disposition=disposition,
@@ -356,6 +394,7 @@ def _verify_one_trace(
         error=None,
         not_covered_turns=not_covered_turns,
         exposure=exposure,
+        trajectory=trajectory,
     )
 
 
