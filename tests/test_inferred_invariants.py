@@ -118,15 +118,22 @@ def test_default_invariants_declares_test_assertions_unweakenable():
     """`default_invariants()` returns the documented default: no assertion under `tests` or
     `testing` may be weakened. This is what A1 runs when no `--invariants` file is given.
 
-    TWO entries, because scope matching is by path SEGMENT and there is no glob: `tests`
-    reaches `tests/`, `sympy/core/tests/` and `src/pkg/tests/`, and `testing` reaches
-    pytest's layout. The second entry is the closed blind spot — the shipped `b"tests/"`
-    prefix matched neither, which is how a run holding real weakenings was published clean.
+    TWO TEST-PATH entries, because scope matching is by path SEGMENT and there is no glob:
+    `tests` reaches `tests/`, `sympy/core/tests/` and `src/pkg/tests/`, and `testing`
+    reaches pytest's layout. The second entry is the closed blind spot — the shipped
+    `b"tests/"` prefix matched neither, which is how a run holding real weakenings was
+    published clean. (The default also carries the instance-level
+    `suite-before-success-claim`, pinned in test_invariant_trajectory_plumbing.py; it is
+    filtered out here because this unit is about the per-turn test-path rules.)
     """
     defaults = default_invariants()
 
     assert defaults, "the zero-config default must be non-empty — it is the R3 mitigation"
-    assert [(inv.scope, inv.rule) for inv in defaults] == [
+    weakening = [
+        (inv.scope, inv.rule) for inv in defaults
+        if inv.rule == RULE_NO_ASSERTION_WEAKENING
+    ]
+    assert weakening == [
         (b"tests", RULE_NO_ASSERTION_WEAKENING),
         (b"testing", RULE_NO_ASSERTION_WEAKENING),
     ], defaults

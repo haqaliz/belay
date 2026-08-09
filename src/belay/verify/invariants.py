@@ -25,9 +25,10 @@ everywhere else in `src/belay`.
 **Fail-closed.** A malformed file, the wrong shape, or a rule Belay does not understand is
 a named `ValueError`, never a silent empty list. An operator who declared a policy Belay
 then swallowed would be reporting the run against *no* policy — the exact false PASS this
-axis exists to refuse. `read-only` and `no-assertion-weakening` are the rules v0 implements;
-`no-create`/`no-delete` are reserved names, deliberately NOT accepted yet, so an
-unimplemented rule cannot pass for an enforced one.
+axis exists to refuse. `read-only`, `no-assertion-weakening` and
+`suite-before-success-claim` are the rules v0 implements; `no-create`/`no-delete` are
+reserved names, deliberately NOT accepted yet, so an unimplemented rule cannot pass for
+an enforced one.
 
 **Scope interpretation is RULE-DEPENDENT, and that is derived rather than chosen.**
 `read-only` keeps its raw byte-PREFIX match, unchanged and untouchable: every
@@ -64,11 +65,18 @@ if TYPE_CHECKING:
 RULE_NO_ASSERTION_WEAKENING = "no-assertion-weakening"
 #: The original rule, unchanged in meaning and in scope semantics (D1).
 RULE_READ_ONLY = "read-only"
+#: The trajectory rule: "the suite must be executed before a success claim", evaluated
+#: ONCE per instance against observed replay effects, never per turn (see
+#: `INSTANCE_LEVEL_RULES`). Triggered by a `claim` record whose text classifies as a
+#: verification claim; scope is meaningless for an instance-level rule.
+RULE_SUITE_BEFORE_SUCCESS_CLAIM = "suite-before-success-claim"
 
 #: The rules v0 understands. The reserved names are listed nowhere here on purpose — an
 #: unimplemented rule must be REJECTED, not quietly accepted as if it were enforced, so the
 #: set of accepted rules is exactly the set that works.
-_KNOWN_RULES = frozenset({RULE_READ_ONLY, RULE_NO_ASSERTION_WEAKENING})
+_KNOWN_RULES = frozenset(
+    {RULE_READ_ONLY, RULE_NO_ASSERTION_WEAKENING, RULE_SUITE_BEFORE_SUCCESS_CLAIM}
+)
 
 #: The rules that cannot be decided from the delta alone: they need the two content trees.
 #: PUBLIC because the CALL SITE reads it — `verify/turn.py` resolves the trees only when a
@@ -77,6 +85,16 @@ _KNOWN_RULES = frozenset({RULE_READ_ONLY, RULE_NO_ASSERTION_WEAKENING})
 #: this set would be accepted from an operator file and then evaluated with no trees, i.e.
 #: UNVERIFIED on every turn — an abstention loophole wearing a wiring bug's coat.
 CONTENT_GROUNDED_RULES = frozenset({RULE_NO_ASSERTION_WEAKENING})
+
+#: The INSTANCE-LEVEL rules — the THIRD grounding category, alongside the delta-grounded
+#: and content-grounded sets. They are evaluated ONCE per instance (trajectory facts in, an
+#: A1 verdict out) and are excluded from the per-turn loop BY CONSTRUCTION in
+#: `verify/turn.py` — `verify_turn` never evaluates them, so no per-turn sub-verdict is
+#: ever emitted and no trees are needed. That exclusion is why the abstention loophole
+#: above cannot open for them: a rule is evaluable exactly when it belongs to one of the
+#: three sets, and joining only `_KNOWN_RULES` — accepted by the loader, grounded by none —
+#: remains a wiring bug either way.
+INSTANCE_LEVEL_RULES = frozenset({RULE_SUITE_BEFORE_SUCCESS_CLAIM})
 
 #: The named causes a content-grounded rule can abstain with. A CLOSED vocabulary, because
 #: `phase0 report` buckets UNVERIFIED turns by cause and a bland shared label would hide
@@ -653,7 +671,10 @@ def default_invariants() -> list[Invariant]:
 
     TWO entries rather than one, per D5, because segment matching has no glob: `tests` covers
     `tests/`, `sympy/core/tests/` and `src/pkg/tests/`, and `testing` covers pytest's layout.
-    `testsuite/` and `contests/` correctly match neither.
+    `testsuite/` and `contests/` correctly match neither. A THIRD entry rides along —
+    `suite-before-success-claim` — which is INSTANCE-level (see `INSTANCE_LEVEL_RULES`):
+    `verify_turn` never evaluates it, so its scope is not meaningful and is declared empty,
+    and it is judged once at instance close against observed replay effects.
 
     Deliberately NOT inferred: "a `readOnlyHint: true` tool must not mutate". That IS C4
     restated — it reads the tool's annotation and so collapses into effect-conformance. The
@@ -662,6 +683,9 @@ def default_invariants() -> list[Invariant]:
     return [
         Invariant(scope=os.fsencode("tests"), rule=RULE_NO_ASSERTION_WEAKENING),
         Invariant(scope=os.fsencode("testing"), rule=RULE_NO_ASSERTION_WEAKENING),
+        # Instance-level: scope is not meaningful for a rule that judges the whole
+        # trajectory, so it is declared empty (see INSTANCE_LEVEL_RULES).
+        Invariant(scope=b"", rule=RULE_SUITE_BEFORE_SUCCESS_CLAIM),
     ]
 
 
@@ -709,6 +733,7 @@ __all__ = [
     "CONTENT_GROUNDED_RULES",
     "ContentRoots",
     "IN_SCOPE_FILE_BUDGET",
+    "INSTANCE_LEVEL_RULES",
     "Invariant",
     "MAX_IN_SCOPE_FILES",
     "NO_CONTENT_ROOTS",
@@ -719,6 +744,7 @@ __all__ = [
     "POST_STATE_NOT_OBSERVED",
     "RULE_NO_ASSERTION_WEAKENING",
     "RULE_READ_ONLY",
+    "RULE_SUITE_BEFORE_SUCCESS_CLAIM",
     "UNDECIDABLE_WEAKENING",
     "UNREADABLE_IN_SCOPE_FILE",
     "corrupt_success_case",

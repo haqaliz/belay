@@ -61,6 +61,7 @@ from belay.replay.report import REPLAYED_SUB_VERDICT, canonical_cause
 from belay.verify.effect import network_subverdict, render_effect_verdict
 from belay.verify.invariants import (
     CONTENT_GROUNDED_RULES,
+    INSTANCE_LEVEL_RULES,
     Invariant,
     evaluate_invariant,
 )
@@ -256,15 +257,23 @@ def verify_turn(
         sub_verdicts.append(net_verdict)
 
     # A1 (C5) is the THIRD axis, folded in ADDITIVELY exactly like the network dimension
-    # above: one A1 sub-verdict per operator-declared invariant, each evaluated against the
-    # SAME replay's observed `delta`. `reduce` is axis-agnostic worst-status-wins, so an A1
-    # FAIL lowers an all-A2-PASS turn to FAIL — the divergence that catches a cheating agent
-    # A2 cannot (a declared-false tool that guts a task-protected test is a C4 effect PASS
-    # but an A1 FAIL). A1 is added ONLY on this REPLAYED path: `evaluate_invariant`
-    # grounds in an OBSERVED delta, and the non-REPLAYED early return has none — with no
-    # delta A1 could only ever be UNVERIFIED, and that turn is ALREADY UNVERIFIED, so an A1
-    # sub-verdict there changes no status and adds only noise. With `invariants=()` (the
-    # default) this loop runs zero times and the turn is byte-for-byte C4's.
+    # above: one A1 sub-verdict per operator-declared PER-TURN invariant, each evaluated
+    # against the SAME replay's observed `delta`. `reduce` is axis-agnostic
+    # worst-status-wins, so an A1 FAIL lowers an all-A2-PASS turn to FAIL — the divergence
+    # that catches a cheating agent A2 cannot (a declared-false tool that guts a
+    # task-protected test is a C4 effect PASS but an A1 FAIL). A1 is added ONLY on this
+    # REPLAYED path: `evaluate_invariant` grounds in an OBSERVED delta, and the
+    # non-REPLAYED early return has none — with no delta A1 could only ever be UNVERIFIED,
+    # and that turn is ALREADY UNVERIFIED, so an A1 sub-verdict there changes no status and
+    # adds only noise. With `invariants=()` (the default) this loop runs zero times and the
+    # turn is byte-for-byte C4's.
+    #
+    # INSTANCE-LEVEL rules (`INSTANCE_LEVEL_RULES`) are NOT per-turn: evaluating
+    # `suite-before-success-claim` here would emit an A1 sub-verdict on every turn, and
+    # since UNVERIFIED outranks PASS every turn would reduce to UNVERIFIED ->
+    # `NO_VERIFIABLE_TURNS` -> `INSTRUMENT SUSPECT` — the poisoning hazard this phase
+    # exists to close. They are skipped below BY CONSTRUCTION and evaluated once at
+    # instance close (the trajectory seam), never here.
     #
     # A CONTENT-grounded rule (`no-assertion-weakening`) needs two trees the delta cannot
     # supply: the TASK pre-state (turn 0's snapshot) and this replay's workspace. They are
@@ -277,6 +286,8 @@ def verify_turn(
     if any(inv.rule in CONTENT_GROUNDED_RULES for inv in invariants):
         roots = content_roots(records, manifest_dir, reply.workspace)
     for inv in invariants:
+        if inv.rule in INSTANCE_LEVEL_RULES:
+            continue  # instance-level: never per-turn-evaluated, never a per-turn sub-verdict
         sub_verdicts.append(evaluate_invariant(inv, reply.delta, n, roots=roots))
 
     status = reduce(sub_verdicts)
