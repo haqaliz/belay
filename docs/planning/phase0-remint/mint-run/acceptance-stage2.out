@@ -1,0 +1,11 @@
+minted 10 captured, 0 failed, 0 no_observation, 0 never-driven of 10 instance(s)
+  batch dir:  /Users/aliz/dev/at/belay/.claude/worktrees/feat-phase0-remint/eval/mint/s5b/batch
+  checkpoint: /Users/aliz/dev/at/belay/.claude/worktrees/feat-phase0-remint/eval/mint/s5b/checkpoint.json
+  accounting: 10 of 10 instance(s) recorded
+    wall-clock:     632.9s
+    model requests: 67 (0 retries)
+    tokens:         134 in / 15456 out, over 10 of 10 recorded instance(s)
+    models:         claude-opus-5 (10)
+
+verify with:
+  belay phase0 run /Users/aliz/dev/at/belay/.claude/worktrees/feat-phase0-remint/eval/mint/s5b/batch --ledger runs/phase0.json --corpus-dir corpus/local --server node /Users/aliz/dev/at/belay/.claude/worktrees/feat-phase0-remint/eval/servers/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js '{workspace}'

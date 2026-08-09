@@ -487,6 +487,25 @@ value cases in the corpus, and the ones the Phase-0 number is made of.
 > is a post-mint adjudication decision, not a prediction. **The re-mint is the next gate
 > decision.**
 >
+> **STATUS 2026-08-09 — the re-mint RAN and the gate outcome is VOID** (`phase0-remint`;
+> this is **not** a gate run: stage 3 never launched). Stage 2 (3 controls + 7 fresh real,
+> `claude-opus-5`, engine v0.15.0): **10/10 captured, 57/57 turns PASS, 0 UNVERIFIED, no
+> `INSTRUMENT SUSPECT`** — the instrument is healthy. The trajectory axis then **judged 5/10**
+> (the D-1 exposure gate, met): 5 FAIL / 0 PASS / 5 UNVERIFIED (CLAIM_UNCLASSIFIABLE). The
+> write control's claim ("…verified by reading it back", zero command turns) FAILed, and
+> **per the pre-registered D-3 rule a FAILing control voids the mint** — stage 3 did not
+> launch, recorded as a void at stage-2 cost. Hand-audit (owner, committed evidence in
+> `docs/planning/phase0-remint/audit-and-publish/`): **all 5 FAILs are false positives by
+> construction** — no shell/`run_process` tool was offered on the MCP boundary (14
+> filesystem tools only), so the rule's evidence was impossible to produce; **trajectory
+> precision 0.00** (0 TP / 5 FP, coverage 1.00, corpus-labeled) — the rule's first real-text
+> measurement, **uninformative about agents** (Rule C's artifact reading), informative about
+> the classifier (determinable 5/10). The one FAIL was hand-replayed (corpus run
+> re-execution, verdict reproduced MATCH). **R1's quantitative form stays untested, with the
+> reason now named: the axis cannot measure this population until a command tool is
+> offered.** The next unit re-scopes the toolset (shell server on the boundary, or an
+> abstain when no command tool is offered), not the rule's vocabulary alone.
+>
 > **Superseded, kept for the record —** **Decision: build `invariant-test-mutation-shape` next; do NOT mint the remaining ~34 instances
 > under a 0.00-precision detector.** Its rule must be *"modification that removes or weakens an
 > existing assertion"*, judged against the **task pre-state** and the **resulting content**. The 7

@@ -2,6 +2,29 @@
 
 This file orients a coding agent working in this repository. Read it first.
 
+> **THE RE-MINT RAN AND ITS OWN PRE-REGISTERED CONTROL GATE VOIDED IT — not a detector
+> failure** (2026-08-09, `phase0-remint`). **This is NOT a gate run and produces NO Phase-0
+> number.** Stage 1 (1 control) captured, `VERIFIED_CLEAN`, gate passed. Stage 2 (3 controls
+> + 7 fresh real, `claude-opus-5` on the subscription path, engine v0.15.0) captured
+> **10/10**, **57/57 turns PASS, 0 UNVERIFIED, no `INSTRUMENT SUSPECT`** — then the write
+> control's claim ("…verified by reading it back", zero command turns) came back **trajectory
+> FAIL** and the pre-registered D-3 rule **VOIDED the mint**; stage 3 (the ≥50 denominator)
+> never launched. Adjudication (owner, on committed evidence): **all 5 trajectory FAILs are
+> false positives by construction** — the MCP boundary offered **14 filesystem tools and NO
+> shell/`run_process` tool**, so the rule's evidence (a replayed command) was impossible to
+> produce; **trajectory precision 0.00** (0 TP / 5 FP, coverage 1.00, corpus-labeled) is the
+> rule's first real-text measurement and reads as **uninformative about agents** — the
+> exposure-zero finding, reproduced on the trajectory axis. The trajectory exposure gate
+> itself PASSED (5/10 judged, the D-1 reading). One FAIL hand-replayed (verdict reproduced
+> MATCH). **R1's quantitative form is STILL untested, with the reason now named: the
+> trajectory axis cannot measure this population until a command tool is offered** — the
+> next unit re-scopes the TOOLSET, not the rule's vocabulary alone. Not a detector PIVOT
+> (instrument healthy and demonstrated), not the STAGE2 "agent did nothing" failure (all 10
+> agents acted), not a near-zero. `4/16`, `precision 0.00`, `3/93`, `recall 0.00`, `1/15`,
+> the 17-judgment figure and the 2026-07-29 PIVOT all stand unedited. Ledgers at
+> `docs/planning/phase0-remint/mint-run/ledgers/`, audit at
+> `docs/planning/phase0-remint/audit-and-publish/`. See `docs/planning/phase0-remint/`.
+>
 > **THE FUNDED MINT RAN AND WAS STOPPED BY ITS OWN PRE-REGISTERED EXPOSURE GATE, NOT BY A
 > DETECTOR FAILURE** (2026-08-09, `phase0-mint-run`). **This is NOT a gate run and produces NO
 > Phase-0 number.** The mint drove `claude-opus-5` on the subscription path through two stages,
