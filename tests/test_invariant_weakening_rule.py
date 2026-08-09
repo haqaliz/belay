@@ -43,6 +43,7 @@ from belay.trace import TraceWriter
 from belay.verify import turn as turn_module
 from belay.verify.invariants import (
     CONTENT_GROUNDED_RULES,
+    INSTANCE_LEVEL_RULES,
     NO_CONTENT_ROOTS,
     NO_POST_STATE_TREE,
     NO_TASK_PRESTATE_HANDLE,
@@ -108,15 +109,22 @@ def test_the_new_rule_is_known_and_content_grounded() -> None:
 
 
 def test_the_default_declares_no_assertion_weakening_on_tests_and_testing() -> None:
-    """`default_invariants()` is TWO entries — scope `tests` and scope `testing`, per D5.
+    """`default_invariants()` carries the two TEST-PATH entries — scope `tests` and `testing`, per D5.
 
     Two entries rather than one glob: `b"tests"` cannot match `testing/`, and pytest's
     tests live in `testing/`. That blind spot is the false negative this unit exists to
-    close, so it is pinned on the default itself rather than only end-to-end.
+    close, so it is pinned on the default itself rather than only end-to-end. The default
+    also carries the instance-level `suite-before-success-claim` rule (pinned in
+    `test_invariant_trajectory_plumbing.py`); it is filtered out here because this unit
+    is about the per-turn test-path rules.
     """
     defaults = default_invariants()
 
-    assert [(inv.scope, inv.rule) for inv in defaults] == [
+    weakening = [
+        (inv.scope, inv.rule) for inv in defaults
+        if inv.rule == RULE_NO_ASSERTION_WEAKENING
+    ]
+    assert weakening == [
         (b"tests", RULE_NO_ASSERTION_WEAKENING),
         (b"testing", RULE_NO_ASSERTION_WEAKENING),
     ], defaults
@@ -595,7 +603,11 @@ def test_the_whole_data_path_fails_a_weakening_through_verify_turn(tmp_path, mon
     )
 
     a1 = [v for v in verdict.sub_verdicts if v.axis == "A1"]
-    assert len(a1) == len(default_invariants()), verdict.sub_verdicts
+    # Only the PER-TURN rules reach `verify_turn` — the instance-level
+    # `suite-before-success-claim` in the default is excluded by construction
+    # (test_invariant_trajectory_plumbing.py pins the exclusion).
+    per_turn = [inv for inv in default_invariants() if inv.rule not in INSTANCE_LEVEL_RULES]
+    assert len(a1) == len(per_turn), verdict.sub_verdicts
     fails = [v for v in a1 if v.status is Status.FAIL]
     assert len(fails) == 1, a1
     assert "tests/test_x.py" in fails[0].message, fails[0].message

@@ -1439,7 +1439,7 @@ UNMODIFIED_DRIVER_CORE = {
         "1e6b4dabab811ac88cb1322a14202b019b7427f82a89c136c2cc40cdb54a3b98"
     ),
     "eval/minting_driver/batch.py": (
-        "0e4d036989ff4f6a5bf8326613d766a182b13423a01d71efbef06db4983975ab"
+        "9bc68a4d6a47e1aed7e3008a90a7e16d9228e4ae476a3078369d55cde38e8a08"
     ),
 }
 

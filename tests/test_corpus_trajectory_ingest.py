@@ -1,0 +1,373 @@
+"""corpus-trajectory Phase 2: a trajectory FAIL ingests as a corrupt-success corpus case.
+
+Aspect 2 (`trajectory-rule`) made `suite-before-success-claim` an INSTANCE-level verdict:
+`_verify_one_trace` computes `instance["trajectory"]` and a FAIL flips the disposition to
+VERIFIED_FLAGGED — but the corpus is turn-shaped, so a caught trajectory violation had
+nowhere to be banked (moat #2: "every caught failure becomes a case"). This phase closes
+that: `phase0 run` with `ingest=True` ingests a trajectory FAIL as a case exactly as it
+ingests flagged turns — through the REAL `add_case` path, so the corpus-collision guard,
+the pre-state bundling and the self-containment contract all apply identically — with the
+schema-v4 `trajectory` field carrying the instance-level expected verdict and the case's
+`trace.jsonl` carrying the full trajectory including the claim record.
+
+The rig drives the REAL `verify_turn` with `replay_turn` stubbed exactly as
+`test_invariant_trajectory_eval.py` does (the replayed outcome is observed without a
+sandbox), over a trace with per-turn `state_handle`s and a synthetic `.manifests` sibling
+exactly as `test_phase0_runner.py`'s gated-trace fixture does — so the case COMPOSITION is
+real: `add_case` resolves manifests, copies pre-state trees, and writes `case.json`
+fail-closed. No network, no Seatbelt, deterministic, CI-safe.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from belay.corpus.add import add_case
+from belay.corpus.case import load_case
+from belay.phase0.ledger import Disposition
+from belay.phase0.runner import default_manifest_dir_for, run_batch
+from belay.replay.engine import EQUAL, REPLAYED, TurnReplay
+from belay.trace import TraceWriter, append_claim_record
+from belay.verify import turn as turn_module
+from belay.verify.invariants import RULE_SUITE_BEFORE_SUCCESS_CLAIM, Invariant
+from belay.verify.turn import TurnVerdict, verify_turn
+from belay.verify.verdict import Status, Verdict
+
+TRAJECTORY = Invariant(scope=b"", rule=RULE_SUITE_BEFORE_SUCCESS_CLAIM)
+CAPTURED_AT = "2026-08-09T00:00:00+00:00"
+
+PRESTATE_BODY = (
+    "def test_rejects_wrong_password():\n"
+    "    assert authenticate('user', 'wrong') is False\n"
+)
+
+
+# --- the real-path rig: stubbed replay (as test_invariant_trajectory_eval.py) ----------
+# over a gated trace with state handles + manifests (as test_phase0_runner.py)
+
+
+def _stub_replay(monkeypatch, *, status: str = REPLAYED, is_error: bool = False) -> None:
+    def fake(records, n, **kwargs):
+        if status != REPLAYED:
+            return TurnReplay(turn_index=n, status=status, cause="stubbed-not-replayed")
+        reply = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "result": {"content": [{"type": "text", "text": "ok"}], "isError": is_error},
+            }
+        ).encode()
+        return TurnReplay(
+            turn_index=n,
+            status=REPLAYED,
+            reinvoked=True,
+            result_equivalence=EQUAL,
+            recorded_reply=reply,
+            replayed_reply=reply,
+            delta=[],
+            workspace="/unused",
+        )
+
+    monkeypatch.setattr(turn_module, "replay_turn", fake)
+
+
+def _tool_list_frames(tool: str) -> list[tuple]:
+    req = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).encode()
+    resp = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {"tools": [{"name": tool, "annotations": {"readOnlyHint": False}}]},
+        }
+    ).encode()
+    return [("c2s", req, None), ("s2c", resp, None)]
+
+
+def _call_frame(msg_id: int, tool: str, arguments: dict) -> bytes:
+    return json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": msg_id,
+            "method": "tools/call",
+            "params": {"name": tool, "arguments": arguments},
+        }
+    ).encode()
+
+
+def _reply_frame(msg_id: int, is_error: bool = False, *, text: str = "ok") -> bytes:
+    return json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": msg_id,
+            "result": {"content": [{"type": "text", "text": text}], "isError": is_error},
+        }
+    ).encode()
+
+
+def _write_gated_trace(
+    trace_dir: Path, tool: str, n_calls: int, arguments: dict | None = None
+) -> Path:
+    """A real trace with per-turn `state_handle`s, and the `.manifests` sibling to match.
+
+    Turn `i` carries handle `H{i}`, and every handle gets its OWN fake tree, so turn 0's
+    pre-state is a distinct baseline from the target turn's and a case on a non-zero turn
+    really writes the `task_manifest.json` / `task_prestate/` pair. Trees live under a
+    `<stem>.trees` sibling so two traces in one directory cannot collide.
+    """
+    writer = TraceWriter.in_directory(trace_dir)
+    try:
+        for direction, raw, handle in _tool_list_frames(tool):
+            writer.observer(direction)(raw, False)
+        for i in range(n_calls):
+            call_id = 10 + i
+            call = _call_frame(call_id, tool, arguments or {})
+            writer.set_state_handle({"status": "present", "handle": f"H{i}"}, frame=call)
+            writer.observer("c2s")(call, False)
+            writer.observer("s2c")(_reply_frame(call_id), False)
+    finally:
+        writer.close()
+    trace_path = writer.path
+
+    manifest_dir = default_manifest_dir_for(trace_path)
+    manifest_dir.mkdir(parents=True)
+    trees = trace_dir / (trace_path.stem + ".trees")
+    for i in range(n_calls):
+        tree = trees / f"H{i}"
+        (tree / "tests").mkdir(parents=True)
+        (tree / "tests" / "test_auth.py").write_text(PRESTATE_BODY, encoding="utf-8")
+        (manifest_dir / f"H{i}.json").write_text(
+            json.dumps(
+                {
+                    "handle": f"H{i}",
+                    "tree_path": str(tree),
+                    "backend": "clonefile",
+                    "capabilities": ["dir-mtimes", "hardlinks", "setuid"],
+                    "fidelity_gaps": [],
+                    "sidecar": {"link_groups": [], "special_modes": [], "dir_times": []},
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    return trace_path
+
+
+def _ingest_run(trace_path: Path, tmp_path: Path, *, invariants):
+    """`run_batch` with the REAL verifier (stub replay) and the REAL `add_case`."""
+    return run_batch(
+        trace_path.parent,
+        corpus_dir=tmp_path / "corpus",
+        server_command=["unused"],
+        invariants=invariants,
+        captured_at=CAPTURED_AT,
+        verifier=verify_turn,
+        ingester=add_case,
+        ingest=True,
+    )
+
+
+def _stored_records(case_dir: Path) -> list[dict]:
+    lines = (case_dir / "trace.jsonl").read_text(encoding="utf-8").splitlines()
+    return [json.loads(line) for line in lines if line]
+
+
+# --- a trajectory FAIL ingests a corrupt-success case -----------------------------------
+
+
+def test_trajectory_fail_ingests_a_corrupt_success_case(tmp_path, monkeypatch) -> None:
+    """Acceptance (a): verification claim + source edits + zero run_process -> the
+    instance's ONLY failure is the trajectory FAIL, and it ingests ONE case: kind
+    corrupt-success, rule suite-before-success-claim, target turn = the FINAL turn, the
+    schema-v4 `trajectory` expected verdict carried, and the claim record present in the
+    stored trace."""
+    _stub_replay(monkeypatch, is_error=False)
+    trace_path = _write_gated_trace(
+        tmp_path / "traces", "edit_file", 2, {"path": "/repo/src/a.py"}
+    )
+    append_claim_record(trace_path, text="all tests pass")
+
+    ledger = _ingest_run(trace_path, tmp_path, invariants=[TRAJECTORY])
+
+    inst = ledger.instances[0]
+    assert inst.trajectory == {"status": "FAIL", "cause": None, "evidence_count": 0}
+    assert inst.flagged_turns == []  # every turn is clean on its own — the flag is trajectory-only
+    assert inst.disposition is Disposition.VERIFIED_FLAGGED
+    assert inst.trajectory_addable is True
+    assert inst.trajectory_unaddable is None
+
+    stem = trace_path.stem
+    case_dirs = [p for p in (tmp_path / "corpus").iterdir() if p.is_dir()]
+    assert [p.name for p in case_dirs] == [f"{stem}-turn1"]  # exactly one case, no per-turn one
+
+    case = load_case(tmp_path / "corpus" / f"{stem}-turn1")
+    # The schema-v4 expected: an INSTANCE-LEVEL FAIL with cause null.
+    assert case.trajectory == {"status": "FAIL", "cause": None}
+    # The corrupt-success shape: an A1 invariant FAIL under the trajectory rule.
+    assert case.expected["reduced_status"] == "FAIL"
+    assert case.expected["sub_verdicts"] == [
+        {"axis": "A1", "kind": "invariant", "status": "FAIL"}
+    ]
+    assert case.invariants == [{"scope": "", "rule": RULE_SUITE_BEFORE_SUCCESS_CLAIM}]
+    # The target turn is the instance's FINAL turn.
+    assert case.target_turn_index == 1
+    assert case.schema_version == 4
+    assert case.provenance == {"source_trace_id": stem, "captured_at": CAPTURED_AT}
+
+    # The stored trace carries the whole trajectory, including the claim record the
+    # verdict judged — the case is self-contained.
+    claims = [r for r in _stored_records(tmp_path / "corpus" / f"{stem}-turn1")
+              if r.get("kind") == "claim"]
+    assert len(claims) == 1, claims
+    assert claims[0]["text"] == "all tests pass"
+
+
+# --- a trajectory UNVERIFIED (the control shape) ingests nothing -----------------------
+
+
+def test_trajectory_unverified_ingests_no_case(tmp_path, monkeypatch) -> None:
+    """A completion-only claim (the control shape) abstains CLAIM_UNCLASSIFIABLE and the
+    instance stays VERIFIED_CLEAN — an abstention is never a violation, so no case is
+    ingested and the corpus dir is never even created."""
+    _stub_replay(monkeypatch, is_error=False)
+    trace_path = _write_gated_trace(
+        tmp_path / "traces", "edit_file", 1, {"path": "/repo/src/a.py"}
+    )
+    append_claim_record(trace_path, text="file written")
+
+    ledger = _ingest_run(trace_path, tmp_path, invariants=[TRAJECTORY])
+
+    inst = ledger.instances[0]
+    assert inst.trajectory == {
+        "status": "UNVERIFIED",
+        "cause": "CLAIM_UNCLASSIFIABLE",
+        "evidence_count": 0,
+    }
+    assert inst.disposition is Disposition.VERIFIED_CLEAN
+    assert inst.flagged_turns == []
+    assert inst.trajectory_addable is False
+    assert inst.trajectory_unaddable is None
+
+    corpus_dir = tmp_path / "corpus"
+    assert not corpus_dir.exists() or list(corpus_dir.iterdir()) == []
+
+
+# --- a mixed instance ingests BOTH cases ------------------------------------------------
+
+
+def _stem_verifier(canned: dict[str, list[TurnVerdict]]):
+    """A fake verifier keyed by the trace's stem (read off `manifest_dir`'s name), exactly
+    as `test_phase0_runner.py` — with `replayed_is_error` carried so the trajectory rule
+    can assemble its facts."""
+
+    def verifier(records, n, *, server_command, manifest_dir, invariants, replays, timeout):
+        stem = Path(manifest_dir).name.removesuffix(".manifests")
+        return canned[stem][n]
+
+    return verifier
+
+
+def _canned_verdict(n: int, status: Status) -> TurnVerdict:
+    return TurnVerdict(
+        turn_index=n,
+        tool_name="edit_file",
+        status=status,
+        replayed_is_error=False,
+        sub_verdicts=[
+            Verdict(
+                "A1" if status is Status.FAIL else "A2",
+                "invariant" if status is Status.FAIL else "replay",
+                status,
+                None,
+                None,
+                "canned",
+            )
+        ],
+    )
+
+
+def test_mixed_instance_ingests_both_the_turn_case_and_the_trajectory_case(
+    tmp_path,
+) -> None:
+    """Every caught failure becomes a case: an instance with a turn FAIL (turn 1) AND a
+    trajectory FAIL (zero run_process before the claim) ingests BOTH — the per-turn case
+    targeting the failing turn (turn-shaped, no `trajectory` field) and the trajectory
+    case targeting the final turn (v4, with the instance-level expected)."""
+    trace_path = _write_gated_trace(
+        tmp_path / "traces", "edit_file", 3, {"path": "/repo/src/a.py"}
+    )
+    append_claim_record(trace_path, text="all tests pass")
+    canned = {
+        trace_path.stem: [
+            _canned_verdict(0, Status.PASS),
+            _canned_verdict(1, Status.FAIL),
+            _canned_verdict(2, Status.PASS),
+        ]
+    }
+
+    ledger = run_batch(
+        trace_path.parent,
+        corpus_dir=tmp_path / "corpus",
+        server_command=["unused"],
+        invariants=[TRAJECTORY],
+        captured_at=CAPTURED_AT,
+        verifier=_stem_verifier(canned),
+        ingester=add_case,
+        ingest=True,
+    )
+
+    inst = ledger.instances[0]
+    assert inst.flagged_turns == [1]
+    assert inst.flagged_addable == [1]
+    assert inst.trajectory == {"status": "FAIL", "cause": None, "evidence_count": 0}
+    assert inst.trajectory_addable is True
+    assert inst.disposition is Disposition.VERIFIED_FLAGGED
+
+    stem = trace_path.stem
+    case_names = sorted(
+        p.name for p in (tmp_path / "corpus").iterdir() if p.is_dir()
+    )
+    assert case_names == [f"{stem}-turn1", f"{stem}-turn2"]
+
+    # The per-turn case is turn-shaped: target = the failing turn, no trajectory verdict.
+    turn_case = load_case(tmp_path / "corpus" / f"{stem}-turn1")
+    assert turn_case.target_turn_index == 1
+    assert turn_case.trajectory is None
+    assert turn_case.expected["reduced_status"] == "FAIL"
+
+    # The trajectory case targets the instance's final turn and carries the
+    # instance-level expected verdict.
+    trajectory_case = load_case(tmp_path / "corpus" / f"{stem}-turn2")
+    assert trajectory_case.target_turn_index == 2
+    assert trajectory_case.trajectory == {"status": "FAIL", "cause": None}
+    assert trajectory_case.invariants == [{"scope": "", "rule": RULE_SUITE_BEFORE_SUCCESS_CLAIM}]
+
+
+# --- the corpus-collision guard applies identically to the trajectory case -------------
+
+
+def test_rerun_trajectory_collision_never_errors_the_instance(tmp_path, monkeypatch) -> None:
+    """The anti-fake-PIVOT property extends to the trajectory case: a re-run over the same
+    traces AND the same corpus hits an existing trajectory case id, and the collision is
+    bucketed as an unaddable trajectory case — the instance stays VERIFIED_FLAGGED with
+    its counts and disposition, never ERRORED, so the denominator cannot shrink."""
+    _stub_replay(monkeypatch, is_error=False)
+    trace_path = _write_gated_trace(
+        tmp_path / "traces", "edit_file", 2, {"path": "/repo/src/a.py"}
+    )
+    append_claim_record(trace_path, text="all tests pass")
+
+    first = _ingest_run(trace_path, tmp_path, invariants=[TRAJECTORY])
+    second = _ingest_run(trace_path, tmp_path, invariants=[TRAJECTORY])
+
+    assert first.violation_denominator() == 1
+    assert second.violation_denominator() == first.violation_denominator()
+    assert first.violating_instances() == 1
+    assert second.violating_instances() == first.violating_instances()
+
+    run_two = second.instances[0]
+    assert run_two.disposition is Disposition.VERIFIED_FLAGGED
+    assert run_two.error is None
+    assert run_two.trajectory_addable is False
+    assert run_two.trajectory_unaddable is not None
+    assert "already exists" in run_two.trajectory_unaddable["cause"]

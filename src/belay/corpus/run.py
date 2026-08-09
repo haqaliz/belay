@@ -106,6 +106,20 @@ the next section either.
 scores that field independently, and coupling regression detection to it would mean
 relabelling a case silently moved the regression suite.
 
+## A case that carries the schema-v4 `trajectory` declaration is INSTANCE-LEVEL
+
+A trajectory case (`corpus-trajectory`) declares its expected verdict whole-trajectory —
+`suite-before-success-claim` judged the run, not any turn — so no single `verify_turn` can
+re-derive it, and `run_case` routes it through the INSTANCE path instead
+(`_recompute_trajectory_case`): the whole stored trace is re-verified with
+`_verify_one_trace` (`ingest=False`, the case's own `invariants`/`server_command`,
+`manifest_dir=case_dir`), and the recomputed trajectory STATUS is compared against the
+declared status (`_classify_trajectory_case`). MATCH/REGRESSION/STILL_MISSED/MISS_CLOSED
+carry over on that one dimension — an instance-level miss closes exactly when the
+declared-clean trajectory status recomputes PASS -> FAIL, mirroring `_closes_the_miss`'s
+transition on the turn-level A1 axis. Per-turn cases are untouched; the two shapes coexist
+in one corpus and each classifies on its own contract.
+
 ## Why the comparison pins the per-sub-verdict SET, not the reduced status (D4)
 
 `classify_case` compares the WHOLE recomputed set — `reduced_status` AND every
@@ -128,7 +142,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from belay.corpus.case import load_case
+from belay.corpus.add import add_case
+from belay.corpus.case import Case, load_case
+from belay.phase0.runner import _verify_one_trace
 from belay.replay.reader import read_trace
 from belay.replay.report import REPLAY_DID_NOT_ANSWER, canonical_cause
 from belay.snapshot.substrate import UnrestorableCause
@@ -348,6 +364,63 @@ def _closes_the_miss(expected: dict, recomputed_set: dict) -> bool:
     return recomputed_set == patched
 
 
+#: The (axis, kind) of an INSTANCE-LEVEL divergence. A trajectory verdict is not a
+#: per-turn sub-verdict: `_divergences`'s `(axis, kind)` dict keying matches recomputed
+#: sub-verdicts against the stored `expected`, and an instance-level mismatch must be
+#: reported by name on its own dimension — never collapsed into (or hidden among) the
+#: turn-shaped keys.
+_TRAJECTORY_DIVERGENCE = ("trajectory", "status")
+
+
+def _trajectory_divergence(expected_status: Optional[str], got_status: Optional[str]) -> Divergence:
+    """One instance-level mismatch, named on the trajectory dimension.
+
+    `expected_status` / `got_status` are the stored vs recomputed trajectory STATUS;
+    either is `None` when one side carried no verdict at all (a declaration with no
+    rule to recompute it).
+    """
+    return Divergence(_TRAJECTORY_DIVERGENCE[0], _TRAJECTORY_DIVERGENCE[1],
+                      expected_status, got_status)
+
+
+def _classify_trajectory_case(
+    expected: dict,
+    recomputed_status: Optional[str],
+    *,
+    case_id: str,
+    recorded_miss: Optional[dict],
+) -> CaseResult:
+    """Classify an instance-level recompute against a trajectory case's expected verdict.
+
+    A trajectory case's contract is the INSTANCE-LEVEL status (`case.trajectory.status`),
+    not any turn's `expected` set — the per-turn shape on the case is the final turn's
+    proxy record, and `corpus run` re-derives the whole-trajectory verdict or nothing.
+    Status equality is therefore the MATCH condition, decided on that one dimension:
+
+    - equal -> MATCH, or **STILL_MISSED** when the case declares a recorded miss (equal
+      there means the engine is still blind on the instance level, which is not agreement
+      — the same inversion `classify_case` applies to turn-shaped cases).
+    - otherwise -> REGRESSION, named on the trajectory dimension — unless the case
+      declares a recorded miss AND the recompute is the ONE exempted instance-level
+      transition, the declared-clean trajectory status moving PASS -> FAIL, which is
+      **MISS_CLOSED**: the whole-dimension verdict the miss was banked against flipped
+      to a catch, and a closed miss must not break the build.
+
+    `recorded_miss` is the DECLARATION, passed in by `run_case` from the loaded case;
+    `None` is an undeclared case. Pure: no replay, no server, no model.
+    """
+    expected_status = expected["status"]
+    declared = recorded_miss is not None
+
+    if recomputed_status == expected_status:
+        return CaseResult(case_id=case_id, outcome=STILL_MISSED if declared else MATCH)
+
+    divergence = [_trajectory_divergence(expected_status, recomputed_status)]
+    if declared and expected_status == "PASS" and recomputed_status == "FAIL":
+        return CaseResult(case_id=case_id, outcome=MISS_CLOSED, divergences=divergence)
+    return CaseResult(case_id=case_id, outcome=REGRESSION, divergences=divergence)
+
+
 def classify_case(
     expected: dict,
     recomputed: TurnVerdict,
@@ -399,6 +472,51 @@ def classify_case(
     return CaseResult(case_id=case_id, outcome=REGRESSION, divergences=divergences)
 
 
+def _recompute_trajectory_case(case_dir: Path, case: Case, expected: dict) -> CaseResult:
+    """Recompute an INSTANCE-LEVEL case through the instance path, and classify it.
+
+    A trajectory case's expected verdict is whole-trajectory, so no single `verify_turn`
+    can re-derive it. The whole stored trace is re-verified through the SAME instance
+    machinery `phase0 run` verifies with (`_verify_one_trace`, `ingest=False` — the
+    corpus is never written, and the ingester is unreachable): the case is
+    self-contained, so `manifest_dir=case_dir` (the engine globs `case_dir/*.json` and
+    matches the turns' recorded handles to the bundled manifests exactly as the per-turn
+    path does), and the stored `invariants`/`server_command`/`replays`/`timeout` are
+    passed through. The recomputed instance-level verdict's STATUS is compared against
+    the expected status (`expected` is `case.trajectory`, already narrowed to a dict by
+    the caller) by `_classify_trajectory_case`.
+
+    `ingest=False` is what makes this a pure re-verification: `_verify_one_trace` skips
+    the ingest loop wholesale, so a re-run over the case can never collide with it or
+    write anything.
+    """
+    invariants = [
+        Invariant(scope=os.fsencode(d["scope"]), rule=d["rule"]) for d in case.invariants
+    ]
+    instance = _verify_one_trace(
+        Path(case_dir) / "trace.jsonl",
+        source_trace_id=case.id,
+        corpus_dir=case_dir,
+        server_command=case.server_command,
+        invariants=invariants,
+        captured_at=case.provenance.get("captured_at", ""),
+        replays=case.replays,
+        timeout=case.timeout,
+        manifest_dir_for=lambda _trace_path: Path(case_dir),
+        verifier=verify_turn,
+        ingester=add_case,
+        ingest=False,
+    )
+    recomputed = instance.trajectory
+    recomputed_status = recomputed.get("status") if recomputed is not None else None
+    return _classify_trajectory_case(
+        expected,
+        recomputed_status,
+        case_id=case.id,
+        recorded_miss=case.recorded_miss,
+    )
+
+
 def run_case(case_dir: Path) -> CaseResult:
     """Load a case, recompute its target turn by REAL re-verification, and classify it.
 
@@ -406,6 +524,12 @@ def run_case(case_dir: Path) -> CaseResult:
     platform, before any platform gate — the corpus never silently drops an unreadable case.
     Off darwin the Seatbelt replay substrate is absent, so the case cannot be evaluated at all
     and is a SKIP decided up front, before a server is ever spawned.
+
+    A case carrying the schema-v4 `trajectory` declaration is an INSTANCE-LEVEL case:
+    it is recomputed through the instance path (`_recompute_trajectory_case`) — the
+    per-turn `verify_turn` below cannot re-derive a whole-trajectory verdict, and a
+    trajectory case sent down it would regress against a final turn's verdict that is
+    not its contract. Every other case takes the per-turn path below, byte-for-byte.
 
     On darwin the turn is recomputed with `verify_turn`, passing `manifest_dir=case_dir`: the
     engine globs `case_dir/*.json`, matches the turn's recorded handle to `manifest.json`
@@ -424,6 +548,9 @@ def run_case(case_dir: Path) -> CaseResult:
                 f"macOS-only, so this case cannot be re-verified here"
             ),
         )
+
+    if case.trajectory is not None:
+        return _recompute_trajectory_case(case_dir, case, case.trajectory)
 
     records = read_trace(Path(case_dir) / "trace.jsonl").records
     invariants = [

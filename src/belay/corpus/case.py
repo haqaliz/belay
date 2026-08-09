@@ -79,8 +79,14 @@ _KNOWN_SUB_STATUSES = _KNOWN_STATUSES | {"NOT_COVERED"}
 #: the `task_prestate` bundle — also optional, for the same reason. Version 3 adds
 #: `recorded_miss`: a v3 case read by pre-v3 code would silently misclassify a declared
 #: miss as an ordinary case — certifying blindness as a pass — so the bump makes that
-#: visible rather than silent.
-CASE_SCHEMA_VERSION = 3
+#: visible rather than silent. Version 4 adds the optional instance-level `trajectory`
+#: expected verdict: a v4 case read by pre-v4 code would silently ignore the trajectory
+#: declaration and recompute the case through the per-turn path — certifying an
+#: instance-level regression as a per-turn agreement — so the bump makes that visible
+#: rather than silent. The loader never REJECTS a newer version; it reads the integer and
+#: leaves the unknown field to be ignored, which is what makes a bump loud rather than
+#: breaking.
+CASE_SCHEMA_VERSION = 4
 
 #: What an OMITTED `schema_version` reads back as. Deliberately a fixed 1 rather than
 #: `CASE_SCHEMA_VERSION`: a case with no version key was written before the key existed, so
@@ -135,6 +141,11 @@ class Case:
     verdict the engine produced but a human has determined is a MISS, not a catch — shape
     `{"note": <non-empty str>}`; `None` (the default) means the case makes no such claim,
     which is what every case written before v3 says. The engine never sets this field.
+    `trajectory` DECLARES an INSTANCE-LEVEL expected verdict — the case's expected FAIL
+    is a whole-trajectory failure, not any turn's — shape `{"status": <reduced-verdict
+    status>, "cause": <named cause or null>}`; `None` (the default) means the case makes
+    no such claim and is a turn-shaped case, which is what every case written before v4
+    says.
     """
 
     id: str
@@ -153,6 +164,7 @@ class Case:
     target_tool: Optional[str] = None
     task_prestate: Optional[dict] = None
     recorded_miss: Optional[dict] = None
+    trajectory: Optional[dict] = None
 
 
 def _validate_root_cause(raw: object, path: Path) -> Optional[dict]:
@@ -270,14 +282,54 @@ def _validate_recorded_miss(raw: object, path: Path, reduced_status: str) -> Opt
     return raw
 
 
+def _validate_trajectory(raw: object, path: Path) -> Optional[dict]:
+    """Validate an on-disk `trajectory`, or raise a named `ValueError`.
+
+    Shape is `{"status": <reduced-verdict status>, "cause": <named cause or null>}`.
+    Presence IS the declaration — a case with no `trajectory` key carries no
+    INSTANCE-LEVEL expected verdict and is a turn-shaped case, byte-for-byte as before,
+    the same single silence `task_prestate` and `recorded_miss` are allowed. `status`
+    must be one of `_KNOWN_STATUSES`: a trajectory verdict is a verdict, and a status
+    outside the verdict contract is rejected rather than read as some third thing.
+    `cause` must be null or a string — null is a declared absence of a named cause (the
+    FAIL shape), a string names one (e.g. an UNVERIFIED `NO_CLAIM_RECORDED`). Both keys
+    must be present: a shape this loader had to guess at is a case whose expected
+    verdict is unknown, and the recompute would be grounded on a guess.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"case file {path!r} field 'trajectory' must be an object with 'status' "
+            f"and 'cause', got {type(raw).__name__}"
+        )
+    if "status" not in raw:
+        raise ValueError(f"case file {path!r} field 'trajectory' is missing 'status'")
+    if raw["status"] not in _KNOWN_STATUSES:
+        known = ", ".join(sorted(_KNOWN_STATUSES))
+        raise ValueError(
+            f"case file {path!r} field 'trajectory.status' is {raw['status']!r}; "
+            f"must be one of: {known}"
+        )
+    if "cause" not in raw:
+        raise ValueError(f"case file {path!r} field 'trajectory' is missing 'cause'")
+    if raw["cause"] is not None and not isinstance(raw["cause"], str):
+        raise ValueError(
+            f"case file {path!r} field 'trajectory.cause' is {raw['cause']!r}; "
+            f"must be null or a string"
+        )
+    return raw
+
+
 def _to_payload(case: Case) -> dict:
     """A `Case` as the JSON dict written to `case.json`.
 
-    `root_cause`, `target_tool`, `task_prestate` and `recorded_miss` are OMITTED when unset
-    rather than written as `null`: a default is never a declaration, so "nobody adjudicated
-    a cause" must stay distinguishable from "a cause was recorded as empty", "this case
-    declares no task pre-state" from "a task pre-state was declared as nothing", and "no
-    miss was recorded" from "a miss was declared as nothing".
+    `root_cause`, `target_tool`, `task_prestate`, `recorded_miss` and `trajectory` are
+    OMITTED when unset rather than written as `null`: a default is never a declaration, so
+    "nobody adjudicated a cause" must stay distinguishable from "a cause was recorded as
+    empty", "this case declares no task pre-state" from "a task pre-state was declared as
+    nothing", "no miss was recorded" from "a miss was declared as nothing", and "this is a
+    turn-shaped case" from "a trajectory verdict was declared as nothing".
     """
     optional = {
         name: value
@@ -286,6 +338,7 @@ def _to_payload(case: Case) -> dict:
             ("target_tool", case.target_tool),
             ("task_prestate", case.task_prestate),
             ("recorded_miss", case.recorded_miss),
+            ("trajectory", case.trajectory),
         )
         if value is not None
     }
@@ -326,11 +379,13 @@ def load_case(case_dir: Path) -> Case:
     `expected` missing `reduced_status`/`sub_verdicts`, an out-of-range `reduced_status`,
     a sub-verdict status outside `_KNOWN_SUB_STATUSES`, a non-integer `schema_version`, or
     a `human_label` outside `_KNOWN_LABELS`, a `task_prestate` matching neither declared
-    shape, or a `recorded_miss` missing a non-empty note (or declared on an already-`FAIL`
-    case) each raise a `ValueError` naming the problem — never a silent default. Two fields
+    shape, a `recorded_miss` missing a non-empty note (or declared on an already-`FAIL`
+    case), or a `trajectory` lacking a known `status` or carrying a `cause` that is
+    neither null nor a string each raise a `ValueError` naming the problem — never a
+    silent default. Two fields
     may be omitted and defaulted: `human_label` -> `pending`, and `schema_version` -> `1`
     (a case written before the field existed IS version 1, not the current version).
-    `root_cause`, `target_tool`, `task_prestate` and `recorded_miss` are
+    `root_cause`, `target_tool`, `task_prestate`, `recorded_miss` and `trajectory` are
     omitted-means-undeclared and read back as `None`. Round-trips:
     `load_case(write_case(dir, c))` equals `c`.
     """
@@ -405,6 +460,7 @@ def load_case(case_dir: Path) -> Case:
     root_cause = _validate_root_cause(raw.get("root_cause"), path)
     task_prestate = _validate_task_prestate(raw.get("task_prestate"), path)
     recorded_miss = _validate_recorded_miss(raw.get("recorded_miss"), path, reduced_status)
+    trajectory = _validate_trajectory(raw.get("trajectory"), path)
 
     target_tool = raw.get("target_tool")
     if target_tool is not None and not isinstance(target_tool, str):
@@ -437,6 +493,7 @@ def load_case(case_dir: Path) -> Case:
         target_tool=target_tool,
         task_prestate=task_prestate,
         recorded_miss=recorded_miss,
+        trajectory=trajectory,
     )
 
 

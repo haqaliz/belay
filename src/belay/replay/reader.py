@@ -59,12 +59,21 @@ class Skip:
     unknown kind, or the too-new schema version. Keeping the identifying fact on the
     `Skip` is what makes "the skip is recorded" mean a caller can *see* what was
     skipped, not merely count that something was.
+
+    `record` is the raw record dict itself, when it parsed cleanly and only its
+    kind/version was unknown (every skip today). It is the additive seam the
+    trajectory rule reads a `claim` record's `text` from — the phase0 runner needs
+    the claim's payload, and the reader is the only place that ever saw it. Old
+    consumers ignore it (absent by default); a skip of a record that never parsed
+    (impossible today — an unparseable line raises `TraceCorrupt` instead) carries
+    `None`.
     """
 
     reason: str
     seq: int | None = None
     kind: str | None = None
     version: object | None = None
+    record: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -122,6 +131,7 @@ def read_trace(path: Path) -> ReadResult:
                     seq=seq,
                     kind=record.get("kind"),
                     version=version,
+                    record=record,
                 )
             )
             continue
@@ -136,6 +146,7 @@ def read_trace(path: Path) -> ReadResult:
                     ),
                     seq=seq,
                     kind=kind,
+                    record=record,
                 )
             )
             continue

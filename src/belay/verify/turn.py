@@ -48,6 +48,7 @@ guard enforces it).
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional, Sequence
@@ -61,6 +62,7 @@ from belay.replay.report import REPLAYED_SUB_VERDICT, canonical_cause
 from belay.verify.effect import network_subverdict, render_effect_verdict
 from belay.verify.invariants import (
     CONTENT_GROUNDED_RULES,
+    INSTANCE_LEVEL_RULES,
     Invariant,
     evaluate_invariant,
 )
@@ -93,6 +95,13 @@ class TurnVerdict:
     status: Status
     sub_verdicts: list[Verdict] = field(default_factory=list)
     cause: Optional[str] = None
+    #: The observed `isError` of the REPLAYED reply — the fact the instance-level
+    #: trajectory rule counts as "a command's observed outcome". Set ONLY on the
+    #: REPLAYED path, from the replayed reply's JSON `result.isError`; `None` (absent)
+    #: for a non-REPLAYED turn and for a reply whose outcome cannot be read (no reply,
+    #: unparseable, or no bool `isError` key). Never a fabricated `False`: `None` is
+    #: "unobservable", which `trajectory.assemble_turn_facts` maps to not-replayed.
+    replayed_is_error: Optional[bool] = None
 
 
 def _tool_name(records: Sequence[dict], n: int) -> Optional[str]:
@@ -117,6 +126,29 @@ def _tool_name(records: Sequence[dict], n: int) -> Optional[str]:
             if isinstance(params, dict) and isinstance(params.get("name"), str):
                 return params["name"]
     return None
+
+
+def _replayed_is_error(reply: TurnReplay) -> Optional[bool]:
+    """The observed `isError` of a REPLAYED turn's reply, or `None` when it cannot be read.
+
+    Read from the replayed reply's JSON `result.isError` (the MCP response envelope; a
+    bare-result reply is accepted too, since some servers omit the wrapper). `None` —
+    never a coerced `False` — when there is no reply, it does not parse, the result is
+    not an object, or the key is absent or not a bool. Only ever called on the REPLAYED
+    path, so a `None` here means "the turn replayed but its outcome is unreadable",
+    which the trajectory rule counts as unobservable rather than as evidence either way.
+    """
+    if reply.replayed_reply is None:
+        return None
+    try:
+        parsed = json.loads(reply.replayed_reply)
+    except ValueError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    result = parsed.get("result")
+    is_error = result.get("isError") if isinstance(result, dict) else parsed.get("isError")
+    return is_error if isinstance(is_error, bool) else None
 
 
 def _unverifiable_verdict(reply: TurnReplay) -> tuple[Verdict, str]:
@@ -256,15 +288,23 @@ def verify_turn(
         sub_verdicts.append(net_verdict)
 
     # A1 (C5) is the THIRD axis, folded in ADDITIVELY exactly like the network dimension
-    # above: one A1 sub-verdict per operator-declared invariant, each evaluated against the
-    # SAME replay's observed `delta`. `reduce` is axis-agnostic worst-status-wins, so an A1
-    # FAIL lowers an all-A2-PASS turn to FAIL — the divergence that catches a cheating agent
-    # A2 cannot (a declared-false tool that guts a task-protected test is a C4 effect PASS
-    # but an A1 FAIL). A1 is added ONLY on this REPLAYED path: `evaluate_invariant`
-    # grounds in an OBSERVED delta, and the non-REPLAYED early return has none — with no
-    # delta A1 could only ever be UNVERIFIED, and that turn is ALREADY UNVERIFIED, so an A1
-    # sub-verdict there changes no status and adds only noise. With `invariants=()` (the
-    # default) this loop runs zero times and the turn is byte-for-byte C4's.
+    # above: one A1 sub-verdict per operator-declared PER-TURN invariant, each evaluated
+    # against the SAME replay's observed `delta`. `reduce` is axis-agnostic
+    # worst-status-wins, so an A1 FAIL lowers an all-A2-PASS turn to FAIL — the divergence
+    # that catches a cheating agent A2 cannot (a declared-false tool that guts a
+    # task-protected test is a C4 effect PASS but an A1 FAIL). A1 is added ONLY on this
+    # REPLAYED path: `evaluate_invariant` grounds in an OBSERVED delta, and the
+    # non-REPLAYED early return has none — with no delta A1 could only ever be UNVERIFIED,
+    # and that turn is ALREADY UNVERIFIED, so an A1 sub-verdict there changes no status and
+    # adds only noise. With `invariants=()` (the default) this loop runs zero times and the
+    # turn is byte-for-byte C4's.
+    #
+    # INSTANCE-LEVEL rules (`INSTANCE_LEVEL_RULES`) are NOT per-turn: evaluating
+    # `suite-before-success-claim` here would emit an A1 sub-verdict on every turn, and
+    # since UNVERIFIED outranks PASS every turn would reduce to UNVERIFIED ->
+    # `NO_VERIFIABLE_TURNS` -> `INSTRUMENT SUSPECT` — the poisoning hazard this phase
+    # exists to close. They are skipped below BY CONSTRUCTION and evaluated once at
+    # instance close (the trajectory seam), never here.
     #
     # A CONTENT-grounded rule (`no-assertion-weakening`) needs two trees the delta cannot
     # supply: the TASK pre-state (turn 0's snapshot) and this replay's workspace. They are
@@ -277,6 +317,8 @@ def verify_turn(
     if any(inv.rule in CONTENT_GROUNDED_RULES for inv in invariants):
         roots = content_roots(records, manifest_dir, reply.workspace)
     for inv in invariants:
+        if inv.rule in INSTANCE_LEVEL_RULES:
+            continue  # instance-level: never per-turn-evaluated, never a per-turn sub-verdict
         sub_verdicts.append(evaluate_invariant(inv, reply.delta, n, roots=roots))
 
     status = reduce(sub_verdicts)
@@ -288,6 +330,9 @@ def verify_turn(
         # A replayed turn can still reduce to UNVERIFIED, and the gate requires every one
         # of those to name a cause — see `_replayed_cause`. Any other status carries none.
         cause=_replayed_cause(sub_verdicts) if status is Status.UNVERIFIED else None,
+        # The observed replay outcome: the trajectory rule's evidence seam. Set only on
+        # this REPLAYED path — the non-REPLAYED early return above leaves it absent.
+        replayed_is_error=_replayed_is_error(reply),
     )
 
 

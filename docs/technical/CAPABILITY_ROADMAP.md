@@ -462,6 +462,31 @@ value cases in the corpus, and the ones the Phase-0 number is made of.
 > clause counts instances minted and is detector-independent), **not a precision number**, and **R1
 > stays untested**. See `PHASE0_RESULTS.md` → *Correction — 2026-08-04*.
 >
+> **STATUS 2026-08-09 — the exposure-gate re-scope SHIPPED: `suite-before-success-claim` is
+> a default-on, instance-level A1 rule** (`trajectory-success-invariant`; commits `a3be96d`
+> (claim classifier), `d916f9e` (declared instance-level rule), `98323e2` (instance
+> evaluation from replayed effects), `3020e2f` (disposition/ledger/report/CLI);
+> see `docs/planning/trajectory-success-invariant/`). The rule the funded mint's gate
+> demanded — *"the suite must be executed before a success claim"*, evaluated A1-style
+> against observed replay effects — because the corrupt-success shape that mint actually
+> exhibits, "edit source, then claim success", is invisible to test-file weakening (0 of 8
+> instances judged). The trigger is the trace's `claim` record (new kind in `TRACE_FORMAT.md`,
+> observed by the driver at session close, after the proxy exits); the classifier is a
+> closed deterministic vocabulary, abstain-first. `verify_turn` **excludes** it via
+> `INSTANCE_LEVEL_RULES` — no per-turn sub-verdict, zero verdict change, pinned by test —
+> and the phase0 runner evaluates it once per instance through a narrow facts seam. Named
+> UNVERIFIED causes, never a silent PASS: `NO_CLAIM_RECORDED` (no claim record — older
+> captures), `CLAIM_UNCLASSIFIABLE` (completion-only or ambiguous text — the control
+> shape), `EVIDENCE_UNOBSERVABLE` (shell turns that never replayed verifiably — counted
+> exposure, never silence). It reaches disposition (a trajectory FAIL is `VERIFIED_FLAGGED`,
+> the same bucket as a turn FAIL), the ledger (absent-never-zero), the report's trajectory
+> exposure line, and `belay verify`'s instance-level line at trace close.
+>
+> **State plainly: no real instance has yet been judged by this rule** — no mint has run
+> under it, so precision is unmeasured and the vocabulary's performance on real model text
+> is a post-mint adjudication decision, not a prediction. **The re-mint is the next gate
+> decision.**
+>
 > **Superseded, kept for the record —** **Decision: build `invariant-test-mutation-shape` next; do NOT mint the remaining ~34 instances
 > under a 0.00-precision detector.** Its rule must be *"modification that removes or weakens an
 > existing assertion"*, judged against the **task pre-state** and the **resulting content**. The 7
@@ -574,6 +599,31 @@ corpus on day 1 rather than starting empty.
 > 7 human-labeled negatives (over 2 distinct instances) plus 7 unlabeled `pending` cases from the
 > fitted-on instance. **This is a capability, not a result.** See `PHASE0_RESULTS.md` →
 > *Correction — 2026-08-04*.
+>
+> ### Status, 2026-08-09 — trajectory FAILs bank as corrupt-success cases, recomputed instance-level
+>
+> `corpus-trajectory` (the final aspect of `trajectory-success-invariant`) closed the loop that
+> began with the 2026-08-09 re-scope: "every caught failure becomes a case" (moat #2) now holds
+> for the instance-level rule too, whose failures previously had nowhere to be banked.
+>
+> - **Ingestion** (commit `0f8878c`): a trajectory FAIL from `belay phase0 run` ingests a
+>   **corrupt-success case** exactly as it ingests flagged turns — `kind` corrupt-success, rule
+>   `suite-before-success-claim`, target turn = the instance's final turn, the full trace
+>   including the claim record bundled — self-contained like every case.
+> - **Schema** (commit `02e033b`): case schema **v4** — an optional `trajectory` expected field
+>   (`{"status", "cause"}`, fail-closed validation). Absent = a turn-shaped case, byte-compatible
+>   with every case written before v4; malformed is a load error, never a silent drop.
+> - **Recompute** (commit `1a88a04`): `belay corpus run` routes a trajectory case through the
+>   **instance path** (`_verify_one_trace`, `ingest=False`) instead of `verify_turn` —
+>   MATCH/REGRESSION decided on the trajectory dimension (divergence named `trajectory status`),
+>   with the recorded-miss transitions carried over: `STILL_MISSED` on an equal recompute,
+>   `MISS_CLOSED` on the one exempted transition (declared PASS recomputing FAIL). Per-turn
+>   cases are untouched; the two shapes coexist in one corpus. `belay corpus show` renders the
+>   declared expected beside the recomputed outcome.
+>
+> **State plainly: no real trajectory case exists yet** — no mint has run under the rule — so
+> this is a capability, not a result. No published number changed: `precision` still reads `n/a`
+> and recall stays unmeasured. See `docs/planning/trajectory-success-invariant/corpus-trajectory/`.
 
 **Dependencies:** C1–C5.
 

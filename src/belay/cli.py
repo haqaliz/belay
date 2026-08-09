@@ -491,6 +491,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     from belay.index import derive_correlation, tool_calls
     from belay.replay.reader import TraceCorrupt, read_trace
     from belay.verify.invariants import default_invariants, load_invariants
+    from belay.verify.trajectory import evaluate_trajectory_rules
     from belay.verify.turn import verify_turn
     from belay.verify.verdict import Status
 
@@ -553,6 +554,21 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         _emit_verdict(verdict)
 
     _emit_aggregate(verdicts, Status)
+
+    # The instance-level verdict, at trace close, on a WHOLE-TRACE run only: with
+    # `--turn N` the facts seam is partial (only one turn was verified), and a
+    # trajectory verdict computed from partial facts would be fabricated — a missing
+    # evidence turn could read as a false FAIL. The rule is instance-level by
+    # construction, so the whole trace is the only honest scope for its line.
+    if args.turn is None:
+        _emit_trajectory(
+            evaluate_trajectory_rules(
+                invariants,
+                skips=read.skips,
+                records=records,
+                verdicts={v.turn_index: v for v in verdicts},
+            )
+        )
 
     _emit()
     for line in _VERIFY_COVERAGE.splitlines():
@@ -743,6 +759,48 @@ def _emit_exposure(verdicts) -> None:
         f"{summary['turns_judging']}/{total} turn(s) "
         f"({summary['turns_recorded']}/{total} turn(s) recorded an exposure fact)"
     )
+
+
+def _emit_trajectory(trajectory) -> None:
+    """This trace's instance-level A1 verdict — the `suite-before-success-claim` line.
+
+    Printed at trace close, after the aggregate. Same discipline as `_emit_exposure`:
+    unconditional, so a reader scanning turn statuses alone still learns whether the
+    instance-level rule judged anything — a run where every turn PASSed can still hold a
+    corrupt-success FAIL, and a reader must not have to ask for it. `trajectory` is the
+    SERIALIZED summary `{"status", "cause", "evidence_count"}` produced by
+    `belay.verify.trajectory.evaluate_trajectory_rules` — the identical shape
+    `belay phase0 run` writes into the ledger — so this line and the record can never
+    drift. `None` means the rule was not declared: unrecorded, never a fabricated clean.
+    """
+    _emit()
+    _emit(
+        "  trajectory (suite-before-success-claim — the instance-level A1 rule: "
+        "the suite must execute before a success claim)"
+    )
+    if trajectory is None:
+        _emit(
+            "    unrecorded — no instance-level rule was declared for this run, so no "
+            "trajectory verdict exists; never a fabricated clean"
+        )
+        return
+    status = trajectory.get("status")
+    cause = trajectory.get("cause")
+    evidence_count = trajectory.get("evidence_count", 0)
+    if status == "FAIL":
+        _emit(
+            f"    FAIL — the claim asserts verification success with {evidence_count} "
+            "evidence turn(s)"
+        )
+        return
+    if status == "PASS":
+        _emit(
+            f"    PASS — the claim is supported by {evidence_count} replayed command "
+            "turn(s)"
+        )
+        return
+    named = cause if cause is not None else "unrecorded"
+    _emit(f"    UNVERIFIED [{named}] — never PASS")
 
 
 def _axes_in_order(sub_verdicts) -> list[str]:
@@ -1333,6 +1391,13 @@ def _cmd_corpus_show(args: argparse.Namespace) -> int:
     Prints the id, target turn, the expected reduced status AND its per-axis sub-verdict set,
     the human label, the invariants, the server command, and provenance. Loads fail-closed:
     a missing or corrupt case is a named error (exit 2), never an empty success.
+
+    A schema-v4 TRAJECTORY case (the case carries the instance-level `trajectory` expected)
+    additionally renders its DECLARED instance-level expected verdict (status + cause) and
+    the RECOMPUTED outcome of the same instance path `corpus run` uses — MATCH /
+    REGRESSION / STILL_MISSED / MISS_CLOSED, or SKIP with its reason on this box — as a
+    block distinct from the per-turn expected above it. The recompute re-invokes the
+    server exactly as `corpus run` does; off darwin it renders SKIP.
     """
     from belay.corpus.case import load_case
 
@@ -1378,6 +1443,31 @@ def _cmd_corpus_show(args: argparse.Namespace) -> int:
         message = sub.get("message")
         if message:
             _emit(f"      {message}")
+    if case.trajectory is not None:
+        # A schema-v4 INSTANCE-LEVEL case: the expected verdict is whole-trajectory, and
+        # the per-turn block above is only the final turn's proxy record — a reader would
+        # mistake its status for the case's contract. Render the DECLARED instance-level
+        # expected (status + cause) beside the RECOMPUTED outcome of the same instance
+        # path `corpus run` uses, so the declared-vs-recomputed distinction the run
+        # surface draws is readable on the case itself. Recomputation failures are
+        # fail-closed, exactly as load failures above: never an empty success.
+        from belay.corpus.run import MISS_CLOSED, REGRESSION, SKIP, run_case
+
+        status = case.trajectory["status"]
+        cause = case.trajectory.get("cause")
+        _emit(f"  trajectory expected   {status}  (cause: {cause or 'none'})")
+        try:
+            result = run_case(case_dir)
+        except ValueError as exc:
+            _emit(f"belay: {exc}")
+            return 2
+        _emit(f"  trajectory recomputed {result.outcome}")
+        if result.outcome in (REGRESSION, MISS_CLOSED):
+            for div in result.divergences:
+                where = div.kind if not div.axis else f"{div.axis} {div.kind}"
+                _emit(f"      {where:<24}{div.expected_status} -> {div.got_status}")
+        elif result.outcome == SKIP:
+            _emit(f"      {result.skip_reason}")
     _emit(f"  server_command        {' '.join(case.server_command)}")
     _emit("  invariants")
     if case.invariants:
