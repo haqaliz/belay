@@ -5,6 +5,23 @@ All notable changes to Belay are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0 — until then,
 `0.x` minor bumps may include changes that would be breaking under strict semver.
 
+## [0.16.0] - 2026-08-09
+
+### Added
+
+- **The re-mint ran under the trajectory invariant, and its own pre-registered control gate
+  voided it** (`phase0-remint`) — a docs-and-measurement release, no engine change. Stage 2
+  (3 controls + 7 fresh real, `claude-opus-5`) captured **10/10** with 57/57 turns PASS,
+  0 UNVERIFIED and no `INSTRUMENT SUSPECT`; the write control's verification claim (zero
+  command turns) came back **trajectory FAIL** and voided the mint per the pre-registered
+  D-3 rule, so stage 3 (the ≥50 denominator) never launched. The hand-audit publishes the
+  trajectory rule's **first real-text precision measurement — 0.00** (0 TP / 5 FP, coverage
+  1.00): all 5 FAILs are false positives **by construction**, because the stage's MCP
+  boundary offered no shell/`run_process` tool, so the rule's evidence was impossible to
+  produce. The dated **VOID** decision line and RUNBOOK corrections carrying the trajectory
+  era ship with it. R1's quantitative form remains untested; the next unit must offer a
+  command tool on the boundary before the axis can measure this population.
+
 ## [0.15.0] - 2026-08-09
 
 ### Added
