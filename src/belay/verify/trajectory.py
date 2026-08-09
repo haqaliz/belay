@@ -45,7 +45,7 @@ from typing import TYPE_CHECKING, Mapping, Optional, Sequence
 from belay.frames import message_of
 from belay.index import derive_correlation, tool_calls
 from belay.replay.reader import Skip
-from belay.verify.invariants import Invariant
+from belay.verify.invariants import INSTANCE_LEVEL_RULES, Invariant
 from belay.verify.verdict import Status, Verdict
 
 if TYPE_CHECKING:
@@ -464,6 +464,54 @@ def _abstain(
     )
 
 
+def evaluate_trajectory_rules(
+    invariants: Sequence[Invariant],
+    *,
+    skips: Sequence[Skip],
+    records: Sequence[dict],
+    verdicts: Mapping[int, "TurnVerdict"],
+) -> Optional[dict]:
+    """Evaluate every declared instance-level rule over one whole trace, ONCE per instance.
+
+    The runner (`belay.phase0.runner` — stores the summary on the instance record and
+    lets a FAIL flip the disposition) and the CLI (`belay verify` — prints it at trace
+    close) share this one computation, so the two surfaces can never drift. Returns the
+    serialized summary `{"status", "cause", "evidence_count"}` when at least one
+    instance-level rule was declared, else `None` — ABSENT, never a fabricated verdict:
+    a run that never declared the rule has no verdict to record (the absent-never-zero
+    discipline the ledger and both surfaces render as `unrecorded`).
+
+    Fed the NARROW facts seam only — the claim record (from the reader's `skips`) plus
+    per-turn replayed facts (from `verdicts` + `records`) — never raw records, so
+    `test_no_invariant_is_ever_sourced_from_a_trace` keeps holding. When several
+    instance-level rules are declared the last one wins, matching the runner's Phase-3
+    behavior; the set has exactly one member today.
+    """
+    instance_rules = [inv for inv in invariants if inv.rule in INSTANCE_LEVEL_RULES]
+    if not instance_rules:
+        return None
+    claim_text, claim_seq = extract_claim(skips)
+    turn_facts = assemble_turn_facts(records, verdicts)
+    verdict: Optional[Verdict] = None
+    for inv in instance_rules:
+        verdict = evaluate_trajectory_invariant(
+            inv,
+            claim_text=claim_text,
+            claim_seq=claim_seq,
+            turn_facts=turn_facts,
+        )
+    expected = (
+        verdict.expected
+        if verdict is not None and isinstance(verdict.expected, dict)
+        else {}
+    )
+    return {
+        "status": verdict.status.name if verdict is not None else "UNVERIFIED",
+        "cause": expected.get("cause"),
+        "evidence_count": len(expected.get("evidence") or []),
+    }
+
+
 __all__ = [
     "CLAIM_UNCLASSIFIABLE",
     "ClaimClassification",
@@ -473,5 +521,6 @@ __all__ = [
     "assemble_turn_facts",
     "classify_claim_text",
     "evaluate_trajectory_invariant",
+    "evaluate_trajectory_rules",
     "extract_claim",
 ]

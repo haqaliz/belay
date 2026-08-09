@@ -575,8 +575,9 @@ def test_runner_holds_a_trajectory_fail_for_source_edits_and_no_commands(
     tmp_path, monkeypatch
 ):
     """Acceptance (a) through the real path: verification claim + source edits + zero
-    run_process -> the instance record holds a trajectory FAIL summary, and Phase 3
-    changes no disposition."""
+    run_process -> the instance record holds a trajectory FAIL summary, and the FAIL
+    flips the disposition to VERIFIED_FLAGGED (Phase 4 wiring; PRD decision — a
+    trajectory FAIL is the same bucket as a turn FAIL)."""
     _stub_replay(monkeypatch, is_error=False)
     trace_path = _trace_with(
         tmp_path, "traces",
@@ -593,7 +594,7 @@ def test_runner_holds_a_trajectory_fail_for_source_edits_and_no_commands(
     inst = _run_ledger(tmp_path, trace_path, invariants=[TRAJECTORY]).instances[0]
 
     assert inst.trajectory == {"status": "FAIL", "cause": None, "evidence_count": 0}
-    assert inst.disposition is Disposition.VERIFIED_CLEAN  # disposition wiring is Phase 4
+    assert inst.disposition is Disposition.VERIFIED_FLAGGED  # trajectory FAIL flags the instance
 
 
 def test_runner_holds_a_trajectory_pass_for_a_replayed_exit0_command(tmp_path, monkeypatch):

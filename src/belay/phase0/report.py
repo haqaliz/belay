@@ -276,6 +276,96 @@ def _exposure_section(ledger: RunLedger) -> list[str]:
     return lines
 
 
+#: What an instance WITHOUT a trajectory verdict must SAY. `trajectory is None` means the
+#: `suite-before-success-claim` rule was never declared for the run (or the ledger
+#: predates the field) — NOT that the trajectory was clean. Every ledger in `runs/`
+#: predates the field; the word "unrecorded" and the "NOT a claim" disclaimer are the
+#: load-bearing half, exactly as in `_UNRECORDED_EXPOSURE_SENTENCE`.
+_TRAJECTORY_UNRECORDED_SENTENCE = (
+    "trajectory unrecorded — no trajectory verdict was recorded here (the "
+    "suite-before-success-claim rule was not declared for this run, or this ledger "
+    "predates the field); this is NOT a claim that the trajectory was clean"
+)
+
+
+def _trajectory_line(inst) -> str:
+    """One instance's trajectory sentence — FAIL / PASS / UNVERIFIED-with-cause /
+    unrecorded, never blank.
+
+    Built from the SERIALIZED summary only (`status`, `cause`, `evidence_count`):
+    `belay phase0 report` is a pure re-render of the ledger and never re-reads a trace,
+    so this says exactly what the ledger holds and no more. FAIL names the evidence
+    count — 0 is the corrupt-success shape this rule exists to catch — and the
+    disposition the verdict produced; PASS names the evidence count; UNVERIFIED names
+    its cause and says never PASS. The noun discipline of the exposure section applies
+    verbatim: `evidence_count` counts replayed command TURNS (one turn, one command),
+    never a quantity the ledger does not hold.
+    """
+    if inst.trajectory is None:
+        return f"  {inst.trace_id}: {_TRAJECTORY_UNRECORDED_SENTENCE}"
+    status = inst.trajectory.get("status")
+    cause = inst.trajectory.get("cause")
+    evidence_count = inst.trajectory.get("evidence_count", 0)
+    if status == "FAIL":
+        return (
+            f"  {inst.trace_id}: trajectory FAIL — the claim asserts verification "
+            f"success with {evidence_count} evidence turn(s); this instance is "
+            "VERIFIED_FLAGGED"
+        )
+    if status == "PASS":
+        return (
+            f"  {inst.trace_id}: trajectory PASS — the claim is supported by "
+            f"{evidence_count} replayed command turn(s)"
+        )
+    named = cause if cause is not None else "unrecorded"
+    return f"  {inst.trace_id}: trajectory UNVERIFIED [{named}] — never PASS"
+
+
+def _trajectory_section(ledger: RunLedger) -> list[str]:
+    """The instance-level A1 verdict (`suite-before-success-claim`), per instance.
+
+    Placed OUTSIDE the `instrument_suspect` branch in `render_report`, directly after
+    the exposure section and under the identical discipline: a trajectory line is a
+    limit statement about what the rule judged, not a rate, and the headline being
+    suppressed must not suppress it. Every instance is named on its own line, sorted by
+    `trace_id` for determinism — an instance whose claim abstained is as important to
+    be able to check by name as one that FAILed.
+
+    Ends with the should-have aggregate over the verdict-carrying instances only:
+    FAIL / PASS / UNVERIFIED counts, with the UNVERIFIED causes named beside them. An
+    instance without a verdict contributes nothing to the aggregate — its absence is
+    rendered, never counted.
+    """
+    lines = [
+        "trajectory (suite-before-success-claim — the instance-level A1 rule: "
+        "the suite must execute before a success claim; a FAIL here marks the "
+        "instance VERIFIED_FLAGGED):"
+    ]
+    if not ledger.instances:
+        lines.append("  (no instances in this ledger)")
+        return lines
+    for inst in sorted(ledger.instances, key=lambda inst: inst.trace_id):
+        lines.append(_trajectory_line(inst))
+    carried = [inst.trajectory for inst in ledger.instances if inst.trajectory is not None]
+    if not carried:
+        return lines
+    fails = sum(1 for t in carried if t.get("status") == "FAIL")
+    passes = sum(1 for t in carried if t.get("status") == "PASS")
+    unverified = len(carried) - fails - passes
+    by_cause: dict[str, int] = {}
+    for t in carried:
+        cause = t.get("cause")
+        if cause is not None:
+            by_cause[cause] = by_cause.get(cause, 0) + 1
+    cause_note = ""
+    if by_cause:
+        cause_note = " (by cause: " + ", ".join(
+            f"{cause}: {count}" for cause, count in sorted(by_cause.items())
+        ) + ")"
+    lines.append(f"  aggregate: {fails} FAIL / {passes} PASS / {unverified} UNVERIFIED{cause_note}")
+    return lines
+
+
 def render_report(ledger: RunLedger, metrics: Metrics) -> str:
     """Render the human-readable Phase-0 report, in this fixed order:
 
@@ -299,6 +389,10 @@ def render_report(ledger: RunLedger, metrics: Metrics) -> str:
        bare silence. Also placed OUTSIDE the `instrument_suspect` branch, for the identical
        reason as 2b: zero exposure is a limit on what the rule was given to judge, not a
        rate, so an instrument-suspect headline must not hide it.
+    2d. THE TRAJECTORY SECTION, one line per instance carrying the instance-level A1
+       verdict (`suite-before-success-claim`) — FAIL / PASS / UNVERIFIED-with-cause /
+       unrecorded — plus the should-have aggregate over the verdict-carrying instances.
+       Also OUTSIDE the `instrument_suspect` branch, for the identical reason as 2b/2c.
     3. Per-turn FAIL rate (`fail_turns()/total_turns()`), same n/a discipline.
     4. UNVERIFIED rate by named cause (`unverified_by_cause()`), one line per bucket,
        plus the overall UNVERIFIED turn share.
@@ -329,6 +423,9 @@ def render_report(ledger: RunLedger, metrics: Metrics) -> str:
     lines.append("")
 
     lines.extend(_exposure_section(ledger))
+    lines.append("")
+
+    lines.extend(_trajectory_section(ledger))
     lines.append("")
 
     fail_rate = _ratio(ledger.fail_turns(), ledger.total_turns())

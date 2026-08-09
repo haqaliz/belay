@@ -26,6 +26,10 @@ must not die on trace #37; it must SAY #37 broke and keep going.
 
 - Any turn's status is FAIL -> `VERIFIED_FLAGGED` (a flagged-but-unaddable turn still counts:
   see below).
+- OR the instance-level trajectory verdict is FAIL (`suite-before-success-claim`: a
+  verification claim with zero observed command evidence — the corrupt-success shape) ->
+  `VERIFIED_FLAGGED`, same bucket as a turn FAIL (PRD decision). A trajectory
+  UNVERIFIED abstention never flags.
 - Else, any turn REPLAYED (status PASS or WARN -- a real, decided, non-UNVERIFIED verdict) ->
   `VERIFIED_CLEAN`. One decided turn is a real verification, even alongside UNVERIFIED
   siblings.
@@ -60,7 +64,7 @@ are reused verbatim -- this module composes them, and changes none of them.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable, Optional, Sequence
+from typing import Callable, Sequence
 
 from belay.corpus.add import add_case
 from belay.index import derive_correlation, tool_calls
@@ -68,14 +72,10 @@ from belay.phase0.ledger import Disposition, InstanceRecord, RunLedger
 from belay.replay.client import DEFAULT_TIMEOUT
 from belay.replay.reader import ReadResult, read_trace
 from belay.replay.report import canonical_cause
-from belay.verify.invariants import INSTANCE_LEVEL_RULES, Invariant
-from belay.verify.trajectory import (
-    assemble_turn_facts,
-    evaluate_trajectory_invariant,
-    extract_claim,
-)
+from belay.verify.invariants import Invariant
+from belay.verify.trajectory import evaluate_trajectory_rules
 from belay.verify.turn import TurnVerdict, verify_turn
-from belay.verify.verdict import Status, Verdict
+from belay.verify.verdict import Status
 
 #: The `unverified_causes` bucket for a turn whose `TurnVerdict.cause` is `None` -- should
 #: not happen for a real UNVERIFIED verdict (`verify_turn` always names a cause), but a fake
@@ -344,44 +344,33 @@ def _verify_one_trace(
             except ValueError as exc:
                 flagged_unaddable.append({"turn": n, "cause": str(exc)})
 
-    if flagged_turns:
+    # INSTANCE-LEVEL rules (the trajectory seam): evaluated ONCE per instance, before
+    # the disposition is decided, from the narrow facts seam — the claim record (the
+    # reader's skips) plus per-turn replayed facts — never raw records
+    # (`test_no_invariant_is_ever_sourced_from_a_trace`). The verdict is held as a
+    # serialized summary `{"status", "cause", "evidence_count"}` on the instance
+    # record, present ONLY when the rule was declared (absent-never-zero: a run that
+    # never declared the rule has no verdict to record). A run_process turn after the
+    # claim's seq is never evidence — the claim is the final statement, so its seq is
+    # the boundary.
+    trajectory = evaluate_trajectory_rules(
+        invariants,
+        skips=read_result.skips,
+        records=records,
+        verdicts=verdicts,
+    )
+
+    # The disposition rule, PRD decision: a trajectory FAIL lands in the SAME bucket as
+    # a turn FAIL — the instance is VERIFIED_FLAGGED and counts in the violation
+    # numerator, whatever its turns said. A trajectory UNVERIFIED (no claim, an
+    # unclassifiable claim, unobservable evidence) never flags — an abstention is not a
+    # violation — so only status FAIL participates here.
+    if flagged_turns or (trajectory is not None and trajectory.get("status") == "FAIL"):
         disposition = Disposition.VERIFIED_FLAGGED
     elif replayed_any:
         disposition = Disposition.VERIFIED_CLEAN
     else:
         disposition = Disposition.NO_VERIFIABLE_TURNS
-
-    # INSTANCE-LEVEL rules (the trajectory seam): evaluated ONCE per instance, after the
-    # turn loop, from the narrow facts seam — the claim record (the reader's skips) plus
-    # per-turn replayed facts — never raw records (`test_no_invariant_is_ever_sourced_
-    # from_a_trace`). The verdict is COMPUTED AND HELD here as a serialized summary on
-    # the instance record; disposition/ledger/report wiring is the next phase, so it
-    # changes no disposition today and the key is present ONLY when the rule was
-    # declared. A run_process turn after the claim's seq is never evidence — the claim
-    # is the final statement, so its seq is the boundary.
-    trajectory: Optional[dict] = None
-    trajectory_invariants = [inv for inv in invariants if inv.rule in INSTANCE_LEVEL_RULES]
-    if trajectory_invariants:
-        claim_text, claim_seq = extract_claim(read_result.skips)
-        turn_facts = assemble_turn_facts(records, verdicts)
-        trajectory_verdict: Optional[Verdict] = None
-        for inv in trajectory_invariants:
-            trajectory_verdict = evaluate_trajectory_invariant(
-                inv,
-                claim_text=claim_text,
-                claim_seq=claim_seq,
-                turn_facts=turn_facts,
-            )
-        expected = (
-            trajectory_verdict.expected
-            if trajectory_verdict is not None and isinstance(trajectory_verdict.expected, dict)
-            else {}
-        )
-        trajectory = {
-            "status": trajectory_verdict.status.name if trajectory_verdict is not None else "UNVERIFIED",
-            "cause": expected.get("cause"),
-            "evidence_count": len(expected.get("evidence") or []),
-        }
 
     return InstanceRecord(
         trace_id=source_trace_id,

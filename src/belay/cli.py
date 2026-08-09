@@ -491,6 +491,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     from belay.index import derive_correlation, tool_calls
     from belay.replay.reader import TraceCorrupt, read_trace
     from belay.verify.invariants import default_invariants, load_invariants
+    from belay.verify.trajectory import evaluate_trajectory_rules
     from belay.verify.turn import verify_turn
     from belay.verify.verdict import Status
 
@@ -553,6 +554,21 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         _emit_verdict(verdict)
 
     _emit_aggregate(verdicts, Status)
+
+    # The instance-level verdict, at trace close, on a WHOLE-TRACE run only: with
+    # `--turn N` the facts seam is partial (only one turn was verified), and a
+    # trajectory verdict computed from partial facts would be fabricated — a missing
+    # evidence turn could read as a false FAIL. The rule is instance-level by
+    # construction, so the whole trace is the only honest scope for its line.
+    if args.turn is None:
+        _emit_trajectory(
+            evaluate_trajectory_rules(
+                invariants,
+                skips=read.skips,
+                records=records,
+                verdicts={v.turn_index: v for v in verdicts},
+            )
+        )
 
     _emit()
     for line in _VERIFY_COVERAGE.splitlines():
@@ -743,6 +759,48 @@ def _emit_exposure(verdicts) -> None:
         f"{summary['turns_judging']}/{total} turn(s) "
         f"({summary['turns_recorded']}/{total} turn(s) recorded an exposure fact)"
     )
+
+
+def _emit_trajectory(trajectory) -> None:
+    """This trace's instance-level A1 verdict — the `suite-before-success-claim` line.
+
+    Printed at trace close, after the aggregate. Same discipline as `_emit_exposure`:
+    unconditional, so a reader scanning turn statuses alone still learns whether the
+    instance-level rule judged anything — a run where every turn PASSed can still hold a
+    corrupt-success FAIL, and a reader must not have to ask for it. `trajectory` is the
+    SERIALIZED summary `{"status", "cause", "evidence_count"}` produced by
+    `belay.verify.trajectory.evaluate_trajectory_rules` — the identical shape
+    `belay phase0 run` writes into the ledger — so this line and the record can never
+    drift. `None` means the rule was not declared: unrecorded, never a fabricated clean.
+    """
+    _emit()
+    _emit(
+        "  trajectory (suite-before-success-claim — the instance-level A1 rule: "
+        "the suite must execute before a success claim)"
+    )
+    if trajectory is None:
+        _emit(
+            "    unrecorded — no instance-level rule was declared for this run, so no "
+            "trajectory verdict exists; never a fabricated clean"
+        )
+        return
+    status = trajectory.get("status")
+    cause = trajectory.get("cause")
+    evidence_count = trajectory.get("evidence_count", 0)
+    if status == "FAIL":
+        _emit(
+            f"    FAIL — the claim asserts verification success with {evidence_count} "
+            "evidence turn(s)"
+        )
+        return
+    if status == "PASS":
+        _emit(
+            f"    PASS — the claim is supported by {evidence_count} replayed command "
+            "turn(s)"
+        )
+        return
+    named = cause if cause is not None else "unrecorded"
+    _emit(f"    UNVERIFIED [{named}] — never PASS")
 
 
 def _axes_in_order(sub_verdicts) -> list[str]:
