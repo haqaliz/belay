@@ -5,9 +5,29 @@ All notable changes to Belay are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0 — until then,
 `0.x` minor bumps may include changes that would be breaking under strict semver.
 
-## [Unreleased]
+## [0.15.0] - 2026-08-09
 
-_Nothing yet._
+### Added
+
+- **The trajectory success invariant — `suite-before-success-claim` — ships** (the re-scope
+  the funded mint's exposure gate demanded, `trajectory-success-invariant`). A default-on,
+  instance-level A1 rule: the suite must be executed before a success claim, judged A1-style
+  against observed replay effects. A new `claim` trace record captures the agent's final
+  claim at session close (minting driver appends `Done.reason`; `max_steps` writes nothing);
+  a conservative deterministic classifier (stdlib, abstain-first) triggers only on
+  verification claims — completion-only and ambiguous claims abstain with named causes. The
+  rule FAILs a verification claim with zero replayed exit-0 `run_process` turns (the
+  corrupt-success shape this population exhibits: edit source, claim success), PASSes with
+  evidence, and abstains honestly (`NO_CLAIM_RECORDED` / `CLAIM_UNCLASSIFIABLE` /
+  `EVIDENCE_UNOBSERVABLE` — never a silent PASS). Instance-level rules are excluded from the
+  per-turn loop by construction, so no per-turn verdict changes. A trajectory FAIL marks the
+  instance `VERIFIED_FLAGGED` and counts in the violation rate; ledger, `phase0 report`, and
+  `belay verify` carry the verdict additively (absent-never-zero). Trajectory FAILs bank as
+  corrupt-success corpus cases (case schema v4) and `belay corpus run` recomputes them
+  instance-level (MATCH/REGRESSION, recorded-miss transitions).
+  **No real instance has yet been judged by this rule** — no mint has run under it — so it
+  ships as a capability, not a result; precision is decided by adjudication after the first
+  mint, and the re-mint is the next gate decision. No published number was re-derived.
 
 ## [0.14.0] - 2026-08-09
 
