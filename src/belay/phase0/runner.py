@@ -2,8 +2,10 @@
 
 `run_batch` is the driver that turns a directory of captured traces into Task 1's
 `RunLedger` — the thing Task 2's report renders. For each trace file it verifies every
-observed `tools/call` turn, ingests the FAILing ones as corpus cases, and classifies the
-instance's disposition from what actually happened during verification. No CLI lives here
+observed `tools/call` turn, ingests the FAILing ones as corpus cases (and a FAILing
+INSTANCE-LEVEL trajectory verdict as a corrupt-success case — `corpus-trajectory`
+phase 2), and classifies the instance's disposition from what actually happened during
+verification. No CLI lives here
 (that's a later task); this module is pure orchestration over the seams below.
 
 ## The seam: real functions by default, fakes injected in tests
@@ -64,7 +66,7 @@ are reused verbatim -- this module composes them, and changes none of them.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable, Optional, Sequence
 
 from belay.corpus.add import add_case
 from belay.index import derive_correlation, tool_calls
@@ -72,10 +74,10 @@ from belay.phase0.ledger import Disposition, InstanceRecord, RunLedger
 from belay.replay.client import DEFAULT_TIMEOUT
 from belay.replay.reader import ReadResult, read_trace
 from belay.replay.report import canonical_cause
-from belay.verify.invariants import Invariant
-from belay.verify.trajectory import evaluate_trajectory_rules
+from belay.verify.invariants import INSTANCE_LEVEL_RULES, Invariant, trajectory_case
+from belay.verify.trajectory import evaluate_trajectory_rules, extract_claim
 from belay.verify.turn import TurnVerdict, verify_turn
-from belay.verify.verdict import Status
+from belay.verify.verdict import Status, Verdict
 
 #: The `unverified_causes` bucket for a turn whose `TurnVerdict.cause` is `None` -- should
 #: not happen for a real UNVERIFIED verdict (`verify_turn` always names a cause), but a fake
@@ -197,10 +199,16 @@ def _verify_one_trace(
 ) -> InstanceRecord:
     """One trace file, fully verified: every `tools/call` turn, every FAIL ingested.
 
+    Ingest covers two shapes: the FAILing TURNS (one case each, target = the failing
+    turn) and, when the instance's trajectory verdict is FAIL, ONE instance-level
+    corrupt-success case (target = the final turn, schema-v4 `trajectory` expected) —
+    see the ingest block below.
+
     Raises whatever `read_trace` / `verifier` / `ingester` raise for anything other than the
-    ingester's `ValueError` (the one exception this function itself handles, per turn, since
-    an unaddable case is a bucketed fact, not a batch-ending error). `run_batch` is the layer
-    that turns any OTHER exception here into `Disposition.ERRORED`.
+    ingester's `ValueError` (the one exception this function itself handles, per turn and
+    per trajectory case, since an unaddable case is a bucketed fact, not a batch-ending
+    error). `run_batch` is the layer that turns any OTHER exception here into
+    `Disposition.ERRORED`.
 
     `ingest=False` skips the ingest loop wholesale (see `run_batch`): the verdicts, the
     `flagged_turns` list and the disposition are computed exactly as before, and only the
@@ -316,11 +324,30 @@ def _verify_one_trace(
         else None
     )
 
+    # INSTANCE-LEVEL rules (the trajectory seam): evaluated ONCE per instance, before
+    # the ingest section (a trajectory FAIL ingests its own case) and before
+    # the disposition is decided, from the narrow facts seam — the claim record (the
+    # reader's skips) plus per-turn replayed facts — never raw records
+    # (`test_no_invariant_is_ever_sourced_from_a_trace`). The verdict is held as a
+    # serialized summary `{"status", "cause", "evidence_count"}` on the instance
+    # record, present ONLY when the rule was declared (absent-never-zero: a run that
+    # never declared the rule has no verdict to record). A run_process turn after the
+    # claim's seq is never evidence — the claim is the final statement, so its seq is
+    # the boundary.
+    trajectory = evaluate_trajectory_rules(
+        invariants,
+        skips=read_result.skips,
+        records=records,
+        verdicts=verdicts,
+    )
+
     flagged_addable: list[int] = []
     flagged_unaddable: list[dict] = []
+    trajectory_addable = False
+    trajectory_unaddable: Optional[dict] = None
     # `ingest=False` means the corpus is never written, so the ingester is never CALLED --
-    # skipping the loop is the whole implementation. Both buckets therefore stay empty: a
-    # turn nobody tried to add is NOT an unaddable turn, and recording it as one would
+    # skipping the loop is the whole implementation. The turn buckets therefore stay empty:
+    # a turn nobody tried to add is NOT an unaddable turn, and recording it as one would
     # assert a composition failure that never happened. `flagged_turns` above is already
     # computed, so the turn keeps its real FAIL and its place in the numerator.
     if ingest:
@@ -344,21 +371,83 @@ def _verify_one_trace(
             except ValueError as exc:
                 flagged_unaddable.append({"turn": n, "cause": str(exc)})
 
-    # INSTANCE-LEVEL rules (the trajectory seam): evaluated ONCE per instance, before
-    # the disposition is decided, from the narrow facts seam — the claim record (the
-    # reader's skips) plus per-turn replayed facts — never raw records
-    # (`test_no_invariant_is_ever_sourced_from_a_trace`). The verdict is held as a
-    # serialized summary `{"status", "cause", "evidence_count"}` on the instance
-    # record, present ONLY when the rule was declared (absent-never-zero: a run that
-    # never declared the rule has no verdict to record). A run_process turn after the
-    # claim's seq is never evidence — the claim is the final statement, so its seq is
-    # the boundary.
-    trajectory = evaluate_trajectory_rules(
-        invariants,
-        skips=read_result.skips,
-        records=records,
-        verdicts=verdicts,
-    )
+        # A trajectory FAIL ingests its OWN case, alongside the per-turn ingest: every
+        # caught failure becomes a case (moat #2). The case is shaped by
+        # `trajectory_case` (the instance-level sibling of `corrupt_success_case` —
+        # the rule/scope/message it names are what the stored A1 sub-verdict carries),
+        # targets the instance's FINAL turn (the full trace is stored, so the case holds
+        # the claim record and every prior turn), and declares the instance-level
+        # expected verdict through `add_case`'s schema-v4 `trajectory` field — the
+        # corpus-collision guard and the pre-state bundling apply identically. A FAILing
+        # ingest is a bucketed fact, never an exception: the same `ValueError` handling
+        # as the per-turn loop, so a re-run over an existing case cannot error the
+        # instance and shrink the denominator (the fake-PIVOT hazard). A trajectory
+        # PASS or UNVERIFIED abstention ingests nothing.
+        if trajectory is not None and trajectory.get("status") == "FAIL":
+            final_turn = len(calls) - 1
+            instance_rule = next(
+                (inv for inv in invariants if inv.rule in INSTANCE_LEVEL_RULES), None
+            )
+            if instance_rule is not None:
+                claim_text, _claim_seq = extract_claim(read_result.skips)
+                shaped = trajectory_case(
+                    instance_rule,
+                    trajectory=trajectory,
+                    final_turn=final_turn,
+                    tool_name=(
+                        verdicts[final_turn].tool_name if final_turn in verdicts else None
+                    ),
+                    claim_text=claim_text,
+                )
+                if shaped is not None:
+                    # The case must be SELF-CONTAINED for a later `corpus run` recompute:
+                    # the reader skips `claim` records (unknown kind) out of `records`, so
+                    # the full trajectory this verdict judged is `records` PLUS the claim
+                    # records, carried in the skip list. The per-turn ingest deliberately
+                    # keeps the reader's `records` — a turn case needs the replay handshake,
+                    # never the claim — and only the instance-level case appends them.
+                    trajectory_records = [
+                        *records,
+                        *(
+                            skip.record
+                            for skip in read_result.skips
+                            if skip.kind == "claim" and skip.record is not None
+                        ),
+                    ]
+                    trajectory_verdict = TurnVerdict(
+                        turn_index=final_turn,
+                        tool_name=shaped["tool_name"],
+                        status=Status.FAIL,
+                        sub_verdicts=[
+                            Verdict(
+                                "A1",
+                                "invariant",
+                                Status.FAIL,
+                                observed=None,
+                                expected={"rule": shaped["rule"], "scope": shaped["scope"]},
+                                message=shaped["message"],
+                            )
+                        ],
+                    )
+                    try:
+                        ingester(
+                            corpus_dir,
+                            records=trajectory_records,
+                            target_turn_index=final_turn,
+                            verdict=trajectory_verdict,
+                            manifest_dir=manifest_dir,
+                            server_command=server_command,
+                            invariants=list(invariants),
+                            human_label="pending",
+                            replays=replays,
+                            timeout=timeout,
+                            source_trace_id=source_trace_id,
+                            captured_at=captured_at,
+                            trajectory={"status": "FAIL", "cause": trajectory.get("cause")},
+                        )
+                        trajectory_addable = True
+                    except ValueError as exc:
+                        trajectory_unaddable = {"cause": str(exc)}
 
     # The disposition rule, PRD decision: a trajectory FAIL lands in the SAME bucket as
     # a turn FAIL — the instance is VERIFIED_FLAGGED and counts in the violation
@@ -384,6 +473,8 @@ def _verify_one_trace(
         not_covered_turns=not_covered_turns,
         exposure=exposure,
         trajectory=trajectory,
+        trajectory_addable=trajectory_addable,
+        trajectory_unaddable=trajectory_unaddable,
     )
 
 

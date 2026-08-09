@@ -168,6 +168,20 @@ class InstanceRecord:
     #: "the trajectory was clean". Serialized additively (`_instance_to_json` omits the
     #: key when `None`), so old ledgers re-render byte-identically.
     trajectory: Optional[dict] = None
+    #: Whether the trajectory FAIL (if any) was ingested as a corpus case. `False` covers
+    #: three facts and does not distinguish them: no trajectory verdict, a non-FAIL
+    #: verdict, or an ingest that never happened (`ingest=False`) — the same deliberate
+    #: conflation `flagged_addable`'s emptiness has for turns. Serialized only when `True`
+    #: (absent reads back `False`), following `trajectory`'s additive pattern, so old
+    #: ledgers re-render byte-identically.
+    trajectory_addable: bool = False
+    #: Why the trajectory FAIL could not be ingested as a corpus case, shape `{"cause":
+    #: <str>}` — the one case-composition failure per instance, so a single dict rather
+    #: than a list. `None` when no trajectory case was attempted or it succeeded. It exists
+    #: for the same reason `flagged_unaddable` does: a trajectory case whose composition
+    #: failed (a corpus collision on re-run, a missing pre-state) must be a bucketed fact,
+    #: never an exception that errors the whole instance and shrinks the denominator.
+    trajectory_unaddable: Optional[dict] = None
 
 
 @dataclass(frozen=True)
@@ -243,7 +257,7 @@ def _instance_to_json(inst: InstanceRecord) -> dict:
     that the key never existed. `"trajectory"` follows the identical rule: an unrecorded
     instance-level verdict stays absent, never `null` and never a fabricated clean.
     """
-    payload = {
+    payload: dict[str, object] = {
         "trace_id": inst.trace_id,
         "disposition": inst.disposition.name,
         "turn_status_counts": dict(inst.turn_status_counts),
@@ -258,6 +272,10 @@ def _instance_to_json(inst: InstanceRecord) -> dict:
         payload["exposure"] = dict(inst.exposure)
     if inst.trajectory is not None:
         payload["trajectory"] = dict(inst.trajectory)
+    if inst.trajectory_addable:
+        payload["trajectory_addable"] = True
+    if inst.trajectory_unaddable is not None:
+        payload["trajectory_unaddable"] = dict(inst.trajectory_unaddable)
     return payload
 
 
@@ -336,6 +354,16 @@ def _instance_from_json(raw: object) -> InstanceRecord:
             dict(raw["trajectory"])
             if isinstance(raw.get("trajectory"), dict)
             else raw.get("trajectory")
+        ),
+        # `trajectory_addable` / `trajectory_unaddable` follow the same additive pattern:
+        # absent keys resolve to the dataclass defaults (`False` / `None`), so every ledger
+        # written before this phase (and every instance whose trajectory case was never
+        # attempted) loads unchanged. A present unaddable dict is copied defensively.
+        trajectory_addable=bool(raw.get("trajectory_addable", False)),
+        trajectory_unaddable=(
+            dict(raw["trajectory_unaddable"])
+            if isinstance(raw.get("trajectory_unaddable"), dict)
+            else raw.get("trajectory_unaddable")
         ),
     )
 

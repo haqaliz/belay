@@ -272,6 +272,7 @@ def add_case(
     timeout: float,
     source_trace_id: str,
     captured_at: str,
+    trajectory: Optional[dict] = None,
 ) -> Path:
     """Compose `corpus_dir/<case-id>/` from one turn of a run; return the created case dir.
 
@@ -282,6 +283,15 @@ def add_case(
     `human_label` is a PASS-THROUGH input (default `pending`) — this function NEVER derives
     it from `verdict`. See the module docstring: a label the engine wrote is not human
     ground truth, and inferring "true-positive" from a FAIL would fake the metric.
+
+    `trajectory` is the OPTIONAL schema-v4 INSTANCE-LEVEL expected verdict — `{"status",
+    <reduced-verdict status>, "cause": <named cause or null>}` — passed through onto the
+    stored `Case` verbatim, exactly as `verdict` is read at one place to build `expected`.
+    Absent (the default) means the case is turn-shaped, which is every case written before
+    v4 and every per-turn ingest; present declares the case's expected FAIL is a
+    whole-trajectory failure (`suite-before-success-claim`), not any turn's. Validation
+    is `case.py`'s fail-closed `_validate_trajectory` at LOAD time, never a silent drop
+    here.
 
     Raises a named `ValueError` when the target turn has no restorable pre-state (an
     `absent`/non-`present` handle) or no persisted manifest is found for its handle — a case
@@ -365,6 +375,7 @@ def add_case(
         capture_capabilities=sorted(snap.manifest.capabilities),
         target_tool=_target_tool_name(records, target_turn_index),
         task_prestate=task_prestate,
+        trajectory=trajectory,
     )
     write_case(case_dir, case)
     return case_dir

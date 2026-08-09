@@ -729,6 +729,49 @@ def corrupt_success_case(verdict: "TurnVerdict") -> Optional[dict]:
     }
 
 
+def trajectory_case(
+    inv: Invariant,
+    *,
+    trajectory: dict,
+    final_turn: int,
+    tool_name: Optional[str],
+    claim_text: Optional[str],
+) -> Optional[dict]:
+    """An INSTANCE-LEVEL A1 FAIL shaped as an ingestable case for the failure corpus (C6).
+
+    `corrupt_success_case` shapes a PER-TURN A1 FAIL from its `TurnVerdict`;
+    `suite-before-success-claim` is an INSTANCE-LEVEL verdict — no single turn's — so this
+    is its sibling seam, shaped in the same voice. It reads the serialized trajectory
+    verdict the runner holds (`{"status", "cause", "evidence_count"}`, the identical
+    summary `evaluate_trajectory_rules` returns) plus the facts the ingest can name: the
+    declared instance-level invariant (rule + scope), the instance's final turn (the
+    case's target turn), the final turn's tool name, and the claim text the verdict
+    judged. Like `corrupt_success_case` it is a PURE shaping function with no persistence
+    and no format beyond what the verdict already grounds.
+
+    Returns None when the trajectory verdict is not FAIL — a PASS or an abstention
+    (UNVERIFIED with a named cause) has no corrupt success to record, so a caller keeps
+    exactly the corrupt-success cases.
+    """
+    if trajectory.get("status") != "FAIL":
+        return None
+    evidence_count = trajectory.get("evidence_count", 0)
+    return {
+        "kind": "corrupt-success",
+        "axis": "A1",
+        "rule": inv.rule,
+        "scope": os.fsdecode(inv.scope),
+        "turn_index": final_turn,
+        "tool_name": tool_name,
+        "violating_paths": [],
+        "message": (
+            f"corrupt success: the instance-level rule {inv.rule} FAILED — the claim "
+            f"{claim_text!r} asserts verification success, but no replayed command ran "
+            f"before it ({evidence_count} evidence turn(s))"
+        ),
+    }
+
+
 __all__ = [
     "CONTENT_GROUNDED_RULES",
     "ContentRoots",
@@ -751,4 +794,5 @@ __all__ = [
     "default_invariants",
     "evaluate_invariant",
     "load_invariants",
+    "trajectory_case",
 ]
