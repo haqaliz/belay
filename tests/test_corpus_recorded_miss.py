@@ -208,13 +208,13 @@ def test_declaration_is_not_a_required_field(tmp_path: Path) -> None:
     assert loaded.schema_version == 2
 
 
-def test_schema_version_is_three_and_absent_still_means_one(tmp_path: Path) -> None:
+def test_schema_version_is_four_and_absent_still_means_one(tmp_path: Path) -> None:
     """The version bump, and the unversioned-means-1 precedent it must not disturb."""
-    assert CASE_SCHEMA_VERSION == 3
+    assert CASE_SCHEMA_VERSION == 4
 
     case = _full_case()
     write_case(tmp_path, case)
-    assert load_case(tmp_path).schema_version == 3
+    assert load_case(tmp_path).schema_version == 4
 
     data = json.loads((tmp_path / "case.json").read_text(encoding="utf-8"))
     del data["schema_version"]
