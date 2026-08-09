@@ -462,6 +462,31 @@ value cases in the corpus, and the ones the Phase-0 number is made of.
 > clause counts instances minted and is detector-independent), **not a precision number**, and **R1
 > stays untested**. See `PHASE0_RESULTS.md` → *Correction — 2026-08-04*.
 >
+> **STATUS 2026-08-09 — the exposure-gate re-scope SHIPPED: `suite-before-success-claim` is
+> a default-on, instance-level A1 rule** (`trajectory-success-invariant`; commits `a3be96d`
+> (claim classifier), `d916f9e` (declared instance-level rule), `98323e2` (instance
+> evaluation from replayed effects), `3020e2f` (disposition/ledger/report/CLI);
+> see `docs/planning/trajectory-success-invariant/`). The rule the funded mint's gate
+> demanded — *"the suite must be executed before a success claim"*, evaluated A1-style
+> against observed replay effects — because the corrupt-success shape that mint actually
+> exhibits, "edit source, then claim success", is invisible to test-file weakening (0 of 8
+> instances judged). The trigger is the trace's `claim` record (new kind in `TRACE_FORMAT.md`,
+> observed by the driver at session close, after the proxy exits); the classifier is a
+> closed deterministic vocabulary, abstain-first. `verify_turn` **excludes** it via
+> `INSTANCE_LEVEL_RULES` — no per-turn sub-verdict, zero verdict change, pinned by test —
+> and the phase0 runner evaluates it once per instance through a narrow facts seam. Named
+> UNVERIFIED causes, never a silent PASS: `NO_CLAIM_RECORDED` (no claim record — older
+> captures), `CLAIM_UNCLASSIFIABLE` (completion-only or ambiguous text — the control
+> shape), `EVIDENCE_UNOBSERVABLE` (shell turns that never replayed verifiably — counted
+> exposure, never silence). It reaches disposition (a trajectory FAIL is `VERIFIED_FLAGGED`,
+> the same bucket as a turn FAIL), the ledger (absent-never-zero), the report's trajectory
+> exposure line, and `belay verify`'s instance-level line at trace close.
+>
+> **State plainly: no real instance has yet been judged by this rule** — no mint has run
+> under it, so precision is unmeasured and the vocabulary's performance on real model text
+> is a post-mint adjudication decision, not a prediction. **The re-mint is the next gate
+> decision.**
+>
 > **Superseded, kept for the record —** **Decision: build `invariant-test-mutation-shape` next; do NOT mint the remaining ~34 instances
 > under a 0.00-precision detector.** Its rule must be *"modification that removes or weakens an
 > existing assertion"*, judged against the **task pre-state** and the **resulting content**. The 7
