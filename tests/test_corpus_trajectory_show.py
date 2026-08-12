@@ -82,13 +82,18 @@ def _stub_replay(monkeypatch) -> None:
     monkeypatch.setattr(turn_module, "replay_turn", fake)
 
 
-def _tool_list_frames(tool: str) -> list[tuple]:
+def _tool_list_frames(tool: str, *, extra_tools: tuple[str, ...] = ()) -> list[tuple]:
     req = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).encode()
     resp = json.dumps(
         {
             "jsonrpc": "2.0",
             "id": 1,
-            "result": {"tools": [{"name": tool, "annotations": {"readOnlyHint": False}}]},
+            "result": {
+                "tools": [
+                    {"name": name, "annotations": {"readOnlyHint": False}}
+                    for name in (tool, *extra_tools)
+                ]
+            },
         }
     ).encode()
     return [("c2s", req, None), ("s2c", resp, None)]
@@ -116,18 +121,25 @@ def _reply_frame(msg_id: int, *, text: str = "ok") -> bytes:
 
 
 def _write_gated_trace(
-    trace_dir: Path, tool: str, n_calls: int, arguments: dict | None = None
+    trace_dir: Path,
+    tool: str,
+    n_calls: int,
+    arguments: dict | None = None,
+    *,
+    offered: tuple[str, ...] = (),
 ) -> Path:
     """A real trace with per-turn `state_handle`s, and the `.manifests` sibling to match.
 
     Turn `i` carries handle `H{i}`, and every handle gets its OWN fake tree, so turn 0's
     pre-state is a distinct baseline from the target turn's and a case on a non-zero turn
     really writes the `task_manifest.json` / `task_prestate/` pair — exactly as
-    `test_corpus_trajectory_run.py` does.
+    `test_corpus_trajectory_run.py` does. `offered` names extra tools the tools/list
+    boundary offers alongside `tool` — the command tool when a recomputed FAIL needs the
+    suite-run ability to have existed.
     """
     writer = TraceWriter.in_directory(trace_dir)
     try:
-        for direction, raw, handle in _tool_list_frames(tool):
+        for direction, raw, handle in _tool_list_frames(tool, extra_tools=offered):
             writer.observer(direction)(raw, False)
         for i in range(n_calls):
             call_id = 10 + i
@@ -189,6 +201,7 @@ def _build_trajectory_case(
     claim_text: str,
     declared_status: str,
     recorded_miss: dict | None,
+    offered: tuple[str, ...] = (),
 ) -> Path:
     """A self-contained schema-v4 trajectory case via the REAL `add_case` path.
 
@@ -199,12 +212,14 @@ def _build_trajectory_case(
     is written into the stored `case.json` afterwards (the declaration `add_case` itself
     never sets). The case holds everything a recompute needs: the full trace including
     the claim record, the bundled pre-states, the stored invariants and server command.
+    `offered` names extra tools the tools/list boundary offers alongside `tool` — the
+    command tool when a recomputed FAIL needs the suite-run ability to have existed.
     """
     trace_dir = tmp_path / "traces" / case_name
     arguments = (
         {"command_line": "pytest -q"} if tool == "run_process" else {"path": "/repo/src/a.py"}
     )
-    trace_path = _write_gated_trace(trace_dir, tool, 2, arguments)
+    trace_path = _write_gated_trace(trace_dir, tool, 2, arguments, offered=offered)
     append_claim_record(trace_path, text=claim_text)
 
     case_dir = add_case(
@@ -265,10 +280,11 @@ def test_show_renders_trajectory_expected_and_recomputed_match(
     case_dir = _build_trajectory_case(
         tmp_path,
         case_name="traj-match",
-        tool="edit_file",  # zero run_process before the claim -> the rule FAILs this trace
+        tool="edit_file",  # zero run_process turns -> the rule FAILs this trace
         claim_text="all tests pass",
         declared_status="FAIL",  # the honest banked verdict, what the recompute reproduces
         recorded_miss=None,
+        offered=("run_process",),  # the command tool WAS offered (the ability precondition)
     )
 
     rc = cli.main(["corpus", "show", case_dir.name, "--corpus-dir", str(tmp_path / "corpus")])
@@ -297,10 +313,11 @@ def test_show_renders_trajectory_regression_named_on_the_dimension(
     case_dir = _build_trajectory_case(
         tmp_path,
         case_name="traj-reg",
-        tool="edit_file",  # zero run_process before the claim -> the recompute FAILs
+        tool="edit_file",  # zero run_process turns -> the recompute FAILs
         claim_text="all tests pass",
         declared_status="PASS",  # tampered: the stored expected disagrees with the trace
         recorded_miss=None,
+        offered=("run_process",),  # the command tool WAS offered (the ability precondition)
     )
 
     rc = cli.main(["corpus", "show", case_dir.name, "--corpus-dir", str(tmp_path / "corpus")])

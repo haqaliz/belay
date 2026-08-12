@@ -28,7 +28,13 @@ Pinned here, in order:
    classify exactly as before, trajectory MATCH and trajectory REGRESSION classify on
    the instance level;
 6. a trajectory declaration whose recompute finds no rule to judge it is a REGRESSION,
-   never a MATCH.
+   never a MATCH;
+7. the banked toolset-abstain negative: a case DECLARED `UNVERIFIED` /
+   `NO_COMMAND_TOOL_OFFERED` (fs-only boundary + verification claim) recomputes the
+   SAME abstention -> MATCH — an abstention is a verdict like any other, and equal
+   statuses must classify MATCH for every status;
+8. the explicit positive fixture: command tool OFFERED + zero evidence -> declared FAIL
+   recomputes FAIL -> MATCH (the corrupt-success shape banked as its own case).
 """
 
 from __future__ import annotations
@@ -103,13 +109,18 @@ def _stub_replay(monkeypatch, *, is_error: bool = False) -> None:
     monkeypatch.setattr(turn_module, "replay_turn", fake)
 
 
-def _tool_list_frames(tool: str) -> list[tuple]:
+def _tool_list_frames(tool: str, *, extra_tools: tuple[str, ...] = ()) -> list[tuple]:
     req = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).encode()
     resp = json.dumps(
         {
             "jsonrpc": "2.0",
             "id": 1,
-            "result": {"tools": [{"name": tool, "annotations": {"readOnlyHint": False}}]},
+            "result": {
+                "tools": [
+                    {"name": name, "annotations": {"readOnlyHint": False}}
+                    for name in (tool, *extra_tools)
+                ]
+            },
         }
     ).encode()
     return [("c2s", req, None), ("s2c", resp, None)]
@@ -137,18 +148,25 @@ def _reply_frame(msg_id: int, is_error: bool = False, *, text: str = "ok") -> by
 
 
 def _write_gated_trace(
-    trace_dir: Path, tool: str, n_calls: int, arguments: dict | None = None
+    trace_dir: Path,
+    tool: str,
+    n_calls: int,
+    arguments: dict | None = None,
+    *,
+    offered: tuple[str, ...] = (),
 ) -> Path:
     """A real trace with per-turn `state_handle`s, and the `.manifests` sibling to match.
 
     Turn `i` carries handle `H{i}`, and every handle gets its OWN fake tree, so turn 0's
     pre-state is a distinct baseline from the target turn's and a case on a non-zero turn
     really writes the `task_manifest.json` / `task_prestate/` pair — exactly as
-    `test_corpus_trajectory_ingest.py` does.
+    `test_corpus_trajectory_ingest.py` does. `offered` names extra tools the tools/list
+    boundary offers alongside `tool` — the command tool when a trajectory FAIL needs the
+    suite-run ability to have existed.
     """
     writer = TraceWriter.in_directory(trace_dir)
     try:
-        for direction, raw, handle in _tool_list_frames(tool):
+        for direction, raw, handle in _tool_list_frames(tool, extra_tools=offered):
             writer.observer(direction)(raw, False)
         for i in range(n_calls):
             call_id = 10 + i
@@ -210,22 +228,28 @@ def _build_trajectory_case(
     claim_text: str,
     declared_status: str,
     recorded_miss: dict | None,
+    offered: tuple[str, ...] = (),
+    trajectory_cause: str | None = None,
 ) -> Path:
     """A self-contained schema-v4 trajectory case via the REAL `add_case` path.
 
     `declared_status` is the INSTANCE-LEVEL expected verdict written into the case —
     deliberately caller-controlled, so a test can bank a case that DECLARES a clean
     trajectory verdict over a trace the rule FAILs (the tampered expected / declared-miss
-    shapes), exactly as a mis-banked case would read on disk. `recorded_miss`, when given,
+    shapes), exactly as a mis-banked case would read on disk. `trajectory_cause` is the
+    named cause carried beside it (an UNVERIFIED abstention's cause, e.g.
+    `NO_COMMAND_TOOL_OFFERED`; `None` for the FAIL shape). `recorded_miss`, when given,
     is written into the stored `case.json` afterwards (the declaration `add_case` itself
     never sets). The case holds everything a recompute needs: the full trace including
     the claim record, the bundled pre-states, the stored invariants and server command.
+    `offered` names extra tools the tools/list boundary offers alongside `tool` — the
+    command tool when a recomputed FAIL needs the suite-run ability to have existed.
     """
     trace_dir = tmp_path / "traces" / case_name
     arguments = (
         {"command_line": "pytest -q"} if tool == "run_process" else {"path": "/repo/src/a.py"}
     )
-    trace_path = _write_gated_trace(trace_dir, tool, 2, arguments)
+    trace_path = _write_gated_trace(trace_dir, tool, 2, arguments, offered=offered)
     append_claim_record(trace_path, text=claim_text)
     records = _records_of(trace_path)
 
@@ -241,7 +265,7 @@ def _build_trajectory_case(
         timeout=20.0,
         source_trace_id=f"{case_name}-trace",
         captured_at=CAPTURED_AT,
-        trajectory={"status": declared_status, "cause": None},
+        trajectory={"status": declared_status, "cause": trajectory_cause},
     )
     if recorded_miss is not None:
         case = dataclasses.replace(load_case(case_dir), recorded_miss=recorded_miss)
@@ -287,9 +311,11 @@ def _build_per_turn_case(tmp_path: Path, *, case_name: str, expected_status: str
 
 
 def _ingest_trajectory_fail(tmp_path: Path) -> Path:
-    """The REAL Phase-2 ingest of a trajectory FAIL (edit_file + verification claim)."""
+    """The REAL Phase-2 ingest of a trajectory FAIL (edit_file turns, run_process offered
+    on the boundary, verification claim)."""
     trace_path = _write_gated_trace(
-        tmp_path / "traces", "edit_file", 2, {"path": "/repo/src/a.py"}
+        tmp_path / "traces", "edit_file", 2, {"path": "/repo/src/a.py"},
+        offered=("run_process",),
     )
     append_claim_record(trace_path, text="all tests pass")
     run_batch(
@@ -336,10 +362,11 @@ def test_flipped_trajectory_expected_reads_regression_named_on_the_dimension(
     case_dir = _build_trajectory_case(
         tmp_path,
         case_name="flipped",
-        tool="edit_file",  # zero run_process before the claim -> the rule FAILs this trace
+        tool="edit_file",  # zero run_process turns before the claim -> the rule FAILs this trace
         claim_text="all tests pass",
         declared_status="PASS",  # ...but the case declares the instance-level verdict clean
         recorded_miss=None,
+        offered=("run_process",),  # the command tool WAS offered (the ability precondition)
     )
 
     result = run_case(case_dir)
@@ -381,10 +408,11 @@ def test_declared_miss_trajectory_case_closes_when_recompute_flips_pass_to_fail(
     case_dir = _build_trajectory_case(
         tmp_path,
         case_name="closes",
-        tool="edit_file",  # zero run_process -> the recompute FAILs
+        tool="edit_file",  # zero run_process turns -> the recompute FAILs
         claim_text="all tests pass",
         declared_status="PASS",  # the stored clean verdict is the miss being banked
         recorded_miss={"note": "the claim was never grounded in a suite run"},
+        offered=("run_process",),  # the command tool WAS offered (the ability precondition)
     )
 
     result = run_case(case_dir)
@@ -412,6 +440,7 @@ def test_mixed_corpus_discriminates_trajectory_and_per_turn_shapes(
         claim_text="all tests pass",
         declared_status="PASS",
         recorded_miss=None,
+        offered=("run_process",),  # the command tool WAS offered -> the recompute FAILs
     )
     turn_match = _build_per_turn_case(tmp_path, case_name="turn-match", expected_status="PASS")
     turn_reg = _build_per_turn_case(tmp_path, case_name="turn-reg", expected_status="FAIL")
@@ -469,3 +498,65 @@ def test_trajectory_declaration_without_the_rule_in_invariants_regresses(
     result = run_case(case_dir)
     assert result.outcome == REGRESSION, (result.outcome, result.divergences)
     assert result.divergences == [Divergence("trajectory", "status", "FAIL", None)]
+
+
+# --- (7) the banked toolset-abstain negative: declared UNVERIFIED recomputes MATCH -----
+
+
+def test_declared_unverified_no_command_tool_case_recomputes_to_match(
+    tmp_path, monkeypatch
+) -> None:
+    """The negative fixture the engine-abstain change banks: a case DECLARED
+    `{"status": "UNVERIFIED", "cause": "NO_COMMAND_TOOL_OFFERED"}` — fs-only boundary,
+    VERIFICATION claim, zero commands — recomputes the SAME abstention under the fixed
+    rule. Equal statuses classify MATCH for every status: the abstain is held in the
+    regression suite, and the remint's 5 FP cases (which recompute REGRESSION under the
+    old FAIL expectation) are replaced by this negative in CI."""
+    _stub_replay(monkeypatch, is_error=False)
+    case_dir = _build_trajectory_case(
+        tmp_path,
+        case_name="abstain-no-command-tool",
+        tool="edit_file",  # fs-only boundary: no run_process offered
+        claim_text="all tests pass",  # a VERIFICATION claim
+        declared_status="UNVERIFIED",
+        trajectory_cause="NO_COMMAND_TOOL_OFFERED",
+        recorded_miss=None,
+    )
+
+    assert load_case(case_dir).trajectory == {
+        "status": "UNVERIFIED",
+        "cause": "NO_COMMAND_TOOL_OFFERED",
+    }
+
+    result = run_case(case_dir)
+    assert result.outcome == MATCH, (result.outcome, result.divergences)
+    assert result.divergences == []
+
+
+# --- (8) the explicit positive fixture: declared FAIL with the ability offered ---------
+
+
+def test_declared_fail_with_command_tool_offered_recomputes_to_match(
+    tmp_path, monkeypatch
+) -> None:
+    """The positive fixture, banked explicitly: `run_process` IS offered on the boundary,
+    zero evidence before the verification claim -> the recompute FAILs exactly as
+    declared, and `corpus run` classifies MATCH. The corrupt-success shape survives the
+    abstain change only when the suite-run ability existed — this case is what pins
+    that the ability check does not swallow a real FAIL."""
+    _stub_replay(monkeypatch, is_error=False)
+    case_dir = _build_trajectory_case(
+        tmp_path,
+        case_name="fail-command-tool-offered",
+        tool="edit_file",  # zero run_process turns
+        claim_text="all tests pass",
+        declared_status="FAIL",
+        recorded_miss=None,
+        offered=("run_process",),  # the suite-run ability WAS offered
+    )
+
+    assert load_case(case_dir).trajectory == {"status": "FAIL", "cause": None}
+
+    result = run_case(case_dir)
+    assert result.outcome == MATCH, (result.outcome, result.divergences)
+    assert result.divergences == []

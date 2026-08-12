@@ -1438,8 +1438,11 @@ UNMODIFIED_DRIVER_CORE = {
     "eval/minting_driver/loop.py": (
         "1e6b4dabab811ac88cb1322a14202b019b7427f82a89c136c2cc40cdb54a3b98"
     ),
+    # Re-pinned by the `mint-dual-server` aspect (2026-08-12), which extends the
+    # `build_server_command` seam to a server composition — the promise that `batch.py`
+    # is untouched now covers the bytes WITH that legitimate extension.
     "eval/minting_driver/batch.py": (
-        "9bc68a4d6a47e1aed7e3008a90a7e16d9228e4ae476a3078369d55cde38e8a08"
+        "3dbd16049d1184fc9615495980afdb5b3e1bca19efe2eea8de34045914d58fb3"
     ),
 }
 

@@ -42,13 +42,22 @@ from typing import Any, Optional, Sequence, Union
 
 from eval.instances.registry import InstanceRecord, load_registry
 from eval.minting_driver.batch import (
+    BuildServerComposition,
     BuildServerCommand,
+    CompositeTransportFactory,
+    DiscoverCompositionTools,
     DiscoverTools,
     ModelFactory,
     PrepareWorkspace,
     run_mint,
 )
 from eval.minting_driver.checkpoint import Checkpoint
+from eval.minting_driver.composite import (
+    VALID_TOOLSETS,
+    ServerSpec,
+    parse_toolset,
+    toolset_names,
+)
 from eval.minting_driver.resilience import (
     DEFAULT_BASE_DELAY_SECONDS,
     DEFAULT_MAX_ATTEMPTS,
@@ -193,6 +202,11 @@ class MintConfig:
     max_steps: int = DEFAULT_MAX_STEPS
     system: str = DEFAULT_SYSTEM_PROMPT
     server_root: Optional[Path] = field(default=None)
+    #: Which pinned servers the boundary offers (`eval/minting_driver/composite.py`).
+    #: `filesystem` (the default) is exactly the pre-existing single-server path — the
+    #: s5 freeze invocations stay valid verbatim; `filesystem+shell` also offers the
+    #: pinned shell server with the instance workspace as its cwd.
+    toolset: str = "filesystem"
     #: The retry budget per model call, and its first backoff. Defaults IMPORTED from
     #: `resilience.py` rather than restated, so "the documented default" and "the built
     #: default" cannot drift. These tune only the transient ladder: a `quota` error is
@@ -225,6 +239,11 @@ class MintConfig:
                 f"unknown provider {self.provider!r}; known providers: "
                 f"{list(PROVIDERS)}. The provider is an explicit choice — it is never "
                 f"inferred from which credentials happen to be exported."
+            )
+        if self.toolset not in VALID_TOOLSETS:
+            raise MintConfigError(
+                f"unknown toolset {self.toolset!r}; valid toolsets: "
+                f"{list(VALID_TOOLSETS)}"
             )
         _validate_request_timeout(self.request_timeout)
         if not isinstance(self.max_steps, int) or self.max_steps <= 0:
@@ -486,7 +505,7 @@ def make_model_factory(
 
 
 def preflight_servers(cfg: MintConfig) -> Path:
-    """Resolve the pinned filesystem server's entrypoint — or fail loudly, once, now.
+    """Resolve every pinned server the configured toolset names — or fail loudly, once, now.
 
     **This must run before anything is prepped, driven, or spent.** `run_mint` builds
     each instance's server command *inside* its per-instance `try/except`, which is
@@ -496,10 +515,18 @@ def preflight_servers(cfg: MintConfig) -> Path:
     report `INSTRUMENT SUSPECT` — a *fake* PIVOT produced by an `npm install` that was
     never run, an hour after the operator walked away.
 
+    For `--toolset filesystem+shell` BOTH pinned servers are resolved here, so a
+    missing shell install fails before the mint, not per instance. The filesystem
+    entrypoint is returned: it is the replay `--server` command's server, unchanged.
+
     `MissingServerError` already carries the exact pinned install command
     (`servers.py`), so it propagates unchanged rather than being re-worded here.
     """
-    return resolve_server_entrypoint("filesystem", root=cfg.server_root)
+    resolved = {
+        name: resolve_server_entrypoint(name, root=cfg.server_root)
+        for name in toolset_names(cfg.toolset)
+    }
+    return resolved["filesystem"]
 
 
 def mint_batch(
@@ -508,9 +535,12 @@ def mint_batch(
     *,
     model_factory: Optional[ModelFactory] = None,
     build_server_command: Optional[BuildServerCommand] = None,
+    server_composition: Optional[BuildServerComposition] = None,
     prepare: PrepareWorkspace = prepare_workspace,
     transport_factory: Optional[TransportFactory] = None,
     discover_tools: Optional[DiscoverTools] = None,
+    discover_composition_tools: Optional[DiscoverCompositionTools] = None,
+    composite_transport_factory: Optional[CompositeTransportFactory] = None,
 ) -> Checkpoint:
     """Drive `records` sequentially through the gated proxy, per `cfg`.
 
@@ -520,9 +550,15 @@ def mint_batch(
     instance into an aborted mint.
 
     The keyword seams (`model_factory`, `prepare`, `transport_factory`,
-    `discover_tools`, `build_server_command`) exist so the whole path is testable with
-    no subprocess, no git, no network and no spend. They are Python kwargs, never
-    command-line flags.
+    `discover_tools`, `build_server_command`, and the composition-side
+    `server_composition`/`discover_composition_tools`/`composite_transport_factory`)
+    exist so the whole path is testable with no subprocess, no git, no network and no
+    spend. They are Python kwargs, never command-line flags.
+
+    The server seam is chosen by `cfg.toolset`: the default `filesystem` wires
+    `build_server_command` to the pinned filesystem server (behavior-identical to
+    before the toolset existed), and `filesystem+shell` wires `server_composition` to
+    `parse_toolset`, so the shell session spawns rooted at each instance's workspace.
     """
     # FIRST statement — see `preflight_servers`. Before the registry, before prep,
     # before any model or credential resolution, before a single byte is spent.
@@ -536,19 +572,34 @@ def mint_batch(
             base_delay=cfg.retry_base_delay,
         )
 
-    if build_server_command is None:
+    if server_composition is None and build_server_command is None:
+        if cfg.toolset == "filesystem+shell":
 
-        def build_server_command_for(layout: WorkspaceLayout) -> list[str]:
-            # THIS instance's workspace is the filesystem server's own allowed-directory
-            # boundary, passed in its argv — a constant command would point every
-            # instance after the first at the first instance's workspace.
-            return filesystem_server_command(layout.work_dir, root=cfg.server_root)
+            def server_composition_for(layout: WorkspaceLayout) -> list[ServerSpec]:
+                # THIS instance's composition: the filesystem spec (workspace as its
+                # allowed-directory) plus the pinned shell server rooted at the same
+                # workspace — `parse_toolset` carries the shell's cwd per instance.
+                return parse_toolset(cfg.toolset, layout, root=cfg.server_root)
 
-        build_server_command = build_server_command_for
+            server_composition = server_composition_for
+        else:
+
+            def build_server_command_for(layout: WorkspaceLayout) -> list[str]:
+                # THIS instance's workspace is the filesystem server's own
+                # allowed-directory boundary, passed in its argv — a constant command
+                # would point every instance after the first at the first instance's
+                # workspace.
+                return filesystem_server_command(layout.work_dir, root=cfg.server_root)
+
+            build_server_command = build_server_command_for
 
     extra: dict[str, Any] = {}
     if discover_tools is not None:
         extra["discover_tools"] = discover_tools
+    if discover_composition_tools is not None:
+        extra["discover_composition_tools"] = discover_composition_tools
+    if composite_transport_factory is not None:
+        extra["composite_transport_factory"] = composite_transport_factory
 
     return run_mint(
         records,
@@ -556,6 +607,7 @@ def mint_batch(
         clones_dir=cfg.clones_dir,
         model_factory=model_factory,
         build_server_command=build_server_command,
+        server_composition=server_composition,
         checkpoint_path=cfg.checkpoint_path,
         request_timeout=cfg.request_timeout,
         max_steps=cfg.max_steps,

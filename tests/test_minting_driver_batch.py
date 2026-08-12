@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import sys
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -37,6 +38,7 @@ from types import SimpleNamespace
 from eval.instances.registry import InstanceRecord
 from eval.minting_driver.batch import run_mint
 from eval.minting_driver.checkpoint import Checkpoint, load_checkpoint
+from eval.minting_driver.composite import CompositeTransport, ServerSpec
 from eval.minting_driver.fakes import FlakyModel, ScriptedModel
 from eval.minting_driver.model import Done, ToolCall
 from eval.minting_driver.resilience import QuotaExhausted, TransientExhausted
@@ -1218,3 +1220,166 @@ def test_no_dollar_figure_is_ever_recorded(tmp_path: Path) -> None:
     assert "$" not in serialized
     for word in ("cost", "price", "usd", "dollar"):
         assert word not in serialized
+
+
+# --------------------------------------------------------------------------------------
+# Dual-server composition — the `mint-dual-server` wiring (spec.md AC1/AC3/AC4)
+# --------------------------------------------------------------------------------------
+
+
+class _FakeCompositeSession:
+    """A minimal session fake for the composition wiring test: canned replies, every
+    `(method, params)` call recorded, `close()` recorded. No subprocess, no network."""
+
+    def __init__(self, name: str, tools: list[dict]) -> None:
+        self.name = name
+        self.tools = tools
+        self.calls: list[tuple[str, dict]] = []
+        self.closed = False
+
+    def request(self, obj: dict, timeout: float | None = None) -> dict:
+        method = obj["method"]
+        params = obj.get("params") or {}
+        self.calls.append((method, params))
+        if method == "initialize":
+            return {
+                "jsonrpc": "2.0",
+                "id": obj["id"],
+                "result": {"serverInfo": {"name": self.name}},
+            }
+        if method == "tools/list":
+            return {
+                "jsonrpc": "2.0",
+                "id": obj["id"],
+                "result": {"tools": [dict(tool) for tool in self.tools]},
+            }
+        if method == "tools/call":
+            return {
+                "jsonrpc": "2.0",
+                "id": obj["id"],
+                "result": {
+                    "content": [{"type": "text", "text": f"{self.name} ran {params['name']}"}]
+                },
+            }
+        raise AssertionError(f"unexpected method: {method}")
+
+    def notify(self, obj: dict) -> None:
+        self.calls.append((obj["method"], obj.get("params") or {}))
+
+    def close(self) -> None:
+        self.closed = True
+
+    def tool_calls(self) -> list[dict]:
+        return [params for method, params in self.calls if method == "tools/call"]
+
+
+def test_dual_server_composition_drives_the_composite_with_merged_tools_and_routed_calls(
+    tmp_path: Path,
+) -> None:
+    """`run_mint` over a server composition: the loop drives a REAL `CompositeTransport`.
+
+    Two fake sessions stand in for the proxied filesystem + shell servers; the shell
+    spec carries THIS instance's workspace as its cwd. Asserts, on the real loop/bridge
+    path with fakes only at the seams:
+
+    - the instance is captured (real `bridge_capture` ran);
+    - routing: fs tools reached ONLY the fs session, `run_process` ONLY the shell one;
+    - the merged tool list reached the model factory, and the composite served it to
+      the loop;
+    - the composition carried `cwd=layout.work_dir` on the shell spec, raw to
+      discovery and proxied (wrapped in `python -m belay.proxy`) to the transport.
+    """
+    records = [_record("octo__repo-1")]
+    prepare = StubPrepare()
+    fs_session = _FakeCompositeSession(
+        "filesystem",
+        [
+            {"name": "read_text_file"},
+            {"name": "edit_file"},
+        ],
+    )
+    shell_session = _FakeCompositeSession("shell", [{"name": "run_process"}])
+    composite = CompositeTransport([fs_session, shell_session])
+
+    seen_compositions: list[list[ServerSpec]] = []
+    seen_raw_tools: list[list[dict]] = []
+    seen_proxied_specs: list[list[ServerSpec]] = []
+
+    def build_composition(layout: object) -> list[ServerSpec]:
+        specs = [
+            ServerSpec(command=["node", "fs.js", str(layout.work_dir)]),  # type: ignore[attr-defined]
+            ServerSpec(command=["node", "shell.js"], cwd=str(layout.work_dir)),  # type: ignore[attr-defined]
+        ]
+        seen_compositions.append(specs)
+        return specs
+
+    def discover(specs: object) -> list[dict]:
+        seen_raw_tools.append(list(specs))  # type: ignore[arg-type]
+        return [
+            {"name": "read_text_file"},
+            {"name": "edit_file"},
+            {"name": "run_process"},
+        ]
+
+    def composite_factory(specs: list[ServerSpec], env: object) -> CompositeTransport:
+        seen_proxied_specs.append(list(specs))
+        return composite
+
+    model_factory = CountingModelFactory(
+        [
+            ToolCall(name="read_text_file", arguments={"path": "a.py"}),
+            ToolCall(name="run_process", arguments={"command_line": "pytest -q"}),
+            Done(reason="done"),
+        ]
+    )
+    seen_tools: list[list[dict]] = []
+
+    def recording_factory(tools: object) -> object:
+        seen_tools.append(list(tools))  # type: ignore[arg-type]
+        return model_factory(tools)
+
+    checkpoint = run_mint(
+        records,
+        root=tmp_path / "mint",
+        clones_dir=tmp_path / "clones",
+        model_factory=recording_factory,
+        server_composition=build_composition,
+        checkpoint_path=tmp_path / "ckpt.json",
+        request_timeout=30.0,
+        max_steps=8,
+        system="sys",
+        prepare=prepare,
+        discover_composition_tools=discover,  # type: ignore[arg-type]
+        composite_transport_factory=composite_factory,  # type: ignore[arg-type]
+    )
+
+    assert checkpoint.status("octo__repo-1") == "captured"
+    # Routing: each session served exactly its own tool's calls, none crossed over.
+    assert [params["name"] for params in fs_session.tool_calls()] == ["read_text_file"]
+    assert [params["name"] for params in shell_session.tool_calls()] == ["run_process"]
+    # The merged list reached the model factory and was served to the loop verbatim.
+    assert [tool["name"] for tool in seen_tools[0]] == [
+        "read_text_file",
+        "edit_file",
+        "run_process",
+    ]
+    assert [tool["name"] for tool in composite.tools_list()] == [
+        "read_text_file",
+        "edit_file",
+        "run_process",
+    ]
+    # The composition carried the per-instance workspace as the shell spec's cwd.
+    work_dir = layout_for("octo__repo-1", tmp_path / "mint").work_dir
+    assert seen_compositions[0][1].cwd == str(work_dir)
+    assert seen_compositions[0][0].cwd is None
+    # Discovery saw the RAW specs; the transport saw the PROXIED ones.
+    assert seen_raw_tools[0][1].cwd == str(work_dir)
+    proxied = seen_proxied_specs[0]
+    assert len(proxied) == 2
+    assert proxied[0].command[0] == sys.executable
+    assert proxied[0].command[1:3] == ["-m", "belay.proxy"]
+    assert proxied[0].cwd is None
+    assert proxied[1].cwd == str(work_dir)
+    # Both fake sessions were closed at teardown.
+    assert fs_session.closed is True
+    assert shell_session.closed is True

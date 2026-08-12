@@ -46,7 +46,9 @@ import select
 import subprocess
 import threading
 import time
-from typing import Any, Optional
+from typing import Any, Optional, Union
+
+StrPath = Union[str, "os.PathLike[str]"]
 
 #: A generous default for a real run; tests pass a short value to exercise the
 #: timeout paths fast.
@@ -212,16 +214,31 @@ class StdioMcp:
     Not thread-safe and not meant to have two `request` calls in flight at
     once — the minting-driver loop is sequential (one tool call awaited before
     the next is proposed), which is exactly what this shape supports.
+
+    `cwd`, when given, becomes the spawned process's working directory
+    (`Popen(cwd=...)`) — the shell server's session is spawned rooted at the
+    per-instance workspace this way (`mint-dual-server`). Absent, no `cwd`
+    kwarg is passed at all, so a default spawn is byte-identical to before the
+    parameter existed.
     """
 
-    def __init__(self, command: list[str], env: dict) -> None:
-        self._proc = subprocess.Popen(
-            command,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=env,
-        )
+    def __init__(
+        self,
+        command: list[str],
+        env: dict,
+        cwd: Optional[StrPath] = None,
+    ) -> None:
+        popen_kwargs: dict = {
+            "stdin": subprocess.PIPE,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "env": env,
+        }
+        if cwd is not None:
+            # Present ONLY when given: an absent `cwd` must not become a `cwd=None`
+            # kwarg, or every default spawn's Popen contract changes.
+            popen_kwargs["cwd"] = cwd
+        self._proc = subprocess.Popen(command, **popen_kwargs)
         assert (
             self._proc.stdin is not None
             and self._proc.stdout is not None

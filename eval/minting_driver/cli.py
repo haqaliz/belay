@@ -35,6 +35,7 @@ import sys
 from pathlib import Path
 from typing import Optional, Sequence
 
+from eval.minting_driver.composite import VALID_TOOLSETS
 from eval.minting_driver.entrypoint import (
     DEFAULT_CLONES_DIR,
     DEFAULT_CORPUS_DIR,
@@ -173,6 +174,18 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
+        "--toolset",
+        default="filesystem",
+        choices=list(VALID_TOOLSETS),
+        help=(
+            "which pinned servers the boundary offers (default: filesystem — exactly "
+            "the pre-existing single-server path; the s5 freeze invocations stay valid "
+            "verbatim). filesystem+shell also offers the pinned shell server "
+            "(mcp-server-commands) with each instance's workspace as its cwd, so "
+            "run_process turns can be captured"
+        ),
+    )
+    parser.add_argument(
         "--verify",
         action="store_true",
         help=(
@@ -245,6 +258,7 @@ def config_from_args(args: argparse.Namespace) -> MintConfig:
         max_attempts=args.max_attempts,
         retry_base_delay=args.retry_base_delay,
         server_root=Path(args.server_root) if args.server_root else None,
+        toolset=args.toolset,
     )
 
 

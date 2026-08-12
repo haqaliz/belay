@@ -137,6 +137,58 @@ def test_close_tears_down_the_subprocess() -> None:
     assert transport._proc.poll() is not None
 
 
+def test_cwd_is_passed_to_popen_when_given(monkeypatch, tmp_path) -> None:
+    """`StdioMcp(command, env, cwd=X)` passes `cwd=X` to `Popen`.
+
+    The shell server must spawn rooted at the per-instance workspace (aspect
+    `mint-dual-server`, spec R5). The `cwd` value is asserted on the EXACT `Popen`
+    kwargs, and the rest of the spawn contract (pipes, env) is untouched.
+    """
+    import subprocess
+
+    captured: dict = {}
+    real_popen = subprocess.Popen
+
+    def spy_popen(*args: object, **kwargs: object) -> object:
+        captured.update(kwargs)
+        return real_popen(*args, **kwargs)
+
+    monkeypatch.setattr("eval.minting_driver.transport.subprocess.Popen", spy_popen)
+    transport = StdioMcp([sys.executable, str(ECHO_SERVER)], env={}, cwd=str(tmp_path))
+    try:
+        assert captured.get("cwd") == str(tmp_path)
+        assert captured["stdin"] is subprocess.PIPE
+        assert captured["stdout"] is subprocess.PIPE
+        assert captured["stderr"] is subprocess.PIPE
+        assert captured["env"] == {}
+    finally:
+        transport.close()
+
+
+def test_no_cwd_kwarg_when_absent(monkeypatch, tmp_path) -> None:
+    """Absent `cwd` -> NO `cwd` argument at all — byte-compatible with today's spawns.
+
+    The default must not manufacture a `cwd=None` kwarg: the s5 freeze scripts re-run
+    identically, and a drift here would change every existing spawn's contract.
+    """
+    import subprocess
+
+    captured: dict = {}
+    real_popen = subprocess.Popen
+
+    def spy_popen(*args: object, **kwargs: object) -> object:
+        captured.update(kwargs)
+        return real_popen(*args, **kwargs)
+
+    monkeypatch.setattr("eval.minting_driver.transport.subprocess.Popen", spy_popen)
+    transport = StdioMcp([sys.executable, str(ECHO_SERVER)], env={})
+    try:
+        assert "cwd" not in captured
+        assert captured["env"] == {}
+    finally:
+        transport.close()
+
+
 def test_transport_module_is_standalone() -> None:
     """No import of `belay.replay` (or any `belay` module) or the `mcp` SDK.
 

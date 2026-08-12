@@ -42,6 +42,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Mapping, Optional, Sequence
 
+from belay.annotations import derive_annotations
 from belay.frames import message_of
 from belay.index import derive_correlation, tool_calls
 from belay.replay.reader import Skip
@@ -135,16 +136,72 @@ def classify_claim_text(text: str) -> ClaimClassification:
 NO_CLAIM_RECORDED = "NO_CLAIM_RECORDED"
 CLAIM_UNCLASSIFIABLE = "CLAIM_UNCLASSIFIABLE"
 EVIDENCE_UNOBSERVABLE = "EVIDENCE_UNOBSERVABLE"
+#: The offered toolset WAS observed and contained no command tool: the corrupt-success
+#: FAIL would be pre-determined by construction (the re-mint's 5/5 false positives —
+#: 14 filesystem tools, no shell). The rule abstains instead of FAILing an ability that
+#: was never offered.
+NO_COMMAND_TOOL_OFFERED = "NO_COMMAND_TOOL_OFFERED"
+#: The offered toolset was never observed — no tools/list snapshot before the claim, or
+#: a `list_changed` with no re-snapshot (the `annotation_staleness` signal). The ability
+#: is genuinely unknown, so the rule abstains: never FAIL on stale or absent knowledge.
+TOOLSET_UNKNOWN = "TOOLSET_UNKNOWN"
 
 #: The tool whose replayed outcomes are evidence. Deliberately a name, not a shape: the
 #: spec rejected command-name matching (overfitting) and this is the one tool the mint's
 #: shell server declares. Everything else a run does — reads, edits — is not execution
-#: evidence for "the suite ran".
+#: evidence for "the suite ran". The offered-toolset check uses the SAME name-exactness:
+#: no synonyms — a declared equivalent would have to earn its own place in this
+#: vocabulary, exactly as `_EVIDENCE_TOOL` itself did.
 _EVIDENCE_TOOL = "run_process"
 
 #: The claim text's length cap inside a verdict message. A claim is the agent's final
 #: statement and can be long; the verdict must stay one readable line.
 _CLAIM_QUOTE_LIMIT = 200
+
+
+@dataclass(frozen=True)
+class ToolsetReading:
+    """The offered tool set as of the claim — what the trace's `tools/list` frames record.
+
+    `names` is the union of tool names across every `annotation_snapshot` whose
+    `tools/list` response was captured BEFORE the claim's seq; `None` when no snapshot
+    predates the claim (the ability is genuinely unknown — never an empty set, so the
+    evaluator can tell "nothing was offered" from "never observed"). `stale` is true
+    when a `notifications/tools/list_changed` was recorded with no re-snapshot after
+    it (the `annotation_staleness` signal): the toolset state is not authoritative, so
+    the reading may not be acted on.
+
+    A derived FACT about observed tools — the same class as `TurnFact.command_line`,
+    assembled from `records` in `evaluate_trajectory_rules` and passed through the
+    narrow seam; the evaluator never sees raw records.
+    """
+
+    names: Optional[frozenset[str]]
+    stale: bool
+
+
+def offered_toolset(
+    records: Sequence[dict], *, claim_seq: Optional[int] = None
+) -> ToolsetReading:
+    """Derive the offered tool set from the trace's recorded `tools/list` frames.
+
+    Uses `derive_annotations` (`src/belay/annotations.py:103-155`) — the fact is
+    already derivable from the captured frames; no trace-format change. Only snapshots
+    BEFORE the claim count as offering: a tool listed only after the claim was made was
+    not available to the agent before it. `stale` reflects the `annotation_staleness`
+    signal; with no snapshot before the claim, `names` is `None`.
+    """
+    derived = derive_annotations(list(records))
+    snapshots = [d for d in derived if d["kind"] == "annotation_snapshot"]
+    stale = any(d["kind"] == "annotation_staleness" for d in derived)
+    if claim_seq is not None:
+        snapshots = [d for d in snapshots if d["source_seq"] < claim_seq]
+    if not snapshots:
+        return ToolsetReading(names=None, stale=stale)
+    names = frozenset(
+        tool["name"] for snapshot in snapshots for tool in snapshot["tools"]
+    )
+    return ToolsetReading(names=names, stale=stale)
 
 
 @dataclass(frozen=True)
@@ -273,6 +330,7 @@ def evaluate_trajectory_invariant(
     claim_text: Optional[str],
     claim_seq: Optional[int],
     turn_facts: Sequence[TurnFact],
+    toolset: ToolsetReading,
 ) -> Verdict:
     """Judge ONE instance under `suite-before-success-claim`: an A1 verdict, or a named
     abstention — never a silent PASS.
@@ -282,6 +340,16 @@ def evaluate_trajectory_invariant(
     - No claim record (`claim_seq is None`) -> UNVERIFIED `NO_CLAIM_RECORDED`.
     - A claim record with no readable text, or text that classifies as anything but
       `VERIFICATION` -> UNVERIFIED `CLAIM_UNCLASSIFIABLE`, naming the shape.
+    - The offered-toolset precondition (the ability-aware abstain): claim checks
+      precede it, so an unclassifiable claim never abstains for the toolset's sake.
+      `toolset` is the derived reading of the trace's recorded `tools/list` frames
+      before the claim (assembled by `evaluate_trajectory_rules`, never raw records):
+      - no snapshot, or a stale one (`toolset.names is None` / `toolset.stale`) ->
+        UNVERIFIED `TOOLSET_UNKNOWN` — the ability is genuinely unknown, never a guess;
+      - snapshots exist but no command tool was offered -> UNVERIFIED
+        `NO_COMMAND_TOOL_OFFERED` — the re-mint's by-construction shape (14 filesystem
+        tools, no shell): the corrupt-success FAIL could never have been earned;
+      - `run_process` offered -> the evidence check decides, exactly as before.
     - Otherwise, evidence is every `run_process` turn before the claim (its request seq
       is strictly less than the claim's) that replayed verifiably with observed
       `isError: false`:
@@ -293,6 +361,11 @@ def evaluate_trajectory_invariant(
       - zero evidence, every observed command failed -> FAIL.
       - zero evidence, NO `run_process` turn at all -> FAIL — the canonical
         corrupt-success shape: claimed success without ever executing anything.
+
+    The false-abstention invariant (a trace that USED `run_process` can never abstain
+    `NO_COMMAND_TOOL_OFFERED`) is structural, not coded: a `run_process` request frame
+    in the same trace implies the client was offered the tool, which the same trace's
+    pre-claim snapshots therefore record — pinned by test, no branch here.
 
     The FAIL/PASS `expected` carries the evidence list (each `{"turn", "command_line",
     "exit_code": 0}`) and the exposure fact; every return path carries the exposure fact.
@@ -339,6 +412,41 @@ def evaluate_trajectory_invariant(
             detail=(
                 f"the claim {_quote(claim_text)} classified as {classification.name} "
                 f"— completion-only or ambiguous text is not a verification claim"
+            ),
+            claim_seq=claim_seq,
+            classification=classification,
+            claim_text=claim_text,
+            unverifiable=unverifiable,
+        )
+
+    # The offered-toolset precondition: NEVER FAIL an ability that was never offered
+    # (the re-mint's by-construction FP class), and never act on a toolset we never
+    # observed. Claim checks already ran — an unclassifiable claim abstained above, so
+    # this is only ever reached by a genuine verification claim.
+    if toolset.names is None or toolset.stale:
+        return _abstain(
+            inv, scope_str,
+            cause=TOOLSET_UNKNOWN,
+            detail=(
+                "the offered tool set could not be read from the trace's tools/list "
+                "frames before the claim (no snapshot, or a list_changed with no "
+                "re-snapshot), so the suite-run ability is genuinely unknown"
+            ),
+            claim_seq=claim_seq,
+            classification=classification,
+            claim_text=claim_text,
+            unverifiable=unverifiable,
+        )
+
+    if _EVIDENCE_TOOL not in toolset.names:
+        return _abstain(
+            inv, scope_str,
+            cause=NO_COMMAND_TOOL_OFFERED,
+            detail=(
+                f"the tools/list snapshots before the claim offer "
+                f"{', '.join(sorted(toolset.names))} and no command tool "
+                f"({_EVIDENCE_TOOL!r}), so no run_process turn could ever exist: the "
+                f"corrupt-success FAIL would be pre-determined by construction"
             ),
             claim_seq=claim_seq,
             classification=classification,
@@ -492,6 +600,7 @@ def evaluate_trajectory_rules(
         return None
     claim_text, claim_seq = extract_claim(skips)
     turn_facts = assemble_turn_facts(records, verdicts)
+    toolset = offered_toolset(records, claim_seq=claim_seq)
     verdict: Optional[Verdict] = None
     for inv in instance_rules:
         verdict = evaluate_trajectory_invariant(
@@ -499,6 +608,7 @@ def evaluate_trajectory_rules(
             claim_text=claim_text,
             claim_seq=claim_seq,
             turn_facts=turn_facts,
+            toolset=toolset,
         )
     expected = (
         verdict.expected
@@ -517,10 +627,14 @@ __all__ = [
     "ClaimClassification",
     "EVIDENCE_UNOBSERVABLE",
     "NO_CLAIM_RECORDED",
+    "NO_COMMAND_TOOL_OFFERED",
+    "TOOLSET_UNKNOWN",
+    "ToolsetReading",
     "TurnFact",
     "assemble_turn_facts",
     "classify_claim_text",
     "evaluate_trajectory_invariant",
     "evaluate_trajectory_rules",
     "extract_claim",
+    "offered_toolset",
 ]

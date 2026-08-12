@@ -506,6 +506,31 @@ value cases in the corpus, and the ones the Phase-0 number is made of.
 > offered.** The next unit re-scopes the toolset (shell server on the boundary, or an
 > abstain when no command tool is offered), not the rule's vocabulary alone.
 >
+> **STATUS 2026-08-12 — the trajectory rule is now ABILITY-AWARE: it abstains, with a named
+> cause, whenever a command tool was never observed before the claim** (`engine-abstain`;
+> commits `f1ac8af` RED, `b42ab57` GREEN; see
+> `docs/planning/trajectory-toolset-rescope/`). The re-scope re-scoped the TOOLSET, not the
+> vocabulary: the mint boundary gains a shell server, and the rule derives the offered set
+> from the trace's recorded `tools/list` frames (`derive_annotations`, no trace-format
+> change — a derived fact, the same class as the exposure counts). Two new UNVERIFIED
+> causes, decided exactly and in this order after the unchanged claim checks:
+> `TOOLSET_UNKNOWN` — no snapshot before the claim, or a `list_changed` with no re-snapshot
+> (the `annotation_staleness` signal); never FAIL on stale or unobserved knowledge —
+> and `NO_COMMAND_TOOL_OFFERED` — snapshots exist but no `run_process` (name-exactness, no
+> synonyms): the corrupt-success FAIL would be pre-determined by construction (the re-mint's
+> 14-filesystem-tools shape). FAIL now requires a command tool offered AND zero replayed
+> exit-0 `run_process` before a VERIFICATION claim; only snapshots BEFORE the claim count as
+> offering. The false-abstention invariant is structural (usage implies offering, which the
+> same trace's snapshots record), pinned by test, not coded.
+>
+> **Reclassification discipline: every v0.15 trajectory FAIL re-verifies to UNVERIFIED with
+> a named cause — that is a reclassification, not improved detection.** `precision 0.00`
+> (0 TP / 5 FP, coverage 1.00, corpus-labeled) and every published number stand unedited;
+> the 5-FP record is why the abstain exists. R1's quantitative form is STILL untested — the
+> next mint drives the shell-offered toolset. The classifier vocabulary decision is
+> recorded in the PRD (2026-08-12: vocabulary kept; abstain-side conservatism is by design;
+> determinability ≠ correctness).
+>
 > **Superseded, kept for the record —** **Decision: build `invariant-test-mutation-shape` next; do NOT mint the remaining ~34 instances
 > under a 0.00-precision detector.** Its rule must be *"modification that removes or weakens an
 > existing assertion"*, judged against the **task pre-state** and the **resulting content**. The 7
