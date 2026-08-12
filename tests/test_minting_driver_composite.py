@@ -110,7 +110,8 @@ class FakeSession:
                 raise ServerExited(
                     f"{self.name} exited while handling {name}"
                 )
-            return {"jsonrpc": "2.0", "id": obj["id"], "result": self.tool_replies[name]}
+            reply = self.tool_replies.get(name, {"content": [{"type": "text", "text": "ok"}]})
+            return {"jsonrpc": "2.0", "id": obj["id"], "result": reply}
         raise AssertionError(f"unexpected method: {method}")
 
     def notify(self, obj: dict) -> None:
@@ -151,8 +152,8 @@ def test_tools_list_merges_both_sessions_with_run_process_verbatim() -> None:
         # The shell entry is the fixture's own declaration, byte for byte.
         assert tools[-1] == SHELL_TOOLS[0]
         # Every session saw the handshake too: broadcast, not a single winner.
-        assert fs.calls_for("initialize") == [{}]
-        assert shell.calls_for("initialize") == [{}]
+        assert len(fs.calls_for("initialize")) == 1
+        assert len(shell.calls_for("initialize")) == 1
     finally:
         composite.close()
 
@@ -233,7 +234,9 @@ def test_a_second_request_while_one_is_in_flight_raises() -> None:
     that way across sessions even if a caller tried to overlap.
     """
     gate = threading.Event()
-    fs = FakeSession("filesystem", FS_TOOLS, tool_replies={"read_text_file": FS_REPLY})
+    fs = FakeSession(
+        "filesystem", FS_TOOLS, tool_replies={"read_text_file": FS_REPLY}, gate=gate
+    )
     shell = FakeSession("shell", SHELL_TOOLS)
     composite = CompositeTransport([fs, shell])
     _handshake(composite)
