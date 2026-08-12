@@ -488,6 +488,17 @@ contract was live when that call happened?"* stays answerable.
 `not-declared` **with a named cause**, so downstream can tell "the server declined to say"
 from "we never asked".
 
+**A derived fact: the offered tool set** (2026-08-12, the trajectory rule's ability-aware
+abstain). The trajectory rule (`suite-before-success-claim`) reads these records, via
+`derive_annotations`, to learn what tools were actually offered before the claim: the union
+of `tools[*]["name"]` across every `annotation_snapshot` whose `source_seq` predates the
+claim — a snapshot AFTER the claim is not an offering. Two honest absence shapes follow:
+**no snapshot before the claim, or any `annotation_staleness` with no re-snapshot** → the
+toolset is unknown (`TOOLSET_UNKNOWN` — never FAIL on stale or unobserved knowledge); a
+snapshot exists but offers no command tool → the rule's FAIL would be pre-determined by
+construction, so it abstains (`NO_COMMAND_TOOL_OFFERED`). The tool names travel verbatim;
+the derivation adds no new trace records.
+
 ## `connection_context` (`belay.connection`)
 
 ```jsonc

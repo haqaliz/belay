@@ -2,6 +2,24 @@
 
 This file orients a coding agent working in this repository. Read it first.
 
+> **THE TRAJECTORY RULE IS NOW ABILITY-AWARE: IT ABSTAINS, WITH A NAMED CAUSE, WHENEVER A
+> COMMAND TOOL WAS NEVER OBSERVED BEFORE THE CLAIM** (2026-08-12, `engine-abstain`). The
+> re-mint's verdict — 5/5 trajectory FAILs that were **false positives by construction** (14
+> filesystem tools, no shell on the boundary; precision 0.00) — is now answered by the rule
+> itself, not by an audit: `suite-before-success-claim` derives the offered tool set from
+> the trace's recorded `tools/list` frames (`derive_annotations`, no trace-format change)
+> and abstains `NO_COMMAND_TOOL_OFFERED` when no `run_process` was offered before the claim,
+> `TOOLSET_UNKNOWN` when no snapshot exists or a `list_changed` was never re-snapshotted
+> (never FAIL on stale or unobserved knowledge). FAIL now requires a command tool offered
+> AND zero replayed exit-0 `run_process` before a VERIFICATION claim. The unit re-scoped the
+> **TOOLSET** (the mint boundary gains a shell server), not the vocabulary — the classifier
+> decision is recorded in the PRD (2026-08-12: vocabulary kept; abstain-side conservatism
+> is by design; determinability ≠ correctness). **Reclassification discipline: every v0.15
+> trajectory FAIL re-verifies to UNVERIFIED with a named cause — a reclassification, not
+> improved detection; `precision 0.00` and all published numbers stand unedited.** R1's
+> quantitative form is STILL untested: the next mint drives the shell-offered toolset. See
+> `docs/planning/trajectory-toolset-rescope/`.
+>
 > **THE RE-MINT RAN AND ITS OWN PRE-REGISTERED CONTROL GATE VOIDED IT — not a detector
 > failure** (2026-08-09, `phase0-remint`). **This is NOT a gate run and produces NO Phase-0
 > number.** Stage 1 (1 control) captured, `VERIFIED_CLEAN`, gate passed. Stage 2 (3 controls
