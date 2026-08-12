@@ -218,11 +218,19 @@ def _resolve_servers() -> tuple[Path, Path, Path]:
 
 
 def _records(trace_path: Path) -> list[dict]:
-    """The trace's records, read with Belay's own reader (skips surfaced, never silent)."""
+    """The trace's records, read with Belay's own reader (skips surfaced, never silent).
+
+    A `claim` skip is EXPECTED on any run that ended in a claim: the reader
+    deliberately does not understand `claim` records (not in `KINDS`), and the
+    trajectory rule reads them out of the skip seam
+    (`verify/trajectory.py:227` `extract_claim`). Anything else that skipped is a
+    real unreadability and fails the smoke.
+    """
     result = read_trace(trace_path)
-    assert not result.skips, (
+    unexpected = [skip for skip in result.skips if skip.kind != "claim"]
+    assert not unexpected, (
         "the reader could not accept every record in the capture, so this trace is not "
-        f"fully readable: {result.skips}"
+        f"fully readable: {unexpected}"
     )
     return result.records
 
