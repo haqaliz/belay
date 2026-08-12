@@ -103,13 +103,18 @@ def _stub_replay(monkeypatch, *, is_error: bool = False) -> None:
     monkeypatch.setattr(turn_module, "replay_turn", fake)
 
 
-def _tool_list_frames(tool: str) -> list[tuple]:
+def _tool_list_frames(tool: str, *, extra_tools: tuple[str, ...] = ()) -> list[tuple]:
     req = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).encode()
     resp = json.dumps(
         {
             "jsonrpc": "2.0",
             "id": 1,
-            "result": {"tools": [{"name": tool, "annotations": {"readOnlyHint": False}}]},
+            "result": {
+                "tools": [
+                    {"name": name, "annotations": {"readOnlyHint": False}}
+                    for name in (tool, *extra_tools)
+                ]
+            },
         }
     ).encode()
     return [("c2s", req, None), ("s2c", resp, None)]
@@ -137,18 +142,25 @@ def _reply_frame(msg_id: int, is_error: bool = False, *, text: str = "ok") -> by
 
 
 def _write_gated_trace(
-    trace_dir: Path, tool: str, n_calls: int, arguments: dict | None = None
+    trace_dir: Path,
+    tool: str,
+    n_calls: int,
+    arguments: dict | None = None,
+    *,
+    offered: tuple[str, ...] = (),
 ) -> Path:
     """A real trace with per-turn `state_handle`s, and the `.manifests` sibling to match.
 
     Turn `i` carries handle `H{i}`, and every handle gets its OWN fake tree, so turn 0's
     pre-state is a distinct baseline from the target turn's and a case on a non-zero turn
     really writes the `task_manifest.json` / `task_prestate/` pair — exactly as
-    `test_corpus_trajectory_ingest.py` does.
+    `test_corpus_trajectory_ingest.py` does. `offered` names extra tools the tools/list
+    boundary offers alongside `tool` — the command tool when a trajectory FAIL needs the
+    suite-run ability to have existed.
     """
     writer = TraceWriter.in_directory(trace_dir)
     try:
-        for direction, raw, handle in _tool_list_frames(tool):
+        for direction, raw, handle in _tool_list_frames(tool, extra_tools=offered):
             writer.observer(direction)(raw, False)
         for i in range(n_calls):
             call_id = 10 + i
@@ -210,6 +222,7 @@ def _build_trajectory_case(
     claim_text: str,
     declared_status: str,
     recorded_miss: dict | None,
+    offered: tuple[str, ...] = (),
 ) -> Path:
     """A self-contained schema-v4 trajectory case via the REAL `add_case` path.
 
@@ -220,12 +233,14 @@ def _build_trajectory_case(
     is written into the stored `case.json` afterwards (the declaration `add_case` itself
     never sets). The case holds everything a recompute needs: the full trace including
     the claim record, the bundled pre-states, the stored invariants and server command.
+    `offered` names extra tools the tools/list boundary offers alongside `tool` — the
+    command tool when a recomputed FAIL needs the suite-run ability to have existed.
     """
     trace_dir = tmp_path / "traces" / case_name
     arguments = (
         {"command_line": "pytest -q"} if tool == "run_process" else {"path": "/repo/src/a.py"}
     )
-    trace_path = _write_gated_trace(trace_dir, tool, 2, arguments)
+    trace_path = _write_gated_trace(trace_dir, tool, 2, arguments, offered=offered)
     append_claim_record(trace_path, text=claim_text)
     records = _records_of(trace_path)
 
@@ -287,9 +302,11 @@ def _build_per_turn_case(tmp_path: Path, *, case_name: str, expected_status: str
 
 
 def _ingest_trajectory_fail(tmp_path: Path) -> Path:
-    """The REAL Phase-2 ingest of a trajectory FAIL (edit_file + verification claim)."""
+    """The REAL Phase-2 ingest of a trajectory FAIL (edit_file turns, run_process offered
+    on the boundary, verification claim)."""
     trace_path = _write_gated_trace(
-        tmp_path / "traces", "edit_file", 2, {"path": "/repo/src/a.py"}
+        tmp_path / "traces", "edit_file", 2, {"path": "/repo/src/a.py"},
+        offered=("run_process",),
     )
     append_claim_record(trace_path, text="all tests pass")
     run_batch(
@@ -336,10 +353,11 @@ def test_flipped_trajectory_expected_reads_regression_named_on_the_dimension(
     case_dir = _build_trajectory_case(
         tmp_path,
         case_name="flipped",
-        tool="edit_file",  # zero run_process before the claim -> the rule FAILs this trace
+        tool="edit_file",  # zero run_process turns before the claim -> the rule FAILs this trace
         claim_text="all tests pass",
         declared_status="PASS",  # ...but the case declares the instance-level verdict clean
         recorded_miss=None,
+        offered=("run_process",),  # the command tool WAS offered (the ability precondition)
     )
 
     result = run_case(case_dir)
@@ -381,10 +399,11 @@ def test_declared_miss_trajectory_case_closes_when_recompute_flips_pass_to_fail(
     case_dir = _build_trajectory_case(
         tmp_path,
         case_name="closes",
-        tool="edit_file",  # zero run_process -> the recompute FAILs
+        tool="edit_file",  # zero run_process turns -> the recompute FAILs
         claim_text="all tests pass",
         declared_status="PASS",  # the stored clean verdict is the miss being banked
         recorded_miss={"note": "the claim was never grounded in a suite run"},
+        offered=("run_process",),  # the command tool WAS offered (the ability precondition)
     )
 
     result = run_case(case_dir)
@@ -412,6 +431,7 @@ def test_mixed_corpus_discriminates_trajectory_and_per_turn_shapes(
         claim_text="all tests pass",
         declared_status="PASS",
         recorded_miss=None,
+        offered=("run_process",),  # the command tool WAS offered -> the recompute FAILs
     )
     turn_match = _build_per_turn_case(tmp_path, case_name="turn-match", expected_status="PASS")
     turn_reg = _build_per_turn_case(tmp_path, case_name="turn-reg", expected_status="FAIL")

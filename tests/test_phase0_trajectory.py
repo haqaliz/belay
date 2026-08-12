@@ -73,13 +73,20 @@ def _stub_replay(monkeypatch, *, status: str = REPLAYED, is_error: bool = False)
     monkeypatch.setattr(turn_module, "replay_turn", fake)
 
 
-def _tool_list_frames(tool: str, annotations: dict | None) -> list[tuple]:
+def _tool_list_frames(
+    tool: str, annotations: dict | None, *, extra_tools: tuple[str, ...] = ()
+) -> list[tuple]:
     req = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).encode()
     resp = json.dumps(
         {
             "jsonrpc": "2.0",
             "id": 1,
-            "result": {"tools": [{"name": tool, "annotations": annotations}]},
+            "result": {
+                "tools": [
+                    {"name": name, "annotations": annotations}
+                    for name in (tool, *extra_tools)
+                ]
+            },
         }
     ).encode()
     return [("c2s", req, None), ("s2c", resp, None)]
@@ -135,13 +142,17 @@ def _run_ledger(tmp_path: Path, trace_path: Path, *, invariants) -> RunLedger:
 
 def test_trajectory_fail_flags_the_instance_and_counts_in_the_rate(tmp_path, monkeypatch):
     """PRD decision through the real path: verification claim + source edits + zero
-    run_process -> the ONLY failure is the trajectory FAIL, and the instance reads
-    VERIFIED_FLAGGED — never VERIFIED_CLEAN — and the per-instance violation rate
-    counts it (numerator 1 over denominator 1)."""
+    run_process, with `run_process` offered on the boundary (the tools/list includes it
+    — the corrupt-success FAIL is only meaningful where the suite-run ability existed)
+    -> the ONLY failure is the trajectory FAIL, and the instance reads VERIFIED_FLAGGED
+    — never VERIFIED_CLEAN — and the per-instance violation rate counts it (numerator 1
+    over denominator 1)."""
     _stub_replay(monkeypatch, is_error=False)
     trace_path = _trace_with(
         tmp_path, "traces",
-        _tool_list_frames("edit_file", {"readOnlyHint": False})
+        _tool_list_frames(
+            "edit_file", {"readOnlyHint": False}, extra_tools=("run_process",)
+        )
         + [
             ("c2s", _call_frame(2, "edit_file", {"path": "/repo/src/a.py"}), None),
             ("s2c", _reply_frame(2), None),
@@ -384,6 +395,44 @@ def test_report_renders_the_trajectory_line_per_instance_with_named_causes() -> 
     assert "CLAIM_UNCLASSIFIABLE: 1" in report
 
 
+def test_report_renders_the_toolset_abstain_causes_per_instance_and_in_the_aggregate() -> None:
+    """The ability-aware abstains render by name on both surfaces: each instance's
+    trajectory line names its cause (NO_COMMAND_TOOL_OFFERED / TOOLSET_UNKNOWN), the
+    by-cause aggregate counts both, and both dispositions stay VERIFIED_CLEAN — an
+    abstention never flags, whatever it abstained for."""
+    no_command = _instance(
+        "trace-no-command",
+        Disposition.VERIFIED_CLEAN,
+        trajectory={
+            "status": "UNVERIFIED",
+            "cause": "NO_COMMAND_TOOL_OFFERED",
+            "evidence_count": 0,
+        },
+    )
+    unknown = _instance(
+        "trace-toolset-unknown",
+        Disposition.VERIFIED_CLEAN,
+        trajectory={
+            "status": "UNVERIFIED",
+            "cause": "TOOLSET_UNKNOWN",
+            "evidence_count": 0,
+        },
+    )
+    ledger = RunLedger(instances=[no_command, unknown])
+
+    report = render_report(ledger, _metrics())
+
+    assert "trace-no-command" in report
+    assert "trajectory UNVERIFIED [NO_COMMAND_TOOL_OFFERED]" in report
+    assert "never PASS" in report
+    assert "trace-toolset-unknown" in report
+    assert "trajectory UNVERIFIED [TOOLSET_UNKNOWN]" in report
+    # The should-have aggregate counts both causes by name.
+    assert "aggregate: 0 FAIL / 0 PASS / 2 UNVERIFIED" in report
+    assert "NO_COMMAND_TOOL_OFFERED: 1" in report
+    assert "TOOLSET_UNKNOWN: 1" in report
+
+
 def test_report_trajectory_section_survives_instrument_suspect() -> None:
     """The trajectory section is a limit statement, not a rate: it renders even when the
     violation-rate headline is suppressed — exactly the exposure section's discipline."""
@@ -424,7 +473,9 @@ def _canned_verifier(status: Status = Status.PASS, *, is_error: bool = False):
 def _edit_trace(tmp_path: Path, *, claim: str | None) -> Path:
     trace_path = _trace_with(
         tmp_path, "traces",
-        _tool_list_frames("edit_file", {"readOnlyHint": False})
+        _tool_list_frames(
+            "edit_file", {"readOnlyHint": False}, extra_tools=("run_process",)
+        )
         + [
             ("c2s", _call_frame(2, "edit_file", {"path": "/repo/src/a.py"}), None),
             ("s2c", _reply_frame(2), None),

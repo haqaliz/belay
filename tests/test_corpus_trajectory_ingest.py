@@ -72,13 +72,18 @@ def _stub_replay(monkeypatch, *, status: str = REPLAYED, is_error: bool = False)
     monkeypatch.setattr(turn_module, "replay_turn", fake)
 
 
-def _tool_list_frames(tool: str) -> list[tuple]:
+def _tool_list_frames(tool: str, *, extra_tools: tuple[str, ...] = ()) -> list[tuple]:
     req = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).encode()
     resp = json.dumps(
         {
             "jsonrpc": "2.0",
             "id": 1,
-            "result": {"tools": [{"name": tool, "annotations": {"readOnlyHint": False}}]},
+            "result": {
+                "tools": [
+                    {"name": name, "annotations": {"readOnlyHint": False}}
+                    for name in (tool, *extra_tools)
+                ]
+            },
         }
     ).encode()
     return [("c2s", req, None), ("s2c", resp, None)]
@@ -106,18 +111,25 @@ def _reply_frame(msg_id: int, is_error: bool = False, *, text: str = "ok") -> by
 
 
 def _write_gated_trace(
-    trace_dir: Path, tool: str, n_calls: int, arguments: dict | None = None
+    trace_dir: Path,
+    tool: str,
+    n_calls: int,
+    arguments: dict | None = None,
+    *,
+    offered: tuple[str, ...] = (),
 ) -> Path:
     """A real trace with per-turn `state_handle`s, and the `.manifests` sibling to match.
 
     Turn `i` carries handle `H{i}`, and every handle gets its OWN fake tree, so turn 0's
     pre-state is a distinct baseline from the target turn's and a case on a non-zero turn
     really writes the `task_manifest.json` / `task_prestate/` pair. Trees live under a
-    `<stem>.trees` sibling so two traces in one directory cannot collide.
+    `<stem>.trees` sibling so two traces in one directory cannot collide. `offered`
+    names extra tools the tools/list boundary offers alongside `tool` — the command tool
+    when a trajectory FAIL needs the suite-run ability to have existed.
     """
     writer = TraceWriter.in_directory(trace_dir)
     try:
-        for direction, raw, handle in _tool_list_frames(tool):
+        for direction, raw, handle in _tool_list_frames(tool, extra_tools=offered):
             writer.observer(direction)(raw, False)
         for i in range(n_calls):
             call_id = 10 + i
@@ -183,7 +195,8 @@ def test_trajectory_fail_ingests_a_corrupt_success_case(tmp_path, monkeypatch) -
     stored trace."""
     _stub_replay(monkeypatch, is_error=False)
     trace_path = _write_gated_trace(
-        tmp_path / "traces", "edit_file", 2, {"path": "/repo/src/a.py"}
+        tmp_path / "traces", "edit_file", 2, {"path": "/repo/src/a.py"},
+        offered=("run_process",),
     )
     append_claim_record(trace_path, text="all tests pass")
 
@@ -294,7 +307,8 @@ def test_mixed_instance_ingests_both_the_turn_case_and_the_trajectory_case(
     targeting the failing turn (turn-shaped, no `trajectory` field) and the trajectory
     case targeting the final turn (v4, with the instance-level expected)."""
     trace_path = _write_gated_trace(
-        tmp_path / "traces", "edit_file", 3, {"path": "/repo/src/a.py"}
+        tmp_path / "traces", "edit_file", 3, {"path": "/repo/src/a.py"},
+        offered=("run_process",),
     )
     append_claim_record(trace_path, text="all tests pass")
     canned = {
@@ -353,7 +367,8 @@ def test_rerun_trajectory_collision_never_errors_the_instance(tmp_path, monkeypa
     its counts and disposition, never ERRORED, so the denominator cannot shrink."""
     _stub_replay(monkeypatch, is_error=False)
     trace_path = _write_gated_trace(
-        tmp_path / "traces", "edit_file", 2, {"path": "/repo/src/a.py"}
+        tmp_path / "traces", "edit_file", 2, {"path": "/repo/src/a.py"},
+        offered=("run_process",),
     )
     append_claim_record(trace_path, text="all tests pass")
 

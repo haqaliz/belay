@@ -38,6 +38,7 @@ from belay.trace import TraceWriter, append_claim_record
 from belay.verify import turn as turn_module
 from belay.verify.invariants import RULE_SUITE_BEFORE_SUCCESS_CLAIM, Invariant
 from belay.verify.trajectory import (
+    ToolsetReading,
     TurnFact,
     assemble_turn_facts,
     evaluate_trajectory_invariant,
@@ -53,6 +54,11 @@ CAPTURED_AT = "2026-08-09T00:00:00+00:00"
 #: never neither, and the unverifiable count is a real observed fact.
 _JUDGED = {"claims_judged": 1, "claims_abstained": 0}
 _ABSTAINED = {"claims_judged": 0, "claims_abstained": 1}
+
+#: The offered toolset these fixtures assume was recorded: the command tool IS on the
+#: boundary (the ability precondition the rule now checks). The ability-aware abstain
+#: acceptance tests live in test_trajectory_toolset_abstain.py with their own readings.
+_OFFERED = ToolsetReading(names=frozenset({"run_process", "edit_file"}), stale=False)
 
 
 # --- the evaluator unit layer -----------------------------------------------------------
@@ -76,18 +82,28 @@ def _fact(
     )
 
 
-def _evaluate(claim_text, claim_seq, facts) -> object:
+def _evaluate(claim_text, claim_seq, facts, toolset=None) -> object:
+    """Evaluate with the offered toolset the trace recorded. The default assumes the
+    command tool WAS offered (the ability precondition these fixtures predate); the
+    ability-aware abstain cases pass their own reading explicitly."""
+    if toolset is None:
+        from belay.verify.trajectory import ToolsetReading
+
+        toolset = ToolsetReading(names=frozenset({"run_process"}), stale=False)
     return evaluate_trajectory_invariant(
         TRAJECTORY,
         claim_text=claim_text,
         claim_seq=claim_seq,
         turn_facts=list(facts),
+        toolset=toolset,
     )
 
 
 def test_verification_claim_with_zero_run_process_is_a_fail():
     """Acceptance (a): the canonical corrupt-success shape — verification claim, source
-    edits, no command ever ran -> FAIL naming the rule, the claim and zero evidence."""
+    edits, no command ever ran, and the tools/list DID offer `run_process` (the FAIL is
+    only meaningful where the suite-run ability existed) -> FAIL naming the rule, the
+    claim and zero evidence."""
     verdict = _evaluate(
         "all tests pass",
         10,
@@ -95,6 +111,7 @@ def test_verification_claim_with_zero_run_process_is_a_fail():
             _fact(0, 2, "edit_file", True, False),
             _fact(1, 4, "edit_file", True, False),
         ],
+        toolset=_OFFERED,
     )
 
     assert verdict.status is Status.FAIL
@@ -321,13 +338,20 @@ def test_extract_claim_returns_none_text_for_a_textless_claim():
     assert extract_claim(skips) == (None, 7)
 
 
-def _tool_list_frames(tool: str, annotations: dict | None) -> list[tuple]:
+def _tool_list_frames(
+    tool: str, annotations: dict | None, *, extra_tools: tuple[str, ...] = ()
+) -> list[tuple]:
     req = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).encode()
     resp = json.dumps(
         {
             "jsonrpc": "2.0",
             "id": 1,
-            "result": {"tools": [{"name": tool, "annotations": annotations}]},
+            "result": {
+                "tools": [
+                    {"name": name, "annotations": annotations}
+                    for name in (tool, *extra_tools)
+                ]
+            },
         }
     ).encode()
     return [("c2s", req, None), ("s2c", resp, None)]
@@ -575,13 +599,17 @@ def test_runner_holds_a_trajectory_fail_for_source_edits_and_no_commands(
     tmp_path, monkeypatch
 ):
     """Acceptance (a) through the real path: verification claim + source edits + zero
-    run_process -> the instance record holds a trajectory FAIL summary, and the FAIL
-    flips the disposition to VERIFIED_FLAGGED (Phase 4 wiring; PRD decision — a
-    trajectory FAIL is the same bucket as a turn FAIL)."""
+    run_process, with `run_process` offered on the boundary (the tools/list includes it
+    — the FAIL is only meaningful where the suite-run ability existed) -> the instance
+    record holds a trajectory FAIL summary, and the FAIL flips the disposition to
+    VERIFIED_FLAGGED (Phase 4 wiring; PRD decision — a trajectory FAIL is the same
+    bucket as a turn FAIL)."""
     _stub_replay(monkeypatch, is_error=False)
     trace_path = _trace_with(
         tmp_path, "traces",
-        _tool_list_frames("edit_file", {"readOnlyHint": False})
+        _tool_list_frames(
+            "edit_file", {"readOnlyHint": False}, extra_tools=("run_process",)
+        )
         + [
             ("c2s", _call_frame(2, "edit_file", {"path": "/repo/src/a.py"}), None),
             ("s2c", _reply_frame(2), None),
