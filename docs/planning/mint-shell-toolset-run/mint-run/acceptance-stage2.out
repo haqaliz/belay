@@ -1,0 +1,11 @@
+minted 11 captured, 0 failed, 0 no_observation, 0 never-driven of 11 instance(s)
+  batch dir:  /Users/aliz/dev/at/belay/.claude/worktrees/feat-mint-shell-toolset-run/eval/mint/s6b/batch
+  checkpoint: /Users/aliz/dev/at/belay/.claude/worktrees/feat-mint-shell-toolset-run/eval/mint/s6b/checkpoint.json
+  accounting: 11 of 11 instance(s) recorded
+    wall-clock:     583.2s
+    model requests: 60 (0 retries)
+    tokens:         120 in / 14810 out, over 11 of 11 recorded instance(s)
+    models:         claude-opus-5 (11)
+
+verify with:
+  belay phase0 run /Users/aliz/dev/at/belay/.claude/worktrees/feat-mint-shell-toolset-run/eval/mint/s6b/batch --ledger runs/phase0.json --corpus-dir corpus/local --server node /Users/aliz/dev/at/belay/.claude/worktrees/feat-mint-shell-toolset-run/eval/servers/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js '{workspace}'
