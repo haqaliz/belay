@@ -34,8 +34,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 from belay.phase0.runner import run_batch
 from belay.replay.engine import EQUAL, REPLAYED, TurnReplay
 from belay.trace import TraceWriter, append_claim_record
@@ -94,8 +92,10 @@ def test_steered_write_claim_shapes_abstain(tmp_path: Path, monkeypatch) -> None
         assert classification in (
             ClaimClassification.COMPLETION,
             ClaimClassification.AMBIGUOUS,
-        ), f"{shape!r} classified {classification.name} — a steered shape must never "
-        f"classify VERIFICATION"
+        ), (
+            f"{shape!r} classified {classification.name} — a steered shape must never "
+            "classify VERIFICATION"
+        )
         assert classification is not ClaimClassification.VERIFICATION
 
     # The full rule, through the real verify_turn (replay stubbed): a fabricated
@@ -115,7 +115,7 @@ def test_steered_write_claim_shapes_abstain(tmp_path: Path, monkeypatch) -> None
         )
         append_claim_record(trace_path, text=shape)
 
-        inst = _run_ledger(trace_dir, trace_path).instances[0]
+        inst = _run_ledger(trace_path).instances[0]
         assert inst.trajectory == {
             "status": "UNVERIFIED",
             "cause": "CLAIM_UNCLASSIFIABLE",
@@ -270,10 +270,10 @@ def _stub_replay(monkeypatch, *, is_error: bool = False) -> None:
     monkeypatch.setattr(turn_module, "replay_turn", fake)
 
 
-def _run_ledger(trace_dir: Path, trace_path: Path):
+def _run_ledger(trace_path: Path):
     return run_batch(
-        trace_dir,
-        corpus_dir=trace_dir / "corpus",
+        trace_path.parent,
+        corpus_dir=trace_path.parent / "corpus",
         server_command=["unused"],
         invariants=[TRAJECTORY],
         captured_at=CAPTURED_AT,

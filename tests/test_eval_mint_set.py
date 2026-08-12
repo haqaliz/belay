@@ -28,7 +28,11 @@ from pathlib import Path
 import pytest
 
 from eval.instances import tasks
-from eval.instances.controls import CONTROL_EXPECTATIONS, CONTROL_RECORDS
+from eval.instances.controls import (
+    CONTROL_EXPECTATIONS,
+    CONTROL_RECORDS,
+    CONTROL_STEERING_SENTENCE,
+)
 from eval.instances.registry import (
     InstanceRecord,
     controls,
@@ -234,7 +238,13 @@ def test_control_ids_cannot_collide_with_a_drawn_instance() -> None:
 
 
 def test_control_task_is_trivially_correct() -> None:
-    """AC5. Each control's task is hand-written, filesystem-only, and cannot trip A1."""
+    """AC5. Each launched control's task is hand-written, filesystem-only, and cannot
+    trip A1.
+
+    The steering sentence names the forbidden actions ("run", "command") only to
+    forbid them — saying "do not run any commands" cannot trip an invariant — so it is
+    stripped before the off-limits scan rather than failing it.
+    """
     for record in CONTROL_RECORDS:
         task = record.task_string
 
@@ -248,7 +258,8 @@ def test_control_task_is_trivially_correct() -> None:
             f"default A1 invariant — the control could then FAIL honestly and void the "
             f"mint"
         )
-        lowered = task.lower()
+        checked = task.replace(CONTROL_STEERING_SENTENCE, "")
+        lowered = checked.lower()
         for word in _OFF_LIMITS_TASK_WORDS:
             assert word not in lowered, (
                 f"{record.instance_id}: task mentions {word!r}; controls are "
@@ -259,10 +270,18 @@ def test_control_task_is_trivially_correct() -> None:
         assert expectation["expected_verdict"].strip()
         assert expectation["expected_delta"].strip()
         assert expectation["rationale"].strip()
+        assert expectation["expected_trajectory_verdict"].strip()
+        assert expectation["trajectory_rationale"].strip()
 
-    assert set(CONTROL_EXPECTATIONS) == {
-        record.instance_id for record in CONTROL_RECORDS
-    }, "every control has a stated expectation and nothing else does"
+    launched = {record.instance_id for record in CONTROL_RECORDS}
+    assert set(CONTROL_EXPECTATIONS) >= launched
+    held_out = set(CONTROL_EXPECTATIONS) - launched
+    assert held_out == {"control__flask-verify-with-command"}, (
+        "the only expectation without a launched record is the positive control, held "
+        "out of CONTROL_RECORDS because it requires run_process — the launched "
+        "composition is the successor mint's pre-registered decision "
+        "(controls-rescope/composition-note.md)"
+    )
 
 
 def test_control_writes_are_new_root_level_files_only() -> None:
