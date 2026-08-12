@@ -5,6 +5,37 @@ All notable changes to Belay are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0 — until then,
 `0.x` minor bumps may include changes that would be breaking under strict semver.
 
+## [0.17.0] - 2026-08-12
+
+### Added
+
+- **The trajectory axis becomes ability-aware, and the mint gains a command tool**
+  (`trajectory-toolset-rescope`) — the re-scope the voided re-mint's adjudication named as
+  the next unit. Engine: `suite-before-success-claim` now abstains with two new closed
+  causes — `NO_COMMAND_TOOL_OFFERED` (a `tools/list` snapshot exists and no command tool was
+  offered before the claim) and `TOOLSET_UNKNOWN` (no snapshot, or a stale one) — and FAILs
+  only when a command tool was actually offered with zero replayed exit-0 `run_process`
+  turns before a verification claim. The remint's 5 false positives by construction
+  (`suite-run-ability-not-offered`, precision 0.00) recompute UNVERIFIED with a named cause;
+  the change is a reclassification, never improved detection, and no published number was
+  re-derived. A false-abstention invariant is pinned by test: a trace containing a
+  `run_process` turn can never abstain `NO_COMMAND_TOOL_OFFERED` — usage is proof of
+  offering. Eval: the minting driver offers the pinned shell server
+  (`mcp-server-commands@0.8.2`) alongside the filesystem server on one boundary — a
+  composite transport with verbatim tool names and one call in flight, the shell server
+  rooted at the per-instance workspace — selectable via `--toolset filesystem+shell`
+  (default `filesystem`, so prior freeze invocations run identically). Controls: the write
+  controls' task text steers completion-only claims (expected abstain, pinned via the
+  classifier), and a new `control__flask-verify-with-command` is the trajectory axis's first
+  positive control (expected PASS; held out of stage registries — composition is the next
+  mint unit's decision). Corpus: declared-UNVERIFIED trajectory cases classify MATCH on
+  recompute, and no-command-tool/command-tool fixtures bank the new behavior. The live
+  dual-server smoke is `manual`-marked (operator step once `eval/servers/` is installed);
+  migration and banked-population reclassification runbooks ship in
+  `docs/planning/trajectory-toolset-rescope/`. **R1's quantitative form stays untested** —
+  this unit makes the axis able to measure the population; the next mint is the gate
+  decision.
+
 ## [0.16.0] - 2026-08-09
 
 ### Added
