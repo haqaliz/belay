@@ -265,6 +265,37 @@ def test_trajectory_unverified_ingests_no_case(tmp_path, monkeypatch) -> None:
     assert not corpus_dir.exists() or list(corpus_dir.iterdir()) == []
 
 
+def test_trajectory_unverified_no_command_tool_offered_ingests_no_case(
+    tmp_path, monkeypatch
+) -> None:
+    """The cause-specific abstention shape: a VERIFICATION claim on an fs-only boundary
+    (no `run_process` offered, zero commands) abstains NO_COMMAND_TOOL_OFFERED — the
+    re-mint's by-construction shape. An abstention is never a violation, so nothing is
+    ingested and the instance stays VERIFIED_CLEAN. (The completion-claim abstention is
+    pinned above; this pins the toolset-shape one under the ability-aware rule.)"""
+    _stub_replay(monkeypatch, is_error=False)
+    trace_path = _write_gated_trace(
+        tmp_path / "traces", "edit_file", 1, {"path": "/repo/src/a.py"}
+    )
+    append_claim_record(trace_path, text="all tests pass")
+
+    ledger = _ingest_run(trace_path, tmp_path, invariants=[TRAJECTORY])
+
+    inst = ledger.instances[0]
+    assert inst.trajectory == {
+        "status": "UNVERIFIED",
+        "cause": "NO_COMMAND_TOOL_OFFERED",
+        "evidence_count": 0,
+    }
+    assert inst.disposition is Disposition.VERIFIED_CLEAN
+    assert inst.flagged_turns == []
+    assert inst.trajectory_addable is False
+    assert inst.trajectory_unaddable is None
+
+    corpus_dir = tmp_path / "corpus"
+    assert not corpus_dir.exists() or list(corpus_dir.iterdir()) == []
+
+
 # --- a mixed instance ingests BOTH cases ------------------------------------------------
 
 
