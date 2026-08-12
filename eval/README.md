@@ -378,7 +378,9 @@ default**), `--registry`, `--clones-dir`, `--checkpoint` (default
 `<root>/checkpoint.json`), `--provider` (`openai-compat` | `anthropic` | `claude-cli`,
 default `openai-compat` — see "The subscription path" for the third), `--request-timeout`
 (default `120.0`), `--max-steps`, `--max-attempts` (default `3`), `--retry-base-delay`
-(default `1.0`), `--server-root`, and `--verify`.
+(default `1.0`), `--server-root`, `--toolset` (`filesystem` | `filesystem+shell`,
+default `filesystem` — the default is exactly the single-server path; the dual-server
+invocation is a Phase-4 runbook topic), and `--verify`.
 `python -m eval.minting_driver one --help` is authoritative.
 
 **`--model` is required and has no default, for the same reason `--root` has none.** The

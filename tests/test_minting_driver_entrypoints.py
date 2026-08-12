@@ -311,6 +311,20 @@ def test_unknown_provider_is_a_named_error(tmp_path: Path) -> None:
         resolve_credentials("openai")
 
 
+def test_unknown_toolset_is_a_named_error(tmp_path: Path) -> None:
+    """A typo'd `--toolset` is refused at config time, naming the valid values.
+
+    The default is `filesystem` — exactly the pre-existing single-server path, so a
+    config built without the field behaves identically to every config before the
+    toolset existed (the freeze-protocol invocations stay valid verbatim).
+    """
+    cfg = MintConfig(root=tmp_path / "mint", model=TEST_MODEL)
+    assert cfg.toolset == "filesystem"
+
+    with pytest.raises(MintConfigError, match="filesystem"):
+        MintConfig(root=tmp_path / "mint", toolset="shell", model=TEST_MODEL)
+
+
 # --------------------------------------------------------------------------------------
 # `claude-cli` — the third provider (aspect `claude-cli-model`, criteria 7/13)
 # --------------------------------------------------------------------------------------
@@ -656,6 +670,34 @@ def test_preflight_passes_with_a_stub_entrypoint(
 
     assert resolved == entrypoint.resolve()
     assert resolved.is_absolute()
+
+
+def test_preflight_for_filesystem_plus_shell_resolves_both_servers(
+    tmp_path: Path,
+) -> None:
+    """`--toolset filesystem+shell` preflights BOTH pinned servers, once, before prep.
+
+    A missing SHELL install must fail the same loud way a missing filesystem one does —
+    before anything is prepped or spent — and still return the filesystem entrypoint
+    (the replay `--server` command's server) when both are present.
+    """
+    server_root = tmp_path / "servers"
+    fs_entrypoint = _install_stub_server(server_root, "filesystem")
+    cfg = MintConfig(
+        root=tmp_path / "mint",
+        server_root=server_root,
+        toolset="filesystem+shell",
+        model=TEST_MODEL,
+    )
+
+    # Shell missing -> the preflight names the shell install, even with fs installed.
+    with pytest.raises(MissingServerError) as excinfo:
+        preflight_servers(cfg)
+    assert "mcp-server-commands@0.8.2" in str(excinfo.value)
+
+    # Both present -> resolves, and returns the filesystem entrypoint.
+    _install_stub_server(server_root, "shell")
+    assert preflight_servers(cfg) == fs_entrypoint.resolve()
 
 
 def test_mint_batch_runs_through_the_real_bridge_once_servers_are_present(

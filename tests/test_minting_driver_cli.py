@@ -642,3 +642,52 @@ def test_verify_flag_runs_the_batch_in_process_with_the_placeholder_command(
     assert code == 0
     assert seen["batch_dir"] == tmp_path / "mint" / "batch"
     assert seen["server_command"] == ["node", str(entrypoint), WORKSPACE_PLACEHOLDER]
+
+
+def test_cli_toolset_defaults_to_filesystem_and_accepts_filesystem_plus_shell(
+    tmp_path: Path,
+) -> None:
+    """`--toolset` defaults to `filesystem` (behavior-neutral — the freeze invocations
+    stay valid verbatim) and `filesystem+shell` reaches the config."""
+    default_cfg = build_config(
+        [
+            "one",
+            "octo__repo-1",
+            "--root",
+            str(tmp_path / "stage1"),
+            "--model",
+            TEST_MODEL,
+        ]
+    )
+    assert default_cfg.toolset == "filesystem"
+
+    dual_cfg = build_config(
+        [
+            "batch",
+            "--root",
+            str(tmp_path / "stage2"),
+            "--model",
+            TEST_MODEL,
+            "--toolset",
+            "filesystem+shell",
+        ]
+    )
+    assert dual_cfg.toolset == "filesystem+shell"
+
+
+def test_cli_rejects_an_unknown_toolset(tmp_path: Path) -> None:
+    """A typo'd `--toolset` is argparse's own exit 2, naming the valid choices."""
+    with pytest.raises(SystemExit) as excinfo:
+        build_config(
+            [
+                "one",
+                "octo__repo-1",
+                "--root",
+                str(tmp_path / "stage1"),
+                "--model",
+                TEST_MODEL,
+                "--toolset",
+                "shell",
+            ]
+        )
+    assert excinfo.value.code == 2

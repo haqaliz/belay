@@ -123,9 +123,19 @@ from eval.minting_driver.bridge import bridge_capture
 from eval.minting_driver.capture import gated_env, proxy_command
 from eval.minting_driver.claims import record_session_claim
 from eval.minting_driver.checkpoint import Checkpoint, load_checkpoint
+from eval.minting_driver.composite import (
+    CompositeTransport,
+    ServerSpec,
+    merge_tool_lists,
+)
+from eval.minting_driver.loop import run_task
 from eval.minting_driver.model import Model
 from eval.minting_driver.resilience import QuotaExhausted, TransientExhausted
-from eval.minting_driver.session import TransportFactory, run_session
+from eval.minting_driver.session import (
+    ClosableTransport,
+    TransportFactory,
+    run_session,
+)
 from eval.minting_driver.workspace import WorkspaceLayout, prepare_workspace
 
 StrPath = Union[str, "os.PathLike[str]"]
@@ -144,6 +154,23 @@ DiscoverTools = Callable[[list[str]], list[dict]]
 #: (fs) or `lambda layout: shell_server_command()` (shell — no per-instance arg).
 BuildServerCommand = Callable[[WorkspaceLayout], list[str]]
 
+#: Builds THIS instance's RAW (unproxied) server COMPOSITION — the dual-server seam
+#: (`--toolset filesystem+shell`, aspect `mint-dual-server`). When given, `run_mint`
+#: drives a `CompositeTransport` over the proxied specs instead of the single-server
+#: `build_server_command` path; `None` (the default) keeps that path byte-identical.
+BuildServerComposition = Callable[[WorkspaceLayout], list[ServerSpec]]
+
+#: Fetches the merged `tools/list` for a server composition, given its RAW specs. The
+#: composition-side discovery seam, mirroring `DiscoverTools` for the single-server path:
+#: tests inject a stub so no server is ever spawned in CI.
+DiscoverCompositionTools = Callable[[Sequence[ServerSpec]], list[dict]]
+
+#: Builds one transport for one dual-server session, given the PROXIED specs and the
+#: gated env. The default spawns one `StdioMcp` per spec (cwd per spec) and fronts them
+#: with a `CompositeTransport`; tests inject a factory over fake sessions. The composite
+#: itself knows nothing about the proxy — the proxied commands are the driver's doing.
+CompositeTransportFactory = Callable[[Sequence[ServerSpec], dict], ClosableTransport]
+
 #: Reads a monotonically-increasing number of seconds. The ONLY clock in the mint's
 #: config/drive path, injected so wall-clock is asserted against a scripted fake rather
 #: than against real elapsed time. See the module docstring for why it lives here and why
@@ -156,7 +183,9 @@ Clock = Callable[[], float]
 PrepareWorkspace = Callable[..., WorkspaceLayout]
 
 
-def _discover_tools(server_command: list[str]) -> list[dict]:
+def _discover_tools(
+    server_command: list[str], *, cwd: Optional[StrPath] = None
+) -> list[dict]:
     """A short-lived, UNPROXIED MCP handshake purely to read `tools/list`.
 
     Mirrors the single-instance smoke's `_fetch_tools_list`: open a raw `StdioMcp` straight to
@@ -164,6 +193,9 @@ def _discover_tools(server_command: list[str]) -> list[dict]:
     the tool list, and always close. This is the default second transport; it is deliberately
     kept behind the `discover_tools` seam so tests never reach it. Imports are lazy so this
     module imports with no `subprocess`/server dependency in a pure-fakes environment.
+
+    `cwd` (optional) is passed to the spawned process only when given — the shell
+    server's discovery spawn roots at the instance workspace exactly like the live one.
     """
     from eval.minting_driver.mcp import (
         MonotonicIds,
@@ -173,7 +205,7 @@ def _discover_tools(server_command: list[str]) -> list[dict]:
     )
     from eval.minting_driver.transport import StdioMcp
 
-    transport = StdioMcp(server_command, dict(os.environ))
+    transport = StdioMcp(server_command, dict(os.environ), cwd=cwd)
     try:
         next_id = MonotonicIds()
         transport.request(initialize(next_id()))
@@ -184,6 +216,37 @@ def _discover_tools(server_command: list[str]) -> list[dict]:
         return list(tools)
     finally:
         transport.close()
+
+
+def _discover_composition_tools(specs: Sequence[ServerSpec]) -> list[dict]:
+    """Per-spec unproxied handshakes merged FIRST-WINS — the composition discovery default.
+
+    One short-lived `StdioMcp` per spec (cwd per spec, so the shell's discovery spawn
+    roots at the workspace exactly like the live session), each handshake's tool list
+    merged with `merge_tool_lists`: the merged list is what the model is offered, so a
+    `run_process` from the shell spec must survive the merge verbatim. Mirrors
+    `_discover_tools`'s containment: kept behind the `discover_composition_tools` seam,
+    so tests never spawn a server.
+    """
+    return merge_tool_lists(
+        [_discover_tools(spec.command, cwd=spec.cwd) for spec in specs]
+    )
+
+
+def _default_composite_transport_factory(
+    specs: Sequence[ServerSpec], env: dict
+) -> ClosableTransport:
+    """One `StdioMcp` per PROXIED spec (cwd per spec) behind a `CompositeTransport`.
+
+    The driver passes proxied commands in — each spec's command is already wrapped in
+    `python -m belay.proxy` by `run_mint` — and the composite knows nothing about the
+    proxy; gating stays per-session because each session is a proxied `StdioMcp`.
+    """
+    from eval.minting_driver.transport import StdioMcp
+
+    return CompositeTransport(
+        [StdioMcp(spec.command, env, cwd=spec.cwd) for spec in specs]
+    )
 
 
 def _int_or_none(value: object) -> Optional[int]:
@@ -259,7 +322,7 @@ def run_mint(
     root: StrPath,
     clones_dir: StrPath,
     model_factory: ModelFactory,
-    build_server_command: BuildServerCommand,
+    build_server_command: Optional[BuildServerCommand] = None,
     checkpoint_path: StrPath,
     request_timeout: float,
     max_steps: int,
@@ -267,6 +330,9 @@ def run_mint(
     prepare: PrepareWorkspace = prepare_workspace,
     transport_factory: Optional[TransportFactory] = None,
     discover_tools: DiscoverTools = _discover_tools,
+    server_composition: Optional[BuildServerComposition] = None,
+    discover_composition_tools: DiscoverCompositionTools = _discover_composition_tools,
+    composite_transport_factory: Optional[CompositeTransportFactory] = None,
     clock: Clock = time.monotonic,
 ) -> Checkpoint:
     """Drive `records` sequentially through the gated proxy, one instance at a time.
@@ -308,7 +374,11 @@ def run_mint(
     `root/"batch"` is this call's single batch dir. Run once per server into distinct roots to
     keep two servers from ever sharing a trace dir. `transport_factory` (default: real
     `StdioMcp`) and `discover_tools` are injectable seams so tests exercise the real
-    `run_session`/`bridge` path with no subprocess, no git, no spend.
+    `run_session`/`bridge` path with no subprocess, no git, no spend. When
+    `server_composition` is given instead, `run_mint` drives a `CompositeTransport` over the
+    PROXIED specs (the dual-server `--toolset filesystem+shell` path); its seams are
+    `discover_composition_tools` and `composite_transport_factory`, and the single-server
+    path is byte-identical to a call without any of the three.
 
     Each session's `Transcript` is kept, not discarded: when the run stopped with a `Done`,
     the claim record (text = `Done.reason`, absent-never-empty) is appended to the capture
@@ -331,6 +401,14 @@ def run_mint(
     if request_timeout <= 0:
         raise ValueError(
             f"run_mint: request_timeout must be > 0 seconds, got {request_timeout!r}"
+        )
+    if build_server_command is None and server_composition is None:
+        # Exactly one seam decides the boundary. Refused here, once, before any instance
+        # is prepped — a mint that discovered neither would fail per-instance for a
+        # setup mistake.
+        raise ValueError(
+            "run_mint: exactly one of build_server_command (single-server path) or "
+            "server_composition (dual-server path) is required; got neither"
         )
 
     checkpoint = load_checkpoint(checkpoint_path)
@@ -357,34 +435,74 @@ def run_mint(
 
         try:
             layout = prepare(record, root=root, clones_dir=clones_dir)
-            # This instance's raw command carries its own workspace boundary (fs server) or is
-            # workspace-independent (shell server) — either way, built from THIS layout.
-            raw_command = build_server_command(layout)
-            if tools is None:
-                # Discover on the first prepped instance's command. Inside the try/except so a
-                # discovery failure fails only this instance and the loop tries the next.
-                tools = list(discover_tools(raw_command))
-            env = gated_env(
-                trace_dir=layout.trace_dir,
-                scope=str(layout.work_dir),
-                snapshot_dir=layout.snapshot_dir,
-            )
-            # BOUND, not inline. `run_session(model_factory(tools), ...)` constructed the
-            # model and discarded it, so the object that knows what this instance cost was
-            # unreachable the moment the call returned — which is why no mint has ever
-            # reported a spend figure. Still a FRESH model per instance: the binding is
-            # per-iteration, so no conversation state bleeds between instances.
-            model = model_factory(tools)
-            transcript = run_session(
-                model,
-                server_command=proxy_command(raw_command),
-                env=env,
-                system=system,
-                task=record.task_string,
-                max_steps=max_steps,
-                transport_factory=transport_factory,
-                request_timeout=request_timeout,
-            )
+            if server_composition is None:
+                # This instance's raw command carries its own workspace boundary (fs server)
+                # or is workspace-independent (shell server) — either way, built from THIS
+                # layout. Single-server path, byte-identical to before the composite seam.
+                raw_command = build_server_command(layout)
+                if tools is None:
+                    # Discover on the first prepped instance's command. Inside the
+                    # try/except so a discovery failure fails only this instance and the
+                    # loop tries the next.
+                    tools = list(discover_tools(raw_command))
+                env = gated_env(
+                    trace_dir=layout.trace_dir,
+                    scope=str(layout.work_dir),
+                    snapshot_dir=layout.snapshot_dir,
+                )
+                # BOUND, not inline. `run_session(model_factory(tools), ...)` constructed
+                # the model and discarded it, so the object that knows what this instance
+                # cost was unreachable the moment the call returned — which is why no mint
+                # has ever reported a spend figure. Still a FRESH model per instance: the
+                # binding is per-iteration, so no conversation state bleeds between
+                # instances.
+                model = model_factory(tools)
+                transcript = run_session(
+                    model,
+                    server_command=proxy_command(raw_command),
+                    env=env,
+                    system=system,
+                    task=record.task_string,
+                    max_steps=max_steps,
+                    transport_factory=transport_factory,
+                    request_timeout=request_timeout,
+                )
+            else:
+                # Dual-server composition (`--toolset filesystem+shell`): THIS instance's
+                # raw specs (fs + shell with the workspace as the shell's cwd) become one
+                # proxied boundary — every command wrapped in `python -m belay.proxy`,
+                # one in-flight across the whole composite, gating per session.
+                specs = list(server_composition(layout))
+                if tools is None:
+                    # Merged FIRST-WINS off each spec's own handshake; inside the
+                    # try/except so one bad first instance never aborts the mint.
+                    tools = list(discover_composition_tools(specs))
+                env = gated_env(
+                    trace_dir=layout.trace_dir,
+                    scope=str(layout.work_dir),
+                    snapshot_dir=layout.snapshot_dir,
+                )
+                model = model_factory(tools)
+                proxied = [
+                    ServerSpec(command=proxy_command(spec.command), cwd=spec.cwd)
+                    for spec in specs
+                ]
+                factory = (
+                    composite_transport_factory
+                    or _default_composite_transport_factory
+                )
+                transport = factory(proxied, env)
+                try:
+                    transcript = run_task(
+                        model,
+                        transport,
+                        system=system,
+                        task=record.task_string,
+                        max_steps=max_steps,
+                        request_timeout=request_timeout,
+                    )
+                finally:
+                    transport.close()
             # The claim record: when the session stopped with a `Done`, the model
             # claimed success, and that claim is the trajectory rule's only evidence
             # of it — it never crossed the proxy (the client parses `Done` itself).
@@ -466,7 +584,10 @@ def run_mint(
 
 __all__ = [
     "BuildServerCommand",
+    "BuildServerComposition",
     "Clock",
+    "CompositeTransportFactory",
+    "DiscoverCompositionTools",
     "DiscoverTools",
     "ModelFactory",
     "PrepareWorkspace",

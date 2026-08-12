@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import threading
 import time
+from pathlib import Path
 from typing import Optional
 
 import pytest
@@ -37,9 +38,12 @@ from eval.minting_driver.composite import (
     BusyError,
     CompositeTransport,
     UnknownToolError,
+    parse_toolset,
 )
 from eval.minting_driver.mcp import initialize, initialized, tools_call, tools_list
+from eval.minting_driver.servers import PINNED_SERVERS
 from eval.minting_driver.transport import ServerExited
+from eval.minting_driver.workspace import layout_for
 
 from fixtures.shell_command_server import RUN_TOOL, TOOLS as SHELL_TOOLS
 
@@ -334,3 +338,61 @@ def test_a_session_that_errors_on_tools_list_fails_the_composite_loudly() -> Non
             _handshake(composite)
     finally:
         composite.close()
+
+
+# --------------------------------------------------------------------------------------
+# Toolset selection — `parse_toolset` (aspect R6: freeze-able toolset, spec.md AC3)
+# --------------------------------------------------------------------------------------
+
+
+def _install_fake_server(root: Path, name: str) -> Path:
+    """An empty entrypoint at the pinned path — CI never installs or spawns node."""
+    entrypoint = root / PINNED_SERVERS[name].entrypoint
+    entrypoint.parent.mkdir(parents=True, exist_ok=True)
+    entrypoint.write_text("// fake\n", encoding="utf-8")
+    return entrypoint
+
+
+def test_parse_toolset_filesystem_is_one_fs_spec_without_cwd(tmp_path: Path) -> None:
+    """`filesystem` -> exactly today's single-server composition: one fs spec, no cwd."""
+    server_root = tmp_path / "servers"
+    entrypoint = _install_fake_server(server_root, "filesystem")
+    layout = layout_for("octo__repo-1", tmp_path / "mint")
+
+    specs = parse_toolset("filesystem", layout, root=server_root)
+
+    assert len(specs) == 1
+    assert specs[0].cwd is None
+    assert specs[0].command == ["node", str(entrypoint.resolve()), str(layout.work_dir)]
+
+
+def test_parse_toolset_filesystem_plus_shell_carries_the_instance_cwd(
+    tmp_path: Path,
+) -> None:
+    """`filesystem+shell` -> fs spec (no cwd) + shell spec with `cwd=layout.work_dir`."""
+    server_root = tmp_path / "servers"
+    fs_entrypoint = _install_fake_server(server_root, "filesystem")
+    shell_entrypoint = _install_fake_server(server_root, "shell")
+    layout = layout_for("octo__repo-1", tmp_path / "mint")
+
+    specs = parse_toolset("filesystem+shell", layout, root=server_root)
+
+    assert len(specs) == 2
+    fs_spec, shell_spec = specs
+    assert fs_spec.cwd is None
+    assert fs_spec.command == ["node", str(fs_entrypoint.resolve()), str(layout.work_dir)]
+    assert shell_spec.cwd == str(layout.work_dir)
+    assert shell_spec.command == ["node", str(shell_entrypoint.resolve())]
+
+
+def test_parse_toolset_bogus_names_the_valid_values(tmp_path: Path) -> None:
+    """An invalid toolset is a clear error naming the valid values — before any server
+    command is built (so it fails even with no install present)."""
+    layout = layout_for("octo__repo-1", tmp_path / "mint")
+
+    with pytest.raises(ValueError) as excinfo:
+        parse_toolset("bogus", layout)
+
+    message = str(excinfo.value)
+    assert "filesystem" in message
+    assert "filesystem+shell" in message
