@@ -380,7 +380,7 @@ default `openai-compat` — see "The subscription path" for the third), `--reque
 (default `120.0`), `--max-steps`, `--max-attempts` (default `3`), `--retry-base-delay`
 (default `1.0`), `--server-root`, `--toolset` (`filesystem` | `filesystem+shell`,
 default `filesystem` — the default is exactly the single-server path; the dual-server
-invocation is a Phase-4 runbook topic), and `--verify`.
+invocation is below), and `--verify`.
 `python -m eval.minting_driver one --help` is authoritative.
 
 **`--model` is required and has no default, for the same reason `--root` has none.** The
@@ -728,6 +728,87 @@ absent from the summary. A stopped batch prints, above the accounting:
 is a live observation and is not reproducible**; the ledger → report path is, and this
 printed line is what makes that second half true.
 
+### The dual-server mint (`--toolset filesystem+shell`)
+
+Since 2026-08-12 the driver can offer **both** pinned servers on one boundary: the
+filesystem server (file tools) plus the shell server (`run_process`) behind the gated
+proxy — one proxied session per server, fronted by a composite transport that merges the
+tool lists **verbatim** (no prefixing: `run_process` stays `run_process`, because the
+trajectory rule matches that exact name) and routes each `tools/call` to the session
+that declared the tool (`eval/minting_driver/composite.py`). This is what the trajectory
+axis needs to measure the mint population at all: a mint under the default `filesystem`
+toolset offers no command tool, the rule abstains `NO_COMMAND_TOOL_OFFERED` on every
+verification claim, and the D-1 exposure gate stops the mint at zero judged claims.
+
+**Default unchanged.** `--toolset` defaults to `filesystem`, which is byte-for-byte the
+pre-existing single-server path — every invocation that worked before this flag works
+identically without it. The dual composition is an explicit opt-in.
+
+#### Install: the same command, both servers
+
+The documented install already covers both pinned servers in one command — run it
+**outside the sandbox**, from the repo root:
+
+```bash
+npm install --prefix eval/servers \
+  @modelcontextprotocol/server-filesystem@2026.7.10 mcp-server-commands@0.8.2
+```
+
+`eval/minting_driver/servers.py` resolves **both** entrypoints when the toolset names
+them and raises `MissingServerError` (with this exact command in its message) if either
+is absent — the driver preflights every server the toolset names before any instance is
+prepped or spent. Keep the install outside the repo and point `BELAY_EVAL_SERVER_ROOT`
+at it if you prefer (e.g. `~/dev/at/holder/belay/servers`).
+
+#### Run: one freeze-able invocation
+
+```bash
+uv run python -m eval.minting_driver one pytest-dev__pytest-7432 \
+  --root eval/mint/live-smoke-dual-server \
+  --registry eval/instances/pool.json \
+  --provider claude-cli --model claude-opus-5 \
+  --toolset filesystem+shell
+```
+
+`--toolset filesystem+shell` is the one flag that changes the composition; everything
+else is an ordinary mint invocation (`--root`/`--registry`/`--provider`/`--model` are
+all required and freeze-able as usual). For a batch: same flag on the `batch` subcommand.
+
+**The shell-cwd note.** The shell server process is spawned with **the instance
+workspace as its working directory** — `cwd=layout.work_dir` is carried on the shell
+spec per instance (`composite.py` `parse_toolset`), inherited by the proxy-spawned
+server, so every `run_process` command the agent issues runs in the repository root of
+that instance. The filesystem server is unaffected (its boundary is the absolute
+`allowed_dir` argv). This is a **capture-side fact only**: replay restores its own
+scratch directory and re-invokes with `cwd=scratch` (plus the shipped
+`command_line`/`argv`/`cwd` relocation rules), so a shell turn replays against the
+restored snapshot, never against the live workspace.
+
+#### Verify: `belay phase0 run` over the capture
+
+The mint prints the stock verify command exactly as for a single-server run:
+
+```bash
+belay phase0 run eval/mint/live-smoke-dual-server/batch \
+  --ledger runs/phase0.json --corpus-dir corpus/local \
+  --server node <abs-filesystem-entrypoint> '{workspace}'
+```
+
+The filesystem turn rows replay through the stock spine as always. The `run_process`
+turn rows are additionally replayable against the rootless pinned shell server command
+(`node <abs .../mcp-server-commands/build/index.js>`, no `{workspace}` token) — that is
+the honest replay path for a shell turn, and the manual smoke
+(`tests/test_minting_driver_dual_server_smoke.py`) asserts the captured `run_process`
+turn replays verifiably (PASS or UNVERIFIED-with-cause, never a silent miss) that way.
+Replaying the shell turns through the single `--server` filesystem command instead is
+not expected to reproduce their replies — treat any such rows as a finding for the
+successor mint's verify composition, not as a detector result.
+
+The dual-server **smoke** (one instance, end to end) is a manual step, never CI:
+see `docs/planning/trajectory-toolset-rescope/mint-dual-server/smoke.md` for the exact
+commands and the current status (it is an operator step; the unit that shipped the
+toolset did not run it).
+
 ## The controls under the trajectory rule
 
 The control records and their stated expectations live in `eval/instances/controls.py`
@@ -800,6 +881,14 @@ The smoke asserts that `belay.phase0.runner.run_batch` resolves at least one tur
 verifiable (non-`UNVERIFIED`) disposition — `verified-clean` or `verified-flagged` — for
 the curated instance in `eval/instances.md`. It is a documented manual procedure run by a
 human before scaling to the ≥50-instance mint, not a merge gate.
+
+**The dual-server smoke** (`tests/test_minting_driver_dual_server_smoke.py`,
+`--toolset filesystem+shell`) is the same manual procedure aimed at the composite
+boundary: one mint instance through both pinned servers, the trace's `tools/list`
+naming `run_process` verbatim, the shell's cwd at the instance workspace, and the
+captured `run_process` turn replaying verifiably. Same three guards (darwin +
+`BELAY_EVAL_LIVE=1` + the `manual` marker), and the exact commands live in
+`docs/planning/trajectory-toolset-rescope/mint-dual-server/smoke.md`.
 
 ## Honest scope
 
