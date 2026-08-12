@@ -52,7 +52,7 @@ from belay.verify.trajectory import (
     evaluate_trajectory_rules,
     offered_toolset,
 )
-from belay.verify.turn import TurnVerdict, verify_turn
+from belay.verify.turn import verify_turn
 from belay.verify.verdict import Status
 
 TRAJECTORY = Invariant(scope=b"", rule=RULE_SUITE_BEFORE_SUCCESS_CLAIM)
