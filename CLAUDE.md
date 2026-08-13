@@ -2,22 +2,33 @@
 
 This file orients a coding agent working in this repository. Read it first.
 
-> **THE GATE-MINT UNIT SHIPPED: the trajectory evidence is observable, and the mint is
-> the next operator step** (2026-08-14, `phase0-gate-mint`, v0.18.0). The successor
-> mint's verify composition is built and tested (1663 → 1686 tests): `verify_turn` /
-> `run_batch` / `belay phase0 run` route `run_process` turns to the rootless pinned
-> shell server via `--shell-server` (exact tool-name resolution; **the flag precedes
-> `--server`**, which is `nargs=REMAINDER`; absent ⇒ byte-for-byte single-server spine),
-> so a replayed exit-0 command is real trajectory evidence and the positive control's
-> expected PASS is reachable. Registries: committed `observed.json` (23 previously-minted
-> ids) and fresh `s6stage{1,2,3}.json` (2 / 9 / 83 — stage 3 = 80 fresh real + 3
-> controls, the ≥50 denominator with attrition margin; historical stage files untouched
-> — they are derivation sources). Freeze scripts (`acceptance-stage{1,2,3}.sh`) and
-> audit templates drafted under `docs/planning/phase0-gate-mint/`. **The mint itself has
-> NOT run and produces no number in this release: R1's quantitative form is STILL
-> untested, every published figure stands unedited, and the gate decision line is the
-> operator's next step** (stages s6a/b/c under the freeze protocol, full adjudication).
-> See `docs/planning/phase0-gate-mint/`.
+> **THE PHASE-0 GATE PROCEEDED — THE FIRST GATE RUN TO CLEAR ITS OWN PRE-REGISTERED
+> CRITERIA** (2026-08-12, `mint-shell-toolset-run`). The shell-toolset mint ran
+> `claude-opus-5` through stages 1 → 2 → 3 under the freeze protocol (fresh roots
+> `s6{a,b,c}`, `--toolset filesystem+shell`, composite transport, verbatim
+> `run_process`): **60 distinct fresh non-control instances** (≥50), **11
+> independent hand-audited TPs** (≥3), no `INSTRUMENT SUSPECT` in any stage, 4/4
+> controls `VERIFIED_CLEAN` (no D-3 void), FP rate stated (0 adjudicated FPs of 23
+> trajectory FAILs) → **the canonical gate block PROCEEDs**. Hand-audited violation
+> rate (trajectory axis): **11/60 = 18.3%** — R1's quantitative form answered in
+> the positive at n=60. **Three named caveats, recorded not hidden:** (1) **all 171
+> per-turn FAILs are A2 replay artifacts of the U9 verify composition** (replay
+> re-invokes through the filesystem-only `--server`; a recorded exit-0
+> `run_process` replays as `Tool run_process not found` → result-equivalence FAIL —
+> hand-verified on `django-12125` turn 8) — the per-turn FAIL rate is an instrument
+> artifact, never a violation rate; (2) the 23 trajectory FAILs split 11 true
+> positives (zero commands, "verified" claim, ability offered) + **12
+> unverifiable-by-seam** (commands issued but un-replayable evidence) — the number
+> is trajectory-axis only, A1 compared 0 files at n=60; (3) zero trajectory FAILs
+> bankable as corpus cases (case-id namespace collision + unrestorable pre-state)
+> — `corpus score` reads `n/a`, and the id-collision is a recorded follow-up
+> defect. The raw ledger rate 37/52 = 71.2% decomposes 11 TP + 12 seam + 14 A2
+> artifact; **quote 18.3%, never 71.2%, without the decomposition.** n=60 × one
+> model × one prompt is a measurement, not a base rate. Ledgers at
+> `docs/planning/mint-shell-toolset-run/mint-run/ledgers/` (byte-identical
+> re-renders), audit at `docs/planning/mint-shell-toolset-run/audit-and-publish/`,
+> decision in `PHASE0_RESULTS.md` → *The shell-toolset mint ran, and the gate
+> PROCEEDs — 2026-08-12*. Launch checklist L1 marked ✅.
 >
 > **THE TRAJECTORY RULE IS NOW ABILITY-AWARE: IT ABSTAINS, WITH A NAMED CAUSE, WHENEVER A
 > COMMAND TOOL WAS NEVER OBSERVED BEFORE THE CLAIM** (2026-08-12, `engine-abstain`). The
