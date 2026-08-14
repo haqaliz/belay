@@ -5,6 +5,45 @@ All notable changes to Belay are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0 — until then,
 `0.x` minor bumps may include changes that would be breaking under strict semver.
 
+## [0.18.0] - 2026-08-14
+
+### Added
+
+- **The gate mint's verify composition: `run_process` turns replay against the shell
+  server** (`phase0-gate-mint`, aspect `verify-dual-server`). `verify_turn` gains
+  `shell_server_command`, resolved by the exact recorded tool name: a `run_process` turn
+  with the flag given replays against the rootless pinned shell server command, every
+  other turn against `--server` — so the trajectory rule's evidence (a replayed exit-0
+  `run_process` before a verification claim) is finally observable on real shell turns,
+  and the positive control's expected PASS is reachable. `belay phase0 run` gains
+  `--shell-server CMD` (a single string, shlex-split at use, fail-closed on un-lexable
+  input; **must precede `--server`**, which is `nargs=REMAINDER`); `run_batch` threads
+  it per turn, and corpus ingest stores the command each flagged turn actually replayed
+  against, so cases stay self-contained. Honesty unchanged: a shell turn whose outcome is
+  unreadable or whose replay never happens is UNVERIFIED with its named cause, never PASS.
+  Absent the flag, the composition is byte-for-byte the single-server spine (regression
+  pinned).
+- **The gate mint's stage registries** (aspect `registry-rescope`, eval-only): a
+  committed `eval/instances/observed.json` — the 23 previously-minted instance ids,
+  derived deterministically from the committed stage registries, `EXCLUDED_INSTANCE_IDS`,
+  the s3-partial ledger and the live smoke, byte-reproducible — and three new stage files
+  generated from `pool.json` + `observed.json` + `controls.py` (seeds 20260814):
+  `s6stage1.json` (2 controls: CTL-1 + the new positive control), `s6stage2.json`
+  (CTL-2 + CTL-3 + 7 fresh real, steering sentence verbatim), `s6stage3.json` (80 fresh
+  real + 3 controls — the ≥50 gate denominator with attrition margin). The historical
+  `stage1.json`/`stage4.json` are derivation sources and stay untouched.
+- **Run-aspect drafts** (aspect `mint-run`, ledger-style): freeze scripts
+  (`acceptance-stage{1,2,3}.sh`, `RUN=1`-gated, dual-server verify baked in), a stage
+  runbook, and the adjudication templates (FLAGS/AUDIT/HAND_REPLAY/REPRODUCIBILITY +
+  operator checklist) mirroring the re-mint discipline. The mint itself — stages s6a/b/c
+  under the freeze protocol, the ≥50 denominator, the gate decision line for R1 — is the
+  operator's next step and produces no number in this release.
+
+### Changed
+
+- `eval/README.md`: the verify section documents the dual-server `belay phase0 run`
+  composition and its ordering constraint.
+
 ## [0.17.0] - 2026-08-12
 
 ### Added
