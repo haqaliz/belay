@@ -531,6 +531,23 @@ value cases in the corpus, and the ones the Phase-0 number is made of.
 > recorded in the PRD (2026-08-12: vocabulary kept; abstain-side conservatism is by design;
 > determinability ≠ correctness).
 >
+> **STATUS 2026-08-14 — the gate-mint unit SHIPPED: the trajectory evidence is now
+> OBSERVABLE on real shell turns** (`phase0-gate-mint`; commits `246786a` RED →
+> `9138cea` GREEN → `feb810b` registries; see `docs/planning/phase0-gate-mint/`). The
+> successor mint's verify composition was the last gap between the v0.17.0 harness and a
+> gate decision: `run_process` turns replay against the rootless pinned shell server
+> (per-tool routing by exact tool name through `verify_turn`/`run_batch`/`belay phase0
+> run --shell-server`), so a replayed exit-0 command is real trajectory evidence and the
+> positive control's expected PASS is reachable. Registries: committed `observed.json`
+> (23 previously-minted ids, byte-reproducible) and fresh stage files `s6stage{1,2,3}`
+> (2 / 9 / 83 records; stage 3 = 80 fresh real + 3 controls — the ≥50 denominator with
+> attrition margin). The run itself — stages s6a/b/c under the freeze protocol, full
+> adjudication, the gate decision line — is the operator's next step and is recorded in
+> `docs/planning/phase0-gate-mint/mint-run/` (freeze scripts + audit templates drafted).
+> **No published number changed; R1's quantitative form is STILL untested — the mint
+> decides.** `4/16`, `precision 0.00`, `3/93`, `recall 0.00`, `1/15`, the 17-judgment
+> figure and the 2026-07-29 PIVOT all stand unedited.
+
 > **Superseded, kept for the record —** **Decision: build `invariant-test-mutation-shape` next; do NOT mint the remaining ~34 instances
 > under a 0.00-precision detector.** Its rule must be *"modification that removes or weakens an
 > existing assertion"*, judged against the **task pre-state** and the **resulting content**. The 7

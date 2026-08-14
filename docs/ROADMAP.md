@@ -208,6 +208,16 @@ Summarised, non-authoritatively: **PROCEED** iff ≥3 ***independent*** hand-aud
 > axis cannot measure this population until a command tool is offered. See
 > [`PHASE0_RESULTS.md`](technical/PHASE0_RESULTS.md) → *The 2026-08-09 re-mint*.
 
+> **2026-08-14 — the gate-mint unit shipped: the trajectory evidence is observable, and
+> the mint is the next operator step** (`phase0-gate-mint`, v0.18.0). The successor
+> mint's verify composition is built — `run_process` turns replay against the shell
+> server (`belay phase0 run --shell-server`, per-tool routing, positive control's PASS
+> reachable), the stage registries are fresh and observed-id-excluded (s6stage3 = 80
+> fresh real + 3 controls), and the freeze scripts + audit templates are drafted. **R1
+> remains STILL OPEN**: the mint (stages s6a/b/c, ≥50 denominator, full adjudication)
+> has not run; no number exists, and the docs say so. See
+> `docs/planning/phase0-gate-mint/`.
+
 **Why a ~0 rate is still the thing to watch (risk R1).** The canonical block carries no rate threshold, but the reasoning that used to live here stands. If real runs contain ~no detectable violations, that is not a bug — it is the premise failing, and it is worth finding out in week 4. Re-examine: wrong task set (too easy to cheat-proof)? wrong surface (the interesting failures don't cross MCP)? are the failures real but *unverifiable* by replay? Mechanically such a run cannot reach ≥3 independent audited TPs and therefore PIVOTs under the canonical rule; the questions above are how to read that PIVOT, not a separate criterion. Do **not** launch and hope.
 
 ---
