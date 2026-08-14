@@ -5,6 +5,40 @@ All notable changes to Belay are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0 — until then,
 `0.x` minor bumps may include changes that would be breaking under strict semver.
 
+## [0.19.0] - 2026-08-15
+
+### Added
+
+- **THE PHASE-0 GATE PROCEEDED — the first gate run to clear its own pre-registered
+  criteria** (`mint-shell-toolset-run`). The shell-toolset mint ran `claude-opus-5`
+  through stages 1 → 2 → 3 under the freeze protocol (fresh roots `s6{a,b,c}`,
+  `--toolset filesystem+shell`, composite transport, verbatim `run_process`): **60
+  distinct fresh non-control instances** (≥50), **11 independent hand-audited TPs**
+  (≥3), no `INSTRUMENT SUSPECT` in any stage, 4/4 controls `VERIFIED_CLEAN` (no D-3
+  void), FP rate stated (0 adjudicated FPs of 23 trajectory FAILs) → **the canonical
+  gate block PROCEEDs**. Hand-audited violation rate (trajectory axis): **11/60 =
+  18.3%** — R1's quantitative form answered in the positive at n=60. Three named
+  caveats, recorded not hidden: (1) all 171 per-turn FAILs are A2 replay artifacts of
+  the U9 verify composition — the per-turn FAIL rate is an instrument artifact, never
+  a violation rate; (2) the 23 trajectory FAILs split 11 true positives + 12
+  unverifiable-by-seam — the number is trajectory-axis only, A1 compared 0 files at
+  n=60; (3) zero trajectory FAILs bankable as corpus cases (case-id namespace
+  collision + unrestorable pre-state) — `corpus score` reads `n/a`, and the
+  id-collision is a recorded follow-up defect. The raw ledger rate 37/52 = 71.2%
+  decomposes 11 TP + 12 seam + 14 A2 artifact; quote 18.3%, never 71.2%, without the
+  decomposition. n=60 × one model × one prompt is a measurement, not a base rate.
+  Ledgers at `docs/planning/mint-shell-toolset-run/mint-run/ledgers/` (byte-identical
+  re-renders), audit at `docs/planning/mint-shell-toolset-run/audit-and-publish/`,
+  decision in `PHASE0_RESULTS.md` → *The shell-toolset mint ran, and the gate
+  PROCEEDs — 2026-08-12*. Launch checklist L1 marked ✅
+  (`docs/planning/launch-readiness/CHECKLIST.md`).
+- **Eval: stage-6 mint registries and trace merge** — `eval/instances/stage6{a,b,c}.json`
+  (the run's registries, fresh draws excluding every previously-minted id),
+  `eval/scripts/build_stage6_registries.py` (byte-reproducible generation), and
+  `eval/minting_driver/trace_merge.py` (merges the composite transport's per-session
+  traces into one per-instance capture, `run_batch` integration). Eval-only, not a
+  product surface; test-pinned (1704 tests).
+
 ## [0.18.0] - 2026-08-14
 
 ### Added
@@ -822,6 +856,7 @@ The first public release: the full **record → sandbox → replay → verdict**
 - **The A3 claim-re-derivation axis** (C8) is not built; the live console (C7) and observability interop
   (C9) are ahead on the roadmap.
 
-[Unreleased]: https://github.com/haqaliz/belay/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/haqaliz/belay/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/haqaliz/belay/compare/v0.18.0...v0.19.0
 [0.1.1]: https://github.com/haqaliz/belay/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/haqaliz/belay/releases/tag/v0.1.0

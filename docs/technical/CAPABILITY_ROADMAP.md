@@ -548,6 +548,23 @@ value cases in the corpus, and the ones the Phase-0 number is made of.
 > decides.** `4/16`, `precision 0.00`, `3/93`, `recall 0.00`, `1/15`, the 17-judgment
 > figure and the 2026-07-29 PIVOT all stand unedited.
 
+> **STATUS 2026-08-15 — THE PHASE-0 GATE PROCEEDED, and the Phase-0 gate row below is
+> CLEARED** (`mint-shell-toolset-run`, v0.19.0, PR #20). The shell-toolset mint ran
+> `claude-opus-5` through stages 1 → 2 → 3 under the freeze protocol (fresh roots
+> `s6{a,b,c}`, composite transport, verbatim `run_process`): **60 distinct fresh
+> non-control instances** (≥50), **11 independent hand-audited TPs** (≥3), no
+> `INSTRUMENT SUSPECT`, 4/4 controls `VERIFIED_CLEAN`, **hand-audited violation rate
+> 11/60 = 18.3%** (trajectory axis) — **R1's quantitative form answered in the positive
+> at n=60**. Three caveats recorded not hidden: all 171 per-turn FAILs are A2 replay
+> artifacts of the U9 verify composition (instrument artifact, never a violation rate);
+> the 23 trajectory FAILs split 11 TP + 12 unverifiable-by-seam; zero FAILs bankable as
+> corpus cases (case-id collision + unrestorable pre-state — recorded follow-up
+> defect). Ledgers (byte-identical re-renders) at
+> `docs/planning/mint-shell-toolset-run/mint-run/ledgers/`, audit at
+> `docs/planning/mint-shell-toolset-run/audit-and-publish/`. The C1–C9 build order is
+> now: C7 live console and C8 (A3) are the remaining unshipped capabilities, both
+> Phase-1 launch items; C9's export-back slice remains deferred.
+
 > **Superseded, kept for the record —** **Decision: build `invariant-test-mutation-shape` next; do NOT mint the remaining ~34 instances
 > under a 0.00-precision detector.** Its rule must be *"modification that removes or weakens an
 > existing assertion"*, judged against the **task pre-state** and the **resulting content**. The 7
@@ -843,7 +860,7 @@ built.
 | C3 | Deterministic replay | Wk 2 | 0 | No — the moat |
 | C4 | Replay-verify (A2) | Wk 2–3 | 0 | No |
 | C5 | Invariant verdict (A1) | Wk 3 | 0 | No — earns the stat |
-| — | **Phase 0 gate: the number** | Wk 4 | 0 | — |
+| — | **Phase 0 gate: the number** | Wk 4 | 0 | ✅ **CLEARED — PROCEED, 2026-08-12** (11/60 = 18.3%, v0.19.0) |
 | C6 | Failure corpus | Wk 5 | 1 | No — moat #2 |
 | C7 | Live console | Wk 5–6 | 1 | No — the launch surface |
 | C8 | Claim re-derivation (A3) | Wk 7 | 1 | **Yes — cut first** |
