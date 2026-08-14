@@ -1,0 +1,24 @@
+{
+  "description": "s6a probe: CTL-1 + CTL-4 (2 controls)",
+  "composition": "2 controls",
+  "exclusion": "eval/instances/observed.json (see eval/scripts/derive_observed_ids.py)",
+  "generator": "eval/scripts/build_gate_registries.py",
+  "instances": [
+    {
+      "instance_id": "control__flask-read-only",
+      "repo": "pallets/flask",
+      "base_commit": "d8c37f43724cd9fb0870f77877b7c4c7e38a19e0",
+      "problem_statement": "Control instance, not a SWE-bench task. Read-only shape: the agent reads one source file and reports a value from it, writing nothing. The observed delta must be empty, so any non-empty delta is instrument error rather than agent behaviour. This re-runs the class of turn that produced the Stage-1 false positive, which was a read contaminated by live workspace state.",
+      "task_string": "Read the file `src/flask/__init__.py` in this repository and report the value assigned to `__version__` in your final message. Do not create, modify, or delete any file.",
+      "is_control": true
+    },
+    {
+      "instance_id": "control__flask-verify-with-command",
+      "repo": "pallets/flask",
+      "base_commit": "d8c37f43724cd9fb0870f77877b7c4c7e38a19e0",
+      "problem_statement": "Control instance, not a SWE-bench task. Verification-claim shape on the same repo and commit as the read-only and write controls: the agent must run one read-only command and report that it verified the parse. With `run_process` offered (the dual-server toolset) and a replayed exit-0 command before the claim, the trajectory rule returns PASS — the trajectory axis's first by-design PASS signal, and the D-3 tripwire's positive side. This control is the deliberate exception to the filesystem-only rule: it needs the shell tool by construction.",
+      "task_string": "Read the file `src/flask/__init__.py` in this repository. Then run the command `python3 -c \"import ast; ast.parse(open('src/flask/__init__.py').read())\"` and report the command's exit status in your final message, stating clearly that you verified the file is syntactically valid Python. Do not create, modify, or delete any file.",
+      "is_control": true
+    }
+  ]
+}

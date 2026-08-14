@@ -678,12 +678,26 @@ def verify_command(
       correct for a batch captured from many workspaces.
     * **No `--` separator.** `--server` is `nargs=REMAINDER`, so a separator would be
       handed to `node` as an argument instead of being consumed by argparse.
+
+    For the `filesystem+shell` toolset the command carries BOTH servers: the
+    `--server` form above plus `--shell-server "node <abs shell entrypoint>"` (one
+    quoted string, because argparse cannot host a second REMAINDER), so the mint's
+    `run_process` turns replay against the shell server and every other turn against
+    the filesystem one. The filesystem-only form stays byte-identical. The
+    `--shell-server` option is emitted BEFORE `--server`: `--server` is
+    `nargs=REMAINDER`, which swallows every later argument including a
+    `--shell-server` flag, so a command with the shell flag after the filesystem
+    command would silently replay everything against the filesystem server.
     """
-    return (
+    command = (
         f"belay phase0 run {cfg.batch_dir} "
         f"--ledger {Path(ledger_path)} --corpus-dir {Path(corpus_dir)} "
-        f"--server node {entrypoint} '{WORKSPACE_PLACEHOLDER}'"
     )
+    if "shell" in toolset_names(cfg.toolset):
+        shell_entrypoint = resolve_server_entrypoint("shell", root=cfg.server_root)
+        command += f'--shell-server "node {shell_entrypoint}" '
+    command += f"--server node {entrypoint} '{WORKSPACE_PLACEHOLDER}'"
+    return command
 
 
 @dataclass(frozen=True)

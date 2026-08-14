@@ -786,23 +786,29 @@ restored snapshot, never against the live workspace.
 
 #### Verify: `belay phase0 run` over the capture
 
-The mint prints the stock verify command exactly as for a single-server run:
+For a dual-server capture, `belay phase0 run` accepts the rootless pinned shell server
+command alongside the filesystem one (`phase0-gate-mint`): turns route **by the exact
+recorded tool name** — `run_process` rows replay against the shell server, every other
+row against `--server`. **`--shell-server` MUST precede `--server`** — `--server` is
+`nargs=REMAINDER` and would swallow every later argument, silently replaying the whole
+batch against the filesystem server.
 
 ```bash
+mkdir -p runs
 belay phase0 run eval/mint/live-smoke-dual-server/batch \
   --ledger runs/phase0.json --corpus-dir corpus/local \
+  --shell-server "node <abs .../mcp-server-commands/build/index.js>" \
   --server node <abs-filesystem-entrypoint> '{workspace}'
 ```
 
-The filesystem turn rows replay through the stock spine as always. The `run_process`
-turn rows are additionally replayable against the rootless pinned shell server command
-(`node <abs .../mcp-server-commands/build/index.js>`, no `{workspace}` token) — that is
-the honest replay path for a shell turn, and the manual smoke
-(`tests/test_minting_driver_dual_server_smoke.py`) asserts the captured `run_process`
-turn replays verifiably (PASS or UNVERIFIED-with-cause, never a silent miss) that way.
-Replaying the shell turns through the single `--server` filesystem command instead is
-not expected to reproduce their replies — treat any such rows as a finding for the
-successor mint's verify composition, not as a detector result.
+`--shell-server` is a single string, shlex-split at use (quote it); absent, the
+composition is byte-for-byte the single-server spine. The shell server command is
+rootless by design (`node <abs .../mcp-server-commands/build/index.js>`, no `{workspace}`
+token): the turn's own `command_line` relocation (the shipped `replay-relocation-shell`
+rules) lands its paths in the scratch, and replay restores with `cwd=scratch`. A shell
+turn's verdict is PASS or UNVERIFIED-with-cause — never a silent miss, never PASS on an
+unobservable outcome — and its replayed exit-0 `isError` becomes the trajectory rule's
+evidence (a verification claim with a replayed exit-0 `run_process` before it is PASS).
 
 The dual-server **smoke** (one instance, end to end) is a manual step, never CI:
 see `docs/planning/trajectory-toolset-rescope/mint-dual-server/smoke.md` for the exact

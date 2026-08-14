@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -1555,6 +1556,10 @@ def _cmd_phase0_run(args: argparse.Namespace) -> int:
     cannot be rooted at the recorded workspace is UNVERIFIED too, and both appear by name in
     the report's UNVERIFIED-by-cause table rather than as a fabricated FAIL.
 
+    `--shell-server` adds the DUAL-SERVER axis: one quoted shell command; a recorded
+    `run_process` turn replays against it while every other turn still replays against
+    `--server`. Absent, every turn replays against `--server` exactly as before.
+
     The ledger records the A1 rules that were in force, so a stored result can be dated: a
     ledger with no detector recorded reports `unrecorded` and is never read as current.
 
@@ -1595,10 +1600,19 @@ def _cmd_phase0_run(args: argparse.Namespace) -> int:
 
     corpus_dir = Path(args.corpus_dir)
     ingest = not args.no_ingest
+    # A single-string flag, shlex-split at use: `--server` is already nargs=REMAINDER, so
+    # argparse cannot host a second remainder here. `None` -> today's behavior. A string
+    # shlex cannot tokenize (e.g. an unterminated quote) FAILS CLOSED: the ValueError is
+    # deliberately NOT caught or guessed at -- a command Belay cannot parse must never be
+    # half-executed.
+    shell_server_command = (
+        shlex.split(args.shell_server) if args.shell_server is not None else None
+    )
     ledger = phase0_runner.run_batch(
         trace_dir,
         corpus_dir=corpus_dir,
         server_command=list(args.server),
+        shell_server_command=shell_server_command,
         invariants=invariants,
         captured_at=captured_at,
         replays=args.replays,
@@ -2356,6 +2370,19 @@ def _parser() -> argparse.ArgumentParser:
             "A whole argument equal to the literal {workspace} is replaced, per trace, with "
             "that trace's own recorded workspace root -- so ONE command verifies a batch "
             "captured from many workspaces (quote it: '{workspace}')"
+        ),
+    )
+    phase0_run.add_argument(
+        "--shell-server",
+        default=None,
+        metavar="CMD",
+        help=(
+            "the SHELL server command, as ONE quoted string; a recorded run_process turn "
+            "replays against it instead of --server, while every other turn still replays "
+            "against --server. Example: --shell-server \"node /abs/eval/servers/"
+            "node_modules/mcp-server-commands/build/index.js\". The string is shlex-split "
+            "at use; an un-lexable string is a hard error. Absent -> every turn replays "
+            "against --server, exactly as before"
         ),
     )
     phase0_run.set_defaults(func=_cmd_phase0_run)

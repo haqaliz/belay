@@ -2,6 +2,23 @@
 
 This file orients a coding agent working in this repository. Read it first.
 
+> **THE GATE-MINT UNIT SHIPPED: the trajectory evidence is observable, and the mint is
+> the next operator step** (2026-08-14, `phase0-gate-mint`, v0.18.0). The successor
+> mint's verify composition is built and tested (1663 → 1686 tests): `verify_turn` /
+> `run_batch` / `belay phase0 run` route `run_process` turns to the rootless pinned
+> shell server via `--shell-server` (exact tool-name resolution; **the flag precedes
+> `--server`**, which is `nargs=REMAINDER`; absent ⇒ byte-for-byte single-server spine),
+> so a replayed exit-0 command is real trajectory evidence and the positive control's
+> expected PASS is reachable. Registries: committed `observed.json` (23 previously-minted
+> ids) and fresh `s6stage{1,2,3}.json` (2 / 9 / 83 — stage 3 = 80 fresh real + 3
+> controls, the ≥50 denominator with attrition margin; historical stage files untouched
+> — they are derivation sources). Freeze scripts (`acceptance-stage{1,2,3}.sh`) and
+> audit templates drafted under `docs/planning/phase0-gate-mint/`. **The mint itself has
+> NOT run and produces no number in this release: R1's quantitative form is STILL
+> untested, every published figure stands unedited, and the gate decision line is the
+> operator's next step** (stages s6a/b/c under the freeze protocol, full adjudication).
+> See `docs/planning/phase0-gate-mint/`.
+>
 > **THE TRAJECTORY RULE IS NOW ABILITY-AWARE: IT ABSTAINS, WITH A NAMED CAUSE, WHENEVER A
 > COMMAND TOOL WAS NEVER OBSERVED BEFORE THE CLAIM** (2026-08-12, `engine-abstain`). The
 > re-mint's verdict — 5/5 trajectory FAILs that were **false positives by construction** (14
