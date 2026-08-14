@@ -207,6 +207,7 @@ def verify_turn(
     n: int,
     *,
     server_command: Sequence[str],
+    shell_server_command: Sequence[str] | None = None,
     manifest_dir: Path | str,
     network: Any = None,
     timeout: float = DEFAULT_TIMEOUT,
@@ -220,11 +221,28 @@ def verify_turn(
     reduce worst-status-wins. On any non-REPLAYED status the turn is UNVERIFIED directly —
     nothing was re-invoked, so A2 verified nothing, and an un-restored or un-snapshotted
     turn must never fall through to PASS. Emits a grounded verdict; no model anywhere.
+
+    **Server routing rule:** a turn whose recorded tool name is exactly `_EVIDENCE_TOOL`
+    (`run_process`) and for which `shell_server_command` is given replays against the
+    shell command; every other turn — and every turn when `shell_server_command` is
+    absent — replays against `server_command`, byte-for-byte as before. The resolved
+    command feeds BOTH `replay_turn` and `classify_determinism`, so the two can never
+    disagree about which server observed the turn.
     """
+    # Function-level import: `trajectory.py` imports `TurnVerdict` at module level, so a
+    # module-level `turn -> trajectory` import would close the turn<->invariants<->trajectory
+    # cluster into a cycle. The constant is resolved once per turn, which is negligible.
+    from belay.verify.trajectory import _EVIDENCE_TOOL
+
     tool_name = _tool_name(records, n)
+    resolved = (
+        list(shell_server_command)
+        if tool_name == _EVIDENCE_TOOL and shell_server_command is not None
+        else server_command
+    )
     reply = replay_turn(
         records, n,
-        server_command=server_command, manifest_dir=manifest_dir,
+        server_command=resolved, manifest_dir=manifest_dir,
         network=network, timeout=timeout,
     )
 
@@ -262,7 +280,7 @@ def verify_turn(
     if reply.result_equivalence == DIVERGED:
         determinism = classify_determinism(
             records, n,
-            server_command=server_command, manifest_dir=manifest_dir,
+            server_command=resolved, manifest_dir=manifest_dir,
             replays=replays, network=network, timeout=timeout,
         )
     result_verdict = render_result_verdict(reply, determinism)

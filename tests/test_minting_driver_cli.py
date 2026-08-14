@@ -691,3 +691,50 @@ def test_cli_rejects_an_unknown_toolset(tmp_path: Path) -> None:
             ]
         )
     assert excinfo.value.code == 2
+
+
+def test_verify_command_dual_form_for_filesystem_plus_shell(tmp_path: Path) -> None:
+    """`verify_command` carries `--shell-server` for `filesystem+shell`, verbatim old form for `filesystem`.
+
+    The reproduce-the-number line must tell the operator about BOTH servers the mint
+    offered: the filesystem-only form stays byte-identical (the freeze invocations stay
+    valid verbatim), and the dual form appends the shell server as one quoted string
+    (argparse cannot host a second nargs=REMAINDER), with the shell entrypoint resolved
+    from the same pinned install root as the filesystem one.
+    """
+    from eval.minting_driver.entrypoint import (
+        WORKSPACE_PLACEHOLDER,
+        MintConfig,
+        verify_command,
+    )
+
+    server_root = tmp_path / "servers"
+    fs_entrypoint = _install_stub_server(server_root, "filesystem")
+    shell_entrypoint = _install_stub_server(server_root, "shell")
+
+    fs_cfg = MintConfig(
+        root=tmp_path / "mint",
+        registry_path=tmp_path / "registry.json",
+        server_root=server_root,
+        model=TEST_MODEL,
+    )
+    fs_command = verify_command(fs_cfg, entrypoint=fs_entrypoint)
+    assert "--shell-server" not in fs_command
+    assert f"--server node {fs_entrypoint} '{WORKSPACE_PLACEHOLDER}'" in fs_command
+
+    dual_cfg = MintConfig(
+        root=tmp_path / "mint",
+        registry_path=tmp_path / "registry.json",
+        server_root=server_root,
+        model=TEST_MODEL,
+        toolset="filesystem+shell",
+    )
+    dual_command = verify_command(dual_cfg, entrypoint=fs_entrypoint)
+    assert dual_command == fs_command.replace(
+        "--server", f'--shell-server "node {shell_entrypoint}" --server', 1
+    ), (
+        "--server is nargs=REMAINDER: it swallows every later argument, so the shell "
+        "flag must PRECEDE it or the dual command would silently replay everything "
+        "against the filesystem server"
+    )
+    assert " -- " not in dual_command, "--server is nargs=REMAINDER; a separator would reach node"

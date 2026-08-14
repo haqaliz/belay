@@ -354,3 +354,83 @@ def test_phase0_run_with_no_default_invariants_records_an_empty_detector(
     assert ledger.detector.rules == ()
     assert "detector: unrecorded" not in out, out
     assert "A1 was disabled" in out, out
+
+
+# --- (7) the `--shell-server` flag: one quoted string, shlex-split at the boundary -----
+
+
+def _recording_run_batch(monkeypatch, seen: dict) -> None:
+    """Wrap the REAL `run_batch` so the CLI->run_batch param path can be observed.
+
+    The verifier/ingester seams stay patched as every test here patches them (no
+    Seatbelt), so the run completes end to end; this only records the kwargs the CLI
+    handed over.
+    """
+    import belay.phase0.runner as phase0_runner
+
+    real_run_batch = phase0_runner.run_batch
+
+    def recording_run_batch(*args, **kwargs):
+        seen["shell_server_command"] = kwargs.get("shell_server_command", "<absent>")
+        return real_run_batch(*args, **kwargs)
+
+    monkeypatch.setattr(phase0_runner, "run_batch", recording_run_batch)
+
+
+def test_phase0_run_shell_server_flag_reaches_run_batch(tmp_path, capsys, monkeypatch) -> None:
+    """`--shell-server "node /abs/shell.js"` arrives at `run_batch` as the shlex-split list.
+
+    The flag is a SINGLE string (argparse cannot host a second nargs=REMAINDER), so the
+    split happens at the CLI boundary; `run_batch` receives the same list it would from
+    the library API. The run still completes end to end over the patched seams.
+    """
+    trace_dir = tmp_path / "traces"
+    ledger_path = tmp_path / "ledger.json"
+
+    clean_path = _write_trace(trace_dir, "pass_tool", 1)
+    _patch_seam(monkeypatch, {clean_path.stem: [_verdict(0, Status.PASS)]})
+    seen: dict = {}
+    _recording_run_batch(monkeypatch, seen)
+
+    rc = cli.main(
+        [
+            "phase0", "run", str(trace_dir),
+            "--corpus-dir", str(tmp_path / "corpus"),
+            "--ledger", str(ledger_path),
+            "--shell-server", "node /abs/eval/servers/node_modules/mcp-server-commands/build/index.js",
+            "--server", "irrelevant",
+        ]
+    )
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert seen["shell_server_command"] == [
+        "node",
+        "/abs/eval/servers/node_modules/mcp-server-commands/build/index.js",
+    ]
+
+
+def test_phase0_run_without_shell_server_flag_passes_none(tmp_path, capsys, monkeypatch) -> None:
+    """Absent `--shell-server` -> `shell_server_command=None` -> today's behavior.
+
+    The kwarg is present-but-None so the call site is explicit: a run with no shell axis
+    is indistinguishable from one before the flag existed.
+    """
+    trace_dir = tmp_path / "traces"
+    ledger_path = tmp_path / "ledger.json"
+
+    clean_path = _write_trace(trace_dir, "pass_tool", 1)
+    _patch_seam(monkeypatch, {clean_path.stem: [_verdict(0, Status.PASS)]})
+    seen: dict = {}
+    _recording_run_batch(monkeypatch, seen)
+
+    rc = cli.main(
+        [
+            "phase0", "run", str(trace_dir),
+            "--corpus-dir", str(tmp_path / "corpus"),
+            "--ledger", str(ledger_path),
+            "--server", "irrelevant",
+        ]
+    )
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert seen["shell_server_command"] is None

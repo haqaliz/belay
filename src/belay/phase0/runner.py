@@ -75,7 +75,11 @@ from belay.replay.client import DEFAULT_TIMEOUT
 from belay.replay.reader import ReadResult, read_trace
 from belay.replay.report import canonical_cause
 from belay.verify.invariants import INSTANCE_LEVEL_RULES, Invariant, trajectory_case
-from belay.verify.trajectory import evaluate_trajectory_rules, extract_claim
+from belay.verify.trajectory import (
+    _EVIDENCE_TOOL,
+    evaluate_trajectory_rules,
+    extract_claim,
+)
 from belay.verify.turn import TurnVerdict, verify_turn
 from belay.verify.verdict import Status, Verdict
 
@@ -83,6 +87,27 @@ from belay.verify.verdict import Status, Verdict
 #: not happen for a real UNVERIFIED verdict (`verify_turn` always names a cause), but a fake
 #: verifier could omit one, and a missing bucket must never silently vanish from the tally.
 _UNKNOWN_CAUSE = "unknown"
+
+
+def _resolve_server_command(
+    tool_name: Optional[str],
+    server_command: list[str],
+    shell_server_command: list[str] | None,
+) -> list[str]:
+    """The ONE command a given turn actually replays against — the ingest-seam rule.
+
+    A turn whose tool name is exactly `_EVIDENCE_TOOL` (`run_process`) and for which a
+    shell command is given replays against the shell command; every other turn — and
+    every turn when no shell command was given — replays against `server_command`. This
+    is the runner's OWN resolution, mirroring `verify_turn`'s routing (which decides
+    what actually replayed): a corpus case must store the command its turn really
+    replayed against, so a shell case carries the shell command and an fs case the fs
+    command. With `shell_server_command=None` this always answers `server_command` —
+    byte-for-byte today.
+    """
+    if tool_name == _EVIDENCE_TOOL and shell_server_command is not None:
+        return shell_server_command
+    return server_command
 
 
 def default_manifest_dir_for(trace_path: Path) -> Path:
@@ -102,6 +127,7 @@ def run_batch(
     *,
     corpus_dir: Path,
     server_command: list[str] | None = None,
+    shell_server_command: list[str] | None = None,
     invariants: Sequence[Invariant],
     captured_at: str,
     replays: int = 3,
@@ -135,6 +161,13 @@ def run_batch(
     stay empty, because nothing was attempted. That empty pair is exactly why the caller
     must SAY ingestion was disabled -- unlabelled, it reads as "nothing could be added"
     (see `belay.cli._cmd_phase0_run`).
+
+    `shell_server_command` (optional) is the dual-server axis: it is threaded to the
+    verifier on every turn, so `verify_turn` can route `run_process` turns against it,
+    and — resolved PER FLAGGED TURN by that turn's `tool_name` — to each `ingester(...)`
+    call, so a corpus case stores the command its turn actually replayed against. With
+    `None` (the default) the resolved command is always `server_command` and everything
+    is byte-for-byte today.
     """
     if (server_command is None) == (server_command_for is None):
         raise TypeError("run_batch requires exactly one of server_command / server_command_for")
@@ -152,6 +185,7 @@ def run_batch(
                 source_trace_id=source_trace_id,
                 corpus_dir=corpus_dir,
                 server_command=server_command_for(trace_path),
+                shell_server_command=shell_server_command,
                 invariants=invariants,
                 captured_at=captured_at,
                 replays=replays,
@@ -188,6 +222,7 @@ def _verify_one_trace(
     source_trace_id: str,
     corpus_dir: Path,
     server_command: list[str],
+    shell_server_command: list[str] | None = None,
     invariants: Sequence[Invariant],
     captured_at: str,
     replays: int,
@@ -241,15 +276,22 @@ def _verify_one_trace(
     exposure_turns_recorded = 0
 
     for n in range(len(calls)):
-        verdict = verifier(
-            records,
-            n,
+        verifier_kwargs = dict(
+            records=records,
+            n=n,
             server_command=server_command,
             manifest_dir=manifest_dir,
             invariants=invariants,
             replays=replays,
             timeout=timeout,
         )
+        # The shell axis is threaded ONLY when set: `None` must mean "today's behavior"
+        # byte-for-byte, and a fake verifier written before the kwarg existed must keep
+        # working (the resolution is `verify_turn`'s, and it gets both commands only
+        # when the batch actually has both).
+        if shell_server_command is not None:
+            verifier_kwargs["shell_server_command"] = shell_server_command
+        verdict = verifier(**verifier_kwargs)
         verdicts[n] = verdict
         turn_status_counts[verdict.status.name] = turn_status_counts.get(verdict.status.name, 0) + 1
 
@@ -359,7 +401,9 @@ def _verify_one_trace(
                     target_turn_index=n,
                     verdict=verdicts[n],
                     manifest_dir=manifest_dir,
-                    server_command=server_command,
+                    server_command=_resolve_server_command(
+                        verdicts[n].tool_name, server_command, shell_server_command
+                    ),
                     invariants=list(invariants),
                     human_label="pending",
                     replays=replays,
@@ -390,13 +434,16 @@ def _verify_one_trace(
             )
             if instance_rule is not None:
                 claim_text, _claim_seq = extract_claim(read_result.skips)
+                # The trajectory case targets the instance's FINAL turn, so its tool name
+                # decides which command the case stores — the same per-turn rule as above.
+                final_tool_name = (
+                    verdicts[final_turn].tool_name if final_turn in verdicts else None
+                )
                 shaped = trajectory_case(
                     instance_rule,
                     trajectory=trajectory,
                     final_turn=final_turn,
-                    tool_name=(
-                        verdicts[final_turn].tool_name if final_turn in verdicts else None
-                    ),
+                    tool_name=final_tool_name,
                     claim_text=claim_text,
                 )
                 if shaped is not None:
@@ -436,7 +483,9 @@ def _verify_one_trace(
                             target_turn_index=final_turn,
                             verdict=trajectory_verdict,
                             manifest_dir=manifest_dir,
-                            server_command=server_command,
+                            server_command=_resolve_server_command(
+                                final_tool_name, server_command, shell_server_command
+                            ),
                             invariants=list(invariants),
                             human_label="pending",
                             replays=replays,
