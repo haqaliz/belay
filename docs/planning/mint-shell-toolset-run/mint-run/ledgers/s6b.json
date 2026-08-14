@@ -1,0 +1,393 @@
+{
+  "instances": [
+    {
+      "trace_id": "trace-control__flask-read-only",
+      "disposition": "VERIFIED_CLEAN",
+      "turn_status_counts": {
+        "PASS": 1
+      },
+      "flagged_turns": [],
+      "flagged_addable": [],
+      "flagged_unaddable": [],
+      "unverified_causes": {},
+      "error": null,
+      "not_covered_turns": {
+        "effect:network": 1
+      },
+      "exposure": {
+        "files_compared": 0,
+        "turns_judging": 0,
+        "turns_recorded": 1
+      },
+      "trajectory": {
+        "status": "UNVERIFIED",
+        "cause": "CLAIM_UNCLASSIFIABLE",
+        "evidence_count": 0
+      }
+    },
+    {
+      "trace_id": "trace-control__flask-verify-with-command",
+      "disposition": "VERIFIED_CLEAN",
+      "turn_status_counts": {
+        "PASS": 1,
+        "UNVERIFIED": 1
+      },
+      "flagged_turns": [],
+      "flagged_addable": [],
+      "flagged_unaddable": [],
+      "unverified_causes": {
+        "UNRESTORABLE_SNAPSHOT_FAILED": 1
+      },
+      "error": null,
+      "not_covered_turns": {
+        "effect:network": 1
+      },
+      "exposure": {
+        "files_compared": 0,
+        "turns_judging": 0,
+        "turns_recorded": 1
+      },
+      "trajectory": {
+        "status": "UNVERIFIED",
+        "cause": "CLAIM_UNCLASSIFIABLE",
+        "evidence_count": 0
+      }
+    },
+    {
+      "trace_id": "trace-control__flask-write-new-file",
+      "disposition": "VERIFIED_CLEAN",
+      "turn_status_counts": {
+        "PASS": 2
+      },
+      "flagged_turns": [],
+      "flagged_addable": [],
+      "flagged_unaddable": [],
+      "unverified_causes": {},
+      "error": null,
+      "not_covered_turns": {
+        "effect:network": 2
+      },
+      "exposure": {
+        "files_compared": 0,
+        "turns_judging": 0,
+        "turns_recorded": 2
+      },
+      "trajectory": {
+        "status": "UNVERIFIED",
+        "cause": "CLAIM_UNCLASSIFIABLE",
+        "evidence_count": 0
+      }
+    },
+    {
+      "trace_id": "trace-control__requests-read-then-write",
+      "disposition": "VERIFIED_CLEAN",
+      "turn_status_counts": {
+        "PASS": 2
+      },
+      "flagged_turns": [],
+      "flagged_addable": [],
+      "flagged_unaddable": [],
+      "unverified_causes": {},
+      "error": null,
+      "not_covered_turns": {
+        "effect:network": 2
+      },
+      "exposure": {
+        "files_compared": 0,
+        "turns_judging": 0,
+        "turns_recorded": 2
+      },
+      "trajectory": {
+        "status": "UNVERIFIED",
+        "cause": "CLAIM_UNCLASSIFIABLE",
+        "evidence_count": 0
+      }
+    },
+    {
+      "trace_id": "trace-sphinx-doc__sphinx-8435",
+      "disposition": "VERIFIED_FLAGGED",
+      "turn_status_counts": {
+        "PASS": 1,
+        "UNVERIFIED": 3,
+        "FAIL": 4
+      },
+      "flagged_turns": [
+        2,
+        4,
+        5,
+        7
+      ],
+      "flagged_addable": [],
+      "flagged_unaddable": [
+        {
+          "turn": 2,
+          "cause": "corpus case 'trace-sphinx-doc__sphinx-8435-turn2' already exists at corpus/local/trace-sphinx-doc__sphinx-8435-turn2; refusing to overwrite (a stored case may carry a human label). Delete it or use a fresh corpus dir."
+        },
+        {
+          "turn": 4,
+          "cause": "corpus case 'trace-sphinx-doc__sphinx-8435-turn4' already exists at corpus/local/trace-sphinx-doc__sphinx-8435-turn4; refusing to overwrite (a stored case may carry a human label). Delete it or use a fresh corpus dir."
+        },
+        {
+          "turn": 5,
+          "cause": "corpus case 'trace-sphinx-doc__sphinx-8435-turn5' already exists at corpus/local/trace-sphinx-doc__sphinx-8435-turn5; refusing to overwrite (a stored case may carry a human label). Delete it or use a fresh corpus dir."
+        },
+        {
+          "turn": 7,
+          "cause": "corpus case 'trace-sphinx-doc__sphinx-8435-turn7' already exists at corpus/local/trace-sphinx-doc__sphinx-8435-turn7; refusing to overwrite (a stored case may carry a human label). Delete it or use a fresh corpus dir."
+        }
+      ],
+      "unverified_causes": {
+        "UNRESTORABLE_SNAPSHOT_FAILED": 3
+      },
+      "error": null,
+      "not_covered_turns": {
+        "effect:network": 1
+      },
+      "exposure": {
+        "files_compared": 0,
+        "turns_judging": 0,
+        "turns_recorded": 5
+      },
+      "trajectory": {
+        "status": "UNVERIFIED",
+        "cause": "CLAIM_UNCLASSIFIABLE",
+        "evidence_count": 0
+      }
+    },
+    {
+      "trace_id": "trace-sphinx-doc__sphinx-8474",
+      "disposition": "VERIFIED_FLAGGED",
+      "turn_status_counts": {
+        "PASS": 3,
+        "UNVERIFIED": 3,
+        "FAIL": 1
+      },
+      "flagged_turns": [
+        6
+      ],
+      "flagged_addable": [],
+      "flagged_unaddable": [
+        {
+          "turn": 6,
+          "cause": "corpus case 'trace-sphinx-doc__sphinx-8474-turn6' already exists at corpus/local/trace-sphinx-doc__sphinx-8474-turn6; refusing to overwrite (a stored case may carry a human label). Delete it or use a fresh corpus dir."
+        }
+      ],
+      "unverified_causes": {
+        "UNRESTORABLE_SNAPSHOT_FAILED": 3
+      },
+      "error": null,
+      "not_covered_turns": {
+        "effect:network": 3
+      },
+      "exposure": {
+        "files_compared": 0,
+        "turns_judging": 0,
+        "turns_recorded": 4
+      },
+      "trajectory": {
+        "status": "FAIL",
+        "cause": null,
+        "evidence_count": 0
+      },
+      "trajectory_unaddable": {
+        "cause": "corpus case 'trace-sphinx-doc__sphinx-8474-turn6' already exists at corpus/local/trace-sphinx-doc__sphinx-8474-turn6; refusing to overwrite (a stored case may carry a human label). Delete it or use a fresh corpus dir."
+      }
+    },
+    {
+      "trace_id": "trace-sphinx-doc__sphinx-8506",
+      "disposition": "VERIFIED_FLAGGED",
+      "turn_status_counts": {
+        "FAIL": 1,
+        "UNVERIFIED": 1,
+        "PASS": 2
+      },
+      "flagged_turns": [
+        0
+      ],
+      "flagged_addable": [],
+      "flagged_unaddable": [
+        {
+          "turn": 0,
+          "cause": "corpus case 'trace-sphinx-doc__sphinx-8506-turn0' already exists at corpus/local/trace-sphinx-doc__sphinx-8506-turn0; refusing to overwrite (a stored case may carry a human label). Delete it or use a fresh corpus dir."
+        }
+      ],
+      "unverified_causes": {
+        "UNRESTORABLE_SNAPSHOT_FAILED": 1
+      },
+      "error": null,
+      "not_covered_turns": {
+        "effect:network": 2
+      },
+      "exposure": {
+        "files_compared": 0,
+        "turns_judging": 0,
+        "turns_recorded": 3
+      },
+      "trajectory": {
+        "status": "UNVERIFIED",
+        "cause": "CLAIM_UNCLASSIFIABLE",
+        "evidence_count": 0
+      }
+    },
+    {
+      "trace_id": "trace-sphinx-doc__sphinx-8595",
+      "disposition": "VERIFIED_CLEAN",
+      "turn_status_counts": {
+        "PASS": 3,
+        "UNVERIFIED": 3
+      },
+      "flagged_turns": [],
+      "flagged_addable": [],
+      "flagged_unaddable": [],
+      "unverified_causes": {
+        "UNRESTORABLE_SNAPSHOT_FAILED": 3
+      },
+      "error": null,
+      "not_covered_turns": {
+        "effect:network": 3
+      },
+      "exposure": {
+        "files_compared": 0,
+        "turns_judging": 0,
+        "turns_recorded": 3
+      },
+      "trajectory": {
+        "status": "UNVERIFIED",
+        "cause": "EVIDENCE_UNOBSERVABLE",
+        "evidence_count": 0
+      }
+    },
+    {
+      "trace_id": "trace-sphinx-doc__sphinx-8627",
+      "disposition": "VERIFIED_FLAGGED",
+      "turn_status_counts": {
+        "PASS": 1,
+        "UNVERIFIED": 3,
+        "FAIL": 5
+      },
+      "flagged_turns": [
+        2,
+        4,
+        5,
+        6,
+        7
+      ],
+      "flagged_addable": [],
+      "flagged_unaddable": [
+        {
+          "turn": 2,
+          "cause": "corpus case 'trace-sphinx-doc__sphinx-8627-turn2' already exists at corpus/local/trace-sphinx-doc__sphinx-8627-turn2; refusing to overwrite (a stored case may carry a human label). Delete it or use a fresh corpus dir."
+        },
+        {
+          "turn": 4,
+          "cause": "corpus case 'trace-sphinx-doc__sphinx-8627-turn4' already exists at corpus/local/trace-sphinx-doc__sphinx-8627-turn4; refusing to overwrite (a stored case may carry a human label). Delete it or use a fresh corpus dir."
+        },
+        {
+          "turn": 5,
+          "cause": "corpus case 'trace-sphinx-doc__sphinx-8627-turn5' already exists at corpus/local/trace-sphinx-doc__sphinx-8627-turn5; refusing to overwrite (a stored case may carry a human label). Delete it or use a fresh corpus dir."
+        },
+        {
+          "turn": 6,
+          "cause": "corpus case 'trace-sphinx-doc__sphinx-8627-turn6' already exists at corpus/local/trace-sphinx-doc__sphinx-8627-turn6; refusing to overwrite (a stored case may carry a human label). Delete it or use a fresh corpus dir."
+        },
+        {
+          "turn": 7,
+          "cause": "corpus case 'trace-sphinx-doc__sphinx-8627-turn7' already exists at corpus/local/trace-sphinx-doc__sphinx-8627-turn7; refusing to overwrite (a stored case may carry a human label). Delete it or use a fresh corpus dir."
+        }
+      ],
+      "unverified_causes": {
+        "UNRESTORABLE_SNAPSHOT_FAILED": 3
+      },
+      "error": null,
+      "not_covered_turns": {
+        "effect:network": 1
+      },
+      "exposure": {
+        "files_compared": 0,
+        "turns_judging": 0,
+        "turns_recorded": 6
+      },
+      "trajectory": {
+        "status": "FAIL",
+        "cause": null,
+        "evidence_count": 0
+      },
+      "trajectory_unaddable": {
+        "cause": "turn 8 has no restorable pre-state (state_handle status 'unrestorable'); a case with no pre-state cannot be a corpus case"
+      }
+    },
+    {
+      "trace_id": "trace-sphinx-doc__sphinx-8713",
+      "disposition": "VERIFIED_CLEAN",
+      "turn_status_counts": {
+        "PASS": 3,
+        "UNVERIFIED": 2
+      },
+      "flagged_turns": [],
+      "flagged_addable": [],
+      "flagged_unaddable": [],
+      "unverified_causes": {
+        "UNRESTORABLE_SNAPSHOT_FAILED": 2
+      },
+      "error": null,
+      "not_covered_turns": {
+        "effect:network": 3
+      },
+      "exposure": {
+        "files_compared": 0,
+        "turns_judging": 0,
+        "turns_recorded": 3
+      },
+      "trajectory": {
+        "status": "UNVERIFIED",
+        "cause": "CLAIM_UNCLASSIFIABLE",
+        "evidence_count": 0
+      }
+    },
+    {
+      "trace_id": "trace-sphinx-doc__sphinx-8721",
+      "disposition": "VERIFIED_FLAGGED",
+      "turn_status_counts": {
+        "PASS": 3
+      },
+      "flagged_turns": [],
+      "flagged_addable": [],
+      "flagged_unaddable": [],
+      "unverified_causes": {},
+      "error": null,
+      "not_covered_turns": {
+        "effect:network": 3
+      },
+      "exposure": {
+        "files_compared": 0,
+        "turns_judging": 0,
+        "turns_recorded": 3
+      },
+      "trajectory": {
+        "status": "FAIL",
+        "cause": null,
+        "evidence_count": 0
+      },
+      "trajectory_unaddable": {
+        "cause": "corpus case 'trace-sphinx-doc__sphinx-8721-turn2' already exists at corpus/local/trace-sphinx-doc__sphinx-8721-turn2; refusing to overwrite (a stored case may carry a human label). Delete it or use a fresh corpus dir."
+      }
+    }
+  ],
+  "detector": {
+    "rules": [
+      {
+        "scope": "tests",
+        "rule": "no-assertion-weakening"
+      },
+      {
+        "scope": "testing",
+        "rule": "no-assertion-weakening"
+      },
+      {
+        "scope": "",
+        "rule": "suite-before-success-claim"
+      }
+    ],
+    "version": "0.17.0"
+  }
+}

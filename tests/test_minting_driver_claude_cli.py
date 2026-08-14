@@ -1441,8 +1441,11 @@ UNMODIFIED_DRIVER_CORE = {
     # Re-pinned by the `mint-dual-server` aspect (2026-08-12), which extends the
     # `build_server_command` seam to a server composition — the promise that `batch.py`
     # is untouched now covers the bytes WITH that legitimate extension.
+    # Re-pinned again by `mint-shell-toolset-run` (2026-08-12): the composite session
+    # now calls `merge_session_traces` after close so the per-server traces become the
+    # one trace per instance the claim append and bridge require.
     "eval/minting_driver/batch.py": (
-        "3dbd16049d1184fc9615495980afdb5b3e1bca19efe2eea8de34045914d58fb3"
+        "fbb9cb14944e3c91fd939fd18678972aced1905c279e7daef7852d401470ae06"
     ),
 }
 

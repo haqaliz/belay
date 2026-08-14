@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# STAGE 1 — probe instance (1 control). Frozen 2026-08-12 BEFORE it was run: this
+# file contains no result. See docs/planning/mint-shell-toolset-run/mint-run/plan_20260812.md
+# Phase 2. The run happens once; stdout is committed verbatim to acceptance-stage1.out.
+set -euo pipefail
+export BELAY_EVAL_SERVER_ROOT="${BELAY_EVAL_SERVER_ROOT:-$PWD/eval/servers}"
+uv run python -m eval.minting_driver one control__flask-read-only \
+  --root eval/mint/s6a --registry eval/instances/stage6a.json \
+  --provider claude-cli --model claude-opus-5 --max-steps 20 --request-timeout 120 \
+  --toolset filesystem+shell

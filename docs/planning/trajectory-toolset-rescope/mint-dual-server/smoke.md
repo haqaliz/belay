@@ -67,20 +67,47 @@ uv run python -m eval.minting_driver one pytest-dev__pytest-7432 \
 
 ## Status
 
-**NOT RUN — no result exists.**
+**RUN — passed, once (2026-08-12), after one instrument-class finding was fixed.**
 
-The live run is an **operator step** that happens only once `eval/servers/` is
-installed (the worktree in which this aspect shipped does not have it — `eval/servers/`
-is gitignored and absent, so the smoke cannot run there by construction). This file was
-committed together with the smoke test, **before** any run, under the freeze protocol:
-the tooling is frozen first so the output cannot be fitted to it.
+**First run (fresh root `eval/mint/live-smoke-dual-server`): FAILED as an instrument
+finding.** The mint captured real traces (93.6 s, 6 model requests, `run_process`
+offered and used) but `bridge_capture` raised `MultipleTracesError`: the composite
+runs TWO proxied sessions, each writing its own trace into the instance's trace
+dir, while the claim append, the bridge, and the phase-0 runner all require exactly
+one trace per instance. **Root cause: the composite shipped without the trace-merge
+step** — a wiring defect no deterministic test could see, and exactly what the
+live smoke exists to catch. Fixed by `mint-shell-toolset-run`
+(`eval/minting_driver/trace_merge.py`, `merge_session_traces` wired into
+`run_mint`'s composite path before the claim/bridge): the per-session traces merge
+into one, `seq` renumbered in capture order, single-server path byte-identical.
 
-**This unit therefore records no smoke outcome of any kind.** There is no passed smoke,
-no failed smoke, no verdict, no rate, and no evidence that the dual composition works on
-live servers yet — the deterministic composite/`cwd`/`--toolset` tests are green, and
-that is all. When the operator runs the smoke, this file is updated with what it showed
-(its echoed facts, findings included), exactly as a smoke record should read — n=1,
-not a base rate, and never a published number.
+**Second run (fresh root `eval/mint/live-smoke-s6b`): PASSED.** The verbatim facts
+of the run (echoed, never interpreted):
+
+- instance `pytest-dev__pytest-7432` · `claude-opus-5` · 42.5 s · 5 turns
+- capture bridged to `batch/trace-pytest-dev__pytest-7432.jsonl` with its
+  manifests sibling; stock `belay phase0 run` resolved exactly this one instance,
+  exit 0, no `INSTRUMENT SUSPECT`, coverage heading present
+- trace's `tools/list` advertised `run_process` AND the filesystem write tools
+  (both servers' tools, verbatim, in ONE trace)
+- the probe (`touch BELAY_PROBE.txt`) landed at the instance workspace root —
+  the shell session's cwd is the workspace
+- the first `run_process` turn replayed verifiably (status PASS, no FAIL, no
+  silent non-replay)
+- trajectory: `UNVERIFIED [CLAIM_UNCLASSIFIABLE]` — the claim ("Read the file
+  back to verify.") abstains, never FAIL
+- one per-turn FAIL (1/5 = 20%) and one UNVERIFIED-by-cause
+  (`UNRESTORABLE_SNAPSHOT_FAILED`) — echoed as findings, n=1, not a base rate,
+  never a published number
+
+**A second smoke-test defect surfaced and was fixed in the same unit:** the smoke's
+`_records` helper asserted zero reader skips, but a `claim` record is EXPECTED on a
+claim-ending run (the reader deliberately skips it — not in `KINDS`; the trajectory
+rule reads it from the skip seam, `verify/trajectory.py:227`). The helper now
+tolerates exactly `kind == "claim"` skips and still fails on anything else.
+
+Read this as "the composite path works end-to-end at n=1", NEVER as "edit quality
+is good" and NEVER as a rate.
 
 ## Findings to record if the smoke trips
 

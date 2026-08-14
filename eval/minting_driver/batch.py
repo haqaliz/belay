@@ -122,6 +122,7 @@ from eval.instances.registry import InstanceRecord
 from eval.minting_driver.bridge import bridge_capture
 from eval.minting_driver.capture import gated_env, proxy_command
 from eval.minting_driver.claims import record_session_claim
+from eval.minting_driver.trace_merge import merge_session_traces
 from eval.minting_driver.checkpoint import Checkpoint, load_checkpoint
 from eval.minting_driver.composite import (
     CompositeTransport,
@@ -503,6 +504,15 @@ def run_mint(
                     )
                 finally:
                     transport.close()
+                # The composite ran TWO proxied sessions (one per server), each
+                # writing its own trace into the instance's trace_dir. Everything
+                # downstream — the claim append, the bridge, the phase-0 runner —
+                # assumes ONE trace per instance, so the per-session traces are
+                # merged here, after the session and before the claim/bridge.
+                # Single-server sessions keep today's exactly-one-trace contract
+                # (a second trace there is still a MultipleTracesError, the
+                # re-used-dir guard).
+                merge_session_traces(layout.trace_dir)
             # The claim record: when the session stopped with a `Done`, the model
             # claimed success, and that claim is the trajectory rule's only evidence
             # of it — it never crossed the proxy (the client parses `Done` itself).
