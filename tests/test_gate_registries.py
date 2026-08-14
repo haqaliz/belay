@@ -136,7 +136,6 @@ def test_stage4_composition() -> None:
 
 def test_stage3_composition() -> None:
     stage3 = _built()["stage3"]
-    ids = [record["instance_id"] for record in stage3]
 
     assert len(stage3) == 83
     real = _real_ids(stage3)
