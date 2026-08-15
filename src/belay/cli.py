@@ -47,6 +47,7 @@ from __future__ import annotations
 import argparse
 import json
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -78,20 +79,32 @@ def _emit(line: str = "") -> None:
 def _check_substrate(scope_root: str) -> bool:
     """Probe the substrate by using it. Returns True if it works here.
 
-    Everything below is executed rather than asserted: a table of what macOS
-    supports is a claim about a machine that is not necessarily this one, and this
-    command's only purpose is to talk about this one.
+    Everything below is executed rather than asserted: a table of what a
+    platform supports is a claim about a machine that is not necessarily this
+    one, and this command's only purpose is to talk about this one. The
+    platform's backend is resolved through the same seam `launch.contained`
+    dispatches on (`belay.sandbox.backend_for`), so the check and the run can
+    never disagree about which boundary exists.
     """
+    if sys.platform == "darwin":
+        return _check_substrate_darwin(scope_root)
+    if sys.platform.startswith("linux"):
+        return _check_substrate_linux(scope_root)
+    _emit("substrate")
+    _emit(f"  platform            {sys.platform} ({_PROBLEM})")
+    _emit("    no sandbox implementation exists on this platform; nothing here is enforced.")
+    return False
+
+
+def _check_substrate_darwin(scope_root: str) -> bool:
+    """The macOS probe: Seatbelt and the APFS clonefile snapshot backend."""
     from belay.sandbox import seatbelt
     from belay.snapshot import substrate
 
     ok = True
 
     _emit("substrate")
-    _emit(f"  platform            {sys.platform} ({_OK if sys.platform == 'darwin' else _PROBLEM})")
-    if sys.platform != "darwin":
-        _emit("    Belay's sandbox is macOS-only. Nothing here is enforced on this platform.")
-        return False
+    _emit(f"  platform            {sys.platform} ({_OK})")
 
     has_sandbox_exec = Path(seatbelt.SANDBOX_EXEC).exists()
     _emit(f"  sandbox-exec        {seatbelt.SANDBOX_EXEC} ({_OK if has_sandbox_exec else _PROBLEM})")
@@ -119,6 +132,42 @@ def _check_substrate(scope_root: str) -> bool:
     return ok
 
 
+def _check_substrate_linux(scope_root: str) -> bool:
+    """The Linux probe: Landlock's ABI, then the containment boundaries by use.
+
+    Landlock is probed at the syscall (its ABI is a kernel property), and the
+    two boundaries it composes — the filesystem write scope and the seccomp
+    network deny — are probed by attempting the exact escapes the macOS check
+    attempts. Absence is reported with its cause, never claimed present; the
+    snapshot backend line is A3's (`linux-snapshot`), not asserted here.
+    """
+    from belay.sandbox import linux
+
+    ok = True
+
+    _emit("substrate")
+    _emit(f"  platform            {sys.platform} ({_OK})")
+
+    abi = linux.landlock_abi()
+    if abi is None:
+        _emit(
+            f"  landlock            {_PROBLEM}: unavailable on this kernel "
+            f"(the ABI probe did not answer — no Landlock syscall, or the LSM disabled)"
+        )
+        _emit("    Belay cannot contain filesystem writes here; refusing to claim a boundary.")
+        return False
+    _emit(f"  landlock            kernel ABI {abi} ({_OK})")
+
+    probe = Path(tempfile.mkdtemp(prefix="belay-check-"))
+    try:
+        ok = _probe_containment(scope_root, probe) and ok
+        ok = _probe_network(probe) and ok
+    finally:
+        shutil.rmtree(probe, ignore_errors=True)
+
+    return ok
+
+
 def _probe_containment(scope_root: str, probe: Path) -> bool:
     """Does the sandbox actually CONTAIN on this machine? Attempt an escape and see.
 
@@ -139,20 +188,22 @@ def _probe_containment(scope_root: str, probe: Path) -> bool:
       inside ✗            → the probe never ran; conclude nothing.
       inside ✓ / outside ✓ → it ran and enforced nothing. The loudest failure here.
     """
-    from belay.sandbox import seatbelt
+    from belay.sandbox import backend_for
+
+    backend = backend_for()
 
     inside = Path(scope_root) / ".belay-check-inside"
     outside = probe / "escaped"
 
     try:
-        seatbelt.run(
+        backend.run(
             [
                 "/bin/sh",
                 "-c",
                 f'echo in > "{inside}"; echo out > "{outside}"',
             ],
             scope=scope_root,
-            network=seatbelt.NetworkPolicy.deny_all(),
+            network=backend.NetworkPolicy.deny_all(),
             timeout=30.0,
         )
     except Exception as exc:  # noqa: BLE001
@@ -175,6 +226,44 @@ def _probe_containment(scope_root: str, probe: Path) -> bool:
     return True
 
 
+def _probe_network(probe: Path) -> bool:
+    """Does seccomp actually refuse IP on this machine? Try to create a socket.
+
+    Landlock cannot express "no network" (its net domain only grants, by
+    port), so the network half of the Linux boundary is seccomp's alone — and
+    a check that never probed it could report a boundary that was never
+    installed. The child attempts `socket(AF_INET)` under deny-all: refused is
+    the seccomp filter working, allowed is the boundary missing. Linux only,
+    reached from `_check_substrate_linux`.
+    """
+    from belay.sandbox import backend_for
+
+    backend = backend_for()
+    program = (
+        "import socket\n"
+        "try:\n"
+        "    socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n"
+        "    print('SOCKET_OK')\n"
+        "except PermissionError:\n"
+        "    print('DENIED')\n"
+    )
+    try:
+        result = backend.run(
+            [sys.executable, "-c", program],
+            scope=probe,
+            network=backend.NetworkPolicy.deny_all(),
+            timeout=30.0,
+        )
+    except Exception as exc:  # noqa: BLE001
+        _emit(f"  seccomp             {_PROBLEM}: could not run the network probe: {exc}")
+        return False
+    if b"DENIED" not in result.stdout:
+        _emit(f"  seccomp             {_PROBLEM}: an AF_INET socket was not refused — NOT ENFORCING")
+        return False
+    _emit(f"  seccomp             {_OK} (an AF_INET socket was refused)")
+    return True
+
+
 def _report_scope(scope) -> None:
     _emit()
     _emit("scope")
@@ -188,17 +277,19 @@ def _report_scope(scope) -> None:
 
 def _run_server(scope, command: Sequence[str], seconds: float) -> bool:
     """Run `command` briefly under the default profile. Returns True if nothing was seen."""
-    from belay.sandbox import seatbelt
+    from belay.sandbox import backend_for
+
+    backend = backend_for()
 
     _emit()
     _emit("server")
     _emit(f"  command             {' '.join(command)}")
 
     try:
-        result = seatbelt.run(
+        result = backend.run(
             scope.wrap(command),
             scope=scope.write_roots,
-            network=seatbelt.NetworkPolicy.deny_all(),
+            network=backend.NetworkPolicy.deny_all(),
             timeout=seconds,
         )
     except subprocess.TimeoutExpired as exc:
@@ -253,14 +344,17 @@ def _emit_denials(denials) -> None:
 def _denials_of(exc: subprocess.TimeoutExpired) -> tuple:
     """Denials from what the child printed before the sample ended.
 
-    Reaches for `seatbelt._denials_from_stderr` by name: a server that reported a
-    refusal and then went on waiting for stdin would otherwise have that refusal
-    dropped on the floor, which is the one thing this command exists to surface.
-    The inference lives in one place and this is that place, private or not.
+    Reaches for the backend's `_denials_from_stderr` by name, through the same
+    seam `_run_server` dispatches on: a server that reported a refusal and then
+    went on waiting for stdin would otherwise have that refusal dropped on the
+    floor, which is the one thing this command exists to surface. The inference
+    lives in one place and this is that place, private or not. (The parser is
+    platform-specific because the MARKERS are — EACCES on Linux as well as
+    EPERM — and resolving it here keeps the check and the run in agreement.)
     """
-    from belay.sandbox.seatbelt import _denials_from_stderr
+    from belay.sandbox import backend_for
 
-    return _denials_from_stderr(exc.stderr or b"")
+    return backend_for()._denials_from_stderr(exc.stderr or b"")
 
 
 def _tail(stream: bytes, lines: int = 4) -> list[str]:
