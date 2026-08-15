@@ -39,6 +39,55 @@ All notable changes to Belay are documented here. The format follows
   traces into one per-instance capture, `run_batch` integration). Eval-only, not a
   product surface; test-pinned (1704 tests).
 
+## [0.20.0] - 2026-08-15
+
+### Added
+
+- **The Linux sandbox slice — C2's second implementation, measured on ubuntu-24.04**
+  (`linux-sandbox`, aspects A1–A4). The sandbox seam is now two substrates:
+  - **A1 · mechanism decision** (`containment-spike`): the containment spike probed
+    the pinned ubuntu-24.04 image and measured what works — bubblewrap is dead on
+    stock runners (unprivileged user namespaces AppArmor-restricted), **Landlock
+    (ABI 7) + seccomp** is the viable zero-dependency mechanism, Landlock's net
+    domain cannot express loopback-only (`allow-ports` degrades with a named cause),
+    and filesystem denials are EACCES — the same text an ordinary `chmod` produces.
+    Decision cites the CI probe artifact (`probe_result.json`).
+  - **A2 · Landlock + seccomp containment** (`linux-containment`): `src/belay/sandbox/linux.py`
+    — the launcher (`python -m belay.sandbox.linux <policy.json> -- <cmd>`) installs
+    a Landlock write-scope ruleset (write rights beneath the scope, EACCES refusal)
+    and a seccomp deny-all filter (socket only for AF_UNIX; connect/sendto/sendmsg/
+    sendmmsg EPERM; wrong arch → ENOSYS). The macOS escape matrix has Linux analogues
+    (direct/`../`/symlink/`mv`/grandchild, live-listener network probes), denial
+    records are shape-identical (`inferred: true, source: "child-stderr"`), and the
+    first real Linux run surfaced and fixed four prediction bugs (dash vs bash exit
+    codes, GNU quote-wrapped denial paths, the loopback probe's socket scope, a
+    `GuardedSnapshot` API misuse).
+  - **A3 · copy-fidelity snapshot backend** (`linux-snapshot`): `src/belay/snapshot/linux.py`
+    — byte-identical snapshot/restore on the Linux substrate via a copy with the
+    same sidecar repairs as clonefile (hardlinks, setuid, dir mtimes), `FICLONE`
+    reflink probed per directory and never assumed (ext4 CI runners take the copy
+    path), and the three reserved taxonomy causes (case collision, normalization
+    collision, invalid UTF-8) reachable on case-sensitive byte-transparent
+    filesystems. Capability-mismatch refusal preserved: a case banked on one
+    substrate can never be guessed back on the other.
+  - **A4 · ubuntu CI job + honest docs** (`linux-ci-docs`): `test (Linux)` on pinned
+    ubuntu-24.04 runs the full suite (**1619 passed, 0 failed**); the gating split is
+    user-confirmed — substrate-independent tests run on both platforms,
+    substrate-specific tests have Linux analogues, and genuinely seatbelt-only tests
+    (e.g. `test_sbpl_limits.py`, which pins against `sandbox-exec`) stay darwin-gated
+    with a **named cause**. `tests/test_platform_gate_named_causes.py` scans every
+    sandbox/replay gate and requires its reason to name a cause from README's
+    platform coverage table. The corpus reverse gate now asserts the cross-substrate
+    reality: a darwin-banked case re-verifying on Linux is SKIP with the named
+    `UNRESTORABLE_CAPABILITY_MISMATCH` cause (the replay engine converts the restore
+    refusal to UNVERIFIED — it used to crash). `THREAT_MODEL.md` gains the Linux
+    section (what is enforced, what is not — the EACCES provenance ambiguity, the
+    `allow-ports` degradation, reads un-scoped *by mechanism* on Linux, the R8
+    launcher surface, the TMPDIR/world-writable `/tmp` difference, the
+    cross-substrate corpus consequence); README badge and platform sections claim
+    macOS + Linux, both measured; the Linux classifier lands in `pyproject.toml`.
+    Launch checklist L2 marked ✅.
+
 ## [0.18.0] - 2026-08-14
 
 ### Added

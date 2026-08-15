@@ -55,6 +55,7 @@ from __future__ import annotations
 import hashlib
 import os
 import stat
+import sys
 import unicodedata
 from pathlib import Path
 from typing import Callable, Collection, Iterator, Optional
@@ -333,7 +334,15 @@ _MUTATIONS = [
         frozenset({(b"xattred.txt", "xattr:" + XATTR_NAME.decode("ascii"))}),
     ),
     (build_torture_tree, *_HARDLINK_BREAK),
-    (build_torture_tree, _flags_dropped, frozenset({(b"hidden.txt", "flags")})),
+    pytest.param(
+        build_torture_tree,
+        _flags_dropped,
+        frozenset({(b"hidden.txt", "flags")}),
+        marks=pytest.mark.skipif(
+            sys.platform != "darwin",
+            reason="bsd-file-flags: st_flags is a BSD file flag; Linux has no chflags",
+        ),
+    ),
     (
         build_torture_tree,
         _mtime_off_by_one_nanosecond,

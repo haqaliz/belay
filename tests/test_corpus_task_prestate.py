@@ -407,7 +407,7 @@ def test_an_unresolvable_turn_zero_manifest_still_composes_a_case(tmp_path):
 
 pytestmark_darwin = pytest.mark.skipif(
     sys.platform != "darwin",
-    reason="run_case re-invokes the server inside the macOS Seatbelt sandbox",
+    reason="replay-reinvokes-seatbelt: run_case re-invokes the server inside the macOS Seatbelt sandbox",
 )
 
 

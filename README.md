@@ -10,7 +10,7 @@ Belay sits as a transparent proxy between an AI agent and the tools it calls. It
 
 [![Release](https://img.shields.io/github/v/release/haqaliz/belay?color=3fb950&label=release)](https://github.com/haqaliz/belay/releases/latest)
 [![CI](https://github.com/haqaliz/belay/actions/workflows/ci.yml/badge.svg)](https://github.com/haqaliz/belay/actions/workflows/ci.yml)
-[![Status](https://img.shields.io/badge/status-alpha%20·%20macOS%20only-3fb950)](docs/ROADMAP.md)
+[![Status](https://img.shields.io/badge/status-alpha%20·%20macOS%20%2B%20Linux-3fb950)](docs/ROADMAP.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Built with uv](https://img.shields.io/badge/built%20with-uv-DE5FE9?logo=astral&logoColor=white)](https://github.com/astral-sh/uv)
@@ -51,7 +51,7 @@ Belay's verdict is **grounded in execution, not opinion** — which means it get
 
 ## Quickstart
 
-> **Requirements:** macOS (Apple Silicon or Intel), Python 3.10+. The sandbox and snapshot are macOS-only today — see [limits](#the-sandbox-is-macos-only). [uv](https://github.com/astral-sh/uv) is recommended.
+> **Requirements:** macOS (Apple Silicon or Intel) or Linux (measured on ubuntu-24.04, kernel ≥ 5.13 with Landlock enabled), Python 3.10+. The sandbox and snapshot backends are **macOS + Linux today** — see [platform coverage](#platform-coverage-macos-and-linux-both-measured). [uv](https://github.com/astral-sh/uv) is recommended.
 
 Install (once v0.1.0 is published — until then, [run from source](#develop)):
 
@@ -61,9 +61,7 @@ uv tool install belay-harness      # or: pipx install belay-harness  /  pip inst
 belay --help
 ```
 
-> **No container yet.** Belay's sandbox (macOS Seatbelt) and snapshot (APFS `clonefile`) are
-> macOS-only, and a Linux container can't run them — so there is deliberately no Docker image
-> until the Linux sandbox slice lands, rather than a container that can't do the core.
+> **No container yet.** The sandbox and snapshot now have Linux implementations (below), but the **Docker image** itself (L3 on the launch checklist) is still unbuilt — a container is packaging work on top of a substrate that now exists, not the gate it used to be.
 
 ### 1 · Put the proxy in front of the server you already run
 
@@ -77,7 +75,7 @@ BELAY_SANDBOX_SCOPE=./workspace \
   python -m belay.proxy my-mcp-server --flag
 ```
 
-Bytes are forwarded verbatim in both directions. With `BELAY_SANDBOX_SCOPE` set, the server runs under macOS Seatbelt — a write outside the scope is refused by the kernel and recorded as a `denial` naming the path; **the network is denied by default** (`BELAY_SANDBOX_NETWORK=allow-all` to widen). Each `tools/call` is held just long enough to snapshot its pre-state before the call reaches the server.
+Bytes are forwarded verbatim in both directions. With `BELAY_SANDBOX_SCOPE` set, the server runs under the platform sandbox — macOS Seatbelt, or Linux Landlock + seccomp — a write outside the scope is refused by the kernel and recorded as a `denial` naming the path; **the network is denied by default** (`BELAY_SANDBOX_NETWORK=allow-all` to widen; `allow-ports` is macOS-only and refused with a named cause on Linux). Each `tools/call` is held just long enough to snapshot its pre-state before the call reaches the server.
 
 ### 2 · Verify the run by re-execution
 
@@ -217,8 +215,36 @@ A case may **declare** that its stored verdict records a **miss** — the engine
 
 **As of 2026-08-04 the answer to that empirical question is: no miss has been banked**, so the declaration path ships **unexercised on real data**. The only two held-out exposed-and-passed turns in Belay's banked captures were hand-adjudicated and both are additions rather than weakenings, so neither became a case. `belay corpus score` therefore still reports **recall unmeasured** and `precision n/a` (0 TP / 0 FP). Read the corpus as a **regression suite that can now express a miss**, not as a measurement that has found one.
 
-### The sandbox is macOS only
-The sandbox is macOS **Seatbelt** (`sandbox-exec`); the snapshot is APFS **`clonefile`**. Everything Belay claims about containment was measured on macOS. **Linux is entirely unverified** — off macOS the sandbox *raises* rather than returning a cheerful no-op, because a no-op reporting success would claim a boundary that does not exist. Linux/Docker is a planned second slice. What the sandbox does and does not enforce (reads are not scoped; denial records are inferred) is in [`docs/technical/THREAT_MODEL.md`](docs/technical/THREAT_MODEL.md).
+### Platform coverage: macOS and Linux, both measured
+The sandbox and snapshot have **two substrate implementations**, each measured on its own CI job:
+
+| | macOS (Seatbelt + APFS `clonefile`) | Linux (Landlock + seccomp + copy-fidelity) |
+|---|---|---|
+| **Mechanism** | `sandbox-exec` profiles; APFS reflink snapshot | Landlock ruleset (write scope) + seccomp filter (network); copy snapshot with sidecar repairs, `FICLONE` reflink where probed |
+| **Write scope** | `file-write*` under the scope, refused elsewhere | Landlock write rights under the scope, refused elsewhere (measured by the A2 escape matrix) |
+| **Reads** | `file-read*` granted **wholesale** — reads are not scoped | Landlock ruleset handles **only write rights**, so reads are also not scoped (same honest limit, different mechanism — see [`THREAT_MODEL.md`](docs/technical/THREAT_MODEL.md)) |
+| **Network** | `deny-all` / `allow-all` / `allow-ports` (loopback, by port) | `deny-all` / `allow-all` only. **`allow-ports` refuses with a named cause** — Landlock's net domain scopes TCP by port with no address scope, so the macOS meaning cannot be expressed (A1 decision, stated in `THREAT_MODEL.md`) |
+| **Denial records** | inferred from the child's `Operation not permitted` | inferred from the child's `Permission denied` (EACCES) or `Operation not permitted` (EPERM) — **the EACCES is the same text an ordinary `chmod` produces**, so inside the boundary it is *consistent with* a denial, not *proof* of one |
+
+**The full suite runs on both platforms** (`.github/workflows/ci.yml`: `test (macOS)` and `test (Linux)` on pinned ubuntu-24.04). The gating split, and it is a checked fact — `tests/test_platform_gate_named_causes.py` scans every gate in the sandbox/replay area and fails unless its reason names one of the causes below:
+
+| Cause | Meaning |
+|---|---|
+| `seatbelt-only` | The test pins against macOS Seatbelt itself — `sandbox-exec`, the SBPL profile language, or the seatbelt containment/denial path. There is no Linux analogue because the mechanism is the subject. |
+| `replay-reinvokes-seatbelt` | The end-to-end replay/verify/corpus test re-invokes the server inside the macOS Seatbelt sandbox. The Linux replay path has its own coverage: the ungated snapshot/turn-gate machinery plus the A2/A3 Linux analogues (escape matrix, copy-fidelity round trips, policy pins). |
+| `landlock-seccomp-only` | Needs a real Linux kernel with Landlock (kernel ≥ 5.13, LSM enabled) — the Linux sandbox. Runs in the `test (Linux)` job. |
+| `linux-simulated` | Simulates a Linux box that is not this one (platform monkeypatch); real-Linux coverage is the `landlock-seccomp-only` tests. |
+| `linux-fs-only` | Needs Linux filesystem features: `os.listxattr` (the xattr-carrying fixture), `FICLONE` ioctls, case-sensitive byte-transparent filesystems (the collision fixtures), invalid-UTF8 names. |
+| `linux-live-probe` | A live syscall/subprocess probe that can only run on Linux. |
+| `bsd-file-flags` | `st_flags` / `chflags` are BSD file flags; Linux has no `st_flags` (the fixture guards `chflags`; the flags axis is macOS-only). |
+| `darwin-acl` | `/bin/chmod +a` ACLs are darwin-only; the Linux `gc()` branch has its own coverage. |
+| `macos-python3-shim` | A stock-macOS-only environment gate (the `/usr/bin/python3` shim). |
+| `landlock-unavailable` | Runtime, measured not declared: this kernel has no Landlock ABI — the tests that need it skip with the cause, exactly as the launcher refuses. |
+| `reflink-unavailable` | Runtime, probed: this filesystem cannot `FICLONE` (ext4/tmpfs cannot) — the copy path is the CI path. |
+| `collision-fixture-uncreatable` | Runtime: this filesystem cannot hold the distinct byte names (case-insensitive or normalising) — the fixture cannot exist here. |
+| `root-environment` | Runtime: running as root, foreign ownership is restorable — nothing to refuse. |
+
+**The cross-substrate consequence is first-class, not an edge case.** A corpus case banked on clonefile/APFS (macOS) re-verifying on a Linux box refuses at restore with `UNRESTORABLE_CAPABILITY_MISMATCH` and classifies **SKIP with that named cause** — never a guessed restore, never a REGRESSION, and never a MATCH. The mirror holds (a copy-fidelity case on macOS). `run_case` admits both substrates and lets the capability check decide; only a platform with *no* backend at all skips up front. What the sandbox does and does not enforce on each substrate — reads are not scoped on either, and denial records are inferred on both — is in [`docs/technical/THREAT_MODEL.md`](docs/technical/THREAT_MODEL.md).
 
 ### Parallel tool calls are recorded `unrestorable`, not snapshotted
 A turn's pre-state is only capturable while nothing else is in flight. When a `tools/call` arrives while another is outstanding — which is the **default** for clients that batch independent calls (Claude Code, Cursor, the OpenAI agents SDK) — the workspace is already a mid-state of the first call, so Belay refuses to clone it and call it a pre-state. It records `unrestorable` and forwards the call unchanged; that turn verifies as `UNVERIFIED`. Belay does **not** serialize turns to make them capturable — that would change how your agent behaves, the one thing this proxy exists not to do. What you lose is coverage; what you keep is honesty.
@@ -244,7 +270,8 @@ Belay is greenfield-clean: Python 3.10+, [uv](https://github.com/astral-sh/uv), 
 ```bash
 git clone https://github.com/haqaliz/belay && cd belay
 uv sync
-uv run pytest            # the full suite (macOS runs the sandbox/replay tests; one is platform-gated)
+uv run pytest            # the full suite (runs on both macOS and Linux; the platform-gated
+                         # tests carry named causes — see "Platform coverage")
 uv run belay --help      # the CLI, from source
 ```
 

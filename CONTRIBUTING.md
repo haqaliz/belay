@@ -23,8 +23,9 @@ regression no matter how much it adds. Before you build, read [CLAUDE.md](CLAUDE
 
 ## Development setup
 
-Python 3.10+ and [uv](https://github.com/astral-sh/uv). The sandbox and snapshot are macOS-only, so
-the full suite runs best on macOS (one test is platform-gated off elsewhere).
+Python 3.10+ and [uv](https://github.com/astral-sh/uv). The sandbox and snapshot have macOS and
+Linux implementations, so the full suite runs on both (the platform-gated tests carry named
+causes — see the README's platform coverage section).
 
 ```bash
 git clone https://github.com/haqaliz/belay && cd belay

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import os
 import stat
+import sys
 import unicodedata
 from pathlib import Path
 
@@ -62,7 +63,6 @@ def test_fixture_is_still_a_torture_tree(tree: Path) -> None:
     assert stat.S_IMODE(os.lstat(tree / "setuid.bin").st_mode) == 0o4711, (
         "fixture lost its setuid bit — the mode axis is now untested"
     )
-    assert os.lstat(tree / "hidden.txt").st_flags & HIDDEN_FLAG, "fixture lost its st_flags"
 
     # macOS injects `com.apple.provenance` onto every file it creates, so
     # "the file has xattrs" is TRUE even on a tree that lost every real one.
@@ -84,6 +84,20 @@ def test_fixture_is_still_a_torture_tree(tree: Path) -> None:
         "once (seek past the end and write), which on APFS allocates the whole "
         "range and leaves no hole at all"
     )
+
+
+@pytest.mark.skipif(
+    sys.platform != "darwin",
+    reason="bsd-file-flags: st_flags is a BSD file flag; Linux has no chflags",
+)
+def test_fixture_is_still_a_torture_tree_flags(tree: Path) -> None:
+    """Anti-vacuity, flags axis: `hidden.txt` still carries its BSD file flag.
+
+    `st_flags` is a BSD file flag; Linux has no `st_flags` and the fixture
+    guards its `chflags` call there, so there is nothing to assert off darwin
+    (named cause: `bsd-file-flags` — see README's platform coverage section).
+    """
+    assert os.lstat(tree / "hidden.txt").st_flags & HIDDEN_FLAG, "fixture lost its st_flags"
 
 
 def test_deterministic(tree: Path) -> None:
@@ -315,7 +329,15 @@ def _break_hardlink(tree: Path) -> None:
             {b"xattred.txt": {"xattr:" + XATTR_NAME.decode()}},
             id="xattr-lost",
         ),
-        pytest.param(_clear_flags, {b"hidden.txt": {"flags"}}, id="st_flags-lost"),
+        pytest.param(
+            _clear_flags,
+            {b"hidden.txt": {"flags"}},
+            id="st_flags-lost",
+            marks=pytest.mark.skipif(
+                sys.platform != "darwin",
+                reason="bsd-file-flags: st_flags is a BSD file flag; Linux has no chflags",
+            ),
+        ),
         pytest.param(_touch_dir_mtime, {b"nested": {"mtime_ns"}}, id="dir-mtime-lost"),
         pytest.param(_rewrite_content, {b"regular.txt": {"content"}}, id="content-changed"),
         pytest.param(_retarget_symlink, {b"relative.link": {"target"}}, id="symlink-retargeted"),

@@ -34,7 +34,7 @@ from conftest import read_trace
 
 from belay.sandbox.scope import default_scope
 
-pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="Seatbelt is macOS-only")
+pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="seatbelt-only: Seatbelt is macOS-only")
 
 PROBE = Path(__file__).parent / "fixtures" / "probe_server.py"
 

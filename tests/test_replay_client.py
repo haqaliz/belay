@@ -72,7 +72,7 @@ TOOLS_CALL_NO_ID = b'{"jsonrpc":"2.0","method":"tools/call","params":{"name":"ec
 MUTATING_CALL = b'{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"clobber","arguments":{}}}'
 
 pytestmark = pytest.mark.skipif(
-    sys.platform != "darwin", reason="replay_turn spawns inside the macOS Seatbelt sandbox"
+    sys.platform != "darwin", reason="replay-reinvokes-seatbelt: replay_turn spawns inside the macOS Seatbelt sandbox"
 )
 
 

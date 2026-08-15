@@ -36,7 +36,7 @@ from belay.trace import TraceWriter
 from conftest import read_trace
 
 pytestmark = pytest.mark.skipif(
-    sys.platform != "darwin", reason="Seatbelt is macOS-only; the module raises elsewhere"
+    sys.platform != "darwin", reason="seatbelt-only: Seatbelt is macOS-only; the module raises elsewhere"
 )
 
 
@@ -175,7 +175,7 @@ def test_a_real_interpreter_runs_to_completion_inside_the_sandbox(tmp_path: Path
 
 
 @pytest.mark.skipif(
-    not Path("/usr/bin/python3").exists(), reason="stock macOS python3 shim not present"
+    not Path("/usr/bin/python3").exists(), reason="macos-python3-shim: stock macOS python3 shim not present"
 )
 def test_the_stock_python3_shim_survives_the_profile(tmp_path: Path) -> None:
     """A3 - the mach-lookup guard, and the ONE test that actually holds that line.

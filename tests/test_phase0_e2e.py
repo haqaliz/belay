@@ -41,7 +41,7 @@ EDITOR_CMD = [sys.executable, str(EDITOR_SERVER)]
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "darwin",
-    reason="replay re-invokes inside the macOS Seatbelt sandbox",
+    reason="replay-reinvokes-seatbelt: replay re-invokes inside the macOS Seatbelt sandbox",
 )
 
 CAPTURED_AT = "2026-01-01T00:00:00+00:00"

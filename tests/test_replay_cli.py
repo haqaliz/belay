@@ -49,7 +49,7 @@ DIES_MIDWAY_CMD = [sys.executable, str(DIES_MIDWAY)]
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "darwin",
-    reason="replay re-invokes inside the macOS Seatbelt sandbox",
+    reason="replay-reinvokes-seatbelt: replay re-invokes inside the macOS Seatbelt sandbox",
 )
 
 

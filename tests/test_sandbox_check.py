@@ -22,7 +22,12 @@ import pytest
 
 from belay import cli
 
-pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="Seatbelt is macOS-only")
+_DARWIN = pytest.mark.skipif(sys.platform != "darwin", reason="seatbelt-only: Seatbelt is macOS-only")
+_LINUX = pytest.mark.skipif(sys.platform != "linux", reason="landlock-seccomp-only: the Landlock+seccomp sandbox is Linux-only")
+_SIMULATED_LINUX = pytest.mark.skipif(
+    sys.platform.startswith("linux"),
+    reason="linux-simulated: simulates a Linux box that is not this one",
+)
 
 
 def _check(argv: list[str], capsys) -> tuple[int, str]:
@@ -33,6 +38,7 @@ def _check(argv: list[str], capsys) -> tuple[int, str]:
 # --- Question 1: does the substrate work here? -------------------------------
 
 
+@_DARWIN
 def test_check_verifies_the_substrate_by_using_it(tmp_path: Path, capsys) -> None:
     """Probed, never declared — the same rule `ClonefileBackend.capabilities` follows."""
     rc, out = _check(["sandbox", "check", "--scope", str(tmp_path)], capsys)
@@ -42,6 +48,7 @@ def test_check_verifies_the_substrate_by_using_it(tmp_path: Path, capsys) -> Non
     assert "clonefile-apfs" in out
 
 
+@_DARWIN
 def test_the_substrate_probe_catches_a_sandbox_that_enforces_nothing(
     tmp_path: Path, capsys, monkeypatch
 ) -> None:
@@ -72,6 +79,7 @@ def test_the_substrate_probe_catches_a_sandbox_that_enforces_nothing(
     assert "PROBLEM" in out
 
 
+@_DARWIN
 def test_a_profile_that_does_not_compile_fails_the_check(tmp_path: Path, capsys, monkeypatch) -> None:
     """The profile must reach the actual compiler, and a bad one must fail for real.
 
@@ -93,6 +101,7 @@ def test_a_profile_that_does_not_compile_fails_the_check(tmp_path: Path, capsys,
     assert "PROBLEM" in out
 
 
+@_DARWIN
 def test_the_substrate_probe_confirms_containment_actually_holds(tmp_path: Path, capsys) -> None:
     """"Does the substrate work here?" means "does it *contain*?", not "does it run?".
 
@@ -106,6 +115,7 @@ def test_the_substrate_probe_confirms_containment_actually_holds(tmp_path: Path,
     assert "containment" in out
 
 
+@_DARWIN
 def test_check_passes_with_no_server_to_run(tmp_path: Path, capsys) -> None:
     """The substrate half must be usable on its own: a user debugging "does Belay
     work on this laptop" has no server to hand yet."""
@@ -135,6 +145,7 @@ def test_check_reports_the_scope_it_would_use(tmp_path: Path, capsys) -> None:
 # --- Question 2: is the scope too tight for THIS server? ---------------------
 
 
+@_DARWIN
 def test_check_is_green_for_a_server_that_stays_in_scope(tmp_path: Path, capsys) -> None:
     rc, out = _check(
         [
@@ -154,6 +165,7 @@ def test_check_is_green_for_a_server_that_stays_in_scope(tmp_path: Path, capsys)
     assert "no denials" in out
 
 
+@_DARWIN
 def test_check_reports_the_denied_path(tmp_path: Path, capsys) -> None:
     """The exact path, because widening has to be a diagnosis rather than a guess."""
     outside = tmp_path.parent / "denied-me.txt"
@@ -176,6 +188,7 @@ def test_check_reports_the_denied_path(tmp_path: Path, capsys) -> None:
     assert str(outside) in out
 
 
+@_DARWIN
 def test_check_marks_a_denial_as_inferred(tmp_path: Path, capsys) -> None:
     """The record's provenance travels with it. We saw the child complain; we did
     not see the kernel deny. A CLI that dropped that distinction would be making a
@@ -191,6 +204,7 @@ def test_check_marks_a_denial_as_inferred(tmp_path: Path, capsys) -> None:
     assert "child-stderr" in out
 
 
+@_DARWIN
 def test_check_fails_a_server_that_dies_without_a_denial(tmp_path: Path, capsys) -> None:
     """The failure mode measured in `test_the_filesystem_server_fixture_would_notice_a_tight_scope`.
 
@@ -212,6 +226,7 @@ def test_check_fails_a_server_that_dies_without_a_denial(tmp_path: Path, capsys)
 # --- The shape a real stdio server actually has ------------------------------
 
 
+@_DARWIN
 def test_a_server_still_running_at_the_end_of_the_sample_is_not_a_fault(
     tmp_path: Path, capsys
 ) -> None:
@@ -242,6 +257,7 @@ def test_a_server_still_running_at_the_end_of_the_sample_is_not_a_fault(
     assert "still running" in out
 
 
+@_DARWIN
 def test_a_denial_is_reported_even_when_the_server_keeps_running(tmp_path: Path, capsys) -> None:
     """A server denied at startup that carries on serving must not pass.
 
@@ -274,6 +290,7 @@ def test_a_denial_is_reported_even_when_the_server_keeps_running(tmp_path: Path,
 # --- What the check must never claim ----------------------------------------
 
 
+@_DARWIN
 def test_check_does_not_read_silence_as_sufficiency(tmp_path: Path, capsys) -> None:
     """The honesty assertion, and the reason this is `check` and not `verify`.
 
@@ -291,6 +308,7 @@ def test_check_does_not_read_silence_as_sufficiency(tmp_path: Path, capsys) -> N
     assert "only what this run touched" in out
 
 
+@_DARWIN
 def test_check_never_widens_the_scope_itself(tmp_path: Path, capsys) -> None:
     """It diagnoses. It does not fix. A tool that widened the boundary to make its
     own error go away would be authoring the invariant — the thing the default
@@ -303,6 +321,37 @@ def test_check_never_widens_the_scope_itself(tmp_path: Path, capsys) -> None:
     )
 
     assert not outside.exists()
+
+
+# --- The Linux probe --------------------------------------------------------
+
+
+@_SIMULATED_LINUX
+def test_check_on_a_linux_box_without_landlock_names_the_cause(tmp_path: Path, capsys, monkeypatch):
+    """S1, the honest half: where the mechanism is absent, the check says so
+    with a cause and fails — it never claims a boundary that is not there. Run
+    on macOS with the platform simulated, because this machine is exactly the
+    no-Landlock case: the ABI probe answers None here."""
+    monkeypatch.setattr(sys, "platform", "linux")
+
+    rc, out = _check(["sandbox", "check", "--scope", str(tmp_path)], capsys)
+
+    assert rc == 1
+    assert "landlock" in out
+    assert "unavailable" in out
+
+
+@_LINUX
+def test_check_reports_the_linux_substrate_truthfully(tmp_path: Path, capsys):
+    """S1, on the real substrate: Landlock probed at the syscall, and both
+    boundaries probed by use — the fs escape attempt and the AF_INET socket
+    refusal. If either stopped enforcing, this fails."""
+    rc, out = _check(["sandbox", "check", "--scope", str(tmp_path)], capsys)
+
+    assert rc == 0, out
+    assert "landlock" in out
+    assert "seccomp" in out
+    assert "containment" in out
 
 
 # --- Usage -------------------------------------------------------------------

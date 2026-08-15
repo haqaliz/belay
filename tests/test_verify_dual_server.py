@@ -85,7 +85,7 @@ from test_replay_relocation_shell_e2e import (
 
 darwin_only = pytest.mark.skipif(
     sys.platform != "darwin",
-    reason="replay re-invokes inside the macOS Seatbelt sandbox",
+    reason="replay-reinvokes-seatbelt: replay re-invokes inside the macOS Seatbelt sandbox",
 )
 
 #: The `server_command` for tests 3-5's non-replay assertions: never reached, but must be a

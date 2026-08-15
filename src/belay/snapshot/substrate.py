@@ -57,8 +57,9 @@ module could raise but never does would be a claim with no evidence behind it,
 which is the documentation equivalent of a false PASS. Each one is mapped in
 `RAISED_BY` to the capability that will raise it and the reason it cannot be
 raised here, and a test asserts every member of the enum is classified exactly
-once. Three of them are measured impossibilities on this substrate rather than
-mere omissions — see `RAISED_BY`.
+once. Three of them were measured impossibilities on the macOS substrate (APFS
+cannot even create the trees) and became reachable only with the Linux slice —
+they now live in `CAUSES_RAISED_HERE`, raised by the Linux restore path.
 """
 
 from __future__ import annotations
@@ -67,6 +68,7 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 import uuid
 from dataclasses import dataclass
 from enum import Enum
@@ -74,7 +76,12 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .bth1 import UnsupportedPlatform
-from .clone import Snapshot, TreeRoot, restore, snapshot
+from .clone import (
+    Snapshot,
+    TreeRoot,
+    restore as darwin_restore,
+    snapshot as darwin_snapshot,
+)
 
 
 class UnrestorableCause(str, Enum):
@@ -128,15 +135,22 @@ FIDELITY_GAPS = (
     UnrestorableCause.UNRESTORABLE_INODE_IDENTITY,
 )
 
-#: Causes this module can actually produce. Proven by
+#: Causes this module's machinery can actually produce. Proven by
 #: `test_each_locally_raised_cause_is_actually_produced`, which reaches every one
-#: through production code rather than trusting this tuple.
+#: through production code rather than trusting this tuple. The three
+#: cross-filesystem causes are raised by the Linux backend's restore path
+#: (`belay.snapshot.linux._refuse_unfaithful_tree`) — APFS cannot even create
+#: the trees that trigger them, which is why they were deferred until the Linux
+#: slice; see `RAISED_BY`'s history note.
 CAUSES_RAISED_HERE = {
     UnrestorableCause.UNRESTORABLE_FIFO,
     UnrestorableCause.UNRESTORABLE_SOCKET,
     UnrestorableCause.UNRESTORABLE_DEVICE_NODE,
     UnrestorableCause.UNRESTORABLE_OWNERSHIP,
     UnrestorableCause.UNRESTORABLE_CAPABILITY_MISMATCH,
+    UnrestorableCause.UNRESTORABLE_CASE_COLLISION,
+    UnrestorableCause.UNRESTORABLE_INVALID_UTF8_NAME,
+    UnrestorableCause.UNRESTORABLE_NORMALIZATION_COLLISION,
     *FIDELITY_GAPS,
 }
 
@@ -151,13 +165,15 @@ CAUSES_RAISED_HERE = {
 #: the property this module is built on — so the owner is named instead. A member
 #: whose owner is a live module is the healthy case, not an exception to it.
 #:
-#: The first three are **measured impossibilities on this substrate**, not
-#: oversights: APFS refuses to create the very entries that would trigger them
-#: (`OSError 92 EILSEQ` for an invalid-UTF8 name; `EEXIST` for both a case
-#: collision and an NFC/NFD pair). A macOS source tree therefore cannot contain
-#: one, and they can only arise when a tree captured on a case-sensitive,
-#: byte-transparent filesystem is restored onto APFS — which is C2's second,
-#: Linux slice.
+#: The three cross-filesystem causes (`UNRESTORABLE_CASE_COLLISION`,
+#: `UNRESTORABLE_INVALID_UTF8_NAME`, `UNRESTORABLE_NORMALIZATION_COLLISION`)
+#: **were** deferred here, documented as measured impossibilities on APFS — APFS
+#: refuses to create the very entries that would trigger them (`OSError 92
+#: EILSEQ` for an invalid-UTF8 name; `EEXIST` for both a case collision and an
+#: NFC/NFD pair), so no macOS source tree can contain one. The Linux slice
+#: (case-sensitive, byte-transparent filesystems) made them **reachable**: they
+#: are now raised by the Linux backend's restore path and live in
+#: `CAUSES_RAISED_HERE`.
 RAISED_BY: dict[UnrestorableCause, str] = {
     UnrestorableCause.UNRESTORABLE_CONCURRENT_TURN: (
         "C2's turn gate (`belay.sandbox.gate`), when a `tools/call` arrives while "
@@ -167,22 +183,6 @@ RAISED_BY: dict[UnrestorableCause, str] = {
         "property of the request stream, not of any entry. The gate refuses "
         "rather than clone a tree that is already a mid-state of the turn in "
         "flight, and `tests/test_turn_gate.py` measures it end to end."
-    ),
-    UnrestorableCause.UNRESTORABLE_CASE_COLLISION: (
-        "C2's Linux/ext4 slice, on cross-filesystem restore. Unreachable here: "
-        "APFS is case-insensitive, so creating `README` and `readme` in one "
-        "directory fails with EEXIST (measured) — a source tree on this "
-        "substrate cannot hold the collision that would be refused."
-    ),
-    UnrestorableCause.UNRESTORABLE_INVALID_UTF8_NAME: (
-        "C2's Linux/ext4 slice, on cross-filesystem restore. Unreachable here: "
-        "APFS rejects an invalid-UTF8 name at creation with OSError 92 EILSEQ "
-        "(measured), so no tree on this machine can contain one."
-    ),
-    UnrestorableCause.UNRESTORABLE_NORMALIZATION_COLLISION: (
-        "C2's Linux/ext4 slice, on cross-filesystem restore. Unreachable here: "
-        "APFS normalises, so an NFC and an NFD spelling of the same name are "
-        "one file and the second create fails with EEXIST (measured)."
     ),
     UnrestorableCause.UNRESTORABLE_EXTERNAL_SERVICE: (
         "C4, from the network policy C2 records as a fact. A call that already "
@@ -377,17 +377,33 @@ def take_snapshot(source: TreeRoot, dest: TreeRoot) -> GuardedSnapshot:
 
     The guard runs **first**. Snapshotting and then noticing is not detection —
     it is a lossy artifact on disk plus an apology.
+
+    The backend is selected by platform: `ClonefileBackend` on darwin, the
+    Linux backend elsewhere. The manifest records the selected backend's name
+    and its **probed** capabilities — the set a later restore refuses across —
+    so a case banked on one substrate can never be guessed back on the other.
     """
     guard(source)
-    snap = snapshot(source, dest)
-    return GuardedSnapshot(
-        snapshot=snap,
-        manifest=Manifest(
+    if sys.platform == "darwin":
+        snap = darwin_snapshot(source, dest)
+        manifest = Manifest(
             backend=ClonefileBackend.name,
             capabilities=ClonefileBackend.capabilities(),
             handle=uuid.uuid4().hex,
-        ),
-    )
+        )
+    else:
+        from .linux import LinuxSnapshotBackend, snapshot as linux_snapshot
+
+        snap = linux_snapshot(source, dest)
+        # `reflink` is a property of the snapshot directory's filesystem, so the
+        # probe (and the capability set) is taken there — and at restore, again
+        # at the snapshot's own directory, so the two can never drift apart.
+        manifest = Manifest(
+            backend=LinuxSnapshotBackend.name,
+            capabilities=LinuxSnapshotBackend.capabilities(Path(dest).parent),
+            handle=uuid.uuid4().hex,
+        )
+    return GuardedSnapshot(snapshot=snap, manifest=manifest)
 
 
 def guarded_restore(snap: GuardedSnapshot, dest: TreeRoot) -> None:
@@ -396,7 +412,14 @@ def guarded_restore(snap: GuardedSnapshot, dest: TreeRoot) -> None:
     Note the refusal happens before `dest` is touched: a half-restored tree is
     indistinguishable from a restored one to everything downstream.
     """
-    here = ClonefileBackend.capabilities()
+    if sys.platform == "darwin":
+        here = ClonefileBackend.capabilities()
+        do_restore = darwin_restore
+    else:
+        from .linux import LinuxSnapshotBackend, restore as linux_restore
+
+        here = LinuxSnapshotBackend.capabilities(Path(snap.snapshot.path).parent)
+        do_restore = linux_restore
     if snap.manifest.capabilities != here:
         missing = sorted(snap.manifest.capabilities - here)
         extra = sorted(here - snap.manifest.capabilities)
@@ -408,7 +431,7 @@ def guarded_restore(snap: GuardedSnapshot, dest: TreeRoot) -> None:
             "restoring a tree whose missing properties nothing would have reported.",
             source="capabilities",
         )
-    restore(snap.snapshot, dest)
+    do_restore(snap.snapshot, dest)
 
 
 def absent_handle() -> dict[str, Any]:
@@ -501,8 +524,14 @@ def gc(path: TreeRoot) -> None:
         return
     except PermissionError:
         pass
-    _clear_flags(path)
-    _strip_acls(path)
+    if sys.platform == "darwin":
+        _clear_flags(path)
+        _strip_acls(path)
+    # Linux: there is no `chflags` and no `/bin/chmod -N` to reach for. The
+    # Linux analogue of `uchg` is the immutable bit (`chattr +i`), and there is
+    # no unprivileged clear for it — an agent that sets one strands disk. That
+    # is stated here rather than silently ignored: the rmtree below raises, and
+    # the stranding becomes a named failure instead of a quiet leak.
     shutil.rmtree(path)  # if this still fails, it raises: no silent stranding
 
 

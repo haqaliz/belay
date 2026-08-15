@@ -45,13 +45,15 @@ sign-off line; `belay corpus score`, against human labels, is where detection is
   to emit, and it must fail CI. (The one exception is a case that DECLARES a recorded miss
   and whose flip is exactly the miss closing; see below. Every other flip, declared or not,
   is a REGRESSION.)
-- A **SKIP** is "THIS box could not evaluate the case" — off the macOS Seatbelt substrate,
-  the recorded server was not runnable / did not answer, a backend capability mismatch on
-  restore. The case was not evaluated here, so it is neither a pass nor a regression, and a
-  non-darwin CI box must not fail the build over a case it structurally cannot replay.
+- A **SKIP** is "THIS box could not evaluate the case" — on a box with no sandbox backend
+  (neither Seatbelt on darwin nor Landlock+seccomp on linux), the recorded server was not
+  runnable / did not answer, a backend capability mismatch on restore (the cross-substrate
+  case: banked on clonefile/APFS, replayed on copy-fidelity). The case was not evaluated
+  here, so it is neither a pass nor a regression, and a box without the substrate must not
+  fail the build over a case it structurally cannot replay.
 
 Conflating the two is the quiet failure: a naive "any non-match is a regression" would turn
-every non-darwin run RED, and a "SKIP is basically a pass" would let a real regression hide
+every run on a bare box RED, and a "SKIP is basically a pass" would let a real regression hide
 behind an environment excuse. So SKIP is decided FIRST and only for a closed set of
 environment/substrate causes; everything else that differs from `expected` is a REGRESSION —
 again unless the case declares a recorded miss AND the difference is exactly the one exempted
@@ -178,9 +180,11 @@ MISS_CLOSED = "MISS_CLOSED"
 #:    spawn). That is "the server is not runnable on THIS box", the server-unavailable gap.
 #:  - `UnrestorableCause.UNRESTORABLE_CAPABILITY_MISMATCH` (substrate.py) — the persisted
 #:    snapshot needs a backend capability this box's restore substrate lacks (S1). A machine
-#:    without the clonefile/APFS substrate the case was captured on lands here (and the
-#:    up-front `sys.platform != "darwin"` gate in `run_case` covers the common case of the
-#:    whole substrate being absent). This is a per-box capability gap, not a verdict flip.
+#:    without the clonefile/APFS substrate a case was captured on lands here — the
+#:    cross-substrate consequence (darwin-banked case on linux, and the mirror), and the
+#:    up-front `sys.platform` gate in `run_case` covers the common case of the WHOLE
+#:    substrate being absent (no darwin/linux backend at all). This is a per-box capability
+#:    gap, not a verdict flip.
 #: Everything else that leaves a turn UNVERIFIED — a manifest missing from a self-contained
 #: case, an unreadable frame — is engine/case corruption, a real divergence from `expected`,
 #: and stays a REGRESSION. The set is deliberately narrow.
@@ -522,8 +526,8 @@ def run_case(case_dir: Path) -> CaseResult:
 
     `load_case` runs FIRST and is fail-closed: a corrupt case dir raises here, on every
     platform, before any platform gate — the corpus never silently drops an unreadable case.
-    Off darwin the Seatbelt replay substrate is absent, so the case cannot be evaluated at all
-    and is a SKIP decided up front, before a server is ever spawned.
+    On a platform with NO sandbox backend (neither darwin nor linux) the case cannot be
+    evaluated at all and is a SKIP decided up front, before a server is ever spawned.
 
     A case carrying the schema-v4 `trajectory` declaration is an INSTANCE-LEVEL case:
     it is recomputed through the instance path (`_recompute_trajectory_case`) — the
@@ -531,21 +535,26 @@ def run_case(case_dir: Path) -> CaseResult:
     trajectory case sent down it would regress against a final turn's verdict that is
     not its contract. Every other case takes the per-turn path below, byte-for-byte.
 
-    On darwin the turn is recomputed with `verify_turn`, passing `manifest_dir=case_dir`: the
-    engine globs `case_dir/*.json`, matches the turn's recorded handle to `manifest.json`
-    (case.json carries no `handle` and is skipped), and `load_snapshot` resolves the
-    manifest's `tree_path="prestate"` against `case_dir` — so the case replays from itself
-    alone. Invariants are rebuilt from the stored policy with `os.fsencode`, mirroring how
+    On darwin AND linux the turn is recomputed with `verify_turn`, passing
+    `manifest_dir=case_dir`: the engine globs `case_dir/*.json`, matches the turn's
+    recorded handle to `manifest.json` (case.json carries no `handle` and is skipped),
+    and `load_snapshot` resolves the manifest's `tree_path="prestate"` against
+    `case_dir` — so the case replays from itself alone. A case banked on the OTHER
+    substrate (clonefile/APFS on darwin, copy-fidelity on linux) refuses at restore
+    with `UNRESTORABLE_CAPABILITY_MISMATCH`, which `classify_case` maps to SKIP with
+    the named cause — the cross-substrate consequence, stated in README. Invariants
+    are rebuilt from the stored policy with `os.fsencode`, mirroring how
     `verify`/`corpus add` built them.
     """
     case = load_case(case_dir)
-    if sys.platform != "darwin":
+    if sys.platform != "darwin" and not sys.platform.startswith("linux"):
         return CaseResult(
             case_id=case.id,
             outcome=SKIP,
             skip_reason=(
-                f"platform {sys.platform!r} is not darwin; the Seatbelt replay substrate is "
-                f"macOS-only, so this case cannot be re-verified here"
+                f"platform {sys.platform!r} has no sandbox backend; the Seatbelt "
+                f"(darwin) and Landlock+seccomp (linux) replay substrates are both "
+                f"absent, so this case cannot be re-verified here"
             ),
         )
 

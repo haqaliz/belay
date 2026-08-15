@@ -291,7 +291,12 @@ def test_the_turns_frame_carries_a_present_state_handle(tmp_path):
         f"the turn's own frame must carry its pre-state snapshot; got {handle!r}"
     )
     assert handle["handle"], "a present handle that names no snapshot resolves to nothing"
-    assert handle["backend"] == "clonefile-apfs"
+    from belay.snapshot.linux import LinuxSnapshotBackend
+
+    expected_backend = (
+        "clonefile-apfs" if sys.platform == "darwin" else LinuxSnapshotBackend.name
+    )
+    assert handle["backend"] == expected_backend
     # `present` must keep naming what it did NOT preserve (Task 6's contract).
     assert "UNRESTORABLE_ATIME" in handle["fidelity_gaps"]
 

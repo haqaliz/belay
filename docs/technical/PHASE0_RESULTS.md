@@ -479,7 +479,7 @@ These are **distinct defects** from the false negative. Merging them would muddy
 
 **Expected `belay corpus run` REGRESSIONs after the `NOT_COVERED` release.** `corpus/run.py` compares the recomputed sub-verdict set against the stored one **exactly**, so any case stored *before* the release whose network sub-verdict was recorded as `UNVERIFIED` now recomputes as `NOT_COVERED` and is reported **REGRESSION**. This is expected and is not a defect, not a detection failure, and not a reason to relabel the case: the finding did not change, its status name did. Confirm the diff is confined to the `A2 / effect:network` entry, then re-mint or re-store the case. A REGRESSION touching any other axis/kind is a real one.
 
-**macOS-only engine.** The Seatbelt sandbox is macOS-specific. This run is conducted on macOS; the engine is not validated on Linux or Windows. A port would require a different sandbox backend.
+**macOS-only engine (as of the runs above).** The Seatbelt sandbox is macOS-specific, and the Phase-0 numbers above were all measured on macOS. The engine now ALSO has a Linux substrate — Landlock + seccomp containment and a copy-fidelity snapshot backend — validated by the `test (Linux)` ubuntu CI job (the linux-gated A2/A3 tests' first real execution) and stated in [`THREAT_MODEL.md`](THREAT_MODEL.md)'s Linux section; `corpus run` on Linux re-verifies linux-banked cases and classifies darwin-banked ones as capability-mismatch SKIP. **No Phase-0 number above is a Linux number** — re-deriving any of them on Linux is a separate, un-run measurement. Windows has no sandbox backend and raises by design.
 
 **See also:** `README.md` "Coverage & limits" for the full honesty contract.
 

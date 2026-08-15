@@ -25,7 +25,7 @@ import pytest
 from belay.sandbox import seatbelt
 from belay.sandbox.scope import DefaultScope, default_scope
 
-pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="Seatbelt is macOS-only")
+pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="seatbelt-only: Seatbelt is macOS-only")
 
 
 def _write_to(target: str) -> list[str]:

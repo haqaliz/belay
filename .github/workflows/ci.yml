@@ -14,8 +14,10 @@ concurrency:
 jobs:
   test:
     name: test (macOS)
-    # Belay's sandbox (Seatbelt) and snapshot (APFS clonefile) are macOS-only, so the
-    # real replay/sandbox tests only run here. Off macOS the sandbox raises by design.
+    # Belay's sandbox (Seatbelt) and snapshot (APFS clonefile) run here; the
+    # seatbelt-pinning and end-to-end replay tests that re-invoke inside the
+    # macOS sandbox live here (named-caused gates — see README). Linux runs the
+    # same suite in the `test-linux` job below.
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,3 +38,84 @@ jobs:
 
       - name: Test
         run: uv run pytest -q
+
+  # The full suite on Linux (aspect A4). The linux-gated A2/A3 tests — the
+  # Landlock+seccomp escape matrix, the copy-fidelity snapshot round trips, the
+  # reflink/collision fixtures — execute for the FIRST time on a real Linux box
+  # here, and the ungated sandbox/replay tests exercise the Linux backends on
+  # this substrate. Skips are limited to the named-caused gates listed in
+  # README's platform coverage section (guarded by
+  # tests/test_platform_gate_named_causes.py).
+  test-linux:
+    name: test (Linux)
+    # PINNED image, same rationale as the spike job: the containment claims are
+    # about ubuntu-24.04 (kernel measured by the A1 probe), and `ubuntu-latest`
+    # is a moving target.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Sync (dev deps)
+        run: uv sync
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Test
+        run: uv run pytest -q
+
+  # The containment spike (aspect A1): measure, on a REAL ubuntu job, which
+  # Linux containment mechanisms can enforce Belay's boundary, and emit the
+  # machine-readable artifact the written decision cites
+  # (docs/planning/linux-sandbox/containment-spike/). This job is the spec's
+  # acceptance criterion 1: it fails until the probe exists and runs.
+  spike-linux:
+    name: spike (linux containment probe)
+    # PINNED image. `ubuntu-latest` is a moving target (22.04 -> 24.04 already
+    # happened mid-mint); the probe artifact records the image it ran on, and
+    # the decision must not be able to drift onto a different substrate.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Sync (dev deps)
+        run: uv sync
+
+      # The probe exits 0 when a mechanism is unavailable: `unavailable` IS
+      # the measurement (spec criterion 2). This step fails only if the probe
+      # itself errors — a crash, or an artifact that fails its own schema.
+      - name: Run the containment probe
+        run: uv run python eval/linux_probe/probe.py
+
+      - name: Keep the first result for the determinism diff
+        run: cp probe_result.json probe_result.first.json
+
+      - name: Upload the probe artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-probe-result
+          path: probe_result.json
+
+      # Spec criterion 3: same image -> byte-identical artifact. The second
+      # run overwrites probe_result.json; the first copy is diffed against it.
+      - name: Re-run the probe
+        run: uv run python eval/linux_probe/probe.py
+
+      - name: "Determinism: the two runs must be byte-identical"
+        run: diff probe_result.first.json probe_result.json

@@ -51,9 +51,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterator, Optional, Sequence
 
-from belay.sandbox import seatbelt
+from belay.sandbox import backend_for, linux, seatbelt
 from belay.sandbox.scope import DefaultScope, default_scope
-from belay.snapshot.bth1 import UnsupportedPlatform
 
 __all__ = [
     "NETWORK_ENV",
@@ -133,6 +132,12 @@ class DenialCapture:
 
     def __init__(self, trace: Any) -> None:
         self._trace = trace
+        # The stderr pump is platform-neutral; the MARKERS are not — on Linux a
+        # filesystem denial reads EACCES ("Permission denied"), which macOS's
+        # EPERM-only parser would miss. The parser is resolved once, from the
+        # same seam `contained` dispatches on, so the live path and the launch
+        # path cannot disagree about which platform this is.
+        self._denials_from_stderr = backend_for()._denials_from_stderr
 
     def observer(self, direction: str) -> Callable[[bytes, bool], None]:
         def observe(line: bytes, truncated: bool) -> None:
@@ -141,7 +146,7 @@ class DenialCapture:
             # denial record is worth that. The proxy is not able to guard it: it
             # hands a peek nothing but bytes.
             try:
-                seatbelt.record_denials(self._trace, seatbelt._denials_from_stderr(line))
+                seatbelt.record_denials(self._trace, self._denials_from_stderr(line))
             except Exception as exc:  # noqa: BLE001
                 self.capture_error(direction, exc)
 
@@ -163,7 +168,10 @@ class DenialCapture:
 class Contained:
     """A command, wrapped so that spawning it normally spawns it contained."""
 
-    #: What to hand to `proxy.run`. `sandbox-exec -f <profile> env TMPDIR=… <cmd>`.
+    #: What to hand to `proxy.run`. On macOS: `sandbox-exec -f <profile> env
+    #: TMPDIR=… <cmd>`. On Linux: `python -m belay.sandbox.linux <policy>
+    #: -- env TMPDIR=… <cmd>` — the launcher installs Landlock+seccomp and
+    #: execs the command, so the argv Popen spawns IS the contained process.
     argv: list[str]
 
     #: The scope the argv was built for. `snapshot_root` is what the gate clones;
@@ -184,31 +192,36 @@ def contained(
     workspace: Path | str,
     network: seatbelt.NetworkPolicy,
 ) -> Iterator[Contained]:
-    """`command`, wrapped to run under a profile that lives as long as the block.
+    """`command`, wrapped to run under a policy that lives as long as the block.
 
-    The profile file is the policy. It is created owner-only by `mkstemp` and
-    unlinked on the way out: a profile a child could write to is a policy the child
-    can rewrite, and one left on disk afterwards is a policy nothing owns. The mode
-    is asserted rather than assumed — this is the one file in Belay whose
-    permissions are a security boundary rather than hygiene.
+    The policy file is the policy. It is created owner-only by `mkstemp` and
+    unlinked on the way out: a policy a child could write to is a policy the
+    child can rewrite, and one left on disk afterwards is a policy nothing
+    owns. The mode is asserted rather than assumed — this is the one file in
+    Belay whose permissions are a security boundary rather than hygiene.
 
-    Raises `UnsupportedPlatform` off macOS rather than yielding the bare command.
-    Running unsandboxed here would be Belay silently withdrawing a boundary the
-    operator asked for by name, which is the failure this project exists to catch,
-    committed by us.
+    The boundary itself is the backend's: Seatbelt on macOS, the
+    Landlock+seccomp launcher on Linux (its `profile` is the JSON ruleset
+    description — the same field, honest content). A platform with NO backend
+    raises `UnsupportedPlatform` rather than yielding the bare command:
+    running unsandboxed here would be Belay silently withdrawing a boundary
+    the operator asked for by name, which is the failure this project exists
+    to catch, committed by us. On Linux, a kernel without Landlock raises the
+    same way, with the cause named, and `allow-ports` raises
+    `NetworkPolicyUnsupported` (an inexpressible mode is never silently
+    widened).
     """
-    if sys.platform != "darwin":
-        raise UnsupportedPlatform(
-            f"a sandbox was requested, and Belay cannot contain anything on "
-            f"{sys.platform!r}: Seatbelt is macOS-only. Refusing rather than "
-            f"spawning the server unsandboxed — a run that quietly dropped the "
-            f"boundary would report exactly like a contained one."
-        )
-
+    backend = backend_for()
     scope = default_scope(workspace)
-    profile = seatbelt.build_profile(scope=scope.write_roots, network=network)
+    if backend is linux:
+        linux.ensure_available()
+        profile = linux.policy_text(scope=scope.write_roots, network=network)
+        suffix = ".json"
+    else:
+        profile = seatbelt.build_profile(scope=scope.write_roots, network=network)
+        suffix = ".sb"
 
-    handle, profile_path = tempfile.mkstemp(prefix="belay-sandbox-", suffix=".sb")
+    handle, profile_path = tempfile.mkstemp(prefix="belay-sandbox-", suffix=suffix)
     try:
         with os.fdopen(handle, "w") as fh:
             fh.write(profile)
@@ -218,8 +231,12 @@ def contained(
                 f"the sandbox profile {profile_path!r} is mode {mode:o}, not 600: "
                 f"refusing to apply a policy the contained process could rewrite"
             )
+        if backend is linux:
+            argv = linux.launcher_argv(scope.wrap(command), policy_path=profile_path)
+        else:
+            argv = [seatbelt.SANDBOX_EXEC, "-f", profile_path, *scope.wrap(command)]
         yield Contained(
-            argv=[seatbelt.SANDBOX_EXEC, "-f", profile_path, *scope.wrap(command)],
+            argv=argv,
             scope=scope,
             profile=profile,
             profile_path=profile_path,

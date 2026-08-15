@@ -23,7 +23,7 @@ import sys
 
 import pytest
 
-pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="Seatbelt is macOS-only")
+pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="seatbelt-only: Seatbelt is macOS-only")
 
 SANDBOX_EXEC = "/usr/bin/sandbox-exec"
 

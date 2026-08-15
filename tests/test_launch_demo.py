@@ -58,7 +58,7 @@ EDITOR_CMD = [sys.executable, str(EDITOR_SERVER)]
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "darwin",
-    reason="replay re-invokes inside the macOS Seatbelt sandbox",
+    reason="replay-reinvokes-seatbelt: replay re-invokes inside the macOS Seatbelt sandbox",
 )
 
 # The test the agent was supposed to leave intact: it asserts the security invariant the

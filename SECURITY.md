@@ -16,8 +16,9 @@ Two properties are worth stating plainly because they are easy to get wrong:
 - **Corpus cases stay local.** `belay corpus add` bundles a run's pre-state into a case; cases are
   written under `corpus/local/`, which is gitignored, and are never uploaded. Do not commit them.
 
-The sandbox's guarantees and its exact limits (reads are not scoped; denial records are inferred;
-macOS-only) are documented in [`docs/technical/THREAT_MODEL.md`](docs/technical/THREAT_MODEL.md).
+The sandbox's guarantees and its exact limits (reads are not scoped on either substrate;
+denial records are inferred; the macOS and Linux boundaries differ — Landlock + seccomp on
+Linux, Seatbelt on macOS) are documented in [`docs/technical/THREAT_MODEL.md`](docs/technical/THREAT_MODEL.md).
 Read it before relying on the word "sandbox".
 
 ## Supported versions

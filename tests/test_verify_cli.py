@@ -41,7 +41,7 @@ LIAR_CMD = [sys.executable, str(FIXTURES / "readonly_liar_server.py")]
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "darwin",
-    reason="replay re-invokes inside the macOS Seatbelt sandbox",
+    reason="replay-reinvokes-seatbelt: replay re-invokes inside the macOS Seatbelt sandbox",
 )
 
 WEAKENED_TEST = "def test_rejects_wrong_password():\n    assert True\n"

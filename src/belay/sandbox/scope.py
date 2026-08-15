@@ -162,9 +162,14 @@ class DefaultScope:
 
         No `--` terminator, and that is measured, not sloppy: macOS `env` accepts
         `env -- cmd`, but after an assignment it takes `--` as the command name and
-        fails `env: --: No such file or directory`. Which leaves the first argument
-        ambiguous if it contains `=`, so that case is refused below rather than
-        silently exec'ing whatever came after it.
+        fails `env: --: No such file or directory`. The platforms genuinely differ
+        here — Linux coreutils `env` terminates option parsing on `--` even after
+        an assignment — but emitting it on Linux and not macOS would fork the
+        wrapped argv on the platform, for no boundary either way, so `wrap` emits
+        the same argv on both and the refusal below is the same conservative
+        answer on both. Which leaves the first argument ambiguous if it contains
+        `=`, so that case is refused below rather than silently exec'ing whatever
+        came after it.
         """
         argv = list(command)
         if not argv:

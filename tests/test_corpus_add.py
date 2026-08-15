@@ -621,7 +621,7 @@ def test_cli_default_timeout_matches_client(tmp_path):
 
 pytestmark_darwin = pytest.mark.skipif(
     sys.platform != "darwin",
-    reason="the survives-rm proof takes a REAL snapshot and restores it in the sandbox",
+    reason="replay-reinvokes-seatbelt: the survives-rm proof takes a REAL snapshot and restores it in the sandbox",
 )
 
 

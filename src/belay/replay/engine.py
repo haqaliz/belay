@@ -73,7 +73,7 @@ from belay.replay.relocate import (
     turn_needs_relocation,
 )
 from belay.snapshot.bth1 import FieldDiff, diff_records, scan_tree
-from belay.snapshot.substrate import guarded_restore
+from belay.snapshot.substrate import Unrestorable, guarded_restore
 
 #: The turn was re-invoked against its restored pre-state. Carries the delta, the
 #: result-equivalence observation, and any version-drift finding.
@@ -528,8 +528,23 @@ def replay_turn(
     # Pre-state: a fresh, deterministic restore of the same snapshot. Restore is
     # byte-identical by construction (C2's guarantee), so this equals the state the
     # server's own scratch copy starts from — the honest baseline for the delta.
+    #
+    # The restore can refuse: a snapshot whose capability set this box's substrate
+    # does not have (the cross-substrate case — banked on clonefile/APFS, replayed
+    # on a copy-fidelity box, and the mirror) raises `Unrestorable` with
+    # `UNRESTORABLE_CAPABILITY_MISMATCH`. That refusal is the pre-state never
+    # arriving, exactly like the recorded `unrestorable` handle above: UNVERIFIED
+    # with the named cause, never a crash and never a guessed restore.
     pre_dir = Path(tempfile.mkdtemp(prefix="belay-replay-pre-"))
-    guarded_restore(snap, pre_dir)
+    try:
+        guarded_restore(snap, pre_dir)
+    except Unrestorable as exc:
+        shutil.rmtree(pre_dir, ignore_errors=True)
+        return TurnReplay(
+            turn_index=n,
+            status=UNVERIFIED,
+            cause=exc.cause.value,
+        )
     before = scan_tree(pre_dir)
 
     result = _client_replay_turn(
