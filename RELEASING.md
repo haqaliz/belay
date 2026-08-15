@@ -8,10 +8,11 @@ repository, not by whatever account the local `gh` CLI happens to be logged into
 The PyPI distribution is **`belay-harness`** (the name `belay` is already taken on PyPI); the
 import package and the `belay` command are unchanged.
 
-> **No container channel yet.** Belay's sandbox and snapshot are macOS-only, so a Linux container
-> cannot run the core (`verify`/`corpus run`/the sandbox). A GHCR image is deliberately deferred
-> until the Linux sandbox slice lands, rather than shipping an image that can't do the main thing.
-> When it lands, add a `ghcr` job here and to `release.yml`.
+> **No container channel yet.** Belay's sandbox and snapshot now have Linux implementations
+> (Landlock + seccomp, copy-fidelity snapshot — measured on the `test (Linux)` CI job), so a
+> Linux container CAN run the core; the **image itself** is still unbuilt. A GHCR image is
+> deliberately deferred to the Docker self-host checklist item (L3), rather than shipping an
+> image that hasn't been packaged. When it lands, add a `ghcr` job here and to `release.yml`.
 
 ## Versioning
 

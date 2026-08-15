@@ -1,5 +1,14 @@
 # Linux sandbox slice — understanding note (Phase 2)
 
+> **STATUS: SHIPPED (2026-08-15) — A1–A4 merged into this feature branch; the `test (Linux)`
+> ubuntu-24.04 CI job runs the full suite green, and the docs below describe what was built.
+> The reading it records is superseded where measurement disagreed: "no platform skips" was
+> user-confirmed as **no skips without a named cause** (genuinely seatbelt-only tests, e.g.
+> `test_sbpl_limits.py`, stay darwin-gated with a named cause), and the mechanism is
+> **Landlock + seccomp** (bwrap dead on stock runners — A1 measured it). Keep this note as
+> the pre-build record; the shipped state is `prd.md`'s aspect table, `CHECKLIST.md` L2, and
+> the `THREAT_MODEL.md` Linux section.
+
 ## What the work is really asking
 
 Launch-checklist item **L2** (`docs/planning/launch-readiness/CHECKLIST.md:68-80`): make the

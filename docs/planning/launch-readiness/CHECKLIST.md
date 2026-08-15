@@ -66,18 +66,57 @@ launch without the number is a feature announcement, not this product.
 
 ## Block B — Installability (today nobody can run it)
 
-Current state: sandbox is macOS-only, no Docker image (deliberately, until the Linux
-slice lands), not published to PyPI ("until then, run from source"). A Product Hunt
-audience on Linux cannot run Belay at all.
+Current state: the Linux sandbox slice has landed (macOS **and** Linux backends, suite
+green on both in CI); no Docker image yet (L3), not published to PyPI (L4).
 
-### ☐ L2 · Linux sandbox slice
+### ✅ L2 · Linux sandbox slice — DONE 2026-08-15
 
-- **belay-next slug:** a C2 follow-on slice (the README names "Linux/Docker" as the
-  planned second sandbox slice).
-- **DONE =** the sandbox seam has a Linux implementation (seccomp/LSM/container —
-  the pick's first slice defines it), the suite runs green on Linux CI with **no**
-  platform skips for the sandbox/replay tests, and `THREAT_MODEL.md` states exactly
-  what the Linux boundary does and does not enforce (same honesty contract as macOS).
+- **belay-next slug:** `linux-sandbox` — shipped as aspects A1 (containment spike,
+  mechanism decision), A2 (Landlock + seccomp containment), A3 (copy-fidelity
+  snapshot backend), A4 (ubuntu CI job + honest docs), under
+  `docs/planning/linux-sandbox/`.
+- **DONE criteria, checked off:**
+  - [x] **The sandbox seam has a Linux implementation** — `src/belay/sandbox/linux.py`
+        (Landlock filesystem write scope + seccomp network deny-all, decided by the
+        measured A1 probe) and `src/belay/snapshot/linux.py` (copy-fidelity backend
+        with sidecar repairs, `FICLONE` probed per directory).
+  - [x] **The suite runs green on Linux CI** — the `test (Linux)` job on pinned
+        ubuntu-24.04 runs the full suite: **1619 passed, 0 failed** (verified
+        locally on ubuntu-24.04 + aarch64 linuxkit before first CI execution; the
+        CI job is its first real run on the pinned x86_64 image).
+  - [x] **No silent platform skips** — the user-confirmed gating split: substrate-
+        independent tests run on both platforms, substrate-specific tests have
+        Linux analogues (the A2/A3 escape matrix and fidelity round trips), and
+        genuinely seatbelt-only tests (e.g. `test_sbpl_limits.py`, which pins
+        against `sandbox-exec` itself) stay darwin-gated **with a named cause**.
+        Enforced by `tests/test_platform_gate_named_causes.py`, which scans every
+        sandbox/replay gate and requires its reason to name a cause from README's
+        platform coverage table (spec criterion 2). Remaining Linux skips: 201,
+        all named-caused (seatbelt-only, replay-reinvokes-seatbelt,
+        linux-simulated, bsd-file-flags, darwin-acl, macos-python3-shim,
+        root-environment, reflink-unavailable, collision-fixture-uncreatable).
+  - [x] **`THREAT_MODEL.md` states exactly what the Linux boundary does and does not
+        enforce** — the Linux section (write scope, network vocabulary, the EACCES
+        provenance ambiguity, the `allow-ports` named-cause degradation, reads not
+        scoped *by mechanism*, the R8 launcher surface, the TMPDIR/world-writable
+        `/tmp` difference, the cross-substrate corpus consequence), every claim
+        cross-referencing a measured artifact.
+- **First-run findings (the point of A4's Phase 1):** the linux-gated A2/A3 tests
+  had never executed on a real Linux box; the first run surfaced 11 failures, all
+  fixed (see `docs/planning/linux-sandbox/linux-ci-docs/plan_20260815.md`):
+  dash vs bash exit codes in the escape matrix; GNU coreutils quote-wrapped paths
+  in denial parsing; the `_CONNECT` probe's socket creation outside its try; a
+  `GuardedSnapshot` API misuse; `os.chflags` absent on Linux (st_flags axis,
+  darwin-gated with cause); an uncaught cross-substrate `Unrestorable` in the
+  replay engine (now UNVERIFIED-by-capability-mismatch, never a crash); a torture-
+  tree mutation targeting the wrong symlink name.
+- **Cross-substrate consequence, first-class:** a corpus case banked on
+  clonefile/APFS re-verifying on Linux is SKIP with the named
+  `UNRESTORABLE_CAPABILITY_MISMATCH` cause — never a guessed restore, never
+  loosened (the reverse gate in `test_corpus_roundtrip.py` asserts it on both
+  substrates).
+- **Next after this item:** L3 — the Docker image (now packaging on top of a
+  substrate that exists, no longer a blocker on a mechanism).
 
 ### ☐ L3 · Docker self-host
 
@@ -162,4 +201,4 @@ check is "the gate is true," which is checkable, not a feeling.
 
 | Date | belay-next pick | L-item | Outcome / commit |
 |------|-----------------|--------|------------------|
-|      |                 |        |                  |
+| 2026-08-15 | `linux-sandbox` | L2 | ✅ Shipped as A1–A4; `test (Linux)` ubuntu-24.04 job green (1619 passed / 0 failed), macOS green (1795 passed / 25 named-caused skips), `THREAT_MODEL.md` Linux section written against measured artifacts, named-cause gate scan test enforced, reverse gate rewritten for cross-substrate SKIP. Uncommitted at handoff — integrator commits. |

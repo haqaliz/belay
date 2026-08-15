@@ -1,4 +1,4 @@
-# Belay threat model (C2: the Seatbelt sandbox)
+# Belay threat model (C2: the Seatbelt + Landlock sandbox)
 
 **Belay executes untrusted agent actions. That makes Belay itself an attack surface.**
 This document states what the C2 sandbox enforces, what it cannot express, and what it
@@ -6,9 +6,15 @@ cannot see at all. Every "enforced" claim below names the test that measures it.
 "not enforced" claim is here because leaving it out would be the failure this project
 exists to catch, committed by us.
 
+The macOS half of this document describes `belay.sandbox.seatbelt`; the Linux half
+describes `belay.sandbox.linux` (Landlock + seccomp) — see [Platform](#platform-macos-and-linux-both-measured)
+before reading either half as the other.
+
 **Scope of this document:** the sandbox and snapshot layer as it exists today, on
-**macOS (darwin/arm64)**. Nothing here has ever been run on Linux — see
-[Platform](#platform-macos-only-and-that-is-not-a-formality).
+**macOS (darwin/arm64) and Linux (ubuntu-24.04, kernel 6.17 — the pinned CI
+image)**. The macOS claims are measured on macOS; the Linux claims are measured
+on the `test (Linux)` ubuntu CI job, the linux-gated A2/A3 tests' first real
+execution — see [Platform](#platform-macos-and-linux-both-measured).
 
 ---
 
@@ -17,9 +23,11 @@ exists to catch, committed by us.
 Everything below describes what `belay.sandbox.seatbelt` enforces when a process is run
 under it. **With `BELAY_SANDBOX_SCOPE` set, the proxy now runs your MCP server under it**:
 `belay.sandbox.launch` composes the profile onto the argv, so `proxy.py`'s `Popen` — the
-same one C1 shipped — spawns `sandbox-exec -f <profile> … <server>`. A write outside the
-scope is refused by the kernel and recorded as a `denial`, measured on a real proxy run
-with a positive control and an ablation (`tests/test_proxy_containment.py`).
+same one C1 shipped — spawns `sandbox-exec -f <profile> … <server>` (on Linux, the same
+seam composes `python -m belay.sandbox.linux <policy.json> -- … <server>` — the Linux
+half of the story is in the [Linux section](#the-linux-boundary-landlock-filesystem--seccomp-network)).
+A write outside the scope is refused by the kernel and recorded as a `denial`, measured on
+a real proxy run with a positive control and an ablation (`tests/test_proxy_containment.py`).
 
 **Without `BELAY_SANDBOX_SCOPE`, nothing here applies.** No scope, no profile, no
 containment: the proxy is C1's byte pump spawning the command you gave it, and it says so
@@ -299,17 +307,142 @@ and accepted rather than hidden.
 
 ---
 
-## Platform: macOS only, and that is not a formality
+## Platform: macOS and Linux, both measured
 
-**Everything in this document was measured on macOS 26.5.2 / arm64.**
+**The macOS claims above were measured on macOS 26.5.2 / arm64.** Seatbelt is the
+darwin backend; `clonefile` + sidecar repairs the darwin snapshot.
 
-**Linux is entirely unverified — nothing has ever been run there.** Not "partially
-supported", not "should work". `seatbelt.run` raises `UnsupportedPlatform` off darwin
-rather than pretending. The snapshot backend is `clonefile`, which needs APFS: **ext4 has
-no reflink**, and GitHub's Linux runners are ext4, so this approach has **no CI equivalent
-there**. Linux/Docker is C2's second slice, at Phase-1 packaging.
+**The Linux claims below were measured on ubuntu-24.04 (kernel 6.17.0-1022-azure,
+glibc 2.39, x86_64 — the pinned CI image)** by the `test (Linux)` CI job: the
+linux-gated A2/A3 tests (the escape matrix, the copy-fidelity round trips) and
+the ungated sandbox/replay tests exercised the Linux backends there for the
+first time. Nothing here is claimed about any other Linux image: a Docker image
+(L3) or another distro may differ and must re-measure (the A1 probe is the
+re-measurement instrument). Windows has no sandbox backend and raises by design.
 
-Do not read any claim here as a claim about Linux.
+---
+
+## The Linux boundary: Landlock (filesystem) + seccomp (network)
+
+The mechanism was decided by measurement, not by preference — the A1 containment
+spike (`docs/planning/linux-sandbox/containment-spike/decision.md`, citing
+`probe_result.json` from the `spike-linux` CI job): bubblewrap is dead on stock
+runners (unprivileged user namespaces are AppArmor-restricted on ubuntu-24.04,
+measured), Landlock works (ABI 7 on the pinned image, measured via syscalls
+444/445/446). The Linux boundary is therefore **Landlock for the filesystem
+write scope** and **seccomp for the network** — `src/belay/sandbox/linux.py`.
+
+### What IS enforced on Linux
+
+- **Write scope via Landlock.** A ruleset handling the WRITE-side
+  `LANDLOCK_ACCESS_FS_*` rights (plus `REFER`/`TRUNCATE` per ABI) is installed,
+  granting those rights only beneath the write roots; a write outside the scope
+  is refused by the kernel with **EACCES** and recorded as a `denial` naming the
+  path. The same five-vector escape matrix as macOS is enforced and measured
+  (`tests/test_linux_containment.py::test_escape_vector_is_contained_and_recorded`,
+  parametrized over direct / `../` / symlink / `mv` / grandchild writes; the
+  positive control — a write inside the scope succeeds — is the same file).
+  The ruleset is inherited across fork/exec, so grandchildren are contained
+  exactly as the macOS profile contains them (`grandchild_write` is a vector in
+  the matrix, not an assumption).
+- **Network vocabulary, closed and cross-platform.** `deny-all` (the default) is
+  a seccomp BPF filter: `socket()` is allowed only for `AF_UNIX`, refused EPERM
+  for every other domain — so no IP socket can exist at all — and
+  `connect`/`sendto`/`sendmsg`/`sendmmsg` are refused EPERM unconditionally.
+  Measured against a LIVE loopback listener (`test_deny_all_refuses_a_loopback_connection_with_a_live_listener`),
+  with the positive control reaching the same listener under `allow-all`
+  (`test_allow_all_reaches_the_very_same_loopback_listener`). A server may bind
+  a unix socket inside its scope (the `AF_UNIX` grant, mirroring the macOS
+  `network-bind` carve-out) — `test_a_contained_server_may_open_a_unix_socket`.
+- **Denial recording, shape-identical to macOS.** Landlock refusals (EACCES,
+  "Permission denied") and seccomp refusals (EPERM, "Operation not permitted")
+  become the same record macOS writes — `{"kind": "denial", "inferred": true,
+  "source": "child-stderr", "detail": <verbatim line>}` — pinned field-for-field
+  by `tests/test_linux_policy.py::test_denial_records_have_the_platform_stable_shape`.
+- **`belay sandbox check` tells the truth on Linux**: a kernel without Landlock
+  is reported unavailable with the cause, never claimed present
+  (`tests/test_sandbox_check.py`, the linux cases).
+
+### What is NOT enforced on Linux — and how this differs from macOS
+
+- **Reads are not scoped, and the mechanism is NOT the macOS one — state the
+  difference, never copy the claim.** The macOS profile *grants* `file-read*`
+  wholesale, which is an explicit decision in the policy. The Linux ruleset
+  handles **write rights only**, and Landlock's semantics are that unhandled
+  rights are never restricted — so reads are unrestricted **by mechanism, not
+  by grant**. Measured on the ubuntu job: a contained process reads `/etc/hostname`
+  (outside the scope) successfully while a write outside the scope is refused.
+  **The honest bottom line is the same on both substrates** — *"the sandbox
+  contains what the child can change, not what it can see"* — but the reason
+  it holds is different, and only the Linux reason is true of the Linux code.
+- **`allow-ports` degrades to a named-cause refusal on Linux, never a silent
+  widening.** Landlock's net domain restricts TCP by **port only** and has no
+  address scope, so the macOS meaning — *"outbound, to loopback, on these
+  ports"* — is inexpressible; a port-only grant would be a looser boundary than
+  the closed vocabulary claims. `NetworkPolicyUnsupported` is raised before
+  anything spawns (`tests/test_linux_containment.py::test_allow_ports_is_a_named_cause_refusal`,
+  `tests/test_linux_policy.py`), surfaced by the proxy as a clean refusal.
+  macOS keeps working `allow-ports`; Linux says so plainly.
+- **Filesystem-denial provenance is INFERRED, with an ambiguity macOS does not
+  have.** A Linux filesystem denial is **EACCES — the same text an ordinary
+  `chmod` produces** — so inside a Landlock boundary an EACCES line is
+  *consistent with* a denial, but not *proof* of one. The record keeps the
+  identical shape (`inferred: true`) and the module docstring states the
+  ambiguity; the kernel-source upgrade (N1) remains the only path to provable,
+  rather than inferred, filesystem denials. Network denials (seccomp EPERM) are
+  distinguishable, like macOS. A denial path parsed from GNU coreutils'
+  diagnostics has its diagnostic quotes stripped, and a path containing a quote
+  of its own is left verbatim (`tests/test_linux_policy.py::test_a_gnu_quoted_path_is_parsed_without_the_diagnostic_quotes`)
+  — the macOS "path is parsed, not reported" caveat, with the Linux message
+  shape handled.
+- **TMPDIR / world-writable `/tmp`.** The macOS bounded-temp story
+  ("bounded on stock macOS, where `gettempdir()` is the per-user
+  `/var/folders/…/T`… **not** bounded when `TMPDIR` is unset or points at
+  world-writable `/tmp`") is the DEFAULT on Linux: `gettempdir()` is
+  `/tmp` (or `$TMPDIR`), both world-writable. The `$TMPDIR` Belay creates is
+  still `0700` under the machine temp root, owner-verified before adoption —
+  but the *neighbourhood* is public, so the "an attacker must already share the
+  uid" bound of stock macOS does not hold on stock Linux. `scope.py`'s
+  `DefaultScope` behavior is substrate-neutral (the sandboxed `$TMPDIR` is
+  created the same way); what differs is the ambient substrate it lands in.
+- **The new R8 surface: the Linux launcher path.** Where macOS composes
+  `sandbox-exec -f <profile> …`, Linux composes
+  `python -m belay.sandbox.linux <policy.json> -- <command>` — Belay's own
+  interpreter re-entered as the launcher. That adds one surface macOS does not
+  have: **`policy.json` is data the launcher reads at exec time**, so a
+  writable policy path would be a policy rewrite, exactly as on macOS — the
+  profile is written via `mkstemp` (owner-only, `0600` asserted) and unlinked
+  in a `finally` (`test_launch_contained_yields_the_linux_argv_and_runs_it_contained`
+  asserts the mode and the removal). The launcher also READS the policy at
+  `exec` time and refuses (exit 2, "refusing to run unsandboxed") on any
+  malformed or inapplicable policy — mechanism absent ⇒ refused, never a bare
+  spawn (`linux.py:main`, pinned by the launch tests). `$PATH` resolution of
+  the server command is unchanged from macOS: the launcher is named absolutely
+  (via `sys.executable`), the wrapped command resolves through `$PATH` inside
+  the boundary.
+- **Seatbelt's deprecation story does not transfer.** Linux has no equivalent
+  of "Apple deprecated the only mechanism"; Landlock and seccomp are stable,
+  kernel-native, and load-bearing kernel APIs. What transfers is the honest
+  statement: on Linux the risk is *kernel config* (Landlock LSM compiled out —
+  measured absent on kernels without it, and the launcher refuses with the
+  named cause rather than running bare).
+
+### The cross-substrate corpus consequence
+
+A corpus case banked on clonefile/APFS (macOS) re-verifying on a Linux box —
+and the mirror — refuses at restore with `UNRESTORABLE_CAPABILITY_MISMATCH`
+and classifies **SKIP with that named cause**: the capability sets of the two
+snapshot backends can never match (`tests/test_linux_snapshot.py::test_the_linux_backend_has_no_snapshot_on_macos_substrate`
+pins the vocabulary), so a restore is never guessed across substrates. This is
+first-class: `run_case` admits both substrates and lets the capability check
+decide, and the README coverage line carries the consequence. The Linux
+snapshot backend itself — copy-fidelity with sidecar repairs, `FICLONE` reflink
+probed per directory and never assumed — is described in
+`src/belay/snapshot/linux.py` and measured by `tests/test_linux_snapshot.py`.
+
+Do not read any macOS claim in this document as a claim about Linux, and vice
+versa: the two halves share the honesty contract and the record shapes, and
+differ in every mechanism.
 
 ---
 

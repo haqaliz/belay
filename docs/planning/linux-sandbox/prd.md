@@ -206,10 +206,10 @@ byte-identically on Linux.
 
 | Aspect | Boundary | Status |
 |---|---|---|
-| **A1 · containment-spike** | Measure mechanism candidates on stock `ubuntu-latest` in CI (userns, bwrap, Landlock, EPERM/EACCES, `allow-ports` mapping). Decides M1/OQ-1. | planned in this PRD |
-| **A2 · linux-containment** | The seam becomes real; Linux `contained()`/`run()` implementation; escape matrix; denial capture; closed network vocabulary; `sandbox check`. (M2, M3, M7, S1, S2) | planned in this PRD |
-| **A3 · linux-snapshot** | Linux snapshot/restore backend on the `SnapshotBackend` pattern; byte-identical restore; `gc()` Linux path; taxonomy causes reachable; capability-mismatch refusal preserved. (M4) | planned in this PRD |
-| **A4 · linux-ci-docs** | ubuntu CI job; test gating split + Linux analogues; reverse-gate rewrite; `THREAT_MODEL.md` Linux section; README/pyproject classifier updates. (M5, M6) | planned in this PRD |
+| **A1 · containment-spike** | Measure mechanism candidates on stock `ubuntu-latest` in CI (userns, bwrap, Landlock, EPERM/EACCES, `allow-ports` mapping). Decides M1/OQ-1. | ✅ shipped (decision.md, probe artifact) |
+| **A2 · linux-containment** | The seam becomes real; Linux `contained()`/`run()` implementation; escape matrix; denial capture; closed network vocabulary; `sandbox check`. (M2, M3, M7, S1, S2) | ✅ shipped (`src/belay/sandbox/linux.py`, `tests/test_linux_containment.py`) |
+| **A3 · linux-snapshot** | Linux snapshot/restore backend on the `SnapshotBackend` pattern; byte-identical restore; `gc()` Linux path; taxonomy causes reachable; capability-mismatch refusal preserved. (M4) | ✅ shipped (`src/belay/snapshot/linux.py`, `tests/test_linux_snapshot.py`) |
+| **A4 · linux-ci-docs** | ubuntu CI job; test gating split + Linux analogues; reverse-gate rewrite; `THREAT_MODEL.md` Linux section; README/pyproject classifier updates. (M5, M6) | ✅ shipped (`test (Linux)` job, `tests/test_platform_gate_named_causes.py`, THREAT_MODEL/README) |
 
 Sequencing: A1 first (de-risks the mechanism, pinned image), then A2/A3 — with
 A2's seam refactor carrying the macOS-canary guard at every commit. The A1
