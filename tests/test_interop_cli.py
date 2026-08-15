@@ -305,7 +305,7 @@ def test_ac7_json_output_round_trips_with_correlation_and_spans(tmp_path, capsys
 
 _REQUIRES_SEATBELT = pytest.mark.skipif(
     sys.platform != "darwin",
-    reason="replay re-invokes inside the macOS Seatbelt sandbox",
+    reason="replay-reinvokes-seatbelt: replay re-invokes inside the macOS Seatbelt sandbox",
 )
 
 

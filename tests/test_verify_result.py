@@ -48,7 +48,7 @@ NONDET_CMD = [sys.executable, str(NONDET)]
 
 darwin_only = pytest.mark.skipif(
     sys.platform != "darwin",
-    reason="replay re-invokes inside the macOS Seatbelt sandbox",
+    reason="replay-reinvokes-seatbelt: replay re-invokes inside the macOS Seatbelt sandbox",
 )
 
 

@@ -22,11 +22,11 @@ import pytest
 
 from belay import cli
 
-_DARWIN = pytest.mark.skipif(sys.platform != "darwin", reason="Seatbelt is macOS-only")
-_LINUX = pytest.mark.skipif(sys.platform != "linux", reason="the Landlock+seccomp sandbox is Linux-only")
+_DARWIN = pytest.mark.skipif(sys.platform != "darwin", reason="seatbelt-only: Seatbelt is macOS-only")
+_LINUX = pytest.mark.skipif(sys.platform != "linux", reason="landlock-seccomp-only: the Landlock+seccomp sandbox is Linux-only")
 _SIMULATED_LINUX = pytest.mark.skipif(
     sys.platform.startswith("linux"),
-    reason="simulates a Linux box that is not this one",
+    reason="linux-simulated: simulates a Linux box that is not this one",
 )
 
 

@@ -187,7 +187,7 @@ def test_ownership_is_refused_because_non_root_cannot_restore_it(tree: Path) -> 
     clone would come back owned by us and nothing would have said so.
     """
     if os.geteuid() == 0:
-        pytest.skip("running as root: foreign ownership is restorable, nothing to refuse")
+        pytest.skip("root-environment: running as root, foreign ownership is restorable, nothing to refuse")
     assert classify(Path("/usr/bin/true")) is UnrestorableCause.UNRESTORABLE_OWNERSHIP
 
 
@@ -335,8 +335,8 @@ def test_restore_within_one_capability_set_works(tree: Path, tmp_path: Path) -> 
 
 @pytest.mark.skipif(
     sys.platform != "darwin",
-    reason="/bin/chmod +a ACLs are darwin-only; the Linux gc() branch is covered "
-    "by test_linux_snapshot.py::test_gc_removes_a_tree_with_non_ascii_names",
+    reason="darwin-acl: /bin/chmod +a ACLs are darwin-only; the Linux gc() branch "
+    "is covered by test_linux_snapshot.py::test_gc_removes_a_tree_with_non_ascii_names",
 )
 def test_gc_removes_an_acld_tree(tmp_path: Path) -> None:
     """`everyone deny delete` made a researcher's own scratch dir undeletable.
@@ -361,8 +361,8 @@ def test_gc_removes_an_acld_tree(tmp_path: Path) -> None:
 
 @pytest.mark.skipif(
     sys.platform != "darwin",
-    reason="os.chflags is darwin-only; Linux has no st_flags and the Linux "
-    "gc() branch is covered by test_linux_snapshot.py",
+    reason="bsd-file-flags: os.chflags is darwin-only; Linux has no st_flags and "
+    "the Linux gc() branch is covered by test_linux_snapshot.py",
 )
 def test_gc_removes_a_uchg_tree(tmp_path: Path) -> None:
     """The `uchg` immutable flag, the other half of the same stranding."""

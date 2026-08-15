@@ -25,11 +25,11 @@ import pytest
 from belay.sandbox import launch, seatbelt
 from belay.snapshot.bth1 import UnsupportedPlatform
 
-_DARWIN = pytest.mark.skipif(sys.platform != "darwin", reason="Seatbelt is macOS-only")
-_LINUX = pytest.mark.skipif(sys.platform != "linux", reason="the Landlock+seccomp sandbox is Linux-only")
+_DARWIN = pytest.mark.skipif(sys.platform != "darwin", reason="seatbelt-only: Seatbelt is macOS-only")
+_LINUX = pytest.mark.skipif(sys.platform != "linux", reason="landlock-seccomp-only: the Landlock+seccomp sandbox is Linux-only")
 _SIMULATED_LINUX = pytest.mark.skipif(
     sys.platform.startswith("linux"),
-    reason="simulates a Linux box that is not this one",
+    reason="linux-simulated: simulates a Linux box that is not this one",
 )
 
 
@@ -38,7 +38,7 @@ def _require_landlock() -> None:
         from belay.sandbox import linux
 
         if linux.landlock_abi() is None:
-            pytest.skip("Landlock is unavailable on this kernel")
+            pytest.skip("landlock-unavailable: Landlock is unavailable on this kernel")
 
 
 # --- A sandbox that cannot be applied is refused, never dropped --------------

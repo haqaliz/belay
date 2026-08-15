@@ -1178,9 +1178,10 @@ def _cmd_corpus_run(args: argparse.Namespace) -> int:
     suite) and prints each case's outcome plus an aggregate. A REGRESSION shows its diverging
     axis/kind (expected -> got); a SKIP shows why the case could not be evaluated on this box.
     The exit is non-zero IFF at least one case REGRESSED — every other outcome exits 0,
-    because a pure SKIP is partial coverage (a non-darwin box, an unavailable server), not a
-    CI failure. Each non-MATCH count is stated plainly, with a line saying what it means, so
-    a partial or still-blind run is never mistaken for a clean full pass.
+    because a pure SKIP is partial coverage (a box with no sandbox backend, an unavailable
+    server, a cross-substrate case), not a CI failure. Each non-MATCH count is stated plainly,
+    with a line saying what it means, so a partial or still-blind run is never mistaken for a
+    clean full pass.
 
     STILL_MISSED and MISS_CLOSED belong to cases that DECLARE their stored verdict is a
     recorded miss. STILL_MISSED is the known state — the engine is still blind there — and it
@@ -1492,7 +1493,7 @@ def _cmd_corpus_show(args: argparse.Namespace) -> int:
     the RECOMPUTED outcome of the same instance path `corpus run` uses — MATCH /
     REGRESSION / STILL_MISSED / MISS_CLOSED, or SKIP with its reason on this box — as a
     block distinct from the per-turn expected above it. The recompute re-invokes the
-    server exactly as `corpus run` does; off darwin it renders SKIP.
+    server exactly as `corpus run` does; a box with no sandbox backend renders SKIP.
     """
     from belay.corpus.case import load_case
 
@@ -2238,9 +2239,10 @@ def _parser() -> argparse.ArgumentParser:
             "longer reproduces its per-sub-verdict SET (not merely its reduced status) is a "
             "caught detector DRIFT — a REGRESSION — and the run exits NON-ZERO.\n\n"
             "A SKIP is kept distinct from a REGRESSION and is never a pass: a case this box "
-            "cannot evaluate — off the macOS Seatbelt substrate, the recorded server not "
-            "runnable, a backend capability mismatch on restore — is SKIPPED, not failed, so "
-            "the corpus does not fail CI on every non-darwin box.\n\n"
+            "cannot evaluate — no sandbox backend (neither Seatbelt on darwin nor Landlock+"
+            "seccomp on linux), the recorded server not runnable, a backend capability "
+            "mismatch on restore (a case banked on the other substrate) — is SKIPPED, not "
+            "failed, so the corpus does not fail CI on a box without the substrate.\n\n"
             "Two further outcomes belong to a case that DECLARES a recorded miss — a stored "
             "verdict the engine produced but a human adjudicated a MISS, so the clean verdict "
             "IS the defect. STILL_MISSED means the engine still does not catch it: the known "

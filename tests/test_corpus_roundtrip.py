@@ -6,9 +6,13 @@ the launch-demo corrupt success), bundle it with `add_case`, then re-verify the 
 with `run_case` and assert it still reaches the same per-sub-verdict set (MATCH). The A1 FAIL
 reproduces from the case ALONE.
 
-Darwin-gated: `run_case` re-invokes the server inside the macOS Seatbelt sandbox, so off
-darwin there is no replay to run — which is exactly the SKIP the pure tests exercise. The
-one non-darwin test here asserts that up-front platform SKIP directly.
+The two substrate roundtrips are darwin-gated with a named cause
+(`replay-reinvokes-seatbelt`): they re-invoke the server inside the macOS Seatbelt sandbox.
+The CROSS-SUBSTRATE test here is the reverse gate — it runs on BOTH darwin and linux and
+asserts that a case banked on the OTHER substrate reaches the restore machinery, refuses
+with `UNRESTORABLE_CAPABILITY_MISMATCH`, and classifies SKIP with that named cause (the new
+reality since the Linux replay backends landed; it used to be an up-front platform skip).
+A box with no sandbox backend at all still skips up front, pinned by the win32 simulation.
 
 Also here: a case whose stored `server_command` points at a nonexistent binary re-verifies
 to UNVERIFIED (the server never answers) and is classified SKIP — server-unavailable is an
@@ -97,20 +101,95 @@ def _trace(tmp_path: Path, name: str, frames: list[tuple]):
     return [json.loads(line) for line in path.read_bytes().split(b"\n") if line]
 
 
-# --- off-darwin: the up-front platform SKIP -------------------------------------------
+# --- cross-substrate: the reverse gate -------------------------------------------------
+# Before the Linux snapshot/replay backends existed, off darwin `run_case` could
+# not replay at all and SKIPped up front, and this test asserted that old skip.
+# Linux replay works now: `run_case`'s platform gate admits darwin AND linux,
+# so on either substrate a case banked on the OTHER one reaches the restore
+# machinery and refuses there with UNRESTORABLE_CAPABILITY_MISMATCH — the
+# cross-substrate consequence, stated in README. That refusal is what this test
+# asserts: SKIP, decided by the capability mismatch, never by the platform gate.
+# Only a box with NO sandbox backend (neither darwin nor linux) still SKIPs
+# before any replay, and the gate in `run_case` covers it.
 
 
-@pytest.mark.skipif(
-    sys.platform == "darwin",
-    reason="on darwin run_case runs the REAL replay; this asserts the off-substrate SKIP",
-)
-def test_run_case_off_darwin_is_a_platform_skip(tmp_path):
-    """Off the macOS substrate, `run_case` cannot replay at all -> a SKIP, decided up front.
+def test_a_case_banked_on_the_other_substrate_is_a_capability_mismatch_skip(
+    tmp_path: Path,
+):
+    """The reverse gate, rewritten for the new reality (spec criterion 3).
 
-    load_case still validates the case (fail-closed), then the platform gate returns SKIP
-    before any replay is attempted. A SKIP is never a pass and never a regression, so a
-    non-darwin CI box does not fail the build over a case it structurally cannot evaluate.
+    On darwin, a linux-banked case; on linux, a darwin-banked case: `run_case`
+    admits the substrate, the restore refuses by capability mismatch, and the
+    case classifies SKIP with the named cause — NOT the old up-front platform
+    skip. The foreign capability set is the other backend's REAL set (probed),
+    so the vocabulary is production, not a sentinel. The case is built through
+    the REAL machinery (`_real_flagged_run` -> `add_case`); only the persisted
+    manifest's backend/capabilities are rewritten to the foreign substrate's,
+    exactly as a case that really was banked there would carry.
     """
+    from belay.snapshot.linux import LinuxSnapshotBackend
+    from belay.snapshot.substrate import ClonefileBackend
+
+    if sys.platform == "darwin":
+        foreign_name, foreign_caps = (
+            LinuxSnapshotBackend.name,
+            LinuxSnapshotBackend.capabilities(tmp_path),
+        )
+    else:
+        foreign_name, foreign_caps = (
+            ClonefileBackend.name,
+            ClonefileBackend.capabilities(),
+        )
+
+    from belay.corpus.add import add_case
+    from belay.verify.invariants import Invariant
+    from belay.verify.turn import TurnVerdict
+
+    records, manifest_dir = _real_flagged_run(tmp_path)
+
+    manifest_path = sorted(manifest_dir.glob("*.json"))[0]
+    manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest_payload["backend"] = foreign_name
+    manifest_payload["capabilities"] = sorted(foreign_caps)
+    manifest_path.write_text(json.dumps(manifest_payload), encoding="utf-8")
+
+    # `add_case` bundles the tampered manifest verbatim; the stored verdict is
+    # immaterial here (run_case recomputes), so a placeholder is fine.
+    placeholder = TurnVerdict(
+        turn_index=0, tool_name="edit_file", status=Status.FAIL, sub_verdicts=[], cause=None
+    )
+    case_dir = add_case(
+        tmp_path / "corpus",
+        records=records,
+        target_turn_index=0,
+        verdict=placeholder,
+        manifest_dir=manifest_dir,
+        server_command=[sys.executable, str(EDITOR_SERVER)],
+        invariants=[Invariant(scope=b"tests/", rule="read-only")],
+        replays=3,
+        timeout=10.0,
+        source_trace_id="flagged-trace",
+        captured_at=CAPTURED_AT,
+    )
+
+    stored = load_case(case_dir)
+    # The case really did bundle the foreign substrate's capabilities (the
+    # tampered manifest's), so the stored case reads as if banked there.
+    assert stored.capture_capabilities == sorted(foreign_caps)
+
+    result = run_case(case_dir)
+    assert result.outcome == SKIP, (result.outcome, result.divergences)
+    # The cause is the capability mismatch, named — never "platform ... is not
+    # darwin" (that gate no longer fires on either substrate).
+    assert "CAPABILITY" in result.skip_reason.upper(), result.skip_reason
+
+
+def test_run_case_on_a_platform_with_no_backend_skips_up_front(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A box with NO sandbox backend (neither darwin nor linux) still SKIPs
+    before any replay — the honest remainder of the old gate, now expressed
+    per-platform with the named cause."""
     case_dir = tmp_path / "corpus" / "some-case"
     case_dir.mkdir(parents=True)
     write_case(
@@ -129,16 +208,20 @@ def test_run_case_off_darwin_is_a_platform_skip(tmp_path):
             capture_capabilities=["clonefile"],
         ),
     )
+    # A platform with no implementation (win32), simulated the way the seam
+    # tests do it: run_case's gate reads sys.platform at call time.
+    monkeypatch.setattr("sys.platform", "win32")
     result = run_case(case_dir)
     assert result.outcome == SKIP, result
-    assert result.skip_reason is not None and "darwin" in result.skip_reason
+    assert "no sandbox backend" in result.skip_reason
+    assert "win32" in result.skip_reason
 
 
 # --- darwin: the real roundtrip -------------------------------------------------------
 
 pytestmark_darwin = pytest.mark.skipif(
     sys.platform != "darwin",
-    reason="run_case re-invokes the server inside the macOS Seatbelt sandbox",
+    reason="replay-reinvokes-seatbelt: run_case re-invokes the server inside the macOS Seatbelt sandbox",
 )
 
 

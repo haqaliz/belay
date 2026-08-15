@@ -54,7 +54,7 @@ SCOPE_FREE_EDITOR_CMD = [sys.executable, str(FIXTURES / "scope_free_editor_serve
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "darwin",
-    reason="replay re-invokes inside the macOS Seatbelt sandbox",
+    reason="replay-reinvokes-seatbelt: replay re-invokes inside the macOS Seatbelt sandbox",
 )
 
 STRONG_TEST = f"def test_rejects_wrong_password():\n    {REAL_ASSERTION}\n"

@@ -14,9 +14,44 @@ concurrency:
 jobs:
   test:
     name: test (macOS)
-    # Belay's sandbox (Seatbelt) and snapshot (APFS clonefile) are macOS-only, so the
-    # real replay/sandbox tests only run here. Off macOS the sandbox raises by design.
+    # Belay's sandbox (Seatbelt) and snapshot (APFS clonefile) run here; the
+    # seatbelt-pinning and end-to-end replay tests that re-invoke inside the
+    # macOS sandbox live here (named-caused gates — see README). Linux runs the
+    # same suite in the `test-linux` job below.
     runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Sync (dev deps)
+        run: uv sync
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Test
+        run: uv run pytest -q
+
+  # The full suite on Linux (aspect A4). The linux-gated A2/A3 tests — the
+  # Landlock+seccomp escape matrix, the copy-fidelity snapshot round trips, the
+  # reflink/collision fixtures — execute for the FIRST time on a real Linux box
+  # here, and the ungated sandbox/replay tests exercise the Linux backends on
+  # this substrate. Skips are limited to the named-caused gates listed in
+  # README's platform coverage section (guarded by
+  # tests/test_platform_gate_named_causes.py).
+  test-linux:
+    name: test (Linux)
+    # PINNED image, same rationale as the spike job: the containment claims are
+    # about ubuntu-24.04 (kernel measured by the A1 probe), and `ubuntu-latest`
+    # is a moving target.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 

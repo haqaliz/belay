@@ -343,7 +343,7 @@ def test_claim_record_is_a_recorded_skip_in_the_trace_reader(tmp_path):
 
 
 @pytest.mark.skipif(
-    sys.platform != "darwin", reason="replay re-invokes inside the macOS Seatbelt sandbox"
+    sys.platform != "darwin", reason="replay-reinvokes-seatbelt: replay re-invokes inside the macOS Seatbelt sandbox"
 )
 def test_claim_record_does_not_change_the_replayed_turn(tmp_path):
     """Acceptance 6: replaying a turn of a claim-bearing trace reproduces the same

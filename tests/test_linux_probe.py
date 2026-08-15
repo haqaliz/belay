@@ -320,16 +320,16 @@ def _assert_probe_shape(probe: dict) -> None:
         assert isinstance(probe.get("reason"), str) and probe["reason"]
 
 
-@pytest.mark.skipif(sys.platform != "linux", reason="live syscall probe; Linux only")
+@pytest.mark.skipif(sys.platform != "linux", reason="linux-live-probe: live syscall probe; Linux only")
 def test_live_probe_unshare_userns_returns_a_schema_shaped_dict():
     _assert_probe_shape(probe_unshare_userns())
 
 
-@pytest.mark.skipif(sys.platform != "linux", reason="live subprocess probe; Linux only")
+@pytest.mark.skipif(sys.platform != "linux", reason="linux-live-probe: live subprocess probe; Linux only")
 def test_live_probe_bwrap_returns_a_schema_shaped_dict():
     _assert_probe_shape(probe_bwrap())
 
 
-@pytest.mark.skipif(sys.platform != "linux", reason="live syscall probe; Linux only")
+@pytest.mark.skipif(sys.platform != "linux", reason="linux-live-probe: live syscall probe; Linux only")
 def test_live_probe_landlock_returns_a_schema_shaped_dict():
     _assert_probe_shape(probe_landlock())

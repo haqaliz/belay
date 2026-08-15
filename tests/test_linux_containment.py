@@ -35,13 +35,13 @@ from belay.trace import TraceWriter
 from conftest import read_trace
 
 pytestmark = pytest.mark.skipif(
-    sys.platform != "linux", reason="the Landlock+seccomp sandbox is Linux-only"
+    sys.platform != "linux", reason="landlock-seccomp-only: the Landlock+seccomp sandbox is Linux-only"
 )
 
 
 def _require_landlock() -> None:
     if linux.landlock_abi() is None:
-        pytest.skip("Landlock is unavailable on this kernel (landlock_abi() returned None)")
+        pytest.skip("landlock-unavailable: Landlock is unavailable on this kernel (landlock_abi() returned None)")
 
 
 def _scope_and_outside(tmp_path: Path) -> tuple[Path, Path]:
@@ -58,31 +58,36 @@ def _denials(records: list[dict]) -> list[dict]:
 
 
 def _vectors(scope: Path, outside: Path) -> dict[str, tuple[list[str], Path, str]]:
+    # The interpreter is /bin/bash, NOT /bin/sh: the exact-rc claim needs a
+    # known interpreter, and Ubuntu's /bin/sh is dash, which exits 2 when a
+    # redirection fails where bash exits 1 (measured on the first real Linux
+    # run). The runner ships bash at /bin/bash; the marker + absent-target
+    # assertions still discriminate even if it did not.
     return {
         "direct_write": (
-            ["/bin/sh", "-c", f"echo pwned > {outside}/direct.txt"],
+            ["/bin/bash", "-c", f"echo pwned > {outside}/direct.txt"],
             outside / "direct.txt",
             f"{outside}/direct.txt",
         ),
         "dotdot_traversal": (
-            ["/bin/sh", "-c", f"cd {scope} && echo pwned > ../outside/trav.txt"],
+            ["/bin/bash", "-c", f"cd {scope} && echo pwned > ../outside/trav.txt"],
             outside / "trav.txt",
             # The child reports the path AS IT WROTE IT - relative, exactly as
             # on macOS; recording the resolved path would be guessing at a cwd.
             "../outside/trav.txt",
         ),
         "symlink_out": (
-            ["/bin/sh", "-c", f"echo pwned > {scope}/link/sym.txt"],
+            ["/bin/bash", "-c", f"echo pwned > {scope}/link/sym.txt"],
             outside / "sym.txt",
             f"{scope}/link/sym.txt",
         ),
         "mv_out": (
-            ["/bin/sh", "-c", f"mv {scope}/movable.txt {outside}/moved.txt"],
+            ["/bin/bash", "-c", f"mv {scope}/movable.txt {outside}/moved.txt"],
             outside / "moved.txt",
             f"{outside}/moved.txt",
         ),
         "grandchild_write": (
-            ["/bin/sh", "-c", f"/bin/sh -c 'echo pwned > {outside}/grand.txt'"],
+            ["/bin/bash", "-c", f"/bin/bash -c 'echo pwned > {outside}/grand.txt'"],
             outside / "grand.txt",
             f"{outside}/grand.txt",
         ),
@@ -173,8 +178,8 @@ def _loopback_listener() -> tuple[int, threading.Thread, socket.socket]:
 
 _CONNECT = (
     "import socket,sys\n"
-    "s=socket.socket(); s.settimeout(5)\n"
     "try:\n"
+    "    s=socket.socket(); s.settimeout(5)\n"
     "    s.connect((sys.argv[1], int(sys.argv[2]))); print('CONNECT_OK')\n"
     "except PermissionError as e:\n"
     "    print('DENIED', e); sys.exit(3)\n"
@@ -184,7 +189,10 @@ _CONNECT = (
 def test_deny_all_refuses_a_loopback_connection_with_a_live_listener(tmp_path: Path) -> None:
     """The listener is live, so a refusal is the sandbox and not an absent
     server. Under deny-all the seccomp filter refuses `socket(AF_INET)` itself
-    — the child cannot even create the socket."""
+    — the child cannot even create the socket. The socket creation sits INSIDE
+    the try (measured on the first real Linux run: created outside it, the
+    refusal surfaced as an uncaught traceback and the DENIED path was
+    unreachable)."""
     _require_landlock()
     scope, _ = _scope_and_outside(tmp_path)
     port, thread, server = _loopback_listener()
@@ -331,7 +339,7 @@ def test_launch_contained_yields_the_linux_argv_and_runs_it_contained(tmp_path: 
     outside.mkdir()
 
     with launch.contained(
-        ["/bin/sh", "-c", f"echo pwned > {outside}/x.txt"],
+        ["/bin/bash", "-c", f"echo pwned > {outside}/x.txt"],
         workspace=workspace,
         network=launch.network_policy(None),
     ) as spawn:

@@ -547,6 +547,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     return 0
 
 
+def _strip_quotes(token: str) -> str:
+    """Remove the quote GNU coreutils wraps around a path in its diagnostics.
+
+    ``mv: cannot move '/a' to '/b': Permission denied`` — the tokenizer's
+    `\\S*` captures the trailing quote as part of the token. The quote is
+    stripped ONLY when the token contains no other instance of that quote
+    character, i.e. when the quote cannot plausibly be part of the path
+    itself; a genuinely quote-terminated path keeps its quote and the record
+    reports it as the child wrote it. The `detail` field keeps the verbatim
+    line either way — this is the path field being cleaned, never the record
+    being rewritten.
+    """
+    if token and token[-1] in ("'", '"') and token.count(token[-1]) == 1:
+        return token[:-1]
+    return token
+
+
 def _denials_from_stderr(stderr: bytes) -> tuple[Denial, ...]:
     """Read the child's own complaints back as denial records.
 
@@ -568,7 +585,10 @@ def _denials_from_stderr(stderr: bytes) -> tuple[Denial, ...]:
             continue
         fields = line.split(": ")
         subject = ": ".join(fields[1:-1])
-        candidates = [token.rstrip(":") for token in _PATH_TOKEN.findall(subject)]
+        candidates = [
+            _strip_quotes(token.rstrip(":"))
+            for token in _PATH_TOKEN.findall(subject)
+        ]
         path = candidates[-1] if candidates else None
         if network:
             op = "network"

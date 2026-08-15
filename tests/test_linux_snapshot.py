@@ -247,6 +247,21 @@ def _mutate(tree: Path) -> None:
     os.symlink("somewhere-else.txt", tree / "rel.link")
 
 
+def _mutate_torture(tree: Path) -> None:
+    """The same damage, against the torture tree's own names (`relative.link`).
+
+    The full-fixture round trip below runs against `build_torture_tree`, whose
+    symlink is `relative.link` — the local `_build_fixture` names it `rel.link`,
+    and mutating the wrong name would fail with FileNotFoundError rather than
+    damage the tree (measured on the first real Linux run).
+    """
+    (tree / "regular.txt").write_bytes(b"clobbered by the agent\n")
+    os.chmod(tree / "setuid.bin", 0o711)
+    os.utime(tree / "nested", ns=(1, 1))
+    os.unlink(tree / "relative.link")
+    os.symlink("somewhere-else.txt", tree / "relative.link")
+
+
 def test_copy_path_round_trips_byte_identically_on_any_platform(
     tmp_path: Path,
 ) -> None:
@@ -282,7 +297,7 @@ def test_copy_path_round_trips_byte_identically_on_any_platform(
 
 @pytest.mark.skipif(
     sys.platform != "linux",
-    reason="the full fixture carries xattrs, which need os.listxattr (Linux-only)",
+    reason="linux-fs-only: the full fixture carries xattrs, which need os.listxattr (Linux-only)",
 )
 def test_linux_full_fixture_round_trips_byte_identically(tmp_path: Path) -> None:
     """Spec criterion 1: hash-of-tree equality over the BTH-1 field set.
@@ -296,9 +311,14 @@ def test_linux_full_fixture_round_trips_byte_identically(tmp_path: Path) -> None
     original = hash_tree(src)
 
     snap = take_snapshot(src, tmp_path / "snap")
-    assert hash_tree(snap.path) == original, "the snapshot on disk must be faithful"
+    # `take_snapshot` returns the `GuardedSnapshot` (snapshot + manifest);
+    # the tree on disk is `snap.snapshot.path` (measured on the first real
+    # Linux run: `snap.path` was a prediction that never executed).
+    assert hash_tree(snap.snapshot.path) == original, (
+        "the snapshot on disk must be faithful"
+    )
 
-    _mutate(src)
+    _mutate_torture(src)
     assert hash_tree(src) != original, "the mutation did not take"
 
     guarded_restore(snap, src)
@@ -309,7 +329,7 @@ def test_linux_full_fixture_round_trips_byte_identically(tmp_path: Path) -> None
 
 @pytest.mark.skipif(
     sys.platform != "linux",
-    reason="reflink is a Linux ioctl; the probe needs a Linux filesystem",
+    reason="linux-fs-only: reflink is a Linux ioctl; the probe needs a Linux filesystem",
 )
 def test_reflink_path_round_trips_when_the_substrate_claims_it(
     tmp_path: Path,
@@ -321,7 +341,7 @@ def test_reflink_path_round_trips_when_the_substrate_claims_it(
     """
     if "reflink" not in LinuxSnapshotBackend.capabilities(tmp_path):
         pytest.skip(
-            "this Linux filesystem does not support FICLONE; "
+            "reflink-unavailable: this Linux filesystem does not support FICLONE; "
             "the copy path is the CI path (OQ-5)"
         )
     from belay.snapshot.linux import restore as linux_restore
@@ -383,8 +403,9 @@ def _collision_fixture(root: Path, names: list[bytes]) -> Path:
         except OSError as exc:
             if exc.errno == errno.EEXIST:
                 pytest.skip(
-                    f"this filesystem cannot hold the distinct names {names!r}; "
-                    "the collision fixture cannot exist here"
+                    f"collision-fixture-uncreatable: this filesystem cannot hold "
+                    f"the distinct names {names!r}; the collision fixture cannot "
+                    "exist here"
                 )
             raise
         os.write(fd, name)
@@ -392,15 +413,16 @@ def _collision_fixture(root: Path, names: list[bytes]) -> Path:
     for name in names:
         if not os.path.exists(os.path.join(os.fsencode(root), name)):
             pytest.skip(
-                f"the names {names!r} collapsed into one entry on this filesystem; "
-                "the collision fixture cannot exist here"
+                f"collision-fixture-uncreatable: the names {names!r} collapsed "
+                "into one entry on this filesystem; the collision fixture cannot "
+                "exist here"
             )
     return root
 
 
 @pytest.mark.skipif(
     sys.platform != "linux",
-    reason="collision trees need a case-sensitive, byte-transparent filesystem",
+    reason="linux-fs-only: collision trees need a case-sensitive, byte-transparent filesystem",
 )
 def test_case_collision_tree_is_refused_at_restore(tmp_path: Path) -> None:
     """A tree holding `README` and `readme` snapshots fine and refuses at restore.
@@ -422,7 +444,7 @@ def test_case_collision_tree_is_refused_at_restore(tmp_path: Path) -> None:
 
 @pytest.mark.skipif(
     sys.platform != "linux",
-    reason="collision trees need a case-sensitive, byte-transparent filesystem",
+    reason="linux-fs-only: collision trees need a case-sensitive, byte-transparent filesystem",
 )
 def test_normalization_collision_tree_is_refused_at_restore(tmp_path: Path) -> None:
     """An NFC/NFD pair in one directory is refused at restore, by name."""
@@ -442,7 +464,7 @@ def test_normalization_collision_tree_is_refused_at_restore(tmp_path: Path) -> N
 
 @pytest.mark.skipif(
     sys.platform != "linux",
-    reason="an invalid-UTF8 name needs a byte-transparent filesystem",
+    reason="linux-fs-only: an invalid-UTF8 name needs a byte-transparent filesystem",
 )
 def test_invalid_utf8_name_is_refused_at_restore(tmp_path: Path) -> None:
     """A name that is not valid UTF-8 is refused at restore, by name."""

@@ -248,7 +248,7 @@ def test_attach_module_never_hand_constructs_a_pass_status():
 
 _REQUIRES_SEATBELT = pytest.mark.skipif(
     sys.platform != "darwin",
-    reason="replay re-invokes inside the macOS Seatbelt sandbox",
+    reason="replay-reinvokes-seatbelt: replay re-invokes inside the macOS Seatbelt sandbox",
 )
 
 

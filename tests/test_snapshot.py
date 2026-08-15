@@ -137,7 +137,7 @@ def test_snapshot_is_copy_on_write(tmp_path: Path) -> None:
 
         if "reflink" not in LinuxSnapshotBackend.capabilities(tmp_path):
             pytest.skip(
-                "this substrate has no reflink (probed, not declared); "
+                "reflink-unavailable: this substrate has no reflink (probed, not declared); "
                 "the copy path is not copy-on-write"
             )
     source = tmp_path / "bulk"

@@ -59,7 +59,7 @@ CHEAT_CMD = [sys.executable, str(CHEAT_SERVER)]
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "darwin",
-    reason="replay re-invokes inside the macOS Seatbelt sandbox",
+    reason="replay-reinvokes-seatbelt: replay re-invokes inside the macOS Seatbelt sandbox",
 )
 
 # The gutted test the cheating agent left behind: the real assertion is gone, replaced

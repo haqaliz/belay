@@ -240,6 +240,33 @@ def test_an_eacces_filesystem_line_is_a_denial_naming_the_path() -> None:
     assert "Permission denied" in denials[0].detail
 
 
+def test_a_gnu_quoted_path_is_parsed_without_the_diagnostic_quotes() -> None:
+    """The `mv` shape, measured on the first real Linux run: GNU coreutils
+    wraps the path in quotes (`cannot move '/a' to '/b'`), and the tokenizer
+    captures the trailing quote. The quote is stripped from the `path` field
+    (the verbatim `detail` keeps the quoted form), and a path containing a
+    quote of its own is left exactly as the child wrote it."""
+    denials = linux._denials_from_stderr(
+        b"mv: cannot move '/tmp/work/movable.txt' to '/tmp/out/moved.txt': "
+        b"Permission denied\n"
+    )
+    assert len(denials) == 1
+    assert denials[0].op == "file-write"
+    assert denials[0].path == "/tmp/out/moved.txt"
+    assert denials[0].detail == (
+        "mv: cannot move '/tmp/work/movable.txt' to '/tmp/out/moved.txt': "
+        "Permission denied"
+    )
+
+    quoted = linux._denials_from_stderr(
+        b"sh: cannot create /tmp/a'file': Permission denied\n"
+    )
+    # Two quotes — one in the path, one the diagnostic's — are indistinguishable
+    # by token inspection: the token is left exactly as the child wrote it
+    # (the documented "path is parsed, not reported" limitation).
+    assert quoted[0].path == "/tmp/a'file'"
+
+
 def test_an_eperm_network_line_is_a_denial_with_a_network_op() -> None:
     denials = linux._denials_from_stderr(
         b"Traceback (most recent call last):\n"

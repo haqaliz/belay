@@ -1044,7 +1044,7 @@ def _real_declared_case(tmp_path: Path) -> Path:
 
 _REQUIRES_SEATBELT = pytest.mark.skipif(
     sys.platform != "darwin",
-    reason="run_case re-invokes the server inside the macOS Seatbelt sandbox",
+    reason="replay-reinvokes-seatbelt: run_case re-invokes the server inside the macOS Seatbelt sandbox",
 )
 
 

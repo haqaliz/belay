@@ -84,7 +84,7 @@ STRONG_TEST = "def test_rejects_wrong_password():\n" f"    {REAL_ASSERTION}\n"
 
 darwin_only = pytest.mark.skipif(
     sys.platform != "darwin",
-    reason="replay re-invokes inside the macOS Seatbelt sandbox",
+    reason="replay-reinvokes-seatbelt: replay re-invokes inside the macOS Seatbelt sandbox",
 )
 
 #: The task-scoped invariant that catches a corrupt success: `tests/` is read-only. The

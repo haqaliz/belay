@@ -52,7 +52,7 @@ PRESTATE_BODY = (
 #: recompute at all and runs everywhere.
 REQUIRES_DARWIN = pytest.mark.skipif(
     sys.platform != "darwin",
-    reason="run_case re-invokes the server inside the macOS Seatbelt sandbox",
+    reason="replay-reinvokes-seatbelt: run_case re-invokes the server inside the macOS Seatbelt sandbox",
 )
 
 

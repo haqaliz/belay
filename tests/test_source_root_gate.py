@@ -38,7 +38,7 @@ from belay.verify.verdict import Status, Verdict
 
 darwin_only = pytest.mark.skipif(
     sys.platform != "darwin",
-    reason="a real gated capture / replay needs macOS clonefile + Seatbelt",
+    reason="replay-reinvokes-seatbelt: a real gated capture / replay needs macOS clonefile + Seatbelt",
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"

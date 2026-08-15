@@ -79,7 +79,7 @@ PRESTATE_BODY = (
 #: substrate — deterministic and CI-safe on darwin.
 pytestmark = pytest.mark.skipif(
     sys.platform != "darwin",
-    reason="run_case re-invokes the server inside the macOS Seatbelt sandbox",
+    reason="replay-reinvokes-seatbelt: run_case re-invokes the server inside the macOS Seatbelt sandbox",
 )
 
 
