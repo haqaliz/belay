@@ -45,3 +45,10 @@ node_modules/
 .next/
 /eval/.mint_key
 /eval/resume_mint.sh
+
+# The containment spike's probe output (eval/linux_probe/probe.py). Generated,
+# re-derivable, and platform-specific: a committed probe_result.json could be
+# cited by the decision as if it were the pinned-image CI measurement, which is
+# exactly the stale-artifact failure the probe's env record exists to prevent.
+# The decision cites the CI artifact (actions/upload-artifact), never a local run.
+/probe_result.json

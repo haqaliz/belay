@@ -36,3 +36,51 @@ jobs:
 
       - name: Test
         run: uv run pytest -q
+
+  # The containment spike (aspect A1): measure, on a REAL ubuntu job, which
+  # Linux containment mechanisms can enforce Belay's boundary, and emit the
+  # machine-readable artifact the written decision cites
+  # (docs/planning/linux-sandbox/containment-spike/). This job is the spec's
+  # acceptance criterion 1: it fails until the probe exists and runs.
+  spike-linux:
+    name: spike (linux containment probe)
+    # PINNED image. `ubuntu-latest` is a moving target (22.04 -> 24.04 already
+    # happened mid-mint); the probe artifact records the image it ran on, and
+    # the decision must not be able to drift onto a different substrate.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Sync (dev deps)
+        run: uv sync
+
+      # The probe exits 0 when a mechanism is unavailable: `unavailable` IS
+      # the measurement (spec criterion 2). This step fails only if the probe
+      # itself errors — a crash, or an artifact that fails its own schema.
+      - name: Run the containment probe
+        run: uv run python eval/linux_probe/probe.py
+
+      - name: Keep the first result for the determinism diff
+        run: cp probe_result.json probe_result.first.json
+
+      - name: Upload the probe artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-probe-result
+          path: probe_result.json
+
+      # Spec criterion 3: same image -> byte-identical artifact. The second
+      # run overwrites probe_result.json; the first copy is diffed against it.
+      - name: Re-run the probe
+        run: uv run python eval/linux_probe/probe.py
+
+      - name: Determinism: the two runs must be byte-identical
+        run: diff probe_result.first.json probe_result.json
