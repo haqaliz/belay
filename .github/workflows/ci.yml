@@ -82,5 +82,5 @@ jobs:
       - name: Re-run the probe
         run: uv run python eval/linux_probe/probe.py
 
-      - name: Determinism: the two runs must be byte-identical
+      - name: "Determinism: the two runs must be byte-identical"
         run: diff probe_result.first.json probe_result.json
