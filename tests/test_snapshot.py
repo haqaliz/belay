@@ -30,13 +30,22 @@ would still pass, green and meaningless.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
 from fixtures.torture_tree import build_torture_tree
 
 from belay.snapshot.bth1 import diff_records, hash_tree, scan_tree
-from belay.snapshot.clone import ALL_REPAIRS, restore, snapshot
+
+# Backend selection by platform, mirroring `take_snapshot`'s dispatch: the
+# darwin tests exercise `clonefile`; on Linux the same contract runs against
+# the Linux backend's copy/reflink machinery with the same sidecar repairs —
+# the ablation tests below must stay load-bearing on both.
+if sys.platform == "darwin":
+    from belay.snapshot.clone import ALL_REPAIRS, restore, snapshot
+else:
+    from belay.snapshot.linux import ALL_REPAIRS, restore, snapshot
 
 
 @pytest.fixture
@@ -118,7 +127,19 @@ def test_snapshot_is_copy_on_write(tmp_path: Path) -> None:
     of the workspace every turn and C2 would be unusable in practice. The bound
     is deliberately loose (a quarter of the data) because free-space deltas on a
     live machine are noisy in both directions.
+
+    On Linux the claim is per-substrate: the copy path (ext4 CI runners) is by
+    definition NOT copy-on-write, and the probe is what decides — the test runs
+    only where reflink was measured, never where a declared feature is assumed.
     """
+    if sys.platform != "darwin":
+        from belay.snapshot.linux import LinuxSnapshotBackend
+
+        if "reflink" not in LinuxSnapshotBackend.capabilities(tmp_path):
+            pytest.skip(
+                "this substrate has no reflink (probed, not declared); "
+                "the copy path is not copy-on-write"
+            )
     source = tmp_path / "bulk"
     source.mkdir()
     payload = os.urandom(1024 * 1024)  # incompressible: no dedup can fake the win

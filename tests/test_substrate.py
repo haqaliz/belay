@@ -35,12 +35,15 @@ import os
 import socket
 import stat
 import subprocess
+import sys
+import unicodedata
 from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 from fixtures.torture_tree import build_torture_tree
 
+from belay.snapshot.linux import LinuxSnapshotBackend
 from belay.snapshot.substrate import (
     CAUSES_DEFERRED,
     CAUSES_RAISED_HERE,
@@ -59,6 +62,18 @@ from belay.snapshot.substrate import (
     unrestorable_handle,
 )
 from belay.trace import TraceWriter
+
+
+def _current_backend():
+    """The backend `take_snapshot`/`guarded_restore` select on this platform.
+
+    Mirrors the dispatch in `substrate.take_snapshot`: darwin gets the
+    clonefile backend, everything else the Linux backend. Tests that pin a
+    backend name or capability use this instead of a hardcoded platform.
+    """
+    if sys.platform == "darwin":
+        return ClonefileBackend
+    return LinuxSnapshotBackend
 
 
 @pytest.fixture
@@ -101,7 +116,7 @@ def test_the_torture_tree_passes_the_guard(tree: Path, tmp_path: Path) -> None:
     """
     guard(tree)  # must not raise
     snap = take_snapshot(tree, tmp_path / "snap")
-    assert snap.manifest.backend == ClonefileBackend.name
+    assert snap.manifest.backend == _current_backend().name
 
 
 # --------------------------------------------------------------------------
@@ -268,9 +283,12 @@ def test_a_present_handle_declares_the_gaps_it_cannot_restore(
 
 def test_capabilities_report_what_this_machine_actually_has() -> None:
     """Probed, not assumed: `os.listxattr` does not exist on macOS (measured)."""
-    caps = ClonefileBackend.capabilities()
+    caps = _current_backend().capabilities()
     assert ("xattrs-os-native" in caps) is hasattr(os, "listxattr")
-    assert "clonefile" in caps
+    if sys.platform == "darwin":
+        assert "clonefile" in caps
+    else:
+        assert "symlinks" in caps
 
 
 def test_restore_across_differing_capabilities_refuses(
@@ -278,14 +296,20 @@ def test_restore_across_differing_capabilities_refuses(
 ) -> None:
     """Honesty, not portability.
 
-    A tree captured where xattrs exist cannot be truthfully restored where they
-    do not. Best-effort restore is exactly the lie: it would return a tree
-    missing a field, and report a grounded pre-state it had not restored.
+    A tree captured under a capability set cannot be truthfully restored where
+    that capability does not exist. Best-effort restore is exactly the lie: it
+    would return a tree missing a field, and report a grounded pre-state it had
+    not restored.
+
+    The differing capability is a sentinel guaranteed absent from every real
+    backend, so the refusal is platform-neutral: on darwin the real hazard is
+    `xattrs-os-native` (absent there), on Linux it is anything the probe did
+    not measure — the rule, not the example, is what is under test.
     """
     snap = take_snapshot(tree, tmp_path / "snap")
     foreign = Manifest(
         backend="clonefile-apfs",
-        capabilities=snap.manifest.capabilities | {"xattrs-os-native"},
+        capabilities=snap.manifest.capabilities | {"not-a-real-capability"},
     )
     alien = type(snap)(snapshot=snap.snapshot, manifest=foreign)
 
@@ -293,7 +317,7 @@ def test_restore_across_differing_capabilities_refuses(
         guarded_restore(alien, tmp_path / "out")
 
     assert caught.value.cause is UnrestorableCause.UNRESTORABLE_CAPABILITY_MISMATCH
-    assert "xattrs-os-native" in caught.value.detail
+    assert "not-a-real-capability" in caught.value.detail
     assert not (tmp_path / "out").exists()  # refused, not half-attempted
 
 
@@ -309,6 +333,11 @@ def test_restore_within_one_capability_set_works(tree: Path, tmp_path: Path) -> 
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(
+    sys.platform != "darwin",
+    reason="/bin/chmod +a ACLs are darwin-only; the Linux gc() branch is covered "
+    "by test_linux_snapshot.py::test_gc_removes_a_tree_with_non_ascii_names",
+)
 def test_gc_removes_an_acld_tree(tmp_path: Path) -> None:
     """`everyone deny delete` made a researcher's own scratch dir undeletable.
 
@@ -330,6 +359,11 @@ def test_gc_removes_an_acld_tree(tmp_path: Path) -> None:
     assert not victim.exists()
 
 
+@pytest.mark.skipif(
+    sys.platform != "darwin",
+    reason="os.chflags is darwin-only; Linux has no st_flags and the Linux "
+    "gc() branch is covered by test_linux_snapshot.py",
+)
 def test_gc_removes_a_uchg_tree(tmp_path: Path) -> None:
     """The `uchg` immutable flag, the other half of the same stranding."""
     victim = tmp_path / "victim"
@@ -394,6 +428,21 @@ def test_each_locally_raised_cause_is_actually_produced(tmp_path: Path) -> None:
         produced.add(classify(Path("/usr/bin/true")))
     else:  # pragma: no cover - the suite does not run as root
         produced.add(UnrestorableCause.UNRESTORABLE_OWNERSHIP)
+
+    # The three cross-filesystem causes are raised by the Linux backend's
+    # restore path from the byte-level facts of the names themselves — so the
+    # pure classifier that raises them is reachable on any platform, and the
+    # linux-gated fixtures in test_linux_snapshot.py prove the same function
+    # fires through the real restore path.
+    from belay.snapshot.linux import _hazard_cause
+
+    produced.add(_hazard_cause([b"README", b"readme"])[0])
+    pair = [
+        unicodedata.normalize("NFD", "café").encode("utf-8"),
+        unicodedata.normalize("NFC", "café").encode("utf-8"),
+    ]
+    produced.add(_hazard_cause(pair)[0])
+    produced.add(_hazard_cause([b"caf\xe9.txt"])[0])
 
     src = build_torture_tree(tmp_path / "w")
     snap = take_snapshot(src, tmp_path / "snap")

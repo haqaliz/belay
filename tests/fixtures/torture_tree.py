@@ -52,7 +52,11 @@ _MTIME_BASE_NS = 1_700_000_000_000_000_000
 # Set on `hidden.txt`. UF_HIDDEN specifically, and NOT UF_IMMUTABLE: an immutable
 # file in a tmp tree cannot be deleted, and would leak a permanently undeletable
 # directory into the runner on every test run.
-HIDDEN_FLAG = stat.UF_HIDDEN
+#
+# `st_flags` is BSD-only: on Linux the field does not exist and BTH-1 hashes a
+# constant 0, so the flag is simply not set there — there is nothing to test on
+# a substrate that has no flags.
+HIDDEN_FLAG = getattr(stat, "UF_HIDDEN", 0)
 
 _XATTR_NOFOLLOW = 0x0001
 
@@ -175,7 +179,8 @@ def build_torture_tree(root: Path) -> Path:
     # st_flags. Set after the content is written: the flag is metadata, and
     # writing through it later would be a different test.
     (root / "hidden.txt").write_bytes(b"flagged UF_HIDDEN\n")
-    os.chflags(root / "hidden.txt", HIDDEN_FLAG)
+    if hasattr(os, "chflags"):  # BSD-only; Linux has no st_flags to set
+        os.chflags(root / "hidden.txt", HIDDEN_FLAG)
 
     _stamp_mtimes(root)
     return root
