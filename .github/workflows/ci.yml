@@ -72,6 +72,37 @@ jobs:
       - name: Test
         run: uv run pytest -q
 
+  # The self-host image (aspect A1 of docs/planning/docker-selfhost/image/):
+  # build it from THIS checkout and hold the built image to the documented
+  # contract (tests/test_docker_image.py — the whole module runs here).
+  # Docker is preinstalled on GitHub's ubuntu runners — no setup step.
+  docker:
+    name: docker (image build + A1 acceptance)
+    # PINNED image, same rationale as the test-linux and spike jobs: the
+    # image's substrate claims are ubuntu-24.04-shaped, and `ubuntu-latest`
+    # is a moving target.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Sync (dev deps)
+        run: uv sync
+
+      # No separate `uv build --wheel` step: the module's session fixture
+      # rebuilds the wheel from this checkout itself — a stale dist/ wheel
+      # would fail the version-stamp test, asserted not assumed — so the
+      # wheel the image installs is exactly this PR's.
+      - name: Test the docker image
+        run: uv run pytest tests/test_docker_image.py -q
+
   # The containment spike (aspect A1): measure, on a REAL ubuntu job, which
   # Linux containment mechanisms can enforce Belay's boundary, and emit the
   # machine-readable artifact the written decision cites
