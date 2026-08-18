@@ -1,96 +1,39 @@
-# Understanding — phase0-mint-run
+# Understanding: Docker self-host (launch checklist L3)
 
-Date: 2026-08-09. Replaces the stale `subscription-model-client` understanding (that unit is
-merged; the file was never rewritten).
+Status: understanding note for `feat/docker-selfhost` (branch `feat/docker-selfhost/aliz`), from the Phase-1 brief (`_card/issue.md`) and three read-only agent maps (sandbox/snapshot, CLI/packaging, CI/threat-model).
 
-## What this unit really is
+## What the work really is
 
-The **execution, audit, and publish of the Phase-0 gate mint** on the funded subscription
-path. The deliverable is not a capability and not new engine code: it is a filled
-`PHASE0_RESULTS.md` decision line (PROCEED or PIVOT) backed by a fresh run's number. The
-machinery is all shipped and is consumed as-is:
+Build the first container channel for Belay: a `Dockerfile` whose image installs the real `belay-harness` wheel and runs the **real Linux sandbox backend** (Landlock + seccomp via `src/belay/sandbox/linux.py`, copy-fidelity snapshot via `src/belay/snapshot/linux.py`), plus the surrounding artifacts the checklist L3 DONE line implies: a `.dockerignore`, a `docker compose` file, a CI job that builds the image and validates it (suite + containment + snapshot round-trip **inside the image**), a THREAT_MODEL container section, and the README update that replaces the "no container yet" callout (`README.md:64`). Per `RELEASING.md:11-15`, adding the image to the release channel (`release.yml` ghcr job) is explicitly part of L3: *"When it lands, add a `ghcr` job here and to `release.yml`."* (`belay-end-fast` skill line 85 makes the same point from the other side: do not add a container step until this lands.)
 
-- **Minting:** `python -m eval.minting_driver {one|batch}` with `--provider claude-cli`,
-  staged registries, checkpoint/resume with `no_observation` re-arm, gated capture,
-  sequential single-in-flight drive, fresh client per instance, request_timeout 120 s
-  (`eval/minting_driver/`, `eval/README.md`).
-- **Verification:** `belay phase0 run --ledger … --server node <fs-server> '{workspace}'`
-  (no `--`), `combine`, `report` — pure re-render, `INSTRUMENT SUSPECT` defense, per-instance
-  exposure reporting (`src/belay/phase0/`, `src/belay/verify/`).
-- **Audit:** `belay corpus add/run/score/list/show/label` with root-cause keys and
-  independence grouping (`src/belay/corpus/`).
-- **Draw:** `selected.json` — 68 records = 65 real + 3 controls, seed `20260723` committed.
+It is **packaging + measurement work on an existing substrate**, not engine work. The L2 completion note already says so (`CHECKLIST.md:119`): "now packaging on top of a substrate that exists, no longer a blocker on a mechanism."
 
-## Affected areas
+## What the dig established (grounded)
 
-- `eval/minting_driver/` + `eval/instances/` + `eval/README.md` (runbook) — execution surface.
-- `docs/technical/PHASE0_RESULTS.md`, `PHASE0_AUDIT.md`, `docs/ROADMAP.md` — publish surface.
-- `docs/planning/phase0-live-mint/` + `phase0-mint-execution/` (audit-and-publish specs,
-  gate criteria) — governing requirements.
-- Possibly `eval/minting_driver/clients/claude_cli_client.py` + one test, IF `--safe-mode`
-  is decided into the shipped argv (eval-side only; the card's "consume the engine as-is"
-  constraint covers `src/belay/`, which must not change).
+1. **No Docker artifacts exist anywhere.** No `Dockerfile`, no compose, no `.dockerignore`, no nix. `release.yml` has no container job; `ci.yml` has none either. Everything must be created.
+2. **The base image is trivial and fixed by existing contracts:** stdlib-only wheel (`pyproject.toml:43-44`, enforced by `tests/test_import_guard.py`), Python ≥3.10, and `/bin/sh` + a working Python are required because `belay sandbox check` probes shell out to `/bin/sh -c` and `sys.executable -c` (`cli.py:199-208`, `251-256`). The image must install the wheel — `__version__` comes from the installed distribution via `importlib.metadata` (`src/belay/__init__.py:18-21`), so a source-copy image would stamp `0+unknown`.
+3. **Two entrypoints, not one:** `belay` → `belay.cli:main` (`pyproject.toml:52-53`) and the proxy as `python -m belay.proxy <server-command>` (`proxy.py:530-574`, env-configured). There is **no `__main__.py`** — `python -m belay` does not work and must not be documented. `docker run belay <args>` = the console script.
+4. **Containment inside the container is the host kernel's Landlock, and it works unprivileged:** the launcher (`python -m belay.sandbox.linux <policy.json> -- <cmd>`) enforces via ctypes syscalls 444/445/446 + `PR_SET_NO_NEW_PRIVS` + seccomp BPF; mechanism absent ⇒ exit 2, never a bare spawn (`linux.py:539-541`). The escape-matrix tests need no privileges and run in an unprivileged container **iff host kernel ≥5.13 has the LSM enabled**. Running as root (Docker default) adds exactly one named skip (`root-environment`, `test_substrate.py:189-190`) and makes foreign ownership restorable (`substrate.py:270`). Docker's default seccomp profile does not block landlock syscalls — but the interplay with Belay's nested BPF filter is the card's named caveat and must be **verified in-image**, not assumed.
+5. **Snapshot fidelity on overlayfs degrades with a name, by existing design:** `FICLONE` is probed per-directory (`snapshot/linux.py:120-152`); unavailable ⇒ honest copy fallback with capabilities recorded (`:170-187`); a cross-capability restore refuses `UNRESTORABLE_CAPABILITY_MISMATCH` before touching dest (`substrate.py:423-433`). "Round-trips byte-identically **or** named-cause degradation" is the L3 acceptance, and the engine already has exactly that behavior — the acceptance test in-image mostly proves the existing contract holds on the new substrate.
+6. **TMPDIR hazard is already named for containers:** world-writable `/tmp` is the Linux default and the threat model already says the macOS bounded bound "does **not** hold" in containers (`THREAT_MODEL.md:398-407`, `495`). The container section must restate it; the image may additionally set a private TMPDIR, but DefaultScope's 0700 owned-verified tmpdir is the mechanism that keeps it bounded.
+7. **The docker.sock line is already tested and stays closed:** the unix-socket grant is `network-bind` (narrow), measured to NOT permit connecting to arbitrary unix sockets — `/var/run/docker.sock` among them (`THREAT_MODEL.md:133-136`, `tests/test_containment.py:622-658`). A contained process in the image cannot talk to the daemon. The Linux analogue lives in `tests/test_linux_containment.py` (AF_UNIX bind allowed under deny-all, `:232-256`).
+8. **The suite is runnable in-image with the existing gate discipline:** named-cause skips are enforced statically by `tests/test_platform_gate_named_causes.py` (AST scan, substrate-neutral) — a container CI job inherits it automatically. Expected in-image skips: `seatbelt-only`, `darwin-acl`, `macos-python3-shim`, `bsd-file-flags`, `replay-reinvokes-seatbelt` (macOS-only), plus runtime `landlock-unavailable` (pre-5.13 host) and `reflink-unavailable` (overlayfs, expected) — all named, never silent.
+9. **A test gap exists and this unit fills it:** no test anywhere exercises the installed console-script binary (`belay` on PATH); `python -m belay.cli` subprocess tests are the standing proxy. L3's "docker run belay behaves identically to the installed CLI" is the first test of the real executable surface.
+10. **The CI substrate story:** `test (Linux)` runs directly on pinned `ubuntu-24.04` runners (no `container:` job). A Docker validation job must build the image and run the acceptance inside it; GitHub runners have Docker preinstalled. `THREAT_MODEL.md:319-321` is the current boundary statement the container section must extend — *"Nothing here is claimed about any other Linux image: a Docker image (L3) or another distro may differ and must re-measure (the A1 probe is the re-measurement instrument)."* The spike decision says the same (`containment-spike/decision.md:75-76`).
 
-## State summary (from the dig, all file-cited)
+## Open questions for the PRD
 
-**SHIPPED and to be consumed as-is:** funded client (20 criteria green; smoke `363fac2` →
-`91f1e21`, `claude-opus-5`, 5 turns, 1 real `edit_file`, 0 UNVERIFIED, VERIFIED_CLEAN);
-entry points; draw; gated capture; quota breaker; replay batch rooting; ledger schema with
-detector + exposure; canonical gate criteria committed at `bde2678` (prd-level at
-`4d06f52b`, 2026-07-21, predating every mint — the card's "criteria predate the first
-Stage-3 mint commit" check resolves at the prd level, and the doc-level disclosure is
-already in `PHASE0_RESULTS.md:44-61`).
+1. **Compose scope.** L3 DONE says "`docker compose` for the console" — but C7 (L6) is unbuilt. Does L3 ship a compose file with the engine service only (console service added by C7), or defer compose entirely? Recommended: ship a minimal compose file with a comment naming the C7 hook — the checklist line demands it, and shipping a broken console service would violate honesty rules.
+2. **Release channel now or later.** `RELEASING.md` says add the ghcr job when the image "lands". Is the image build + validation the whole unit, with the ghcr push as a follow-on slice (L5's release checklist sequences "publish to PyPI → build Docker image")? Or must the ghcr job ship in this unit?
+3. **Image size / base.** python:3.12-slim + wheel is the obvious minimal; anything to add for the escape-matrix to run (coreutils, /bin/sh — busybox vs dash/bash exit-code differences were a real L2 finding: `plan_20260815.md` dash vs bash). The in-image suite run needs a shell + coreutils behaving like the measured ubuntu-24.04 substrate.
+4. **Root vs non-root in the image.** Docker default is root (adds one named skip, ownership restorable); non-root is the safer posture for the harness. Decide the default user in the Dockerfile.
 
-**Published numbers that stand unedited until this gate run supersedes them:** `4/16`,
-`precision 0.00`, `3/93`, `recall 0.00`, `1/15`, 17 judgments, decision PIVOT.
+## Verdict-axes placement
 
-## Open decisions (this unit's to make — the interview must resolve these)
+L3 changes **no verdict**. It re-measures A1/A2 machinery on a new substrate (the acceptance tests are the existing escape matrix, fidelity round-trips and `belay sandbox check` probes running inside the container) and extends the honesty boundary statement (`THREAT_MODEL.md`), which is the R5/R8 guardrail surface. There is no new verdict surface and nothing an LLM judges.
 
-1. **Mint model** — default candidate `claude-opus-5` (D-2 precedent + smoke evidence the
-   full id works at n=1: `live-smoke-confirmation/acceptance.out`). R-6: 12 banked s3
-   instances ran on `gemini-3.1-pro-preview`; a single-model re-mint of all 68 is
-   "the mint's call" and the card's "run the ~65–70-instance batch through `claude -p`"
-   reads as a full fresh run.
-2. **`--safe-mode` in the shipped argv** — unprobed, absent from code and tests today.
-   Probably right for reproducibility (isolates hooks/plugins/`CLAUDE.md` without touching
-   auth, P2 evidence) — but it is a change to `claude_cli_client._build_command` + a test,
-   and it must be probed before being adopted.
-3. **Stop-loss / abort threshold** — `phase0-gate-readiness/prd.md:125-128` required one
-   "committed before any Stage-3 run"; none exists anywhere. The subscription limit shape is
-   unknown (R-4): unrecognised errors classify `terminal`, and the first real limit is "a
-   finding for the mint unit". ~11 h wall-clock estimate (68 × ~10 min).
-4. **`--max-steps`** — default 12 (`entrypoint.py:100`); Stages 1–3 ran `--max-steps 20`;
-   the smoke ran at 12. Must be chosen and stated.
-5. **Controls FIRST** — not enforced by code (`selected.json` appends controls last; the
-   driver preserves registry order). Must be achieved via `one` invocations or a
-   controls-first registry. The third control (`control__requests-read-then-write`) has
-   **never** been driven live.
+## Contradictions / flags
 
-## Ambiguities and contradictions to flag (not paper over)
-
-- `_card/understanding.md` was stale (subscription-model-client); this note replaces it.
-- RUNBOOK ledger/case examples still describe an older format
-  (`docs/planning/phase0-corpus-run/RUNBOOK.md:304-318,348` vs the shipped schema).
-- README "re-run `npm view`" note conflicts with code-pinned versions
-  (`eval/README.md:168-174` vs `servers.py:61-74`) — pins win.
-- This worktree has no `eval/servers/` and is not in the banked-data symlink list
-  (`eval/README.md:55-72`): install or symlink servers, and `mkdir -p runs` before
-  `belay phase0 run` (an absent ledger dir discards a completed run).
-- The smoke's zero-exposure finding (`pytest-7432` edited source, `files_compared: 0`)
-  strengthens R-3: a near-zero mint result must be published under the pre-registered
-  reading rules as **uninterpretable about agents**, never as evidence of honesty.
-- The exposure forecast's 44.6% (29/65) has an **unmeasured** relationship to exposure
-  (floor claim withdrawn 2026-08-05).
-
-## Verdict axes
-
-No axis changes. A1/A2 are the instruments of the measurement (defaults on:
-`no-assertion-weakening` on `tests`+`testing` segments); A3 untouched and disabled.
-
-## Guardrail check
-
-No agent framework (the oracle is a no-tools completion subprocess), no LLM judge (verdicts
-are replay-grounded), no raw-data egress (traces/corpus stay gitignored and on-box;
-committed artifacts are ledgers/acceptance outputs only), honest verdicts (UNVERIFIED never
-PASS; INSTRUMENT SUSPECT never a 0%), zero runtime deps preserved. A `--safe-mode` argv
-change is eval-side only and keeps all 20 criteria testable offline via the `runner=` seam.
+- `README.md:56` "Install (once v0.1.0 is published…)" is stale (0.20.0) — that's L4's quickstart flip, not L3; note only.
+- L3 DONE's "docker compose **for the console**" presumes an unshipped C7 — open question 1, must be resolved in the PRD rather than silently re-scoped.
+- The card names "FICLONE-on-overlayfs degradation" as a caveat; the dig shows the engine already handles it with a named cause — the acceptance must assert the *degradation path*, not fight it.
