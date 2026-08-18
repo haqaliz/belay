@@ -92,7 +92,7 @@ def _docker_run(
     tag: str, options: list[str], command: list[str], timeout: float = 120
 ) -> subprocess.CompletedProcess[bytes]:
     return subprocess.run(
-        ["docker", "run", *options, tag, *command],
+        ["docker", "run", "--rm", *options, tag, *command],
         capture_output=True,
         timeout=timeout,
     )
