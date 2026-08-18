@@ -243,6 +243,7 @@ The sandbox and snapshot have **two substrate implementations**, each measured o
 | `reflink-unavailable` | Runtime, probed: this filesystem cannot `FICLONE` (ext4/tmpfs cannot) — the copy path is the CI path. |
 | `collision-fixture-uncreatable` | Runtime: this filesystem cannot hold the distinct byte names (case-insensitive or normalising) — the fixture cannot exist here. |
 | `root-environment` | Runtime: running as root, foreign ownership is restorable — nothing to refuse. |
+| `docker-unavailable` | Runtime: no Docker CLI/daemon on the host — docker-gated tests skip with this cause. |
 
 **The cross-substrate consequence is first-class, not an edge case.** A corpus case banked on clonefile/APFS (macOS) re-verifying on a Linux box refuses at restore with `UNRESTORABLE_CAPABILITY_MISMATCH` and classifies **SKIP with that named cause** — never a guessed restore, never a REGRESSION, and never a MATCH. The mirror holds (a copy-fidelity case on macOS). `run_case` admits both substrates and lets the capability check decide; only a platform with *no* backend at all skips up front. What the sandbox does and does not enforce on each substrate — reads are not scoped on either, and denial records are inferred on both — is in [`docs/technical/THREAT_MODEL.md`](docs/technical/THREAT_MODEL.md).
 
