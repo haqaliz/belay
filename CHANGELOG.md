@@ -5,6 +5,31 @@ All notable changes to Belay are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0 — until then,
 `0.x` minor bumps may include changes that would be breaking under strict semver.
 
+## [0.21.1] - 2026-08-20
+
+Documentation and tooling only — **no change to `src/belay/`**, so the installed
+package behaves exactly as 0.21.0. Cut to keep the record and the release history in
+step with what was decided after L3 shipped.
+
+### Changed
+
+- **PRD should-have 9 (`belay sandbox check` as a Docker `HEALTHCHECK` / entrypoint
+  preflight) is recorded as NOT SHIPPED, deliberately**, rather than left looking
+  unfinished. The capability it wanted did ship and is the load-bearing half: the probe
+  is the re-measurement instrument, it runs in-container on every PR, and README gives
+  the exact macOS re-probe command. The Docker *directive* is what does not fit —
+  `HEALTHCHECK` is periodic liveness for a **long-running** container, and
+  `ENTRYPOINT ["belay"]` is a one-shot CLI that exits, so it would never meaningfully
+  run; an entrypoint preflight would probe the sandbox before every invocation
+  including `belay --help`, which needs none. It becomes right when C7's console
+  service exists, and the note now says so there.
+- **The `belay-end-fast` skill carried an instruction v0.20.0 and v0.21.0 made false**
+  ("GHCR/Docker is deliberately deferred until the Linux sandbox slice — a Linux
+  container can't run the macOS-only core"). Both halves were stale. Corrected to the
+  real boundary: the image exists and is validated in-container on every PR; the
+  **publish** job is what does not — so the next release run is not told to defer
+  something that already shipped.
+
 ## [0.21.0] - 2026-08-20
 
 ### Added
@@ -981,7 +1006,8 @@ The first public release: the full **record → sandbox → replay → verdict**
 - **The A3 claim-re-derivation axis** (C8) is not built; the live console (C7) and observability interop
   (C9) are ahead on the roadmap.
 
-[Unreleased]: https://github.com/haqaliz/belay/compare/v0.21.0...HEAD
+[Unreleased]: https://github.com/haqaliz/belay/compare/v0.21.1...HEAD
+[0.21.1]: https://github.com/haqaliz/belay/compare/v0.21.0...v0.21.1
 [0.21.0]: https://github.com/haqaliz/belay/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/haqaliz/belay/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/haqaliz/belay/compare/v0.18.0...v0.19.0
