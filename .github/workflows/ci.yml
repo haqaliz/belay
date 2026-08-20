@@ -72,12 +72,21 @@ jobs:
       - name: Test
         run: uv run pytest -q
 
-  # The self-host image (aspect A1 of docs/planning/docker-selfhost/image/):
-  # build it from THIS checkout and hold the built image to the documented
-  # contract (tests/test_docker_image.py — the whole module runs here).
+  # The self-host image (docs/planning/docker-selfhost/): build it from THIS
+  # checkout, hold it to the documented contract (tests/test_docker_image.py, A1),
+  # and re-measure Belay's substrate INSIDE the container
+  # (tests/test_docker_inimage.py, A2 — the whole suite, `belay sandbox check`,
+  # and a capture -> verify roundtrip generated in-container).
+  #
+  # This job is the LINUX-HOST half of the claim split: the container's kernel is
+  # this pinned runner's, so what it asserts is a fact about ubuntu-24.04 and
+  # nothing else. The macOS-host path (Docker Desktop's Linux VM kernel) is a
+  # different substrate; it stays a manual operator re-probe, documented in
+  # README, and is never asserted here.
+  #
   # Docker is preinstalled on GitHub's ubuntu runners — no setup step.
   docker:
-    name: docker (image build + A1 acceptance)
+    name: docker (image build + in-image acceptance)
     # PINNED image, same rationale as the test-linux and spike jobs: the
     # image's substrate claims are ubuntu-24.04-shaped, and `ubuntu-latest`
     # is a moving target.
@@ -101,7 +110,11 @@ jobs:
       # would fail the version-stamp test, asserted not assumed — so the
       # wheel the image installs is exactly this PR's.
       - name: Test the docker image
-        run: uv run pytest tests/test_docker_image.py -q
+        # Both modules in ONE invocation: the image build is a session-scoped
+        # fixture in tests/conftest.py, so a single pytest process builds once and
+        # both modules run against the same artifact. Split across two steps and
+        # the image would be built twice.
+        run: uv run pytest tests/test_docker_image.py tests/test_docker_inimage.py -q
 
   # The containment spike (aspect A1): measure, on a REAL ubuntu job, which
   # Linux containment mechanisms can enforce Belay's boundary, and emit the
