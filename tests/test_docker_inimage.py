@@ -225,7 +225,11 @@ def test_capture_and_verify_roundtrip_in_image(built_image: str) -> None:
         built_image,
         "set -e; "
         "mkdir -p /tmp/rt/ws; "
+        # Both files go INTO the workspace: the server, and the trace-wait helper
+        # it imports (a script's own directory is what lands on sys.path, and the
+        # server runs from the workspace, not from /fixtures).
         "cp /fixtures/docker_roundtrip_server.py /tmp/rt/ws/server.py; "
+        "cp /fixtures/docker_roundtrip_trace.py /tmp/rt/ws/; "
         "export BELAY_SANDBOX_SCOPE=/tmp/rt/ws "
         "BELAY_SNAPSHOT_DIR=/tmp/rt/sn BELAY_TRACE_DIR=/tmp/rt/tr; "
         "python /fixtures/docker_roundtrip_client.py /tmp/rt/ws/server.py /tmp/rt/ws/note.txt; "

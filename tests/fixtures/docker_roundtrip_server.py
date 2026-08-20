@@ -14,6 +14,15 @@ real; a path smuggled through the environment would be invisible to relocation a
 the replay would write straight back into the live workspace — a contaminated
 verdict rather than a grounded one.
 
+The one thing here that is not pure request/response: the `tools/list` reply waits
+until the trace has recorded the REQUEST. The proxy forwards before it records (by
+design — see `docker_roundtrip_trace.py`), so a server that answers fast enough can
+have its RESPONSE recorded first; an inverted pair does not correlate, the
+annotation snapshot is never taken, and effect-conformance abstains. Only the
+server can close that window, because only the server decides when to answer. The
+`tools/call` branch is untouched by this and stays purely deterministic — which is
+what matters, since replay re-invokes that branch and nothing else.
+
 `readOnlyHint: false` is declared truthfully (the tool does mutate), so A2's
 effect-conformance has a contract to check instead of abstaining for want of one.
 `openWorldHint: false` is declared just as truthfully and is the point of the last
@@ -23,7 +32,10 @@ into it.
 """
 
 import json
+import os
 import sys
+
+from docker_roundtrip_trace import await_recorded
 
 TOOL = {
     "name": "write_note",
@@ -67,6 +79,11 @@ def main() -> None:
         elif method == "notifications/initialized":
             continue  # a notification: no reply, ever
         elif method == "tools/list":
+            trace_dir = os.environ.get("BELAY_TRACE_DIR")
+            if trace_dir:
+                # Nothing is being captured when this is unset (replay, or a bare
+                # run), and then there is no ordering to protect.
+                await_recorded(trace_dir, "c2s", method="tools/list")
             _reply({"jsonrpc": "2.0", "id": msg_id, "result": {"tools": [TOOL]}})
         elif method == "tools/call":
             target = message["params"]["arguments"]["path"]
