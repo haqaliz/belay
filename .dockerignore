@@ -3,6 +3,7 @@
 .claude/
 traces/
 runs/
+workspace/
 _sandbox/
 corpus/
 eval/

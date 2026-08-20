@@ -1,0 +1,47 @@
+# Belay, self-hosted: the engine, and nothing else yet.
+#
+# One service on purpose. `docker compose run --rm belay <subcommand>` is exactly
+# `docker run --rm belay <subcommand>` — same image, same non-root user, same
+# entrypoint — so nothing here is a second way to configure the engine.
+#
+#   docker compose build
+#   docker compose run --rm belay --help
+#   docker compose run --rm belay sandbox check --scope /workspace
+#
+# THE CONSOLE (C7, launch checklist L6) is the service that will join this file:
+# the local-first live run feed with streaming per-turn verdicts. It is named here
+# and deliberately NOT declared — a service resolving to an image nobody built
+# would break `docker compose up` for every reader, and an honest absence is the
+# better first impression. When C7 ships, it lands here as `console:`.
+#
+# Kernel requirement, carried from the README: the sandbox is the HOST kernel's
+# Landlock (≥ 5.13, LSM enabled). On an older host the launcher refuses with a
+# named cause and exit 2 — loudly, never a silent unsandboxed run.
+
+services:
+  belay:
+    build: .
+    # Pinned to the tag the image tests build (tests/conftest.py:DOCKER_IMAGE_TAG),
+    # so the compose path and the `docker run` path are one artifact, not two.
+    image: belay:test
+    # The state mount. Everything Belay reads or writes lives under here, and it
+    # stays owned by the host user: the image runs as the non-root `belay` user
+    # (uid 1000), and `docker run --user root` is the one-flag opt-in.
+    volumes:
+      - ./workspace:/workspace
+    working_dir: /workspace
+    environment:
+      # Where captured traces land. Treat a trace as the credential it may
+      # contain: capture is lossless, so tool arguments — keys included — are in
+      # it verbatim (README, "A trace is as sensitive as...").
+      BELAY_TRACE_DIR: ${BELAY_TRACE_DIR:-/workspace/traces}
+      # Where a turn's pre-state snapshots land; the manifests go to a SIBLING
+      # directory (`<dir>.manifests`), which is what `belay verify --manifest-dir`
+      # wants.
+      BELAY_SNAPSHOT_DIR: ${BELAY_SNAPSHOT_DIR:-/workspace/snapshots}
+      # The write scope the sandbox enforces. Unset means no sandbox: set it to
+      # the tree the server may change, and nothing wider.
+      BELAY_SANDBOX_SCOPE: ${BELAY_SANDBOX_SCOPE:-/workspace}
+    # No ports, and no docker socket. The engine is a stdio proxy — it listens on
+    # nothing — and mounting the daemon socket would hand a contained process the
+    # host, which is the opposite of what this image is for.
