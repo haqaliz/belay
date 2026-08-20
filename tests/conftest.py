@@ -124,21 +124,17 @@ def docker_available() -> bool:
 
 @pytest.fixture(scope="session")
 def built_image() -> Iterator[str]:
-    """Build the wheel from THIS checkout, then the image; clean both up after.
+    """Build the image from a CLEAN checkout — no pre-built wheel — and clean up after.
 
-    The wheel is rebuilt by `uv build` every session (a stale `dist/` wheel
-    would fail the version-stamp test — asserted, not assumed), and `docker
-    build` demands the Dockerfile. If either step fails this fixture raises, and
-    every test that requested it fails with it: the honest RED, the same shape as
-    a corrupt success made visible.
+    The `dist/` sweep before the build is the assertion, not housekeeping. The
+    README asks a stranger with nothing but Docker to run `docker build -t belay .`,
+    so the Dockerfile has to build the wheel itself; leaving a locally-built wheel
+    lying around would let a broken multi-stage build pass here and fail for them.
+    A stale wheel would also stamp the wrong version, which the version test would
+    catch — but by then the quickstart is already wrong.
     """
-    built = subprocess.run(
-        ["uv", "build", "--wheel"],
-        cwd=_REPO_ROOT,
-        capture_output=True,
-        timeout=600,
-    )
-    assert built.returncode == 0, built.stderr.decode(errors="replace")
+    for stale in (_REPO_ROOT / "dist").glob("belay_harness-*.whl"):
+        stale.unlink()
     try:
         image = subprocess.run(
             ["docker", "build", "-f", "Dockerfile", "-t", DOCKER_IMAGE_TAG, "."],
@@ -152,5 +148,3 @@ def built_image() -> Iterator[str]:
         subprocess.run(
             ["docker", "rmi", DOCKER_IMAGE_TAG], capture_output=True, timeout=120
         )
-        for stale in (_REPO_ROOT / "dist").glob("belay_harness-*.whl"):
-            stale.unlink()

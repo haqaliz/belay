@@ -73,6 +73,18 @@ def test_image_builds(built_image: str) -> None:
     assert built_image == _IMAGE_TAG
 
 
+def test_the_build_needs_nothing_but_the_checkout_and_docker(built_image: str) -> None:
+    """No `dist/` wheel exists — the image built its own, from source, in-build.
+
+    This is the README quickstart's precondition, checked rather than hoped: a
+    stranger who has cloned the repo and has Docker runs `docker build -t belay .`
+    and gets a working image. A Dockerfile that `COPY`s a pre-built wheel works on
+    the machine that just ran `uv build` and nowhere else — and it fails at
+    `lstat /dist`, before any of this module's other assertions could notice.
+    """
+    assert not list((_REPO_ROOT / "dist").glob("belay_harness-*.whl"))
+
+
 def test_belay_help_exits_zero(built_image: str) -> None:
     """The entrypoint is the belay CLI, and its help shows the full surface."""
     run = _docker_run(built_image, [], ["--help"])
@@ -172,6 +184,31 @@ def test_workdir_is_the_documented_mount_point(built_image: str) -> None:
     run = _docker_run(built_image, ["--entrypoint", "pwd"], [])
     assert run.returncode == 0, run.stderr.decode(errors="replace")
     assert run.stdout.strip() == b"/workspace"
+
+
+def test_the_workdir_is_writable_by_the_default_user(built_image: str) -> None:
+    """`/workspace` belongs to the container user, so the documented commands work.
+
+    `WORKDIR` creates the directory as root, and the image then drops to `belay`.
+    Left that way, README's own first command —
+    `docker run --rm belay sandbox check --scope /workspace` — exits 1 with
+    "the probe never ran": the containment probe has to WRITE inside the scope to
+    find out whether writes outside it are refused, and it could not. A boundary
+    check that cannot run is the one thing worse than a boundary that fails, so the
+    ownership is asserted rather than assumed.
+
+    This says nothing about a bind mount at the same path: a mounted directory
+    carries the HOST's ownership, which `test_ownership_contract_both_ways` covers.
+    """
+    probe = _docker_run(
+        built_image, ["--entrypoint", "sh"], ["-c", "touch /workspace/probe"]
+    )
+    assert probe.returncode == 0, probe.stderr.decode(errors="replace")
+
+    check = _docker_run(built_image, [], ["sandbox", "check", "--scope", "/workspace"])
+    out = check.stdout.decode(errors="replace")
+    assert check.returncode == 0, out + check.stderr.decode(errors="replace")
+    assert "the probe never ran" not in out, out
 
 
 def test_no_documented_python_m_belay(built_image: str) -> None:

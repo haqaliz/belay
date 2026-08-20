@@ -446,6 +446,112 @@ differ in every mechanism.
 
 ---
 
+## The container (L3): what the image does and does not change
+
+The self-host image (`Dockerfile`, `docker-compose.yml`) is packaging, not a
+sandbox. Belay's boundary inside a container is the SAME Landlock + seccomp
+boundary described above — so every Linux claim in this document applies, and the
+container adds no containment of its own that Belay relies on. What it does change
+is the *substrate those claims were measured on*, and this document's rule is that
+a new substrate must re-measure rather than inherit. So the image re-runs the
+measurement in-container, and this section states only what that run observed.
+
+**The instruments.** `tests/test_docker_inimage.py`: the repo's whole suite inside
+a throwaway dev container (with every skip's cause machine-checked), `belay sandbox
+check` deciding the boundary by using it, and a capture → verify roundtrip
+generated entirely in-container. `tests/test_docker_image.py` holds the image's
+contract; `tests/test_docker_compose.py` the compose path. All three run in the
+`docker` CI job on the pinned `ubuntu-24.04` runner.
+
+### The claim split — what CI asserts and what it cannot
+
+- **Linux host: asserted.** On the `ubuntu-24.04` runner the container's kernel IS
+  the runner's kernel, so the `docker` job's in-image results are a fact about that
+  pinned image and nothing else.
+- **macOS host: a manual re-probe, never a CI claim.** The image runs inside Docker
+  Desktop's Linux VM, whose kernel is neither the host's nor the runner's, and the
+  macOS host's Seatbelt is irrelevant to it. `docker run belay sandbox check` is the
+  re-probe, and an operator relying on the container on macOS should run it. The
+  reference measurement, recorded so it can be compared rather than trusted: **macOS
+  26.x host / Docker Desktop 29.7.2 / kernel 7.0.12-linuxkit / aarch64, 2026-08-20**
+  — `platform linux (ok)`, `landlock kernel ABI 8 (ok)`, `containment ok (a write
+  outside the scope was refused)`, `seccomp ok (an AF_INET socket was refused)`;
+  full suite in-image 1620 passed, 218 skipped, every skip named.
+- **Do not read one as the other.** The two kernels differ by major version.
+
+### Landlock belongs to the HOST kernel — an image cannot supply one
+
+Landlock is a kernel LSM, and it is **not namespaced**: an unprivileged container
+gets exactly the Landlock its host kernel offers, and no image can add it. On a
+pre-5.13 host (or one with the LSM compiled out) the launcher refuses — exit 2,
+"refusing to run unsandboxed", the named cause — and the suite's Landlock-dependent
+tests skip with `landlock-unavailable`. That is correct behavior and it is also
+loud: a reader's first `docker run` on an old host fails rather than running bare,
+which is why README carries the kernel ≥ 5.13 requirement in the quickstart itself.
+
+### Docker's seccomp profile sits UNDER Belay's, and both apply
+
+A container started with Docker's defaults already runs under Docker's own seccomp
+profile (`Seccomp: 2`, one filter installed, read from `/proc/self/status` in a
+stock `python:3.12-slim` container). Belay then installs its own BPF filter for the
+network policy. Seccomp filters compose by intersection — every installed filter
+sees the syscall and the most restrictive verdict wins — so the two do not conflict
+and neither weakens the other. Measured, not reasoned: `belay sandbox check` in the
+image reports `seccomp ok (an AF_INET socket was refused)`, which is Belay's filter
+producing Belay's refusal with Docker's profile already in place. **What this does
+NOT establish:** that `--security-opt seccomp=unconfined` or a custom profile is
+safe. Belay's filter still installs; Docker's is simply gone, and every claim about
+Docker's default profile above stops applying.
+
+### Overlayfs has no reflink, so the copy path IS the container path
+
+The image's writable layer is overlayfs, which cannot `FICLONE`. The snapshot
+backend probes per directory and never assumes, so it degrades to the copy path
+with the named `reflink-unavailable` cause — measured in-image, and the
+copy-fidelity round trips pass there. Nothing silently falls back: a snapshot that
+cannot restore is `UNRESTORABLE_*` with its cause, never a guessed restore.
+
+**The cross-substrate consequence carries over unchanged, and it bites here.** A
+corpus case banked on macOS clonefile/APFS re-verifying inside the container refuses
+at restore with `UNRESTORABLE_CAPABILITY_MISMATCH` and classifies **SKIP** — so a
+corpus built outside the container is not re-verifiable inside it, and vice versa.
+That is the honest outcome, not a regression.
+
+### What the container does NOT bound
+
+- **The TMPDIR neighbourhood is public, exactly as on stock Linux.** `gettempdir()`
+  is `/tmp`, world-writable. Belay's own `$TMPDIR` is still `0700` under the machine
+  temp root and owner-verified before adoption, but the *neighbourhood* is shared —
+  the "an attacker must already share the uid" bound of stock macOS does not hold.
+  A container narrows *who else is in that /tmp* in practice; it is not a mechanism
+  Belay claims.
+- **Reads are still not scoped**, by the same Landlock mechanism reason as on bare
+  Linux — including reads of everything else in the image.
+- **The image is not a security boundary against a hostile server.** It contains
+  what the child can change to the degree Landlock does. Container escape, kernel
+  bugs, and anything the operator mounts in are outside what Belay claims.
+
+### R8: the container's own surface, and the one line that stays closed
+
+- **The default user is non-root** (`belay`, uid 1000; `--user root` is a one-flag
+  opt-in, asserted both ways in `tests/test_docker_image.py`). That is a strictly
+  narrower R8 surface than a root-by-default image, and it also removes the
+  `root-environment` skip: the suite in-image runs the ownership-refusal paths
+  instead of skipping them.
+- **The docker socket is never mounted, and `docker-compose.yml` says so in a
+  comment.** Mounting `/var/run/docker.sock` would hand a contained process the
+  daemon and therefore the host — every filesystem and network claim in this
+  document would become vacuous. Belay's `network-bind` grant is measured narrow
+  (UNIX-domain `bind`, and only `bind`), which is what keeps a contained server from
+  reaching a daemon socket it can see.
+- **The wheel is the only thing installed.** The runtime image carries the
+  zero-dependency `belay-harness` wheel and nothing else; the suite's dev deps are
+  installed into a throwaway container during the acceptance run and never into the
+  image. A smaller install surface is a smaller supply-chain surface, and it is the
+  zero-dependency contract paying off rather than a container feature.
+
+---
+
 ## What Belay cannot see at all
 
 **The sandbox's limit and the MCP boundary's limit are the SAME limit.**
