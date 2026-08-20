@@ -82,7 +82,7 @@ The steps (follow `RELEASING.md`):
 
 **Release identity, do not get this wrong:** the release belongs to the **haqaliz** account (`git@github.com:haqaliz/belay.git`), never `playdolphia`/`aliz-manifold`. The workflow publishes with the repo token (owned by the repo); any manual step must run with `gh` active as haqaliz (`gh auth switch --user haqaliz`). Commit as `aliz@foresightanalytics.ca`.
 
-**Deferred channels (do not fake them):** GHCR/Docker is deliberately deferred until the Linux sandbox slice — a Linux container can't run the macOS-only core — so v0.x releases publish **PyPI + GitHub Release only**. Do not add a container step until `RELEASING.md` says the Linux slice landed.
+**Deferred channels (do not fake them):** the **image** exists (L3, v0.21.0 — `Dockerfile` + `docker-compose.yml`, built and validated in-container by the `docker` CI job on every PR), but the **GHCR publish job** does not, so v0.x releases still publish **PyPI + GitHub Release only**. Do not add a container step here until `RELEASING.md` says the publish slice landed — and when it does, it should push the SAME image the `docker` job already validated rather than rebuilding an unvalidated one.
 
 ### Phase 4 — Comment on the issue (optional)
 

@@ -40,7 +40,7 @@ Evidence it's real: every Phase-1 deliverable in `ROADMAP.md:261-272` (packaging
 
 ### Should-have
 
-9. `belay sandbox check` run as the image healthcheck / entrypoint preflight (the A1 probe *is* the re-measurement instrument, `THREAT_MODEL.md:319-321`).
+9. ~~`belay sandbox check` run as the image healthcheck / entrypoint preflight~~ — **NOT SHIPPED, deliberately (decided 2026-08-20).** The *capability* it wanted is shipped and is the load-bearing part: the probe is the re-measurement instrument, it runs in-container on every PR (`tests/test_docker_inimage.py`), and README gives a reader the exact command to re-probe a macOS host. What is not shipped is the Docker *directive*, because neither form fits this image. A `HEALTHCHECK` is periodic liveness for a **long-running** container; `ENTRYPOINT ["belay"]` is a one-shot CLI that exits, so the check would never meaningfully run. An **entrypoint preflight** would probe the sandbox before every invocation — including `belay --help`, which needs no sandbox — paying setup cost on each run and turning a substrate absence into a failure of commands that do not touch the substrate. It becomes right when a long-running service exists: **C7's console** (named, not built, in `docker-compose.yml`) is the service that should declare a healthcheck, and this is the note for whoever builds it.
 10. A `docker run` smoke against a fixture trace exercising `verify` end-to-end (first real test of the installed console-script surface — the repo has none today; `python -m belay.cli` subprocess tests are the standing proxy).
 
 ### Nice-to-have

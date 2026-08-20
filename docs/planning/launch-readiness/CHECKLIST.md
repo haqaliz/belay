@@ -179,9 +179,15 @@ green on both in CI); no Docker image yet (L3), not published to PyPI (L4).
   with no engine change and no sleep. **Worth a follow-up on the engine side:** the
   degradation is honest (UNVERIFIED, never a false PASS) but it is a real
   coverage-loss path for any fast local server.
-- **Deferred, deliberately, and named:** the GHCR **publish** job. L3 ships packaging
-  + validation; publishing is its own slice, and when it lands it should push the
-  SAME image the `docker` job already validated (`RELEASING.md`).
+- **Deferred, deliberately, and named:** (1) the GHCR **publish** job — L3 ships
+  packaging + validation; publishing is its own slice, and when it lands it should
+  push the SAME image the `docker` job already validated (`RELEASING.md`). (2) A
+  Docker `HEALTHCHECK` / entrypoint preflight (PRD should-have 9) — the *capability*
+  ships (the probe runs in-container on every PR, and README gives the re-probe
+  command), but neither directive fits a one-shot CLI image: a `HEALTHCHECK` is
+  periodic liveness for a long-running container, and a preflight would probe the
+  sandbox before `belay --help`, which needs none. It becomes right when **C7's
+  console service** exists.
 - **Next after this item:** L4 — PyPI publish + quickstart flip.
 
 ### ☐ L4 · PyPI publish + quickstart flip
