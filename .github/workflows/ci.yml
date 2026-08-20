@@ -76,7 +76,8 @@ jobs:
   # checkout, hold it to the documented contract (tests/test_docker_image.py, A1),
   # and re-measure Belay's substrate INSIDE the container
   # (tests/test_docker_inimage.py, A2 — the whole suite, `belay sandbox check`,
-  # and a capture -> verify roundtrip generated in-container).
+  # and a capture -> verify roundtrip generated in-container), and the compose
+  # path (tests/test_docker_compose.py).
   #
   # This job is the LINUX-HOST half of the claim split: the container's kernel is
   # this pinned runner's, so what it asserts is a fact about ubuntu-24.04 and
@@ -114,7 +115,9 @@ jobs:
         # fixture in tests/conftest.py, so a single pytest process builds once and
         # both modules run against the same artifact. Split across two steps and
         # the image would be built twice.
-        run: uv run pytest tests/test_docker_image.py tests/test_docker_inimage.py -q
+        run: >-
+          uv run pytest tests/test_docker_image.py tests/test_docker_inimage.py
+          tests/test_docker_compose.py -q
 
   # The containment spike (aspect A1): measure, on a REAL ubuntu job, which
   # Linux containment mechanisms can enforce Belay's boundary, and emit the
