@@ -17,6 +17,11 @@ The platform gate is `docker info`, probed once at import: a host without a
 Docker CLI or daemon skips the whole module with the named cause
 `docker-unavailable` (README's platform coverage table) — never fails, never
 fakes a pass.
+
+The build itself is the session-scoped `built_image` fixture in
+`tests/conftest.py`: `test_docker_inimage.py` drives the same image, and one
+build shared between the two modules is the only way both are talking about the
+same artifact.
 """
 
 from __future__ import annotations
@@ -26,66 +31,23 @@ import re
 import subprocess
 import sys
 import tempfile
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
+from conftest import DOCKER_IMAGE_TAG, DOCKER_IMAGE_UID, docker_available
+
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-_IMAGE_TAG = "belay:test"
-_IMAGE_USER_UID = 1000
-
-
-def _docker_ready() -> bool:
-    """One probe, module scope: the CLI exists AND the daemon answers."""
-    try:
-        probe = subprocess.run(["docker", "info"], capture_output=True, timeout=30)
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return False
-    return probe.returncode == 0
-
-
-_DOCKER_READY = _docker_ready()
+_IMAGE_TAG = DOCKER_IMAGE_TAG
+_IMAGE_USER_UID = DOCKER_IMAGE_UID
 
 pytestmark = pytest.mark.skipif(
-    not _DOCKER_READY,
+    not docker_available(),
     reason=(
         "docker-unavailable: no Docker CLI/daemon on the host — the docker "
         "image tests skip with this cause"
     ),
 )
-
-
-@pytest.fixture(scope="session")
-def built_image() -> Iterator[str]:
-    """Build the wheel from THIS checkout, then the image; clean both up after.
-
-    The wheel is rebuilt by `uv build` every session (a stale `dist/` wheel
-    would fail the version-stamp test — asserted, not assumed), and `docker
-    build` demands the Dockerfile that Phase 2 supplies. Until then this
-    fixture raises, and every test in the module fails with it: the honest
-    RED, the same shape as a corrupt success made visible.
-    """
-    built = subprocess.run(
-        ["uv", "build", "--wheel"],
-        cwd=_REPO_ROOT,
-        capture_output=True,
-        timeout=600,
-    )
-    assert built.returncode == 0, built.stderr.decode(errors="replace")
-    try:
-        image = subprocess.run(
-            ["docker", "build", "-f", "Dockerfile", "-t", _IMAGE_TAG, "."],
-            cwd=_REPO_ROOT,
-            capture_output=True,
-            timeout=900,
-        )
-        assert image.returncode == 0, image.stderr.decode(errors="replace")
-        yield _IMAGE_TAG
-    finally:
-        subprocess.run(["docker", "rmi", _IMAGE_TAG], capture_output=True, timeout=120)
-        for stale in (_REPO_ROOT / "dist").glob("belay_harness-*.whl"):
-            stale.unlink()
 
 
 def _docker_run(
