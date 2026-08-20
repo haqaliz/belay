@@ -5,39 +5,81 @@ All notable changes to Belay are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0 — until then,
 `0.x` minor bumps may include changes that would be breaking under strict semver.
 
-## [0.19.0] - 2026-08-15
+## [0.21.0] - 2026-08-20
 
 ### Added
 
-- **THE PHASE-0 GATE PROCEEDED — the first gate run to clear its own pre-registered
-  criteria** (`mint-shell-toolset-run`). The shell-toolset mint ran `claude-opus-5`
-  through stages 1 → 2 → 3 under the freeze protocol (fresh roots `s6{a,b,c}`,
-  `--toolset filesystem+shell`, composite transport, verbatim `run_process`): **60
-  distinct fresh non-control instances** (≥50), **11 independent hand-audited TPs**
-  (≥3), no `INSTRUMENT SUSPECT` in any stage, 4/4 controls `VERIFIED_CLEAN` (no D-3
-  void), FP rate stated (0 adjudicated FPs of 23 trajectory FAILs) → **the canonical
-  gate block PROCEEDs**. Hand-audited violation rate (trajectory axis): **11/60 =
-  18.3%** — R1's quantitative form answered in the positive at n=60. Three named
-  caveats, recorded not hidden: (1) all 171 per-turn FAILs are A2 replay artifacts of
-  the U9 verify composition — the per-turn FAIL rate is an instrument artifact, never
-  a violation rate; (2) the 23 trajectory FAILs split 11 true positives + 12
-  unverifiable-by-seam — the number is trajectory-axis only, A1 compared 0 files at
-  n=60; (3) zero trajectory FAILs bankable as corpus cases (case-id namespace
-  collision + unrestorable pre-state) — `corpus score` reads `n/a`, and the
-  id-collision is a recorded follow-up defect. The raw ledger rate 37/52 = 71.2%
-  decomposes 11 TP + 12 seam + 14 A2 artifact; quote 18.3%, never 71.2%, without the
-  decomposition. n=60 × one model × one prompt is a measurement, not a base rate.
-  Ledgers at `docs/planning/mint-shell-toolset-run/mint-run/ledgers/` (byte-identical
-  re-renders), audit at `docs/planning/mint-shell-toolset-run/audit-and-publish/`,
-  decision in `PHASE0_RESULTS.md` → *The shell-toolset mint ran, and the gate
-  PROCEEDs — 2026-08-12*. Launch checklist L1 marked ✅
-  (`docs/planning/launch-readiness/CHECKLIST.md`).
-- **Eval: stage-6 mint registries and trace merge** — `eval/instances/stage6{a,b,c}.json`
-  (the run's registries, fresh draws excluding every previously-minted id),
-  `eval/scripts/build_stage6_registries.py` (byte-reproducible generation), and
-  `eval/minting_driver/trace_merge.py` (merges the composite transport's per-session
-  traces into one per-instance capture, `run_batch` integration). Eval-only, not a
-  product surface; test-pinned (1704 tests).
+- **Belay ships as a container that runs the REAL sandbox** (launch checklist **L3**,
+  `docker-selfhost`). A multi-stage `Dockerfile` (`python:3.12-slim`, non-root `belay`
+  user at uid 1000 with `--user root` as the one-flag opt-in, `ENTRYPOINT ["belay"]`,
+  `python -m belay.proxy` reachable) and a minimal `docker-compose.yml`. `docker build
+  -t belay .` needs **nothing but the checkout** — the wheel is built inside the image,
+  so there is no prebuilt-wheel step to get wrong and no stale wheel to install.
+- **The substrate is RE-MEASURED inside the container, not inherited.**
+  `THREAT_MODEL.md` is explicit that a new image must re-measure, so
+  `tests/test_docker_inimage.py` does exactly that: the repo's whole suite runs in a
+  throwaway dev container with **every skip's cause machine-checked** (an unknown or
+  unnamed cause FAILs) — which is how the Landlock+seccomp escape matrix and the
+  copy-fidelity snapshot round trips are covered, as modules inside that run;
+  `belay sandbox check` decides the boundary by **using** it (`landlock kernel ABI 8
+  (ok)`, `containment ok (a write outside the scope was refused)`, `seccomp ok (an
+  AF_INET socket was refused)`); and a **capture → verify roundtrip is generated
+  entirely in-container** — gated proxy over real stdio, real snapshot, then `belay
+  verify` re-executing against the restored pre-state → `turn 0 write_note PASS`, A2
+  replay PASS, A2 effect PASS, `effect:network NOT_COVERED`, coverage line printed.
+  The trace is made in-image and never mounted (the no-raw-data-egress guardrail).
+- **A `docker` CI job on pinned `ubuntu-24.04`** builds the image from every PR and
+  runs all three container modules against it.
+- **`THREAT_MODEL.md` gains a container section** where every claim cites the run that
+  produced it: Landlock is the **host kernel's** and is not namespaced (a pre-5.13 host
+  ⇒ the launcher refuses, exit 2, named cause — loud, never a bare spawn); Docker's
+  default seccomp profile sits **under** Belay's BPF filter and the two compose by
+  intersection (measured: `Seccomp: 2` in a stock container); overlayfs has no reflink
+  ⇒ the copy path with the named `reflink-unavailable` cause; the cross-substrate
+  corpus consequence bites (a macOS-banked case is **SKIP** with
+  `UNRESTORABLE_CAPABILITY_MISMATCH` inside the container, never a guessed restore);
+  the world-writable `/tmp` neighbourhood is restated, not fixed; and the docker.sock
+  line stays closed.
+
+### Changed
+
+- **README's "no container yet" callout is replaced by the `docker run` quickstart**,
+  carrying the kernel ≥ 5.13 requirement and the coverage line. `RELEASING.md` now says
+  what is actually deferred: the image is built, the **publish channel** (GHCR) is the
+  separate slice — and when it lands it should push the SAME image the `docker` job
+  already validated rather than rebuilding an unvalidated one.
+- **The claim split is stated wherever the claim is made.** CI asserts the
+  **Linux-host** path (on the pinned runner the container's kernel *is* the runner's).
+  The **macOS-host** path runs on Docker Desktop's Linux VM kernel, which CI cannot
+  reach, so it ships as a **documented manual re-probe** with a recorded reference
+  measurement to compare against — never asserted by CI.
+
+### Fixed
+
+- **`docker build -t belay .` failed on any machine that had not just run `uv build`.**
+  The Dockerfile `COPY`d a prebuilt wheel and died at `lstat /dist`; the session
+  fixture hid it by building the wheel first. The build is multi-stage now, and the
+  fixture **sweeps** `dist/` before building, so every docker test proves the
+  clean-checkout path.
+- **`docker run --rm belay sandbox check --scope /workspace` exited 1** with
+  "containment PROBLEM: the probe never ran" — `WORKDIR` creates the directory as root
+  and the image then drops to `belay`, so the containment probe could not write inside
+  the scope. `/workspace` is chowned to the container user. A boundary check that
+  cannot run is worse than one that fails.
+- **A trace-ordering race, found by the Linux CI runner.** `belay.proxy._pump` forwards
+  each chunk and observes it afterwards — "forwarding must never wait on the recorder",
+  the transparency contract — so a fast server can have its `tools/list` **response**
+  recorded before its own **request**. An inverted pair does not correlate,
+  `derive_annotations` takes no snapshot, and effect-conformance abstains. The
+  degradation is honest (UNVERIFIED, never a false PASS) and the engine is unchanged;
+  the roundtrip fixtures close the window by waiting on the trace itself rather than on
+  a sleep. Stress: 40/40 in-container, from 18/20 before. **Logged as a follow-up** —
+  it is a real coverage-loss path for any fast local server.
+
+### Housekeeping
+
+- `CHANGELOG.md`'s `[0.19.0]` and `[0.20.0]` sections were out of order (0.19 above
+  0.20); reordered newest-first.
 
 ## [0.20.0] - 2026-08-15
 
@@ -87,6 +129,40 @@ All notable changes to Belay are documented here. The format follows
     cross-substrate corpus consequence); README badge and platform sections claim
     macOS + Linux, both measured; the Linux classifier lands in `pyproject.toml`.
     Launch checklist L2 marked ✅.
+
+## [0.19.0] - 2026-08-15
+
+### Added
+
+- **THE PHASE-0 GATE PROCEEDED — the first gate run to clear its own pre-registered
+  criteria** (`mint-shell-toolset-run`). The shell-toolset mint ran `claude-opus-5`
+  through stages 1 → 2 → 3 under the freeze protocol (fresh roots `s6{a,b,c}`,
+  `--toolset filesystem+shell`, composite transport, verbatim `run_process`): **60
+  distinct fresh non-control instances** (≥50), **11 independent hand-audited TPs**
+  (≥3), no `INSTRUMENT SUSPECT` in any stage, 4/4 controls `VERIFIED_CLEAN` (no D-3
+  void), FP rate stated (0 adjudicated FPs of 23 trajectory FAILs) → **the canonical
+  gate block PROCEEDs**. Hand-audited violation rate (trajectory axis): **11/60 =
+  18.3%** — R1's quantitative form answered in the positive at n=60. Three named
+  caveats, recorded not hidden: (1) all 171 per-turn FAILs are A2 replay artifacts of
+  the U9 verify composition — the per-turn FAIL rate is an instrument artifact, never
+  a violation rate; (2) the 23 trajectory FAILs split 11 true positives + 12
+  unverifiable-by-seam — the number is trajectory-axis only, A1 compared 0 files at
+  n=60; (3) zero trajectory FAILs bankable as corpus cases (case-id namespace
+  collision + unrestorable pre-state) — `corpus score` reads `n/a`, and the
+  id-collision is a recorded follow-up defect. The raw ledger rate 37/52 = 71.2%
+  decomposes 11 TP + 12 seam + 14 A2 artifact; quote 18.3%, never 71.2%, without the
+  decomposition. n=60 × one model × one prompt is a measurement, not a base rate.
+  Ledgers at `docs/planning/mint-shell-toolset-run/mint-run/ledgers/` (byte-identical
+  re-renders), audit at `docs/planning/mint-shell-toolset-run/audit-and-publish/`,
+  decision in `PHASE0_RESULTS.md` → *The shell-toolset mint ran, and the gate
+  PROCEEDs — 2026-08-12*. Launch checklist L1 marked ✅
+  (`docs/planning/launch-readiness/CHECKLIST.md`).
+- **Eval: stage-6 mint registries and trace merge** — `eval/instances/stage6{a,b,c}.json`
+  (the run's registries, fresh draws excluding every previously-minted id),
+  `eval/scripts/build_stage6_registries.py` (byte-reproducible generation), and
+  `eval/minting_driver/trace_merge.py` (merges the composite transport's per-session
+  traces into one per-instance capture, `run_batch` integration). Eval-only, not a
+  product surface; test-pinned (1704 tests).
 
 ## [0.18.0] - 2026-08-14
 
@@ -905,7 +981,8 @@ The first public release: the full **record → sandbox → replay → verdict**
 - **The A3 claim-re-derivation axis** (C8) is not built; the live console (C7) and observability interop
   (C9) are ahead on the roadmap.
 
-[Unreleased]: https://github.com/haqaliz/belay/compare/v0.20.0...HEAD
+[Unreleased]: https://github.com/haqaliz/belay/compare/v0.21.0...HEAD
+[0.21.0]: https://github.com/haqaliz/belay/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/haqaliz/belay/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/haqaliz/belay/compare/v0.18.0...v0.19.0
 [0.1.1]: https://github.com/haqaliz/belay/compare/v0.1.0...v0.1.1

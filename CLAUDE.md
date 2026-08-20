@@ -2,6 +2,45 @@
 
 This file orients a coding agent working in this repository. Read it first.
 
+> **BELAY NOW SHIPS AS A CONTAINER THAT RUNS THE REAL SANDBOX — launch checklist L3 is
+> DONE** (2026-08-20, `docker-selfhost`, PR #22, v0.21.0). A multi-stage `Dockerfile`
+> (`python:3.12-slim`, non-root `belay` uid 1000, `ENTRYPOINT ["belay"]`) that builds from
+> **nothing but the checkout**, plus a minimal `docker-compose.yml` (engine only; the C7
+> console is named in a comment, never a service resolving to an image nobody built).
+> **The point is not packaging — it is RE-MEASUREMENT.** `THREAT_MODEL.md` says a new
+> substrate must re-measure rather than inherit, so `tests/test_docker_inimage.py` re-runs
+> the measurement *inside the container*: the whole suite in a throwaway dev container with
+> **every skip's cause machine-checked** (unknown or unnamed ⇒ FAIL — which is how the
+> escape matrix and the copy-fidelity round trips are covered, as modules inside that run);
+> `belay sandbox check` deciding the boundary by **using** it (`landlock kernel ABI 8 (ok)`,
+> `containment ok`, `seccomp ok`); and a **capture → verify roundtrip generated entirely
+> in-container** (gated proxy → real snapshot → `belay verify` re-executing against the
+> restored pre-state → `turn 0 write_note PASS`, `effect:network NOT_COVERED`, coverage line
+> printed; the trace is made in-image and **never mounted**).
+> **THE CLAIM SPLIT IS THE HONESTY RULE HERE, and it is stated wherever the claim is made:**
+> the `docker` CI job on pinned `ubuntu-24.04` asserts the **Linux-host** path — the
+> container's kernel *is* the runner's. The **macOS-host** path runs on Docker Desktop's
+> Linux VM kernel, which CI cannot reach, and ships as a **documented manual re-probe** with
+> a recorded reference measurement to compare against. **Never read one as the other.**
+> **Three defects, all found by RUNNING the quickstart rather than reading it:** (1) `docker
+> build -t belay .` failed on any machine that had not just run `uv build` — the Dockerfile
+> COPYd a prebuilt wheel and died at `lstat /dist`, and the session fixture hid it by
+> building the wheel first; the build is multi-stage now and the fixture **sweeps** `dist/`
+> instead. (2) `sandbox check --scope /workspace` exited 1 with "the probe never ran" —
+> `WORKDIR` creates the dir as root and the image drops to `belay`, so the containment probe
+> could not write inside the scope. (3) **A trace-ordering race the Linux runner caught:**
+> `_pump` forwards each chunk and observes it afterwards ("forwarding must never wait on the
+> recorder" — the transparency contract), so a fast server can have its `tools/list`
+> RESPONSE recorded before its own REQUEST; an inverted pair does not correlate,
+> `derive_annotations` takes no snapshot, and effect-conformance abstains. **The degradation
+> is honest (UNVERIFIED, never a false PASS) and the engine is UNCHANGED** — the fixtures
+> close the window by waiting on the trace itself, no sleep (40/40 stress, from 18/20). **It
+> is logged as a follow-up: a real coverage-loss path for any fast local server.**
+> **What this does NOT do:** no verdict axis, invariant, or verdict surface changed; no
+> Phase-0 number moves; **GHCR publish is deferred by name** (packaging + validation shipped;
+> when the push job lands it should push the SAME image the `docker` job validated). See
+> `docs/planning/docker-selfhost/` and `CHECKLIST.md` → L3 ☑.
+>
 > **THE PHASE-0 GATE PROCEEDED — THE FIRST GATE RUN TO CLEAR ITS OWN PRE-REGISTERED
 > CRITERIA** (2026-08-12, `mint-shell-toolset-run`). The shell-toolset mint ran
 > `claude-opus-5` through stages 1 → 2 → 3 under the freeze protocol (fresh roots
@@ -222,7 +261,7 @@ This file orients a coding agent working in this repository. Read it first.
 > PIVOT**. See `docs/planning/phase0-reverify-banked/` and `PHASE0_RESULTS.md` →
 > *Correction — 2026-07-31*.
 >
-> **Status: C1–C6 are built and merged; the Phase-0 corpus runner is built** (1492 tests, 1 platform-skip, 2 manual-deselected; zero runtime dependencies). *(Was "1238" until 2026-08-05; that figure was stale for several releases and is superseded going forward, not re-derived.)*
+> **Status: C1–C6 are built and merged; the Phase-0 corpus runner is built** (1813 tests passing on macOS, 25 named-caused skips, 3 manual-deselected; zero runtime dependencies) *(was "1492" until 2026-08-20)*. *(Was "1238" until 2026-08-05; that figure was stale for several releases and is superseded going forward, not re-derived.)*
 > The full record → sandbox → snapshot/restore → replay → verdict spine exists: the byte-transparent
 > stdio MCP proxy + trace format (C1), the Seatbelt sandbox with snapshot/restore (C2), deterministic
 > replay with a real before/after delta (C3), and the grounded verdict — **A2** result-equivalence +
