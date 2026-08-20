@@ -61,7 +61,27 @@ uv tool install belay-harness      # or: pipx install belay-harness  /  pip inst
 belay --help
 ```
 
-> **No container yet.** The sandbox and snapshot now have Linux implementations (below), but the **Docker image** itself (L3 on the launch checklist) is still unbuilt — a container is packaging work on top of a substrate that now exists, not the gate it used to be.
+**Or run it as a container.** The image is the whole engine, not a demo shell — it runs the real Landlock + seccomp sandbox and the real snapshot backend:
+
+```bash
+docker build -t belay .            # or: docker compose build — needs nothing but this checkout
+docker run --rm belay --help
+# the boundary, decided by USING it — not read off a kernel version:
+docker run --rm belay sandbox check --scope /workspace
+#   landlock      kernel ABI 8 (ok)
+#   containment   ok (a write outside the scope was refused)
+#   seccomp       ok (an AF_INET socket was refused)
+
+# mount the tree you want verified and drive the engine over it:
+docker run --rm -v "$PWD:/workspace" belay verify /workspace/traces/<trace>.jsonl \
+  --manifest-dir /workspace/snapshots.manifests --server <your-mcp-server-cmd>
+```
+
+`docker compose run --rm belay <subcommand>` is the same thing through compose (one service, the engine; the C7 console is named in `docker-compose.yml` and not yet built).
+
+> **What the container does and does not do.** It runs as a **non-root** `belay` user (uid 1000; `--user root` is the opt-in), and it carries **no containment of its own that Belay relies on** — the boundary is the *host kernel's* Landlock, which is not namespaced and which no image can supply. On a host below kernel 5.13, or with the LSM off, the launcher **refuses** (exit 2, named cause) instead of running unsandboxed: loud, never silent. The image's overlayfs layer has no reflink, so snapshots take the **copy path** with the named `reflink-unavailable` cause — and a corpus case banked on macOS APFS is **SKIP** with `UNRESTORABLE_CAPABILITY_MISMATCH` inside the container, never a guessed restore.
+>
+> **Measured where, exactly:** the `docker` CI job builds the image and re-runs the whole measurement *inside* it on the pinned `ubuntu-24.04` runner — the suite (with every skip's cause machine-checked), the escape matrix, the snapshot round trips, and a capture → verify roundtrip generated in-container. That asserts the **Linux-host** path. On a **macOS host** the image runs in Docker Desktop's Linux VM — a different kernel, which CI cannot reach — so `docker run --rm belay sandbox check --scope /workspace` there is a **manual re-probe you should run** before relying on it. Full details in [`THREAT_MODEL.md`](docs/technical/THREAT_MODEL.md#the-container-l3-what-the-image-does-and-does-not-change).
 
 ### 1 · Put the proxy in front of the server you already run
 
@@ -243,6 +263,7 @@ The sandbox and snapshot have **two substrate implementations**, each measured o
 | `reflink-unavailable` | Runtime, probed: this filesystem cannot `FICLONE` (ext4/tmpfs cannot) — the copy path is the CI path. |
 | `collision-fixture-uncreatable` | Runtime: this filesystem cannot hold the distinct byte names (case-insensitive or normalising) — the fixture cannot exist here. |
 | `root-environment` | Runtime: running as root, foreign ownership is restorable — nothing to refuse. |
+| `docker-unavailable` | Runtime: no Docker CLI/daemon on the host — docker-gated tests skip with this cause. |
 
 **The cross-substrate consequence is first-class, not an edge case.** A corpus case banked on clonefile/APFS (macOS) re-verifying on a Linux box refuses at restore with `UNRESTORABLE_CAPABILITY_MISMATCH` and classifies **SKIP with that named cause** — never a guessed restore, never a REGRESSION, and never a MATCH. The mirror holds (a copy-fidelity case on macOS). `run_case` admits both substrates and lets the capability check decide; only a platform with *no* backend at all skips up front. What the sandbox does and does not enforce on each substrate — reads are not scoped on either, and denial records are inferred on both — is in [`docs/technical/THREAT_MODEL.md`](docs/technical/THREAT_MODEL.md).
 

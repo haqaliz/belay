@@ -11,6 +11,13 @@ to derive from. Both go through the real `TraceWriter` rather than hand-building
 record dicts: a derivation fed a fabricated envelope is only ever tested against
 the fabricator's idea of the format, and would keep passing after the writer's
 real output drifted away from it.
+
+`built_image` lives here for a different reason: two modules now drive the
+self-host image (`test_docker_image.py`, the A1 contract; `test_docker_inimage.py`,
+the A2 in-image acceptance) and a session fixture defined in one of them would
+build the image twice, or bind the second module to the first module's import
+order. One session-scoped build, shared, is also the only way the two modules can
+be talking about the same image at all.
 """
 
 from __future__ import annotations
@@ -19,7 +26,10 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Iterator
 from pathlib import Path
+
+import pytest
 
 FIXTURE = Path(__file__).parent / "fixtures" / "fake_server.py"
 
@@ -89,3 +99,52 @@ def trace_of(tmp_path: Path, frames: list[tuple]) -> list[dict]:
     finally:
         writer.close()
     return read_trace(tmp_path / "trace")
+
+
+# --- the self-host image: one build per session, shared by both docker modules -------
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
+#: The tag both docker modules build and run. Fixed, so a leftover image from an
+#: interrupted session is overwritten rather than accumulating.
+DOCKER_IMAGE_TAG = "belay:test"
+
+#: The uid the image's `belay` user owns. Asserted by the A1 contract tests and
+#: used by the in-image module to reason about what the default user may write.
+DOCKER_IMAGE_UID = 1000
+
+def docker_available() -> bool:
+    """One probe: the CLI exists AND the daemon answers."""
+    try:
+        probe = subprocess.run(["docker", "info"], capture_output=True, timeout=30)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+    return probe.returncode == 0
+
+
+@pytest.fixture(scope="session")
+def built_image() -> Iterator[str]:
+    """Build the image from a CLEAN checkout — no pre-built wheel — and clean up after.
+
+    The `dist/` sweep before the build is the assertion, not housekeeping. The
+    README asks a stranger with nothing but Docker to run `docker build -t belay .`,
+    so the Dockerfile has to build the wheel itself; leaving a locally-built wheel
+    lying around would let a broken multi-stage build pass here and fail for them.
+    A stale wheel would also stamp the wrong version, which the version test would
+    catch — but by then the quickstart is already wrong.
+    """
+    for stale in (_REPO_ROOT / "dist").glob("belay_harness-*.whl"):
+        stale.unlink()
+    try:
+        image = subprocess.run(
+            ["docker", "build", "-f", "Dockerfile", "-t", DOCKER_IMAGE_TAG, "."],
+            cwd=_REPO_ROOT,
+            capture_output=True,
+            timeout=900,
+        )
+        assert image.returncode == 0, image.stderr.decode(errors="replace")
+        yield DOCKER_IMAGE_TAG
+    finally:
+        subprocess.run(
+            ["docker", "rmi", DOCKER_IMAGE_TAG], capture_output=True, timeout=120
+        )

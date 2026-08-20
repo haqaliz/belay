@@ -18,6 +18,10 @@ dist/
 /traces/
 /runs/
 /_sandbox/
+# The compose service's state mount. `docker compose run` creates it on the host
+# the first time it runs, and everything under it — traces, snapshots, whatever
+# the agent wrote — is run data by construction.
+/workspace/
 # The WHOLE corpus dir, not just `local/`. It was `/corpus/local/`, which silently stopped
 # covering anything the moment a run used a different corpus dir — and one did:
 # `phase0-reverify-banked` writes its cases to `corpus/reverify-YYYYMMDD/`, whose prestate

@@ -1,0 +1,17 @@
+.git
+.venv/
+.claude/
+traces/
+runs/
+workspace/
+_sandbox/
+corpus/
+eval/
+node_modules/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+# Local build output. The image builds its own wheel in the `build` stage, so a
+# stale local wheel must not reach the context and cannot shadow it.
+dist/

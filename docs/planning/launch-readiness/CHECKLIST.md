@@ -118,11 +118,71 @@ green on both in CI); no Docker image yet (L3), not published to PyPI (L4).
 - **Next after this item:** L3 — the Docker image (now packaging on top of a
   substrate that exists, no longer a blocker on a mechanism).
 
-### ☐ L3 · Docker self-host
+### ☑ L3 · Docker self-host — DONE 2026-08-20
 
 - **DONE =** `docker run` (and `docker compose` for the console) works on Linux +
   macOS host, per the roadmap's Phase-1 deliverable. The image runs the real sandbox
   — not a container that can't do the core.
+- **DONE criteria, checked off:**
+  - [x] **`docker run belay <subcommand>` works, and the image runs the REAL
+        sandbox** — `Dockerfile` (multi-stage, `python:3.12-slim`, non-root `belay`
+        uid 1000, `ENTRYPOINT ["belay"]`). `belay sandbox check --scope /workspace`
+        in the image decides the boundary by USING it: `landlock kernel ABI 8 (ok)`,
+        `containment ok (a write outside the scope was refused)`, `seccomp ok (an
+        AF_INET socket was refused)`. Not a container that can't do the core.
+  - [x] **The whole suite runs green INSIDE the container, with every skip's cause
+        machine-checked** — `tests/test_docker_inimage.py`. That one run carries the
+        escape matrix (`test_linux_containment.py`) and the copy-fidelity snapshot
+        round trips (`test_linux_snapshot.py`), so PRD acceptances 1–3 are one
+        measurement rather than three claims. An unknown or unnamed skip cause FAILs.
+  - [x] **`docker run belay` behaves identically to the installed CLI, proven by a
+        capture → verify roundtrip generated IN-container** — gated proxy over real
+        stdio, real snapshot, then `belay verify` re-executing against the restored
+        pre-state: `turn 0 write_note PASS`, A2 replay PASS, A2 effect PASS,
+        `effect:network NOT_COVERED`, 1 PASS / 0 FAIL / 0 UNVERIFIED, coverage line
+        printed. The trace is made in-image and never mounted (no-raw-data-egress).
+  - [x] **`docker compose` works and ships nothing broken** —
+        `docker compose run --rm belay --help` reaches the same CLI surface; one
+        service, and the C7 console is a COMMENT rather than a service resolving to
+        an image nobody built (`tests/test_docker_compose.py`).
+  - [x] **`THREAT_MODEL.md` states exactly what the container boundary does and does
+        not enforce** — the container section: Landlock is the HOST kernel's and is
+        not namespaced (pre-5.13 ⇒ launcher refuses, exit 2, named cause); Docker's
+        seccomp profile sits UNDER Belay's and the two compose by intersection
+        (measured, `Seccomp: 2` in a stock container); overlayfs ⇒
+        `reflink-unavailable` ⇒ copy path; the cross-substrate corpus consequence
+        bites (a macOS-banked case is SKIP inside the container); the world-writable
+        `/tmp` neighbourhood is restated, not fixed; the docker.sock line stays
+        closed. Every claim cites the run that produced it.
+  - [x] **CI proves it on every PR** — the `docker` job on pinned `ubuntu-24.04`
+        builds the image from the PR and runs all three modules inside/against it
+        (run `32392451384`: docker ✅ 59s, `test (Linux)` ✅ 1638 passed / 200
+        skipped, `test (macOS)` ✅, spike ✅).
+- **The claim split, stated because CI cannot close it:** CI asserts the
+  **Linux-host** path — on the pinned runner the container's kernel IS the runner's.
+  The **macOS-host** path runs on Docker Desktop's Linux VM kernel, which CI cannot
+  reach, so it ships as a **documented manual re-probe** (`docker run --rm belay
+  sandbox check --scope /workspace`) with a recorded reference measurement to
+  compare against, never as a CI-verified claim.
+- **Findings, from running the quickstart rather than reading it:** (1) `docker build
+  -t belay .` failed on any machine that had not just run `uv build` — the Dockerfile
+  COPYd a prebuilt wheel and died at `lstat /dist`, and the session fixture hid it by
+  building the wheel first; the build is multi-stage now and the fixture SWEEPS
+  `dist/` instead. (2) `sandbox check --scope /workspace` exited 1 with "the probe
+  never ran" — `WORKDIR` creates the directory as root and the image drops to
+  `belay`, so the containment probe could not write inside the scope; `/workspace` is
+  chowned. (3) A trace-ordering race the Linux runner caught: the proxy forwards
+  before it records (deliberately — "forwarding must never wait on the recorder"), so
+  a fast server can have its `tools/list` RESPONSE recorded before its own REQUEST;
+  an inverted pair does not correlate, no annotation snapshot is taken, and
+  effect-conformance abstains. Closed in the fixtures by waiting on the trace itself,
+  with no engine change and no sleep. **Worth a follow-up on the engine side:** the
+  degradation is honest (UNVERIFIED, never a false PASS) but it is a real
+  coverage-loss path for any fast local server.
+- **Deferred, deliberately, and named:** the GHCR **publish** job. L3 ships packaging
+  + validation; publishing is its own slice, and when it lands it should push the
+  SAME image the `docker` job already validated (`RELEASING.md`).
+- **Next after this item:** L4 — PyPI publish + quickstart flip.
 
 ### ☐ L4 · PyPI publish + quickstart flip
 
@@ -201,4 +261,5 @@ check is "the gate is true," which is checkable, not a feeling.
 
 | Date | belay-next pick | L-item | Outcome / commit |
 |------|-----------------|--------|------------------|
+| 2026-08-20 | `docker-selfhost` | L3 | ✅ Shipped as A1–A3: multi-stage `Dockerfile` (non-root, builds from a clean checkout), `docker-compose.yml` (engine only, console named not built), `tests/test_docker_{image,inimage,compose}.py`, the `docker` CI job on pinned ubuntu-24.04, `THREAT_MODEL.md` container section, README quickstart replacing the "no container yet" callout. In-image: `landlock ABI 8 (ok)` / containment ok / seccomp ok, whole suite green with every skip named, capture → verify roundtrip PASS. Three defects found by running the quickstart: prebuilt-wheel build, unwritable `/workspace`, and a trace-ordering race. GHCR publish deferred by name. |
 | 2026-08-15 | `linux-sandbox` | L2 | ✅ Shipped as A1–A4; `test (Linux)` ubuntu-24.04 job green (1619 passed / 0 failed), macOS green (1795 passed / 25 named-caused skips), `THREAT_MODEL.md` Linux section written against measured artifacts, named-cause gate scan test enforced, reverse gate rewritten for cross-substrate SKIP. Uncommitted at handoff — integrator commits. |

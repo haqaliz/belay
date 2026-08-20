@@ -8,11 +8,14 @@ repository, not by whatever account the local `gh` CLI happens to be logged into
 The PyPI distribution is **`belay-harness`** (the name `belay` is already taken on PyPI); the
 import package and the `belay` command are unchanged.
 
-> **No container channel yet.** Belay's sandbox and snapshot now have Linux implementations
-> (Landlock + seccomp, copy-fidelity snapshot — measured on the `test (Linux)` CI job), so a
-> Linux container CAN run the core; the **image itself** is still unbuilt. A GHCR image is
-> deliberately deferred to the Docker self-host checklist item (L3), rather than shipping an
-> image that hasn't been packaged. When it lands, add a `ghcr` job here and to `release.yml`.
+> **The image is built; the container CHANNEL is still deferred.** L3 shipped the
+> `Dockerfile` and `docker-compose.yml`, and the `docker` CI job builds the image from every PR
+> and re-runs the whole measurement inside it. What is *not* here is publishing: no GHCR push
+> job, so there is no `docker pull ghcr.io/haqaliz/belay` — a reader builds it from the checkout
+> (`docker build -t belay .`, which needs nothing else). Publishing is its own slice, deliberately
+> separate from packaging: when it lands, add a `ghcr` job here and to `release.yml`, and it
+> should push the SAME image the `docker` job already validates rather than rebuilding an
+> unvalidated one.
 
 ## Versioning
 
