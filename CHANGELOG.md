@@ -5,6 +5,17 @@ All notable changes to Belay are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0 — until then,
 `0.x` minor bumps may include changes that would be breaking under strict semver.
 
+## [0.22.0] - 2026-08-24
+
+The quickstart is the live install path (launch checklist L4): a new `install` CI job
+(macOS + pinned ubuntu-24.04) builds the wheel and sdist and proves the installed
+artifact runs — CLI surface, version stamp, zero-dependency import, `sandbox check`,
+and a capture → verify roundtrip (`tests/test_artifact_install.py`, `@pytest.mark.install`);
+the README's "until then, run from source" caveat is gone, replaced by
+`uv tool install belay-harness` / `pipx` / `pip`; the docs are machine-checked
+(`tests/test_quickstart_docs.py`); and a time-to-first-verdict runbook ships for the
+remaining L4 clause (stranger-timed, post-merge). No change to the verdict spine.
+
 ## [0.21.1] - 2026-08-20
 
 Documentation and tooling only — **no change to `src/belay/`**, so the installed
