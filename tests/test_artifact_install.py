@@ -209,7 +209,12 @@ def test_capture_verify_roundtrip_from_the_installed_cli(installed_wheel, tmp_pa
     docker inimage reasoning).
     """
     venv_bin, _wheel = installed_wheel
-    ws = tmp_path / "ws"
+    # realpath'd: the gate records the workspace's REALPATH as `source_root`, and
+    # replay's relocation is lexical — a workspace under a symlinked tmp root
+    # (macOS `/tmp` -> `/private/tmp`) would not lexically match and the replayed
+    # write would be denied. pytest's basetemp is already realpath'd; this makes
+    # the guarantee explicit rather than inherited from the runner's choice.
+    ws = Path(os.path.realpath(tmp_path / "ws"))
     ws.mkdir()
     snap = tmp_path / "sn"
     snap.mkdir()
@@ -244,7 +249,7 @@ def test_capture_verify_roundtrip_from_the_installed_cli(installed_wheel, tmp_pa
         [
             str(venv_bin / "belay"), "verify", str(traces[0]),
             "--manifest-dir", str(tmp_path / "sn.manifests"),
-            "--server", "python", str(ws / "server.py"),
+            "--server", str(venv_bin / "python"), str(ws / "server.py"),
         ],
         capture_output=True,
         text=True,
@@ -266,11 +271,32 @@ def test_capture_verify_roundtrip_from_the_installed_cli(installed_wheel, tmp_pa
 
 
 def test_sdist_installs_and_runs(built_artifacts, tmp_path_factory) -> None:
-    """The sdist installs in a fresh venv and `belay --help` works (S3)."""
+    """The sdist installs in a fresh venv and `belay --help` works (S3).
+
+    pip's build isolation needs to fetch the `hatchling` build backend, which
+    `--no-index` refuses; the backend is therefore pre-installed into the venv
+    from uv's own cache, and pip builds with `--no-build-isolation`. Both halves
+    are offline: no index is ever consulted. No dev dependency is added — the
+    build backend goes into a throwaway venv, never the project's groups.
+    """
     _wheel, sdist = built_artifacts
     venv_bin = _make_venv(tmp_path_factory, "sdist-venv")
+    backend = subprocess.run(
+        [
+            "uv", "pip", "install", "--python", str(venv_bin / "python"), "hatchling",
+        ],
+        capture_output=True,
+        text=True,
+        errors="replace",
+        timeout=300,
+    )
+    assert backend.returncode == 0, backend.stdout + backend.stderr
     install = subprocess.run(
-        [str(venv_bin / "python"), "-m", "pip", "install", "--no-index", str(sdist)],
+        [
+            str(venv_bin / "python"),
+            "-m", "pip", "install",
+            "--no-index", "--no-build-isolation", str(sdist),
+        ],
         capture_output=True,
         text=True,
         errors="replace",
