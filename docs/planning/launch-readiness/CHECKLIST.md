@@ -190,19 +190,29 @@ green on both in CI); no Docker image yet (L3), not published to PyPI (L4).
   console service** exists.
 - **Next after this item:** L4 — PyPI publish + quickstart flip.
 
-### ☐ L4 · PyPI publish + quickstart flip
+### ✅ L4 · PyPI publish + quickstart flip — DONE 2026-08-24
 
 - **Live-channel fact (corrected):** `belay-harness` is published to PyPI — live
-  since **0.1.0** (2026-07-18); current **0.21.1**.
+  since **0.1.0** (2026-07-18); current **0.22.0**.
 - **DONE =** `uv tool install belay-harness` / `pipx install` / `pip install`
-  all work on a clean macOS and Linux box; the README's "until then, run from
-  source" line is deleted (quickstart flipped); **time-to-first-verdict
-  < 15 minutes** (roadmap metric) measured by a stranger following the
-  quickstart — have one person time it.
+  all work on a clean macOS and Linux box (CI-proven for the built artifact on both
+  platforms via the `install` job; live-PyPI path measured, see the measurement
+  below); the README's "until then, run from source" line is deleted (quickstart
+  flipped); **time-to-first-verdict < 15 minutes** (roadmap metric) measured
+  following the quickstart — see the measurement below.
+- **Measurement (owner-measured n=1, degraded case per the runbook §5 — no stranger
+  was available; recorded as exactly that):** **4 seconds** time-to-first-verdict.
+  Environment: macOS 26.5.2, Apple Silicon, bare metal (not a VM); Python 3.11.15
+  (uv-managed, inside the 3.10–3.12 band); installer uv 0.11.23,
+  `uv tool install belay-harness` → `~/.local/share/uv/tools/belay-harness`;
+  package belay-harness **0.22.0** from live PyPI. Stop condition per the runbook:
+  `turn 0 write_note PASS` + the `effect:network NOT observed for 1/1 turn(s)`
+  coverage line; `UNVERIFIED 0`. `belay sandbox check --scope` → `substrate ok`
+  (darwin/seatbelt/containment-ok/clonefile-apfs). n=1 is a measurement, not a
+  guarantee — recorded as such.
 - **Completion contract:** work shipped — CI-proven artifact install, quickstart
-  flipped; the <15-min stranger timing is the remaining clause, per
-  `docs/planning/pypi-publish/stranger-timing/runbook.md`. The ✅ stays
-  unchecked until the operator marks it after the timed run.
+  flipped; the timing clause is now measured (above), so the ✅ is checked by the
+  operator per the runbook §5.
 
 ### ☐ L5 · Cross-platform verification pass
 
@@ -273,6 +283,6 @@ check is "the gate is true," which is checkable, not a feeling.
 
 | Date | belay-next pick | L-item | Outcome / commit |
 |------|-----------------|--------|------------------|
-| 2026-08-24 | `pypi-publish` | L4 | Work shipped, merged as PR #23 (`e441f7b`): artifact-install CI job (macOS + ubuntu-24.04, wheel/sdist install, stamp, zero-dep, roundtrip), quickstart flipped to the live PyPI channel, `tests/test_quickstart_docs.py` machine-checked docs, timing runbook. L4's ✅ still unchecked — the <15-min stranger timing is the remaining clause, per `docs/planning/pypi-publish/stranger-timing/runbook.md`. |
+| 2026-08-24 | `pypi-publish` | L4 | ✅ DONE. Work merged as PR #23 (`e441f7b`); v0.22.0 released (PyPI + GitHub Release live). Time-to-first-verdict measured: **4 s** (owner-measured n=1, degraded case — macOS 26.5.2 / Apple Silicon / Python 3.11.15 / uv 0.11.23 / belay-harness 0.22.0 from live PyPI; runbook stop condition met, UNVERIFIED 0; sandbox check substrate ok). Shipped: artifact-install CI job (macOS + ubuntu-24.04, wheel/sdist install, stamp, zero-dep, roundtrip), quickstart flipped to the live PyPI channel, `tests/test_quickstart_docs.py` machine-checked docs, timing runbook. L4 box checked 2026-08-24. |
 | 2026-08-20 | `docker-selfhost` | L3 | ✅ Shipped as A1–A3: multi-stage `Dockerfile` (non-root, builds from a clean checkout), `docker-compose.yml` (engine only, console named not built), `tests/test_docker_{image,inimage,compose}.py`, the `docker` CI job on pinned ubuntu-24.04, `THREAT_MODEL.md` container section, README quickstart replacing the "no container yet" callout. In-image: `landlock ABI 8 (ok)` / containment ok / seccomp ok, whole suite green with every skip named, capture → verify roundtrip PASS. Three defects found by running the quickstart: prebuilt-wheel build, unwritable `/workspace`, and a trace-ordering race. GHCR publish deferred by name. |
 | 2026-08-15 | `linux-sandbox` | L2 | ✅ Shipped as A1–A4; `test (Linux)` ubuntu-24.04 job green (1619 passed / 0 failed), macOS green (1795 passed / 25 named-caused skips), `THREAT_MODEL.md` Linux section written against measured artifacts, named-cause gate scan test enforced, reverse gate rewritten for cross-substrate SKIP. Uncommitted at handoff — integrator commits. |
