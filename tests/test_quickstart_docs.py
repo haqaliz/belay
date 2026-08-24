@@ -9,17 +9,14 @@ caveat. The distribution name and CLI entrypoint are the truth held by
 agree with it. Every assertion is a deterministic string/parse check on
 committed docs — no network, no clock.
 
-The one conditional test (`stranger-timing` runbook consistency) skips with the
-named cause `runbook-not-yet-written` until that aspect's runbook lands — a
-named-cause skip is the repo's accepted intermediate state, never a silent pass.
+The `stranger-timing` runbook-consistency test is live: it asserts the runbook
+exists and that its install command equals the README's headline install command.
 """
 
 from __future__ import annotations
 
 import re
 from pathlib import Path
-
-import pytest
 
 _RUNBOOK = "docs/planning/pypi-publish/stranger-timing/runbook.md"
 
@@ -88,16 +85,14 @@ def test_stranger_timing_runbook_install_command_matches_readme() -> None:
     """The runbook's install command must equal the README headline command.
 
     Cross-aspect consistency with `stranger-timing`: a stranger following the
-    runbook must install the same way the README's quickstart does. Skipped with
-    a named cause until that aspect's runbook lands (sequenced after this one).
+    runbook must install the same way the README's quickstart does. Live since
+    the stranger-timing runbook landed — the runbook must exist, and its install
+    command must equal the README's headline install command verbatim.
     """
-    runbook = _repo_root() / _RUNBOOK
-    if not runbook.exists():
-        pytest.skip(
-            f"runbook-not-yet-written: {_RUNBOOK} does not exist yet — the "
-            "stranger-timing aspect creates it; this check goes live then"
-        )
-    lines = runbook.read_text(encoding="utf-8").splitlines()
+    assert (_repo_root() / _RUNBOOK).exists(), (
+        f"{_RUNBOOK} does not exist — the stranger-timing aspect must create it"
+    )
+    lines = _read(_RUNBOOK).splitlines()
     runbook_cmd = next(
         line for line in lines if line.strip().startswith("uv tool install")
     )
