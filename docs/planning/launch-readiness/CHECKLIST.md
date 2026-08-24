@@ -192,11 +192,17 @@ green on both in CI); no Docker image yet (L3), not published to PyPI (L4).
 
 ### ☐ L4 · PyPI publish + quickstart flip
 
-- **DONE =** `belay-harness` v0.1.0 published; `uv tool install belay-harness` /
-  `pipx install` / `pip install` all work on a clean macOS and Linux box; the
-  README's "until then, run from source" line is deleted; **time-to-first-verdict
-  < 15 minutes** (roadmap metric) measured by a stranger following the quickstart —
-  have one person time it.
+- **Live-channel fact (corrected):** `belay-harness` is published to PyPI — live
+  since **0.1.0** (2026-07-18); current **0.21.1**.
+- **DONE =** `uv tool install belay-harness` / `pipx install` / `pip install`
+  all work on a clean macOS and Linux box; the README's "until then, run from
+  source" line is deleted (quickstart flipped); **time-to-first-verdict
+  < 15 minutes** (roadmap metric) measured by a stranger following the
+  quickstart — have one person time it.
+- **Completion contract:** work shipped — CI-proven artifact install, quickstart
+  flipped; the <15-min stranger timing is the remaining clause, per
+  `docs/planning/pypi-publish/stranger-timing/runbook.md`. The ✅ stays
+  unchecked until the operator marks it after the timed run.
 
 ### ☐ L5 · Cross-platform verification pass
 
@@ -267,5 +273,6 @@ check is "the gate is true," which is checkable, not a feeling.
 
 | Date | belay-next pick | L-item | Outcome / commit |
 |------|-----------------|--------|------------------|
+| 2026-08-24 | `pypi-publish` | L4 | work shipped (artifact-install CI, quickstart flip); metric pending per the runbook |
 | 2026-08-20 | `docker-selfhost` | L3 | ✅ Shipped as A1–A3: multi-stage `Dockerfile` (non-root, builds from a clean checkout), `docker-compose.yml` (engine only, console named not built), `tests/test_docker_{image,inimage,compose}.py`, the `docker` CI job on pinned ubuntu-24.04, `THREAT_MODEL.md` container section, README quickstart replacing the "no container yet" callout. In-image: `landlock ABI 8 (ok)` / containment ok / seccomp ok, whole suite green with every skip named, capture → verify roundtrip PASS. Three defects found by running the quickstart: prebuilt-wheel build, unwritable `/workspace`, and a trace-ordering race. GHCR publish deferred by name. |
 | 2026-08-15 | `linux-sandbox` | L2 | ✅ Shipped as A1–A4; `test (Linux)` ubuntu-24.04 job green (1619 passed / 0 failed), macOS green (1795 passed / 25 named-caused skips), `THREAT_MODEL.md` Linux section written against measured artifacts, named-cause gate scan test enforced, reverse gate rewritten for cross-substrate SKIP. Uncommitted at handoff — integrator commits. |

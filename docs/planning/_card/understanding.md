@@ -1,39 +1,122 @@
-# Understanding: Docker self-host (launch checklist L3)
+# Understanding: PyPI publish + quickstart flip (launch checklist L4)
 
-Status: understanding note for `feat/docker-selfhost` (branch `feat/docker-selfhost/aliz`), from the Phase-1 brief (`_card/issue.md`) and three read-only agent maps (sandbox/snapshot, CLI/packaging, CI/threat-model).
+Phase 2 dig for the L4 unit. Sources: `docs/planning/_card/issue.md` (brief), the two
+read-only research passes over `pyproject.toml`, `RELEASING.md`, `README.md`,
+`.github/workflows/{ci,release}.yml`, `tests/`, `docs/planning/launch-readiness/CHECKLIST.md`,
+`docs/planning/docker-selfhost/prd.md`, `CHANGELOG.md`, and the guardrail docs.
 
-## What the work really is
+## What this work is really asking
 
-Build the first container channel for Belay: a `Dockerfile` whose image installs the real `belay-harness` wheel and runs the **real Linux sandbox backend** (Landlock + seccomp via `src/belay/sandbox/linux.py`, copy-fidelity snapshot via `src/belay/snapshot/linux.py`), plus the surrounding artifacts the checklist L3 DONE line implies: a `.dockerignore`, a `docker compose` file, a CI job that builds the image and validates it (suite + containment + snapshot round-trip **inside the image**), a THREAT_MODEL container section, and the README update that replaces the "no container yet" callout (`README.md:64`). Per `RELEASING.md:11-15`, adding the image to the release channel (`release.yml` ghcr job) is explicitly part of L3: *"When it lands, add a `ghcr` job here and to `release.yml`."* (`belay-end-fast` skill line 85 makes the same point from the other side: do not add a container step until this lands.)
+L4 is the **distribution** half of "a stranger can run Belay" — the Phase-1 installability
+block. It is **not** an engine capability: it touches no verdict axis, no replay path, no
+sandbox logic. The moat (replay + execution-grounded verification + corpus) is already
+shipped; this unit makes the Phase-0 number and the harness *installable by a stranger on
+their own box*, which is the precondition for the Phase 1→2 gate (≥3 external self-hosts,
+`ROADMAP.md:283`).
 
-It is **packaging + measurement work on an existing substrate**, not engine work. The L2 completion note already says so (`CHECKLIST.md:119`): "now packaging on top of a substrate that exists, no longer a blocker on a mechanism."
+**The critical discovery from the dig:** the PyPI publish channel is ALREADY LIVE and has
+been since v0.1.0. Verified 2026-08-24 against the PyPI JSON API
+(`https://pypi.org/pypi/belay-harness/json`): `belay-harness` is owned by Ali Haqiqi, and
+every release 0.1.0 → 0.21.1 has wheel + sdist uploads whose timestamps match the
+CHANGELOG dates (0.21.0 and 0.21.1 both uploaded 2026-08-20; first upload 2026-07-18). The
+trusted-publisher pipeline (`release.yml`) has evidently been working since the v0.1.0 tag.
+So L4's "published" clause is satisfied in substance — the checklist's "v0.1.0" wording and
+the README's "until then, run from source" caveat are the stale artifacts, not the publish.
+**What L4 genuinely still needs:** artifact-path install verification in CI (nothing
+installs the built wheel today), the README quickstart flip, and the stranger-timed metric.
 
-## What the dig established (grounded)
+**The critical discovery from the dig (as originally written, retained):** most of the packaging machinery already exists and
+is correct. `pyproject.toml` is publish-ready (`name = "belay-harness"`, hatchling, empty
+runtime deps, `belay = "belay.cli:main"` entrypoint, wheel targets only `src/belay`,
+`pyproject.toml:9,44,52-53,67-68`). `release.yml` is a complete tag-driven build →
+tag==version check → PyPI trusted-publish → GitHub Release pipeline
+(`release.yml:3-5,22,24-32,39-54,56-93`). `RELEASING.md` documents the whole cut-a-release
+flow and the one-time PyPI trusted-publisher setup (`RELEASING.md:26-68`). The version is
+read from the installed distribution, so the published wheel stamps the true version
+(`src/belay/__init__.py:16-21`).
 
-1. **No Docker artifacts exist anywhere.** No `Dockerfile`, no compose, no `.dockerignore`, no nix. `release.yml` has no container job; `ci.yml` has none either. Everything must be created.
-2. **The base image is trivial and fixed by existing contracts:** stdlib-only wheel (`pyproject.toml:43-44`, enforced by `tests/test_import_guard.py`), Python ≥3.10, and `/bin/sh` + a working Python are required because `belay sandbox check` probes shell out to `/bin/sh -c` and `sys.executable -c` (`cli.py:199-208`, `251-256`). The image must install the wheel — `__version__` comes from the installed distribution via `importlib.metadata` (`src/belay/__init__.py:18-21`), so a source-copy image would stamp `0+unknown`.
-3. **Two entrypoints, not one:** `belay` → `belay.cli:main` (`pyproject.toml:52-53`) and the proxy as `python -m belay.proxy <server-command>` (`proxy.py:530-574`, env-configured). There is **no `__main__.py`** — `python -m belay` does not work and must not be documented. `docker run belay <args>` = the console script.
-4. **Containment inside the container is the host kernel's Landlock, and it works unprivileged:** the launcher (`python -m belay.sandbox.linux <policy.json> -- <cmd>`) enforces via ctypes syscalls 444/445/446 + `PR_SET_NO_NEW_PRIVS` + seccomp BPF; mechanism absent ⇒ exit 2, never a bare spawn (`linux.py:539-541`). The escape-matrix tests need no privileges and run in an unprivileged container **iff host kernel ≥5.13 has the LSM enabled**. Running as root (Docker default) adds exactly one named skip (`root-environment`, `test_substrate.py:189-190`) and makes foreign ownership restorable (`substrate.py:270`). Docker's default seccomp profile does not block landlock syscalls — but the interplay with Belay's nested BPF filter is the card's named caveat and must be **verified in-image**, not assumed.
-5. **Snapshot fidelity on overlayfs degrades with a name, by existing design:** `FICLONE` is probed per-directory (`snapshot/linux.py:120-152`); unavailable ⇒ honest copy fallback with capabilities recorded (`:170-187`); a cross-capability restore refuses `UNRESTORABLE_CAPABILITY_MISMATCH` before touching dest (`substrate.py:423-433`). "Round-trips byte-identically **or** named-cause degradation" is the L3 acceptance, and the engine already has exactly that behavior — the acceptance test in-image mostly proves the existing contract holds on the new substrate.
-6. **TMPDIR hazard is already named for containers:** world-writable `/tmp` is the Linux default and the threat model already says the macOS bounded bound "does **not** hold" in containers (`THREAT_MODEL.md:398-407`, `495`). The container section must restate it; the image may additionally set a private TMPDIR, but DefaultScope's 0700 owned-verified tmpdir is the mechanism that keeps it bounded.
-7. **The docker.sock line is already tested and stays closed:** the unix-socket grant is `network-bind` (narrow), measured to NOT permit connecting to arbitrary unix sockets — `/var/run/docker.sock` among them (`THREAT_MODEL.md:133-136`, `tests/test_containment.py:622-658`). A contained process in the image cannot talk to the daemon. The Linux analogue lives in `tests/test_linux_containment.py` (AF_UNIX bind allowed under deny-all, `:232-256`).
-8. **The suite is runnable in-image with the existing gate discipline:** named-cause skips are enforced statically by `tests/test_platform_gate_named_causes.py` (AST scan, substrate-neutral) — a container CI job inherits it automatically. Expected in-image skips: `seatbelt-only`, `darwin-acl`, `macos-python3-shim`, `bsd-file-flags`, `replay-reinvokes-seatbelt` (macOS-only), plus runtime `landlock-unavailable` (pre-5.13 host) and `reflink-unavailable` (overlayfs, expected) — all named, never silent.
-9. **A test gap exists and this unit fills it:** no test anywhere exercises the installed console-script binary (`belay` on PATH); `python -m belay.cli` subprocess tests are the standing proxy. L3's "docker run belay behaves identically to the installed CLI" is the first test of the real executable surface.
-10. **The CI substrate story:** `test (Linux)` runs directly on pinned `ubuntu-24.04` runners (no `container:` job). A Docker validation job must build the image and run the acceptance inside it; GitHub runners have Docker preinstalled. `THREAT_MODEL.md:319-321` is the current boundary statement the container section must extend — *"Nothing here is claimed about any other Linux image: a Docker image (L3) or another distro may differ and must re-measure (the A1 probe is the re-measurement instrument)."* The spike decision says the same (`containment-spike/decision.md:75-76`).
+**What L4 actually adds, then, is narrow and concrete:**
+1. **Artifact-path install verification the repo does not have.** Every CI job today runs
+   the source tree via `uv sync`; nothing installs the *built* wheel/sdist
+   (`ci.yml`, confirmed by research — no `uv build`/`pip install <dist>` step in CI). L4's
+   DONE ("works on a clean macOS and Linux box") has no CI surface asserting the artifact
+   path. This is the load-bearing, test-first acceptance.
+2. **The PyPI publish itself** — a one-time, owner-only act: create/reserve `belay-harness`
+   on PyPI, add the trusted publisher (`RELEASING.md:52-68`), then push a version tag so
+   `release.yml` runs. Not something CI can do; it is an operator step *after* the PR merges.
+3. **README quickstart flip** — delete the "until then, run from source" caveat
+   (`README.md:56`) and promote the install block (`README.md:58-62`) to the primary path.
+   Keep the Develop/from-source section (`README.md:287-297`).
+4. **The 15-minute stranger measurement** — a manual, human-timed run (R10). Provide a
+   runbook so the timing is reproducible; the timing itself is an operator step.
 
-## Open questions for the PRD
+## Affected areas
 
-1. **Compose scope.** L3 DONE says "`docker compose` for the console" — but C7 (L6) is unbuilt. Does L3 ship a compose file with the engine service only (console service added by C7), or defer compose entirely? Recommended: ship a minimal compose file with a comment naming the C7 hook — the checklist line demands it, and shipping a broken console service would violate honesty rules.
-2. **Release channel now or later.** `RELEASING.md` says add the ghcr job when the image "lands". Is the image build + validation the whole unit, with the ghcr push as a follow-on slice (L5's release checklist sequences "publish to PyPI → build Docker image")? Or must the ghcr job ship in this unit?
-3. **Image size / base.** python:3.12-slim + wheel is the obvious minimal; anything to add for the escape-matrix to run (coreutils, /bin/sh — busybox vs dash/bash exit-code differences were a real L2 finding: `plan_20260815.md` dash vs bash). The in-image suite run needs a shell + coreutils behaving like the measured ubuntu-24.04 substrate.
-4. **Root vs non-root in the image.** Docker default is root (adds one named skip, ownership restorable); non-root is the safer posture for the harness. Decide the default user in the Dockerfile.
+- `pyproject.toml` — version bump only when cutting the release; no metadata change expected.
+- `.github/workflows/ci.yml` — add an artifact-install check (build via `uv build`, install
+  the wheel into a clean venv, run `belay --help` / `belay sandbox check` / a minimal
+  capture→verify roundtrip) on macOS (`test` job) and Linux (`test-linux` job). Possibly a
+  dedicated job to keep it orthogonal.
+- `README.md` — install section (lines 54–62), develop section (287–297) stays.
+- `RELEASING.md` — the stale "C7 → v0.2.0" example (`RELEASING.md:22`); confirm the
+  trusted-publishing instructions are current.
+- `CHANGELOG.md` — new dated section when the release is cut (post-merge).
+- `docs/planning/launch-readiness/CHECKLIST.md` — mark L4 ✅ only when DONE holds (post-publish),
+  per the checklist's own rule (`CHECKLIST.md:8-20`).
+- New: a runbook/script for the time-to-first-verdict measurement.
 
-## Verdict-axes placement
+## Contradictions surfaced (flagged, not papered over)
 
-L3 changes **no verdict**. It re-measures A1/A2 machinery on a new substrate (the acceptance tests are the existing escape matrix, fidelity round-trips and `belay sandbox check` probes running inside the container) and extends the honesty boundary statement (`THREAT_MODEL.md`), which is the R5/R8 guardrail surface. There is no new verdict surface and nothing an LLM judges.
+1. **L4 DONE says "`belay-harness` v0.1.0 published" but the repo is at `0.21.1`**
+   (`CHECKLIST.md:195` vs `pyproject.toml:10`). The v0.1.0 wording is stale — it predates
+   the release history (tags v0.1.0…v0.21.1). The publish must happen at the *next real
+   version* (post-merge bump → 0.22.0), not v0.1.0. Needs a decision, but the resolution is
+   near-certain: keep versioning as-is, publish the next bump.
+2. **`ROADMAP.md:277` frames the metric as "from `docker run`", while L4's DONE frames it as
+   "following the quickstart"** (install path). Both are in the README quickstart; the
+   stranger test should measure the README quickstart as written and report which path.
+3. **"Zero runtime dependencies" is load-bearing and already enforced**
+   (`pyproject.toml:43-44`, `tests/test_import_guard.py:84-111`, `Dockerfile:16-18`). The
+   publish must not perturb it; the artifact-install CI is itself a new enforcement surface.
+4. **The GHCR "SAME image" rule is a cross-doc invariant** (`CLAUDE.md:40-41`,
+   `RELEASING.md:16-18`, `CHANGELOG.md:73-75`, `CHECKLIST.md:182-184`) — it is a *deferred,
+   separate* slice and is **out of scope** for L4. Flagged so the PRD does not silently
+   absorb it.
+5. **`belay` is taken on PyPI** (an unrelated MicroPython tool) — that is *why* the dist is
+   `belay-harness` (`pyproject.toml:6-8`). `belay-harness`'s own availability is **not
+   verified anywhere in the repo**; it must be checked (PyPI JSON API) before publish.
 
-## Contradictions / flags
+## Strategic constraints honored
 
-- `README.md:56` "Install (once v0.1.0 is published…)" is stale (0.20.0) — that's L4's quickstart flip, not L3; note only.
-- L3 DONE's "docker compose **for the console**" presumes an unshipped C7 — open question 1, must be resolved in the PRD rather than silently re-scoped.
-- The card names "FICLONE-on-overlayfs degradation" as a caveat; the dig shows the engine already handles it with a named cause — the acceptance must assert the *degradation path*, not fight it.
+- **Not an agent framework, not an LLM judge** — this is pure distribution; orthogonal to
+  both guardrails by construction.
+- **Runs on user's infra / no raw-data egress** — publishing the wheel is an explicit,
+  opted-in code egress (the user publishes it), and nothing about install/run changes the
+  on-box posture. The README must keep the honest coverage line with the quickstart.
+- **UNVERIFIED never PASS / honest claims** — the stranger-timing metric must be *reported*
+  honestly (measured once, n=1), not asserted as a guarantee. The README flip must not
+  over-claim what install gives you.
+- **R10 (solo-founder bandwidth)** is the named risk: the 15-minute metric needs a real
+  external timer.
+
+## Verdict-axis placement
+
+**None.** This unit changes no verdict axis (A1/A2/A3), no trace format, no replay engine.
+It is distribution + docs + CI. It *uses* the verdict machinery (the install acceptance runs
+`belay verify` on a capture→verify roundtrip) but does not modify it.
+
+## Open questions for the PRD interview
+
+1. **Version at publish**: confirm the next bump (0.22.0) is the publish version, and that
+   the checklist's "v0.1.0" wording is corrected to "the next release".
+2. **Artifact CI scope**: build-and-install check in the existing `test`/`test-linux` jobs,
+   or a dedicated job? Which install frontends must CI exercise (`pip install <wheel>`,
+   `uv tool install`/`uvx`, `pipx`) vs which are documented-and-manually-verified at publish?
+3. **Name availability**: verify `belay-harness` free on PyPI via the JSON API now, or at
+   publish time? (Recommend: a CI-checkable or PRD-recorded verification now.)
+4. **Trusted publisher**: is the one-time PyPI setup (project + trusted publisher) already
+   done by the owner, or is it part of this unit's operator steps?
+5. **README flip**: keep `uv tool install` as the headline with `pipx`/`pip` as alternates
+   (current structure), or restructure? Keep the Docker quickstart in place (yes, per L3).
+6. **What does "clean box" mean for the CI check**: fresh `python:3.12` container (Linux)
+   and a fresh venv on the macOS runner — confirm that is the acceptance.

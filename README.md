@@ -53,7 +53,7 @@ Belay's verdict is **grounded in execution, not opinion** — which means it get
 
 > **Requirements:** macOS (Apple Silicon or Intel) or Linux (measured on ubuntu-24.04, kernel ≥ 5.13 with Landlock enabled), Python 3.10+. The sandbox and snapshot backends are **macOS + Linux today** — see [platform coverage](#platform-coverage-macos-and-linux-both-measured). [uv](https://github.com/astral-sh/uv) is recommended.
 
-Install (once v0.1.0 is published — until then, [run from source](#develop)):
+Install from PyPI — the `belay-harness` package is published there, so this is the live install path:
 
 ```bash
 uv tool install belay-harness      # or: pipx install belay-harness  /  pip install belay-harness
