@@ -72,6 +72,40 @@ jobs:
       - name: Test
         run: uv run pytest -q
 
+  # The artifact acceptance (aspect artifact-install-ci, feature pypi-publish):
+  # the built wheel and sdist must install and run on the platforms the release
+  # claims to support. The module is deselected from the default run
+  # (pyproject.toml addopts); this job is the ONLY run of
+  # tests/test_artifact_install.py (selected with -m install).
+  install:
+    name: install (${{ matrix.os }})
+    # PINNED ubuntu-24.04, same rationale as the test-linux job: the installed
+    # artifact's substrate claims are about the release the wheel was built on,
+    # and `ubuntu-latest` is a moving target. macos-latest is the macOS path
+    # (the sandbox's Seatbelt backend lives there).
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-24.04]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      # No separate `uv build --wheel` step: the module's session fixture
+      # rebuilds the wheel and sdist from this checkout itself (the docker job
+      # comment above is the same pattern) — a stale dist/ artifact would fail
+      # the version-stamp test, asserted not assumed.
+      - name: Test the installed artifact
+        run: uv run pytest tests/test_artifact_install.py -m install -q
+
   # The self-host image (docs/planning/docker-selfhost/): build it from THIS
   # checkout, hold it to the documented contract (tests/test_docker_image.py, A1),
   # and re-measure Belay's substrate INSIDE the container
