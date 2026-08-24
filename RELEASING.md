@@ -27,7 +27,11 @@ breaking under strict semver. The tag **must** match the `version` in `pyproject
 
 1. Bump `version` in `pyproject.toml` and move the `[Unreleased]` notes into a dated version
    section in `CHANGELOG.md`.
-2. Commit to `master` and make sure CI is green (`.github/workflows/ci.yml`).
+2. Commit to `master` and make sure CI is green (`.github/workflows/ci.yml`). "Green"
+   covers the full suite on **both platforms** (`test` on macOS, `test-linux` on pinned
+   ubuntu-24.04) **and** the `docker` job, which builds the release image from the same
+   checkout and re-runs the measurement inside it — so the image a reader will build from
+   the tag is validated before the tag is pushed, not after.
 3. Tag and push the tag — a plain `git push`, using the repo's git identity:
 
    ```bash

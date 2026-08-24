@@ -214,11 +214,19 @@ green on both in CI); no Docker image yet (L3), not published to PyPI (L4).
   flipped; the timing clause is now measured (above), so the ✅ is checked by the
   operator per the runbook §5.
 
-### ☐ L5 · Cross-platform verification pass
+### ✅ L5 · Cross-platform verification pass — DONE 2026-08-24
 
 - **DONE =** CI runs the full suite on Linux + macOS; any remaining platform skips
   are named with a cause in README; release checklist includes "tag → CI green on
   both platforms → publish to PyPI → build Docker image".
+- **Checked 2026-08-24:** all three clauses verified against the repo — (1) the
+  full suite runs on both platforms every PR (`ci.yml`: `test` on macos-latest,
+  `test-linux` on pinned ubuntu-24.04, plus `install` ×2 and `docker`; README
+  `#platform-coverage-macos-and-linux`); (2) platform skips name their cause and a
+  gate test enforces it (`tests/test_platform_gate_named_causes.py`, README
+  platform-coverage section); (3) `RELEASING.md` "Cut a release" step 2 now states
+  explicitly that green covers both platforms **and** the `docker` job's in-image
+  validation, closing the "build Docker image" element of the checklist line.
 
 ---
 
@@ -283,6 +291,7 @@ check is "the gate is true," which is checkable, not a feeling.
 
 | Date | belay-next pick | L-item | Outcome / commit |
 |------|-----------------|--------|------------------|
+| 2026-08-24 | `pypi-publish` | L5 | ✅ DONE. All three clauses verified: full suite green on macOS + Linux every PR (`test`, `test-linux`, `install`, `docker` jobs); platform skips named-caused and machine-checked (`test_platform_gate_named_causes.py`); `RELEASING.md` step 2 now states green covers both platforms + the docker job's in-image validation. |
 | 2026-08-24 | `pypi-publish` | L4 | ✅ DONE. Work merged as PR #23 (`e441f7b`); v0.22.0 released (PyPI + GitHub Release live). Time-to-first-verdict measured: **4 s** (owner-measured n=1, degraded case — macOS 26.5.2 / Apple Silicon / Python 3.11.15 / uv 0.11.23 / belay-harness 0.22.0 from live PyPI; runbook stop condition met, UNVERIFIED 0; sandbox check substrate ok). Shipped: artifact-install CI job (macOS + ubuntu-24.04, wheel/sdist install, stamp, zero-dep, roundtrip), quickstart flipped to the live PyPI channel, `tests/test_quickstart_docs.py` machine-checked docs, timing runbook. L4 box checked 2026-08-24. |
 | 2026-08-20 | `docker-selfhost` | L3 | ✅ Shipped as A1–A3: multi-stage `Dockerfile` (non-root, builds from a clean checkout), `docker-compose.yml` (engine only, console named not built), `tests/test_docker_{image,inimage,compose}.py`, the `docker` CI job on pinned ubuntu-24.04, `THREAT_MODEL.md` container section, README quickstart replacing the "no container yet" callout. In-image: `landlock ABI 8 (ok)` / containment ok / seccomp ok, whole suite green with every skip named, capture → verify roundtrip PASS. Three defects found by running the quickstart: prebuilt-wheel build, unwritable `/workspace`, and a trace-ordering race. GHCR publish deferred by name. |
 | 2026-08-15 | `linux-sandbox` | L2 | ✅ Shipped as A1–A4; `test (Linux)` ubuntu-24.04 job green (1619 passed / 0 failed), macOS green (1795 passed / 25 named-caused skips), `THREAT_MODEL.md` Linux section written against measured artifacts, named-cause gate scan test enforced, reverse gate rewritten for cross-substrate SKIP. Uncommitted at handoff — integrator commits. |
