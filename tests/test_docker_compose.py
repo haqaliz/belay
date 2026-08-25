@@ -148,6 +148,7 @@ def test_the_console_image_builds_and_reports_health_with_the_engine() -> None:
     )
     assert run.returncode == 0, run.stderr
     try:
+        import json
         import time
 
         health = ""
@@ -160,12 +161,15 @@ def test_the_console_image_builds_and_reports_health_with_the_engine() -> None:
                 timeout=10,
             )
             health = probe.stdout
-            if '"ok": true' in health:
-                break
+            try:
+                if json.loads(health).get("ok") is True:
+                    break
+            except (ValueError, TypeError):
+                pass
             time.sleep(1)
-        assert '"ok": true' in health, health
-        assert re.search(r'"engine": "[\d.]+"', health), health
-        assert _project_version() in health, health
+        payload = json.loads(health)
+        assert payload.get("ok") is True, health
+        assert payload.get("engine") == _project_version(), health
     finally:
         subprocess.run(
             ["docker", "rm", "-f", "belay-console-test"],
