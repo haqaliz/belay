@@ -582,6 +582,13 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     grounding, and the UNVERIFIED list with each named cause — never a hidden or
     spun-as-PASS unverified. Exit is non-zero if any turn is FAIL or UNVERIFIED: a run
     Belay could not fully stand behind must not read as success to a shell.
+
+    `--json` renders the SAME verdicts as one JSON document (see `belay.verify.json`)
+    instead of the human report: the document is built from the same `TurnVerdict`
+    objects and the same trajectory summary the text renderers consume — one
+    computation, two renderers — and the exit code is unchanged. An internal failure
+    emits an `{"error": ...}` document with the same non-zero exit, never a truncated
+    one.
     """
     from belay.index import derive_correlation, tool_calls
     from belay.replay.reader import TraceCorrupt, read_trace
@@ -590,13 +597,36 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     from belay.verify.turn import verify_turn
     from belay.verify.verdict import Status
 
+    json_mode = args.json
+    if json_mode:
+        from belay.verify.json import (
+            VerifyReport,
+            aggregate_record,
+            coverage_record,
+            error_report,
+            exposure_record,
+            render_json,
+            trajectory_record,
+            turn_record,
+        )
+
     if not args.server:
-        _emit("belay: a server command is required, after --server. Nothing to replay against.")
+        message = (
+            "belay: a server command is required, after --server. Nothing to replay against."
+        )
+        if json_mode:
+            _emit(render_json(error_report(args.trace, message)))
+        else:
+            _emit(message)
         return 2
 
     trace_path = Path(args.trace)
     if not trace_path.exists():
-        _emit(f"belay: trace not found: {trace_path}")
+        message = f"belay: trace not found: {trace_path}"
+        if json_mode:
+            _emit(render_json(error_report(args.trace, message)))
+        else:
+            _emit(message)
         return 2
 
     # The A1 policy this run enforces: the defaults (unless dropped) plus any operator file.
@@ -608,13 +638,21 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         try:
             invariants = invariants + load_invariants(Path(args.invariants))
         except ValueError as exc:
-            _emit(f"belay: {exc}")
+            message = f"belay: {exc}"
+            if json_mode:
+                _emit(render_json(error_report(args.trace, message)))
+            else:
+                _emit(message)
             return 2
 
     try:
         read = read_trace(trace_path)
     except TraceCorrupt as exc:
-        _emit(f"belay: {exc}")
+        message = f"belay: {exc}"
+        if json_mode:
+            _emit(render_json(error_report(args.trace, message)))
+        else:
+            _emit(message)
         return 2
 
     records = list(read.records)
@@ -623,7 +661,11 @@ def _cmd_verify(args: argparse.Namespace) -> int:
 
     if args.turn is not None:
         if not (0 <= args.turn < total):
-            _emit(f"belay: --turn {args.turn} out of range; the trace holds {total} tool call(s)")
+            message = f"belay: --turn {args.turn} out of range; the trace holds {total} tool call(s)"
+            if json_mode:
+                _emit(render_json(error_report(args.trace, message)))
+            else:
+                _emit(message)
             return 2
         indices = [args.turn]
     else:
@@ -631,46 +673,76 @@ def _cmd_verify(args: argparse.Namespace) -> int:
 
     manifest_dir = Path(args.manifest_dir)
 
-    _emit(f"belay verify {trace_path}")
-    _emit()
-    _emit(f"  {total} tool-call turn(s); verifying {len(indices)} by re-execution.")
-    _emit(f"  manifests             {manifest_dir}")
-    _emit()
+    try:
+        if not json_mode:
+            _emit(f"belay verify {trace_path}")
+            _emit()
+            _emit(f"  {total} tool-call turn(s); verifying {len(indices)} by re-execution.")
+            _emit(f"  manifests             {manifest_dir}")
+            _emit()
 
-    verdicts = []
-    _emit("turns")
-    for n in indices:
-        verdict = verify_turn(
-            records, n,
-            server_command=args.server, manifest_dir=manifest_dir, replays=args.replays,
-            invariants=invariants,
-        )
-        verdicts.append(verdict)
-        _emit_verdict(verdict)
+        verdicts = []
+        report_turns = []
+        if not json_mode:
+            _emit("turns")
+        for n in indices:
+            verdict = verify_turn(
+                records, n,
+                server_command=args.server, manifest_dir=manifest_dir, replays=args.replays,
+                invariants=invariants,
+            )
+            verdicts.append(verdict)
+            if json_mode:
+                report_turns.append(turn_record(verdict))
+            else:
+                _emit_verdict(verdict)
 
-    _emit_aggregate(verdicts, Status)
-
-    # The instance-level verdict, at trace close, on a WHOLE-TRACE run only: with
-    # `--turn N` the facts seam is partial (only one turn was verified), and a
-    # trajectory verdict computed from partial facts would be fabricated — a missing
-    # evidence turn could read as a false FAIL. The rule is instance-level by
-    # construction, so the whole trace is the only honest scope for its line.
-    if args.turn is None:
-        _emit_trajectory(
-            evaluate_trajectory_rules(
+        # The instance-level verdict, at trace close, on a WHOLE-TRACE run only: with
+        # `--turn N` the facts seam is partial (only one turn was verified), and a
+        # trajectory verdict computed from partial facts would be fabricated — a missing
+        # evidence turn could read as a false FAIL. The rule is instance-level by
+        # construction, so the whole trace is the only honest scope for its line.
+        trajectory = None
+        if args.turn is None:
+            trajectory = evaluate_trajectory_rules(
                 invariants,
                 skips=read.skips,
                 records=records,
                 verdicts={v.turn_index: v for v in verdicts},
             )
-        )
 
-    _emit()
-    for line in _VERIFY_COVERAGE.splitlines():
-        _emit(line)
+        if json_mode:
+            # One document, rendered from the SAME objects the text renderers consumed:
+            # the TurnVerdicts above, the shared exposure accumulator, and the same
+            # trajectory summary. Nothing is recomputed for the machine surface.
+            report = VerifyReport(
+                trace=args.trace,
+                turns=report_turns,
+                aggregate=aggregate_record(verdicts),
+                coverage=coverage_record(verdicts),
+                exposure=exposure_record(_exposure_summary(verdicts)),
+                trajectory=trajectory_record(trajectory),
+                error=None,
+            )
+            _emit(render_json(report))
+        else:
+            _emit_aggregate(verdicts, Status)
+            if args.turn is None:
+                _emit_trajectory(trajectory)
+            _emit()
+            for line in _VERIFY_COVERAGE.splitlines():
+                _emit(line)
 
-    worst = _worst(verdicts, Status)
-    return 0 if worst is Status.PASS else 1
+        worst = _worst(verdicts, Status)
+        return 0 if worst is Status.PASS else 1
+    except Exception as exc:
+        # An internal failure under `--json` must never leave a truncated document on
+        # stdout: emit the error document and the non-zero exit the text run's own
+        # failure would also produce. Text mode re-raises exactly as before.
+        if json_mode:
+            _emit(render_json(error_report(args.trace, f"{type(exc).__name__}: {exc}")))
+            return 1
+        raise
 
 
 def _emit_verdict(verdict) -> None:
@@ -2125,6 +2197,17 @@ def _parser() -> argparse.ArgumentParser:
         help=(
             "do not apply the built-in default invariants (no-assertion-weakening "
             "under the tests and testing path segments)"
+        ),
+    )
+    verify.add_argument(
+        "--json",
+        action="store_true",
+        help=(
+            "emit ONE JSON document to stdout instead of the human report — the same "
+            "per-turn verdicts, sub-verdicts, aggregate, coverage, exposure and "
+            "trajectory disposition, rendered from the same objects; exit codes are "
+            "unchanged, and an internal failure emits an error document rather than a "
+            "truncated one"
         ),
     )
     verify.add_argument(

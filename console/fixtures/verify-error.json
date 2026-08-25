@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "trace": null,
+  "turns": [],
+  "aggregate": {"turns_verified": 0, "PASS": 0, "WARN": 0, "FAIL": 0, "UNVERIFIED": 0},
+  "coverage": {},
+  "exposure": {"recorded": false, "judged_turns": 0, "comparisons": 0},
+  "trajectory": null,
+  "error": {"cause": "trace-claim: the trace has no claim record and no turns to verify"}
+}

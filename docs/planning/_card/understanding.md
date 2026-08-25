@@ -1,122 +1,92 @@
-# Understanding: PyPI publish + quickstart flip (launch checklist L4)
+# Understanding: Live console (launch checklist L6 / C7)
 
-Phase 2 dig for the L4 unit. Sources: `docs/planning/_card/issue.md` (brief), the two
-read-only research passes over `pyproject.toml`, `RELEASING.md`, `README.md`,
-`.github/workflows/{ci,release}.yml`, `tests/`, `docs/planning/launch-readiness/CHECKLIST.md`,
-`docs/planning/docker-selfhost/prd.md`, `CHANGELOG.md`, and the guardrail docs.
+Phase 2 dig for the L6 unit. Sources: `docs/planning/_card/issue.md` (brief), the read-only
+research pass over `docs/technical/CAPABILITY_ROADMAP.md` §C7, `docs/technical/TRACE_FORMAT.md`,
+`src/belay/cli.py`, `src/belay/trace.py`, `tests/test_coverage_rendering.py`,
+`docker-compose.yml`, `docs/planning/launch-readiness/CHECKLIST.md`, and `docs/ROADMAP.md`.
 
-## What this work is really asking
+## What this work really is
 
-L4 is the **distribution** half of "a stranger can run Belay" — the Phase-1 installability
-block. It is **not** an engine capability: it touches no verdict axis, no replay path, no
-sandbox logic. The moat (replay + execution-grounded verification + corpus) is already
-shipped; this unit makes the Phase-0 number and the harness *installable by a stranger on
-their own box*, which is the precondition for the Phase 1→2 gate (≥3 external self-hosts,
-`ROADMAP.md:283`).
+C7 is **the launch surface** — the visual a Product Hunt launch demos (the demo today is CLI
+output and gifs). It is explicitly *not the moat*: "the surface through which the moat is
+legible" (`CAPABILITY_ROADMAP.md:712-714`). It is **not cuttable** (sequencing table:
+"C7 | Live console | Wk 5–6 | 1 | No — the launch surface", `CAPABILITY_ROADMAP.md:865`).
 
-**The critical discovery from the dig:** the PyPI publish channel is ALREADY LIVE and has
-been since v0.1.0. Verified 2026-08-24 against the PyPI JSON API
-(`https://pypi.org/pypi/belay-harness/json`): `belay-harness` is owned by Ali Haqiqi, and
-every release 0.1.0 → 0.21.1 has wheel + sdist uploads whose timestamps match the
-CHANGELOG dates (0.21.0 and 0.21.1 both uploaded 2026-08-20; first upload 2026-07-18). The
-trusted-publisher pipeline (`release.yml`) has evidently been working since the v0.1.0 tag.
-So L4's "published" clause is satisfied in substance — the checklist's "v0.1.0" wording and
-the README's "until then, run from source" caveat are the stale artifacts, not the publish.
-**What L4 genuinely still needs:** artifact-path install verification in CI (nothing
-installs the built wheel today), the README quickstart flip, and the stranger-timed metric.
+Per §C7 the console is: local-first, self-hosted, TypeScript (Next.js or Vue); a streaming
+per-turn feed (tool call, args, verdict, and the diff where FAILed); **the verdict rendering
+is the honesty contract made visible** (UNVERIFIED distinct, never grouped as PASS; the
+coverage line travels with the status); replay-from-here (any past turn re-runnable).
+Acceptance: trace renders every turn + FAILed turn shows diff; **UNVERIFIED rendered
+distinctly from PASS — a snapshot/DOM test, correctness not style**; fully offline against a
+local trace. Dependencies C1–C6 — all met.
 
-**The critical discovery from the dig (as originally written, retained):** most of the packaging machinery already exists and
-is correct. `pyproject.toml` is publish-ready (`name = "belay-harness"`, hatchling, empty
-runtime deps, `belay = "belay.cli:main"` entrypoint, wheel targets only `src/belay`,
-`pyproject.toml:9,44,52-53,67-68`). `release.yml` is a complete tag-driven build →
-tag==version check → PyPI trusted-publish → GitHub Release pipeline
-(`release.yml:3-5,22,24-32,39-54,56-93`). `RELEASING.md` documents the whole cut-a-release
-flow and the one-time PyPI trusted-publisher setup (`RELEASING.md:26-68`). The version is
-read from the installed distribution, so the published wheel stamps the true version
-(`src/belay/__init__.py:16-21`).
+## The ground facts that shape the design
 
-**What L4 actually adds, then, is narrow and concrete:**
-1. **Artifact-path install verification the repo does not have.** Every CI job today runs
-   the source tree via `uv sync`; nothing installs the *built* wheel/sdist
-   (`ci.yml`, confirmed by research — no `uv build`/`pip install <dist>` step in CI). L4's
-   DONE ("works on a clean macOS and Linux box") has no CI surface asserting the artifact
-   path. This is the load-bearing, test-first acceptance.
-2. **The PyPI publish itself** — a one-time, owner-only act: create/reserve `belay-harness`
-   on PyPI, add the trusted publisher (`RELEASING.md:52-68`), then push a version tag so
-   `release.yml` runs. Not something CI can do; it is an operator step *after* the PR merges.
-3. **README quickstart flip** — delete the "until then, run from source" caveat
-   (`README.md:56`) and promote the install block (`README.md:58-62`) to the primary path.
-   Keep the Develop/from-source section (`README.md:287-297`).
-4. **The 15-minute stranger measurement** — a manual, human-timed run (R10). Provide a
-   runbook so the timing is reproducible; the timing itself is an operator step.
+1. **Verdicts are NOT in the trace.** "Nothing in this format is a verdict"
+   (`TRACE_FORMAT.md:367-368`). Verdicts are computed by `belay verify`/`phase0 run`/`corpus
+   add` (`verify_turn`, `src/belay/verify/turn.py:205`). A console therefore must either
+   shell out to the engine or reimplement it — the engine owns verdicts, always.
+2. **The only structured CLI output today is `interop correlate --json`.** `belay verify`
+   and `belay replay` emit human text only (`cli.py:676` `_emit_verdict`, `:917`
+   `_emit_coverage`, `:956` `_emit_aggregate`). There is no `--json` for verify — the C7
+   card's open question. A machine-checked culture (the repo's) argues for a real
+   structured seam rather than parsing human text.
+3. **The trace is append-only JSONL** (`TRACE_FORMAT.md:22-24`; `trace-*.jsonl`, created
+   0600) — "safe to read while a run is still in progress". The natural streaming source is
+   a **file tail** of the live trace; no watch command or event stream exists in the engine
+   (confirmed: none anywhere in src/).
+4. **A server command is required for real verdicts** (`--server` + `--manifest-dir`;
+   without it everything degrades to named-cause UNVERIFIED). "Offline" means local
+   subprocess server, never network. The console must surface this boundary, not hide it.
+5. **The honesty contract is enforced one test per surface** in
+   `tests/test_coverage_rendering.py` (597 lines, 11 surfaces enumerated). The console adds
+   a new surface — the same rule applies, and C7's acceptance #2 (UNVERIFIED ≠ PASS,
+   snapshot/DOM test) is the console's version of it. `README.md:189` states the surface
+   list; the console must join it.
+6. **Replay-from-here already has its primitive**: `belay replay --turn N` and
+   `belay verify --turn N` (0-based, `cli.py:2068-2073, 2101-2106`).
+7. **No frontend exists** — no console/dashboard dir, `.gitignore` pre-stages
+   `node_modules/`, `.next/`; `docker-compose.yml:11-15` names the console as a comment
+   only and `tests/test_docker_compose.py:91-102` regression-guards that it stays a comment
+   until C7 ships. When C7 lands, the compose `console:` service joins and the deferred
+   Docker HEALTHCHECK becomes right (`CHECKLIST.md:189-190`).
+8. **No click/override machinery exists** — the eval-data intent (which turns humans click
+   into, which verdicts get overridden) is greenfield; overrides are Phase-2 scope
+   (`ROADMAP.md:296` — the approval gate).
 
-## Affected areas
+## Strategic constraints
 
-- `pyproject.toml` — version bump only when cutting the release; no metadata change expected.
-- `.github/workflows/ci.yml` — add an artifact-install check (build via `uv build`, install
-  the wheel into a clean venv, run `belay --help` / `belay sandbox check` / a minimal
-  capture→verify roundtrip) on macOS (`test` job) and Linux (`test-linux` job). Possibly a
-  dedicated job to keep it orthogonal.
-- `README.md` — install section (lines 54–62), develop section (287–297) stays.
-- `RELEASING.md` — the stale "C7 → v0.2.0" example (`RELEASING.md:22`); confirm the
-  trusted-publishing instructions are current.
-- `CHANGELOG.md` — new dated section when the release is cut (post-merge).
-- `docs/planning/launch-readiness/CHECKLIST.md` — mark L4 ✅ only when DONE holds (post-publish),
-  per the checklist's own rule (`CHECKLIST.md:8-20`).
-- New: a runbook/script for the time-to-first-verdict measurement.
-
-## Contradictions surfaced (flagged, not papered over)
-
-1. **L4 DONE says "`belay-harness` v0.1.0 published" but the repo is at `0.21.1`**
-   (`CHECKLIST.md:195` vs `pyproject.toml:10`). The v0.1.0 wording is stale — it predates
-   the release history (tags v0.1.0…v0.21.1). The publish must happen at the *next real
-   version* (post-merge bump → 0.22.0), not v0.1.0. Needs a decision, but the resolution is
-   near-certain: keep versioning as-is, publish the next bump.
-2. **`ROADMAP.md:277` frames the metric as "from `docker run`", while L4's DONE frames it as
-   "following the quickstart"** (install path). Both are in the README quickstart; the
-   stranger test should measure the README quickstart as written and report which path.
-3. **"Zero runtime dependencies" is load-bearing and already enforced**
-   (`pyproject.toml:43-44`, `tests/test_import_guard.py:84-111`, `Dockerfile:16-18`). The
-   publish must not perturb it; the artifact-install CI is itself a new enforcement surface.
-4. **The GHCR "SAME image" rule is a cross-doc invariant** (`CLAUDE.md:40-41`,
-   `RELEASING.md:16-18`, `CHANGELOG.md:73-75`, `CHECKLIST.md:182-184`) — it is a *deferred,
-   separate* slice and is **out of scope** for L4. Flagged so the PRD does not silently
-   absorb it.
-5. **`belay` is taken on PyPI** (an unrelated MicroPython tool) — that is *why* the dist is
-   `belay-harness` (`pyproject.toml:6-8`). `belay-harness`'s own availability is **not
-   verified anywhere in the repo**; it must be checked (PyPI JSON API) before publish.
-
-## Strategic constraints honored
-
-- **Not an agent framework, not an LLM judge** — this is pure distribution; orthogonal to
-  both guardrails by construction.
-- **Runs on user's infra / no raw-data egress** — publishing the wheel is an explicit,
-  opted-in code egress (the user publishes it), and nothing about install/run changes the
-  on-box posture. The README must keep the honest coverage line with the quickstart.
-- **UNVERIFIED never PASS / honest claims** — the stranger-timing metric must be *reported*
-  honestly (measured once, n=1), not asserted as a guarantee. The README flip must not
-  over-claim what install gives you.
-- **R10 (solo-founder bandwidth)** is the named risk: the 15-minute metric needs a real
-  external timer.
+- **Not an agent framework, not an LLM judge** — a renderer of engine verdicts; orthogonal
+  by construction. The engine owns verdicts; the console never computes them.
+- **No raw-data egress** — local-first; the console reads local traces and writes its own
+  local state only. Never uploads.
+- **Honest verdicts only** — this is the console's *raison d'être*; the coverage line +
+  UNVERIFIED-distinctness are acceptance tests, not style.
+- **R10 (bandwidth)** — the console must be a narrow first slice, not a platform.
+- **Determinism** — the console's own tests (snapshot/DOM) run offline against fixture
+  traces; no network, no clock.
 
 ## Verdict-axis placement
 
-**None.** This unit changes no verdict axis (A1/A2/A3), no trace format, no replay engine.
-It is distribution + docs + CI. It *uses* the verdict machinery (the install acceptance runs
-`belay verify` on a capture→verify roundtrip) but does not modify it.
+**None — the console renders existing verdicts.** It changes no axis (A1/A2/A3), no trace
+format, no verdict computation. It may add a *structured output seam* to the engine
+(`verify --json`) — a rendering surface, not a verdict change; the reduction rule and the
+statuses are untouched (the `--json` must carry exactly what the human report does,
+including the coverage line — the honesty contract applies to the machine surface too).
 
 ## Open questions for the PRD interview
 
-1. **Version at publish**: confirm the next bump (0.22.0) is the publish version, and that
-   the checklist's "v0.1.0" wording is corrected to "the next release".
-2. **Artifact CI scope**: build-and-install check in the existing `test`/`test-linux` jobs,
-   or a dedicated job? Which install frontends must CI exercise (`pip install <wheel>`,
-   `uv tool install`/`uvx`, `pipx`) vs which are documented-and-manually-verified at publish?
-3. **Name availability**: verify `belay-harness` free on PyPI via the JSON API now, or at
-   publish time? (Recommend: a CI-checkable or PRD-recorded verification now.)
-4. **Trusted publisher**: is the one-time PyPI setup (project + trusted publisher) already
-   done by the owner, or is it part of this unit's operator steps?
-5. **README flip**: keep `uv tool install` as the headline with `pipx`/`pip` as alternates
-   (current structure), or restructure? Keep the Docker quickstart in place (yes, per L3).
-6. **What does "clean box" mean for the CI check**: fresh `python:3.12` container (Linux)
-   and a fresh venv on the macOS runner — confirm that is the acceptance.
+1. **Framework**: Vue 3 + Vite + TS (founder's primary stack; leanest fit for a
+   local-first offline SPA) vs Next.js (heavier; SSR is not needed offline).
+2. **Engine interface**: add a test-first `belay verify --json` structured seam (matches
+   the interop `--json` precedent and the machine-checked culture) vs parse the human
+   report (fragile) vs the console computing verdicts itself (rejected — the engine owns
+   verdicts).
+3. **Streaming**: file-tail of the append-only trace (zero engine change; the honest
+   source) vs an engine-published event stream (new machinery).
+4. **Watch-and-steer scope in this slice**: replay-from-here only (approval/override is
+   Phase 2 per ROADMAP) vs pulling override capture in now.
+5. **Eval-data capture**: a local click/expansion log (on-box, first signal of
+   unconvincing verdicts) vs defer entirely.
+6. **Compose/healthcheck**: land the `console:` service + HEALTHCHECK with C7 (the L3
+   deferral note says it becomes right when C7 exists) or defer to a follow-on slice.

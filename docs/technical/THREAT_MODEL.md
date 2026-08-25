@@ -550,6 +550,24 @@ That is the honest outcome, not a regression.
   image. A smaller install surface is a smaller supply-chain surface, and it is the
   zero-dependency contract paying off rather than a container feature.
 
+### The console container (C7): the same boundary, a narrower surface
+
+The console image (`console/Dockerfile`, the `console:` compose service) is
+packaging for the *launch surface*, and it deliberately does not change any
+boundary above: it bundles the SAME engine wheel — built in-image from this
+checkout, never a stale published wheel — so a server verified inside the console
+container runs under the same host-kernel Landlock + seccomp boundary the engine
+image runs, and the same claims hold. What is narrower is the console's own
+surface: the service serves the SPA on the **loopback only** (`127.0.0.1:8080:8080`
+— never the LAN), its `/health` endpoint answers 200 only when the bundled engine
+reports its version (a 503 is the honest engine-unreportable state, never a
+claimed ok), and it mounts no docker socket — the same one line that stays closed
+in the engine service. One honest difference from the engine image: the console
+image is a web server, so its runtime carries node (copied from the node build
+stage) plus its one runtime library, libstdc++6 — a deliberate widening of the
+"wheel only" install surface, stated here rather than hidden, in exchange for a
+static server with no package index access.
+
 ---
 
 ## What Belay cannot see at all

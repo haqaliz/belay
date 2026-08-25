@@ -200,3 +200,30 @@ jobs:
 
       - name: "Determinism: the two runs must be byte-identical"
         run: diff probe_result.first.json probe_result.json
+
+  # The live console (aspect console-app, feature live-console, launch L6/C7):
+  # the Vue 3 + Vite SPA and its local server are built and tested on every PR.
+  # Node-only and fully offline (synthetic fixtures, stub engine, injected
+  # clocks); the engine seam it consumes is covered by the test jobs above.
+  console:
+    name: console (SPA + server)
+    # PINNED image, same rationale as the other jobs: `ubuntu-latest` is a
+    # moving target, and the console CI must not drift onto a new substrate.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          # Pinned LTS (the version the console is developed and tested on).
+          node-version: "22.21.1"
+
+      - name: Install dependencies
+        run: npm ci --prefix console
+
+      - name: Test
+        run: npm run test --prefix console
+
+      - name: Build
+        run: npm run build --prefix console

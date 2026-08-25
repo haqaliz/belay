@@ -187,7 +187,9 @@ green on both in CI); no Docker image yet (L3), not published to PyPI (L4).
   command), but neither directive fits a one-shot CLI image: a `HEALTHCHECK` is
   periodic liveness for a long-running container, and a preflight would probe the
   sandbox before `belay --help`, which needs none. It becomes right when **C7's
-  console service** exists.
+  console service** exists. **Resolved by C7 (2026-08-25):** the console service
+  ships with a `healthcheck` against its `/health` endpoint — the long-running
+  service the deferral was waiting for (L6).
 - **Next after this item:** L4 — PyPI publish + quickstart flip.
 
 ### ✅ L4 · PyPI publish + quickstart flip — DONE 2026-08-24
@@ -291,6 +293,7 @@ check is "the gate is true," which is checkable, not a feeling.
 
 | Date | belay-next pick | L-item | Outcome / commit |
 |------|-----------------|--------|------------------|
+| 2026-08-25 | `live-console` | L6 | 🚧 Shipped via the `feat/live-console` branch (PR pending): aspects `console-app` (SPA: live run feed, per-turn verdicts, honesty contract — UNVERIFIED never PASS, coverage line on every surface), `verify-json` (the `--json` engine seam), and `compose-healthcheck` (the console as a compose service: built from this checkout, loopback `8080:8080`, `healthcheck` on `/health`, engine wheel bundled in-image, shares the engine's `/workspace` mount; the flipped `test_the_console_service_ships_with_a_healthcheck` regression-guards it). **L6 box stays ☐** until the PR merges and the launch demo (L7) uses the console. |
 | 2026-08-24 | `pypi-publish` | L5 | ✅ DONE. All three clauses verified: full suite green on macOS + Linux every PR (`test`, `test-linux`, `install`, `docker` jobs); platform skips named-caused and machine-checked (`test_platform_gate_named_causes.py`); `RELEASING.md` step 2 now states green covers both platforms + the docker job's in-image validation. |
 | 2026-08-24 | `pypi-publish` | L4 | ✅ DONE. Work merged as PR #23 (`e441f7b`); v0.22.0 released (PyPI + GitHub Release live). Time-to-first-verdict measured: **4 s** (owner-measured n=1, degraded case — macOS 26.5.2 / Apple Silicon / Python 3.11.15 / uv 0.11.23 / belay-harness 0.22.0 from live PyPI; runbook stop condition met, UNVERIFIED 0; sandbox check substrate ok). Shipped: artifact-install CI job (macOS + ubuntu-24.04, wheel/sdist install, stamp, zero-dep, roundtrip), quickstart flipped to the live PyPI channel, `tests/test_quickstart_docs.py` machine-checked docs, timing runbook. L4 box checked 2026-08-24. |
 | 2026-08-20 | `docker-selfhost` | L3 | ✅ Shipped as A1–A3: multi-stage `Dockerfile` (non-root, builds from a clean checkout), `docker-compose.yml` (engine only, console named not built), `tests/test_docker_{image,inimage,compose}.py`, the `docker` CI job on pinned ubuntu-24.04, `THREAT_MODEL.md` container section, README quickstart replacing the "no container yet" callout. In-image: `landlock ABI 8 (ok)` / containment ok / seccomp ok, whole suite green with every skip named, capture → verify roundtrip PASS. Three defects found by running the quickstart: prebuilt-wheel build, unwritable `/workspace`, and a trace-ordering race. GHCR publish deferred by name. |

@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "trace": "trace-clean.jsonl",
+  "turns": [
+    {
+      "ordinal": 0,
+      "tool": "write_note",
+      "status": "PASS",
+      "cause": null,
+      "sub_verdicts": [
+        {"axis": "A2", "kind": "replay", "status": "PASS", "message": "reply reproduced byte-identically (hash_canonical match)"},
+        {"axis": "A2", "kind": "effect", "status": "PASS", "message": "filesystem effect conformed to the declared contract (readOnlyHint: false, write observed)"},
+        {"axis": "A2", "kind": "effect:network", "status": "NOT_COVERED", "message": "openWorldHint: false declared — Belay does not observe egress, the promise is recorded, never verified"},
+        {"axis": "A1", "kind": "invariant", "rule": "no-assertion-weakening", "scope": "tests", "status": "PASS", "message": "0 file-comparison(s) — nothing in scope judged", "files_compared": 0}
+      ]
+    },
+    {
+      "ordinal": 1,
+      "tool": "list_files",
+      "status": "PASS",
+      "cause": null,
+      "sub_verdicts": [
+        {"axis": "A2", "kind": "replay", "status": "PASS", "message": "reply reproduced byte-identically (hash_canonical match)"},
+        {"axis": "A2", "kind": "effect", "status": "PASS", "message": "read-only declared (readOnlyHint: true) and no filesystem effect observed"},
+        {"axis": "A2", "kind": "effect:network", "status": "NOT_COVERED", "message": "openWorldHint: false declared — Belay does not observe egress, the promise is recorded, never verified"},
+        {"axis": "A1", "kind": "invariant", "rule": "no-assertion-weakening", "scope": "tests", "status": "PASS", "message": "0 file-comparison(s) — nothing in scope judged", "files_compared": 0}
+      ]
+    }
+  ],
+  "aggregate": {"turns_verified": 2, "PASS": 2, "WARN": 0, "FAIL": 0, "UNVERIFIED": 0},
+  "coverage": {
+    "effect:network": {"not_observed_turns": 2, "of_turns": 2, "message": "network egress is not observed; a declared-false openWorldHint is recorded as NOT_COVERED, never verified"}
+  },
+  "exposure": {"recorded": true, "judged_turns": 0, "comparisons": 0},
+  "trajectory": {"status": "UNVERIFIED", "cause": "NO_CLAIM_RECORDED", "message": "no claim record in this trace — nothing was claimed, nothing judged"},
+  "error": null
+}
