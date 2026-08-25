@@ -1,18 +1,19 @@
-# Belay, self-hosted: the engine, and nothing else yet.
+# Belay, self-hosted: the engine and the live console.
 #
-# One service on purpose. `docker compose run --rm belay <subcommand>` is exactly
+# Two services on purpose. `docker compose run --rm belay <subcommand>` is exactly
 # `docker run --rm belay <subcommand>` — same image, same non-root user, same
-# entrypoint — so nothing here is a second way to configure the engine.
+# entrypoint — so nothing here is a second way to configure the engine. The
+# console is the C7 surface (launch checklist L6): the local-first live run feed,
+# built from this checkout and served on the loopback with its own healthcheck.
 #
 #   docker compose build
 #   docker compose run --rm belay --help
 #   docker compose run --rm belay sandbox check --scope /workspace
+#   docker compose up console      # http://127.0.0.1:8080
 #
-# THE CONSOLE (C7, launch checklist L6) is the service that will join this file:
-# the local-first live run feed with streaming per-turn verdicts. It is named here
-# and deliberately NOT declared — a service resolving to an image nobody built
-# would break `docker compose up` for every reader, and an honest absence is the
-# better first impression. When C7 ships, it lands here as `console:`.
+# The console image BUNDLES the engine — the wheel is built in-image from this
+# checkout, mirroring the engine Dockerfile — so verify/replay inside the console
+# container run THIS engine, never a stale published wheel.
 #
 # Kernel requirement, carried from the README: the sandbox is the HOST kernel's
 # Landlock (≥ 5.13, LSM enabled). On an older host the launcher refuses with a
@@ -45,3 +46,39 @@ services:
     # No ports, and no docker socket. The engine is a stdio proxy — it listens on
     # nothing — and mounting the daemon socket would hand a contained process the
     # host, which is the opposite of what this image is for.
+
+  # C7 — the live console (launch checklist L6). Built from this checkout
+  # (console/Dockerfile), served on the loopback only, with a healthcheck against
+  # its /health endpoint. The image bundles the engine (wheel built in-image), so
+  # replay-from-here works in-container; the volumes below share the engine's
+  # state mount, so the traces and snapshots the engine writes are what the
+  # console reads.
+  console:
+    build:
+      # The repo root is the build context: the console image builds the engine
+      # wheel IN-IMAGE from this checkout, so the context must carry the engine
+      # sources alongside console/.
+      context: .
+      dockerfile: console/Dockerfile
+    ports:
+      # Loopback only: the console serves the local network, never the LAN.
+      - "127.0.0.1:8080:8080"
+    # The same state mount as the engine service: the console reads the traces
+    # (BELAY_CONSOLE_TRACE_DIR) and the bundled engine reads the snapshots
+    # (BELAY_SNAPSHOT_DIR) from the directories the engine service writes.
+    volumes:
+      - ./workspace:/workspace
+    environment:
+      # The trace dir the console reads — the engine service's BELAY_TRACE_DIR
+      # default, reached through the shared mount.
+      BELAY_CONSOLE_TRACE_DIR: ${BELAY_CONSOLE_TRACE_DIR:-/workspace/traces}
+      # The bundled engine's snapshot dir (verify/replay in-container).
+      BELAY_SNAPSHOT_DIR: ${BELAY_SNAPSHOT_DIR:-/workspace/snapshots}
+    healthcheck:
+      # /health answers 200 only when the bundled engine reports its version; a
+      # 503 (engine unreportable) reads as unhealthy — the honest state.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
