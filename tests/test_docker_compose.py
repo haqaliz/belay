@@ -1,16 +1,19 @@
 """`docker compose` is the other install path, and it must be the SAME engine.
 
-Aspect A3 (`docs/planning/docker-selfhost/compose-docs/`). The compose file is
-deliberately small: one service, the engine, invoked as `docker compose run --rm
-belay <args>`. The C7 live console is the service that will join it, and until
-C7 exists it is named in a COMMENT and nothing else — a service that resolves to
-an image nobody built would break `docker compose up` for every reader, which is
-a worse first impression than an honest absence.
+Aspect A3 (`docs/planning/docker-selfhost/compose-docs/`), extended by the
+live-console aspect `compose-healthcheck`. The compose file holds exactly two
+services: the engine, invoked as `docker compose run --rm belay <args>`, and
+the C7 live console — built from this checkout (its image bundles the engine
+wheel built in-image, so verify/replay inside the console container run THIS
+engine), served on the loopback with a healthcheck, and sharing the engine's
+state mount so the traces and snapshots the engine writes are what the console
+reads.
 
 What the tests hold it to: the file parses and resolves under the real compose
-CLI; the resolved service runs the same `belay` entrypoint the A1 contract pins;
-and the console is still a comment. That last one is the regression guard — the
-temptation, when C7 lands elsewhere, is to add its service here first.
+CLI; the resolved engine service runs the same `belay` entrypoint the A1
+contract pins; and the console is a shipped service, not a comment. That last
+one is the regression guard — the temptation, when C7 lands elsewhere, is to
+name it in a comment and never declare it.
 
 Gate: `docker compose version` (the v2 plugin), probed once. A host with the
 Docker CLI but no compose plugin skips with the same named cause the other two
@@ -88,18 +91,31 @@ def test_compose_run_reaches_the_same_cli(built_image: str) -> None:
         assert subcommand in run.stdout, run.stdout
 
 
-def test_the_console_is_named_but_not_shipped() -> None:
-    """C7's service is a comment. A broken service must never ship in its place.
+def test_the_console_service_ships_with_a_healthcheck() -> None:
+    """C7's service is declared: `console:` builds and carries a healthcheck.
 
-    Read as text, not through compose, precisely because compose would resolve a
-    commented service to nothing and tell us nothing. The claim is about what a
-    reader opening the file sees: exactly one service key, and the console named
-    as the thing that will join it.
+    Read as text, not through compose — compose would resolve a missing service
+    to nothing and tell us nothing. The claim is about what a reader opening the
+    file sees: exactly two services, and the console built from THIS checkout —
+    its Dockerfile lives in `console/` and shares the build context with the
+    engine sources, because the console image bundles the engine wheel built
+    in-image — with a healthcheck against its `/health` endpoint, a loopback
+    port mapping, and the same state mount as the engine service, so the traces
+    and snapshots the engine writes are what the console reads.
     """
     text = _COMPOSE_FILE.read_text(encoding="utf-8")
     services = re.findall(r"^  ([a-z0-9-]+):", text, re.MULTILINE)
-    assert services == [_SERVICE], services
-    assert "console" in text.lower(), "the C7 console is not named as the future service"
+    assert services == [_SERVICE, "console"], services
+
+    engine_block, console_block = text.split("  console:", 1)
+    assert "context: ." in console_block, "the console builds from the checkout root"
+    assert "dockerfile: console/Dockerfile" in console_block
+    assert "healthcheck:" in console_block
+    assert "127.0.0.1:8080:8080" in console_block, "loopback-only, never the LAN"
+    assert "./workspace:/workspace" in engine_block
+    assert "./workspace:/workspace" in console_block
+    assert "BELAY_CONSOLE_TRACE_DIR" in console_block
+    assert "BELAY_SNAPSHOT_DIR" in console_block
 
 
 def test_compose_pins_the_same_tag_the_image_tests_build() -> None:
