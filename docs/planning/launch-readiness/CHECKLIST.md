@@ -234,13 +234,21 @@ green on both in CI); no Docker image yet (L3), not published to PyPI (L4).
 
 ## Block C — The launch surface
 
-### ☐ L6 · C7 live console ("watch and steer")
+### ✅ L6 · C7 live console ("watch and steer") — DONE 2026-08-24
 
 - **belay-next slug:** `live-console` / C7.
 - **DONE =** local-first live run feed with streaming per-turn verdicts
   (PASS/WARN/FAIL/UNVERIFIED + the coverage line on every surface), per the
   CAPABILITY_ROADMAP C7 spec and its acceptance tests. This is the visual a PH
   launch demos — today it's CLI output and gifs.
+- **Checked 2026-08-24:** C7 acceptance met as tests — merged as PR #24
+  (`3c326b9`, v0.23.0): `belay verify --json` machine contract (pinned fixture,
+  one computation two renderers, text byte-identical); the Vue 3 + Vite + TS
+  console (`console/`) with tail-streaming, replay-from-here, click/expand log,
+  77 offline tests incl. the C7 UNVERIFIED-distinct-from-PASS correctness test
+  and coverage-line-per-surface; `console:` compose service + HEALTHCHECK
+  (the L3 deferral item C7 resolves) with the engine bundled in-image. L7 (the
+  launch demo) is the remaining launch-surface item and uses this console.
 
 ### ☐ L7 · Launch demo, locked spec
 
@@ -293,7 +301,7 @@ check is "the gate is true," which is checkable, not a feeling.
 
 | Date | belay-next pick | L-item | Outcome / commit |
 |------|-----------------|--------|------------------|
-| 2026-08-25 | `live-console` | L6 | 🚧 Shipped via the `feat/live-console` branch (PR pending): aspects `console-app` (SPA: live run feed, per-turn verdicts, honesty contract — UNVERIFIED never PASS, coverage line on every surface), `verify-json` (the `--json` engine seam), and `compose-healthcheck` (the console as a compose service: built from this checkout, loopback `8080:8080`, `healthcheck` on `/health`, engine wheel bundled in-image, shares the engine's `/workspace` mount; the flipped `test_the_console_service_ships_with_a_healthcheck` regression-guards it). **L6 box stays ☐** until the PR merges and the launch demo (L7) uses the console. |
+| 2026-08-25 | `live-console` | L6 | ✅ DONE. Merged as PR #24 (`3c326b9`); v0.23.0 released. Aspects `console-app` (SPA: live run feed, per-turn verdicts, honesty contract — UNVERIFIED never PASS, coverage line on every surface, 77 offline tests), `verify-json` (the `--json` engine seam, pinned machine contract, text byte-identical), `compose-healthcheck` (the console as a compose service: built from this checkout, loopback `8080:8080`, `healthcheck` on `/health`, engine wheel bundled in-image, shares the engine's `/workspace` mount; the flipped `test_the_console_service_ships_with_a_healthcheck` regression-guards it; the image-build + /health test caught one CI-only defect on the pinned Linux runner — compact-JSON substring — fixed before merge). L7 (the launch demo) is the next launch-surface item and uses this console. |
 | 2026-08-24 | `pypi-publish` | L5 | ✅ DONE. All three clauses verified: full suite green on macOS + Linux every PR (`test`, `test-linux`, `install`, `docker` jobs); platform skips named-caused and machine-checked (`test_platform_gate_named_causes.py`); `RELEASING.md` step 2 now states green covers both platforms + the docker job's in-image validation. |
 | 2026-08-24 | `pypi-publish` | L4 | ✅ DONE. Work merged as PR #23 (`e441f7b`); v0.22.0 released (PyPI + GitHub Release live). Time-to-first-verdict measured: **4 s** (owner-measured n=1, degraded case — macOS 26.5.2 / Apple Silicon / Python 3.11.15 / uv 0.11.23 / belay-harness 0.22.0 from live PyPI; runbook stop condition met, UNVERIFIED 0; sandbox check substrate ok). Shipped: artifact-install CI job (macOS + ubuntu-24.04, wheel/sdist install, stamp, zero-dep, roundtrip), quickstart flipped to the live PyPI channel, `tests/test_quickstart_docs.py` machine-checked docs, timing runbook. L4 box checked 2026-08-24. |
 | 2026-08-20 | `docker-selfhost` | L3 | ✅ Shipped as A1–A3: multi-stage `Dockerfile` (non-root, builds from a clean checkout), `docker-compose.yml` (engine only, console named not built), `tests/test_docker_{image,inimage,compose}.py`, the `docker` CI job on pinned ubuntu-24.04, `THREAT_MODEL.md` container section, README quickstart replacing the "no container yet" callout. In-image: `landlock ABI 8 (ok)` / containment ok / seccomp ok, whole suite green with every skip named, capture → verify roundtrip PASS. Three defects found by running the quickstart: prebuilt-wheel build, unwritable `/workspace`, and a trace-ordering race. GHCR publish deferred by name. |
