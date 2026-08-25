@@ -737,6 +737,28 @@ the first signal of where our verdicts are *unconvincing* rather than merely wro
 
 **Dependencies:** C1–C6.
 
+**As built (three aspects, shipped on the `feat/live-console` branch):** the
+console is a real surface, built in three units — `console-app` (the SPA: Vue 3
++ Vite, a live run feed with streaming per-turn verdicts, the honesty contract
+as load-bearing spec — UNVERIFIED renders distinctly from PASS, every surface
+carries its coverage line, NOT_COVERED renders as a boundary never as PASS, and
+replay without context renders a named-cause UNVERIFIED; component specs are
+the C7 correctness tests), `verify-json` (the `--json` engine seam the console
+parses — the console computes no verdict of its own), and `compose-healthcheck`
+(the console as a docker-compose service with a `healthcheck` against its
+`/health` endpoint, which reports the BUNDLED engine's version — the wheel is
+built in-image from the checkout, mirroring the engine Dockerfile, so
+verify/replay inside the console container run THIS engine; the service serves
+the SPA on the loopback and shares the engine's `/workspace` state mount). The
+console image is validated by the flipped compose regression test
+(`test_the_console_service_ships_with_a_healthcheck`) and `docker compose
+config`; the docker CI job is the Linux-host substrate. Acceptance met:
+traces render with verdicts, the UNVERIFIED/PASS distinction is asserted, the
+console works fully offline. **Still ahead:** the console as a full `docker
+compose up` surface in the launch demo (L7) — the container currently ships the
+SPA + health endpoint, not yet the dev server's `/api` surface — and any
+watch-and-steer follow-ups.
+
 ---
 
 ## C8. Claim re-derivation — axis A3  ·  week 7  ·  **cuttable**

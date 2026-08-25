@@ -77,7 +77,7 @@ docker run --rm -v "$PWD:/workspace" belay verify /workspace/traces/<trace>.json
   --manifest-dir /workspace/snapshots.manifests --server <your-mcp-server-cmd>
 ```
 
-`docker compose run --rm belay <subcommand>` is the same thing through compose (one service, the engine; the C7 console is named in `docker-compose.yml` and not yet built).
+`docker compose run --rm belay <subcommand>` is the same thing through compose. The second service is the live console (C7): `docker compose up console` builds it from this checkout and serves the SPA at `http://127.0.0.1:8080` (loopback only), with a healthcheck on its `/health` endpoint and the engine bundled in the image — verify/replay from inside the console container run this checkout's engine, and the service shares the engine's `/workspace` state mount, so traces and snapshots live in one place.
 
 > **What the container does and does not do.** It runs as a **non-root** `belay` user (uid 1000; `--user root` is the opt-in), and it carries **no containment of its own that Belay relies on** — the boundary is the *host kernel's* Landlock, which is not namespaced and which no image can supply. On a host below kernel 5.13, or with the LSM off, the launcher **refuses** (exit 2, named cause) instead of running unsandboxed: loud, never silent. The image's overlayfs layer has no reflink, so snapshots take the **copy path** with the named `reflink-unavailable` cause — and a corpus case banked on macOS APFS is **SKIP** with `UNRESTORABLE_CAPABILITY_MISMATCH` inside the container, never a guessed restore.
 >
