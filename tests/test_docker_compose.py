@@ -118,6 +118,70 @@ def test_the_console_service_ships_with_a_healthcheck() -> None:
     assert "BELAY_SNAPSHOT_DIR" in console_block
 
 
+def test_the_console_image_builds_and_reports_health_with_the_engine() -> None:
+    """The console image BUILDS from this checkout and its /health is honest.
+
+    The flipped declaration test above asserts the service exists in the file;
+    this one proves the image behind it builds and that its health endpoint
+    carries the bundled engine's version — `{"ok": true, "engine": "X.Y.Z"}` —
+    which is the in-image proof that the console container runs THIS checkout's
+    engine (the wheel is built in-image, exactly like the engine image). A
+    broken `console/Dockerfile` passes the declaration test and fails here.
+    """
+    tag = "belay:console-test"
+    build = subprocess.run(
+        ["docker", "build", "-f", "console/Dockerfile", "-t", tag, "."],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        errors="replace",
+        timeout=900,
+    )
+    assert build.returncode == 0, build.stderr[-4000:]
+
+    run = subprocess.run(
+        ["docker", "run", "--rm", "-d", "--name", "belay-console-test", "-p", "127.0.0.1:18080:8080", tag],
+        capture_output=True,
+        text=True,
+        errors="replace",
+        timeout=120,
+    )
+    assert run.returncode == 0, run.stderr
+    try:
+        import time
+
+        health = ""
+        for _ in range(30):
+            probe = subprocess.run(
+                ["curl", "-s", "http://127.0.0.1:18080/health"],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=10,
+            )
+            health = probe.stdout
+            if '"ok": true' in health:
+                break
+            time.sleep(1)
+        assert '"ok": true' in health, health
+        assert re.search(r'"engine": "[\d.]+"', health), health
+        assert _project_version() in health, health
+    finally:
+        subprocess.run(
+            ["docker", "rm", "-f", "belay-console-test"],
+            capture_output=True,
+            timeout=60,
+        )
+
+
+def _project_version() -> str:
+    """The version pyproject.toml states — what the bundled engine must report."""
+    text = (_REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(r'^version = "([^"]+)"', text, re.MULTILINE)
+    assert match is not None, "pyproject.toml carries no version"
+    return match.group(1)
+
+
 def test_compose_pins_the_same_tag_the_image_tests_build() -> None:
     """One tag, written once in the compose file and once in `tests/conftest.py`.
 
