@@ -24,7 +24,10 @@ if (mode === "empty") {
 }
 
 const hasTurn = argv.includes("--turn");
-const positional = [...argv].reverse().find((a) => !a.startsWith("-"));
+// The trace is the FIRST positional after the `verify` subcommand:
+// `verify`'s `--server` is REMAINDER, so everything after it belongs to the
+// server command.
+const positional = argv.slice(1).find((a) => !a.startsWith("-"));
 const name = positional ?? "trace-clean.jsonl";
 
 let doc = "verify-clean.json";

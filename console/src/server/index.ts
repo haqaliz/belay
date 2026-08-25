@@ -175,9 +175,11 @@ export function createServer(config: ServerConfig = {}): Server {
       sendJson(res, 200, { ok: false, error: { cause: "missing-context" }, exitCode: null });
       return;
     }
+    // Order matters: `--manifest-dir` must precede `--server`, which is
+    // nargs=REMAINDER and would swallow everything after it.
     const extraArgs: string[] = [];
-    if (typeof body?.server === "string") extraArgs.push("--server", body.server);
     if (typeof body?.manifest === "string") extraArgs.push("--manifest-dir", body.manifest);
+    if (typeof body?.server === "string") extraArgs.push("--server", body.server);
     const result = await runVerifyJson({ trace: resolved, turn, extraArgs, env });
     sendJson(res, 200, result);
   }

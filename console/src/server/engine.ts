@@ -30,10 +30,13 @@ export function resolveBelayBinary(env: NodeJS.ProcessEnv = process.env): string
 }
 
 export function verifyArgv(opts: VerifyOptions): string[] {
+  // The trace positional MUST precede the extra args: `verify`'s `--server`
+  // is nargs=REMAINDER, so everything after it is swallowed as the server
+  // command — a trace placed last would vanish (argparse: "required: trace").
   const argv = ["verify", "--json"];
   if (opts.turn !== undefined) argv.push("--turn", String(opts.turn));
-  if (opts.extraArgs !== undefined) argv.push(...opts.extraArgs);
   argv.push(opts.trace);
+  if (opts.extraArgs !== undefined) argv.push(...opts.extraArgs);
   return argv;
 }
 
