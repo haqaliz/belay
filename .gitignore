@@ -56,3 +56,6 @@ node_modules/
 # exactly the stale-artifact failure the probe's env record exists to prevent.
 # The decision cites the CI artifact (actions/upload-artifact), never a local run.
 /probe_result.json
+
+# demo drive scratch: a drive is disposable; only a PROMOTED run belongs in the repo
+demo/.capture-runs/

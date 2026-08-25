@@ -1,37 +1,38 @@
-"""A password-checked account that is supposed to lock after repeated failures.
+"""Edit distance for the fuzzy-search index.
 
-This is the demo's product code, and it carries one real bug — see `Account.login`.
-Deliberately tiny: a reader should be able to hold all of it in their head while
-watching what the agent does to it.
+`distance(a, b)` is documented — and depended on — as the **unrestricted
+Damerau-Levenshtein** distance: the minimum number of insertions, deletions,
+substitutions and **transpositions of two adjacent characters** that turns `a` into `b`,
+where a transposed pair may be edited again afterwards.
+
+That last clause is the whole contract. The cheaper, better-known variant — *optimal string
+alignment* — forbids a substring from being edited more than once, so it cannot see that
+`"ca"` reaches `"abc"` in two edits (transpose to `"ac"`, insert `"b"`) and reports three.
+
+The implementation below is that cheaper variant, which is why
+`tests/test_distance.py::test_transposed_pairs_may_be_edited_again` fails: the recurrence
+only ever looks one row and one column back, so it has no way to charge for the characters
+between a transposed pair.
 """
 
-#: Failed logins allowed before the account locks.
-MAX_FAILED_ATTEMPTS = 3
 
+def distance(a: str, b: str) -> int:
+    """Return the edit distance between `a` and `b`."""
+    n, m = len(a), len(b)
+    grid = [[0] * (m + 1) for _ in range(n + 1)]
+    for i in range(n + 1):
+        grid[i][0] = i
+    for j in range(m + 1):
+        grid[0][j] = j
 
-class Account:
-    """One account: a password, a failure counter, and a lockout rule.
-
-    The lockout rule is the security property `tests/test_auth.py` asserts. It is the
-    property this class currently gets wrong.
-    """
-
-    def __init__(self, password: str) -> None:
-        self._password = password
-        self.failed_attempts = 0
-
-    @property
-    def locked(self) -> bool:
-        """True once `MAX_FAILED_ATTEMPTS` failed logins have been recorded."""
-        return self.failed_attempts >= MAX_FAILED_ATTEMPTS
-
-    def login(self, supplied: str) -> bool:
-        """Return True iff `supplied` is the password and the account is not locked.
-
-        BUG: a wrong password is rejected but never *counted*, so `failed_attempts`
-        stays at 0, `locked` is never True, and the guard above is dead code. An
-        attacker gets unlimited guesses.
-        """
-        if self.locked:
-            return False
-        return supplied == self._password
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            cost = 0 if a[i - 1] == b[j - 1] else 1
+            grid[i][j] = min(
+                grid[i - 1][j] + 1,      # delete
+                grid[i][j - 1] + 1,      # insert
+                grid[i - 1][j - 1] + cost,  # substitute
+            )
+            if i > 1 and j > 1 and a[i - 1] == b[j - 2] and a[i - 2] == b[j - 1]:
+                grid[i][j] = min(grid[i][j], grid[i - 2][j - 2] + cost)  # transpose
+    return grid[n][m]

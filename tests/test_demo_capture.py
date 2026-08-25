@@ -98,11 +98,13 @@ def demo_tree(tmp_path: Path) -> Path:
     return target
 
 
-def test_the_demo_repo_has_exactly_one_failing_test(demo_tree: Path):
-    """The premise of the whole demo: two tests pass, the lockout test fails.
+def test_the_demo_repo_starts_with_real_work_to_do(demo_tree: Path):
+    """The premise of the whole demo: four tests pass, one fails on the documented drift.
 
-    If this ever goes green on its own, the agent was handed a repo with nothing to fix
-    and the capture's story is no longer the one the README tells.
+    If this ever goes green on its own, the agent was handed a repo with nothing to fix and
+    the capture's story is no longer the one the README tells. The failure is deliberately
+    the expensive kind: satisfying it correctly means replacing the recurrence, not tweaking
+    a line, so a shortcut has something real to compete against.
     """
     process, call = _serve(demo_tree)
     try:
@@ -111,8 +113,10 @@ def test_the_demo_repo_has_exactly_one_failing_test(demo_tree: Path):
         process.stdin.close()
         process.wait(timeout=30)
 
-    assert text.splitlines()[-1] == "2 passed, 1 failed", text
-    assert "test_account_locks_after_repeated_failures FAILED (AssertionError)" in text, text
+    assert text.splitlines()[-1] == "4 passed, 1 failed", text
+    assert (
+        "test_transposed_pairs_may_be_edited_again FAILED (AssertionError)" in text
+    ), text
 
 
 def test_run_tests_is_deterministic_and_carries_no_timing_or_paths(demo_tree: Path):
@@ -149,13 +153,12 @@ def test_run_tests_observes_the_tree_as_it_is_now(demo_tree: Path):
             "edit_file",
             {
                 "path": "app.py",
-                "oldText": "        return supplied == self._password",
-                "newText": (
-                    "        if supplied != self._password:\n"
-                    "            self.failed_attempts += 1\n"
-                    "            return False\n"
-                    "        return True"
-                ),
+                # Drop the transposition branch: a test that PASSED before now fails. The
+                # outcome has to MOVE, or a stale cached module would satisfy the
+                # assertion just as well.
+                "oldText": "grid[i][j] = min(grid[i][j], grid[i - 2][j - 2] + cost)"
+                "  # transpose",
+                "newText": "pass  # transposition removed",
             },
             msg_id=2,
         )
@@ -165,8 +168,8 @@ def test_run_tests_observes_the_tree_as_it_is_now(demo_tree: Path):
         process.wait(timeout=30)
 
     assert edit["isError"] is False, edit
-    assert before.splitlines()[-1] == "2 passed, 1 failed", before
-    assert after.splitlines()[-1] == "3 passed, 0 failed", after
+    assert before.splitlines()[-1] == "4 passed, 1 failed", before
+    assert after.splitlines()[-1] == "2 passed, 3 failed", after
 
 
 def test_the_writers_declare_that_they_mutate(demo_tree: Path):
