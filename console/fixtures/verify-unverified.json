@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "trace": "trace-unverified.jsonl",
+  "turns": [
+    {
+      "ordinal": 0,
+      "tool": "write_note",
+      "status": "UNVERIFIED",
+      "cause": "UNRESTORABLE_CONCURRENT_TURN",
+      "sub_verdicts": [
+        {"axis": "A2", "kind": "replay", "status": "UNVERIFIED", "cause": "UNRESTORABLE_CONCURRENT_TURN", "message": "the turn overlapped another — no pre-state of it ever existed to capture, replay abstains"},
+        {"axis": "A2", "kind": "effect", "status": "UNVERIFIED", "cause": "UNRESTORABLE_CONCURRENT_TURN", "message": "no pre-state, no observed delta — effect abstains"},
+        {"axis": "A2", "kind": "effect:network", "status": "NOT_COVERED", "message": "openWorldHint: false declared — Belay does not observe egress, the promise is recorded, never verified"},
+        {"axis": "A1", "kind": "invariant", "rule": "no-assertion-weakening", "scope": "tests", "status": "UNVERIFIED", "cause": "NO_SNAPSHOT", "message": "no snapshot exists for this turn — nothing judged", "files_compared": 0}
+      ]
+    }
+  ],
+  "aggregate": {"turns_verified": 0, "PASS": 0, "WARN": 0, "FAIL": 0, "UNVERIFIED": 1},
+  "coverage": {
+    "effect:network": {"not_observed_turns": 1, "of_turns": 1, "message": "network egress is not observed; a declared-false openWorldHint is recorded as NOT_COVERED, never verified"}
+  },
+  "exposure": {"recorded": true, "judged_turns": 0, "comparisons": 0},
+  "trajectory": {"status": "UNVERIFIED", "cause": "NO_CLAIM_RECORDED", "message": "no claim record in this trace — nothing was claimed, nothing judged"},
+  "error": null
+}
