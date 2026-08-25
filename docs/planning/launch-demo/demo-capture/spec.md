@@ -33,6 +33,39 @@ deterministic verdict on both platforms, and the runbook.
   run — manual, real model spend, marked as such).
 - N1 (if cheap): a one-command demo script wiring capture→verify→console.
 
+## Decision — 2026-08-25: the demo owns its MCP server (deviation from the plan)
+
+The plan called for driving the capture against the reference node servers
+(`@modelcontextprotocol/server-filesystem` + `mcp-server-commands`, the `s1p`-proven path)
+and writing a **stdlib mimic** of them for the CI replay. Reviewing that against A2 killed
+it: result-equivalence compares the replayed reply to the recorded one, and the reference
+filesystem server answers `edit_file` with a **git-style diff**. A stdlib mimic either
+imitates that byte-exactly (fragile, and pinned to a version we do not vendor) or echoes
+the recorded reply — which reproduces it *by construction*, i.e. a **vacuous A2 PASS
+wearing a real one's clothes**. CI also has no node and `eval/servers/` is a gitignored
+`npm install`, so the reference servers cannot be re-invoked there at all.
+
+**Decided (owner, 2026-08-25):** the demo ships its own server, `demo/server.py` — stdlib,
+deterministic, truthfully annotated, five tools (`list_files`, `read_text_file`,
+`write_file`, `edit_file`, `run_tests`). The **same file** is what the real agent drives
+during the capture and what `belay verify` re-invokes during replay, so the A2 PASS is a
+genuine re-execution and the demo is clone-and-run on any machine with Python.
+
+- **What this does NOT change:** the engine, the trace format, the sandbox, the gated
+  proxy, the verdict, or the agent. `claude -p` is still a real agent making real MCP
+  calls through `python -m belay.proxy` with the sandbox on.
+- **The cost, stated:** we now own both the repo and the server the agent acts on, so a
+  skeptic can say we wrote both sides of the boundary. The answer is that both are ~200
+  lines of readable stdlib in the repo, and neither is the thing under test — the agent's
+  behavior and the invariant's verdict are.
+- **Determinism is a server contract now**, not an accident of the tooling: no clock, no
+  randomness, no network, no durations/temp paths/tracebacks in any reply. `run_tests` is
+  a small in-process runner rather than a `pytest` subprocess for exactly this reason —
+  pytest's output carries durations, a rootdir line and tracebacks with addresses, none of
+  which reproduce, so a recorded pytest reply would report DIVERGED on a faithful trace.
+- Paths are **relative to a root passed as argv**, which is the token replay relocates
+  (`remap_argv`) — so replies carry only relative paths and stay byte-identical anywhere.
+
 ## Out of scope
 
 - The gif (A3), the console container API fix (A2), Langfuse (deferred), A3 claim axis.

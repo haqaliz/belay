@@ -52,6 +52,7 @@ SCAN_AREA: frozenset[str] = frozenset(
         "test_corpus_trajectory_run.py",
         "test_corpus_trajectory_show.py",
         "test_default_scope.py",
+        "test_demo_capture.py",
         "test_determinism.py",
         "test_docker_image.py",
         "test_docker_compose.py",
