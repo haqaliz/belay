@@ -5,6 +5,21 @@ All notable changes to Belay are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0 — until then,
 `0.x` minor bumps may include changes that would be breaking under strict semver.
 
+## [0.23.0] - 2026-08-25
+
+The C7 live console ships — the launch surface (launch checklist L6): `belay verify
+--json` emits the full verdict document (per-turn statuses, every sub-verdict incl.
+NOT_COVERED and UNVERIFIED-with-cause, aggregate, coverage block always present,
+exposure, trajectory) rendered from the same objects as the human report — text output
+byte-identical, exit codes unchanged, contract pinned by a committed fixture; the
+local-first Vue 3 + Vite + TypeScript console (`console/`) streams a live run feed by
+tailing the append-only trace, renders every turn with its verdict and the FAILed
+turn's diff, carries the coverage line on every surface and renders UNVERIFIED
+distinctly from PASS (a correctness test, not a style one), replays any past turn, and
+logs expand/clicks locally; the `console:` compose service ships with a HEALTHCHECK
+(the L3 deferral item C7 resolves) and bundles the engine wheel built in-image. No
+verdict axis, reduction rule, or trace format changed.
+
 ## [0.22.0] - 2026-08-24
 
 The quickstart is the live install path (launch checklist L4): a new `install` CI job
