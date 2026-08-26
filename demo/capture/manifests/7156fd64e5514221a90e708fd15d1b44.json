@@ -1,0 +1,39 @@
+{
+  "handle": "7156fd64e5514221a90e708fd15d1b44",
+  "tree_path": "/Users/aliz/dev/at/belay/.claude/worktrees/feat-launch-demo/demo/.capture-runs/run-009/snapshots/turn-0000",
+  "backend": "clonefile-apfs",
+  "capabilities": [
+    "acls",
+    "clonefile",
+    "dir-mtimes",
+    "hardlinks",
+    "special-modes"
+  ],
+  "fidelity_gaps": [
+    "UNRESTORABLE_ATIME",
+    "UNRESTORABLE_CTIME",
+    "UNRESTORABLE_BIRTHTIME",
+    "UNRESTORABLE_INODE_IDENTITY"
+  ],
+  "sidecar": {
+    "link_groups": [],
+    "special_modes": [],
+    "dir_times": [
+      [
+        "dGVzdHM=",
+        [
+          1787769871360862907,
+          1787769871309491931
+        ]
+      ],
+      [
+        "Lg==",
+        [
+          1787769871361089570,
+          1787769871308858315
+        ]
+      ]
+    ]
+  },
+  "source_root": "/Users/aliz/dev/at/belay/.claude/worktrees/feat-launch-demo/demo/.capture-runs/run-009/workspace"
+}
