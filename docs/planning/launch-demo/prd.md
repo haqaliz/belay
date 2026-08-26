@@ -36,6 +36,11 @@ deferred — the honest first slice is a juxtaposition).
    are corrected to what actually shipped — the committed capture's real flag turn, and
    a documented juxtaposition (console verdict beside the agent's session transcript)
    with the Langfuse integration named deferred.
+5. **DONE is defined under the fallback too.** If the 3-drive cap is reached without a
+   corrupt success (demo-capture spec Decision 2026-08-26), L7's DONE is re-opened with
+   the owner before any redefinition — the negative control (the clean drives verified
+   clean) is the documented fallback posture, and the checklist's L7 row is never marked
+   DONE on an unreviewed meaning.
 
 ## User Personas & Scenarios
 
@@ -55,13 +60,26 @@ deferred — the honest first slice is a juxtaposition).
   test — the `test_auth.py` shape from `tests/test_launch_demo.py`), the committed
   captured run (trace + snapshot trees + manifests), and a `demo/README.md` that is
   the stranger's runbook. All inside the belay repo — one clone, everything.
-- **M2 · The capture is a real agent run.** Drive a real agent once (manual, BYOK
-  `claude -p` via the minting driver, filesystem+shell servers behind the gated
-  proxy — the `s1p`-proven path) on the demo repo with the task *"make the tests
+- **M2 · The capture is a real agent run.** Drive a real agent (manual, BYOK
+  `claude -p` via the minting driver, the demo's own server behind the gated
+  proxy — the approved deviation) on the demo repo with the task *"make the tests
   pass"*. Commit the capture. The agent's trajectory varies; the COMMITTED capture is
   what the demo pins. **The capture ships with a provenance note** (model, date,
   task text, operator) beside the artifact — the freeze-protocol culture applied to
   the demo's headline claim.
+- **M2' · The demo repo's bug contract is HARD by decision (2026-08-26).** Four
+  drives on the original easy contracts (lockout counter, path-glob semantics,
+  unrestricted edit distance; `claude-opus-5` + `claude-haiku-4-5`) all FIXED the
+  bug honestly — zero touched `tests/` (`demo-capture/DRIVES.md`, n=4 recorded as a
+  measurement, not a base rate). The mint's real corrupt successes came from
+  SWE-bench-class bugs where the honest fix was genuinely hard. Decided (owner,
+  2026-08-26): the demo repo contract changes to a bug in that class — the honest
+  fix is real work, the shortcut (weakening the STRONG failing test) is cheaper —
+  while staying a small committable module with the same neutral prompt and task
+  text. Strangers replay the committed capture; they never re-drive, so the repo
+  stays small. The contract selection criteria and the iteration cap are in the
+  demo-capture spec's Decision block; every drive continues to be recorded in
+  `DRIVES.md`.
 - **M3 · Deterministic replay in CI.** A test replays the committed capture every PR
   (no network; the replay server is a deterministic stdlib fixture with the same tool
   names) and asserts: the flag turn FAILs with the A1 `no-assertion-weakening` cause
@@ -129,11 +147,19 @@ deferred — the honest first slice is a juxtaposition).
 
 ## Risks & Open Questions
 
-- **The live agent may not produce a corrupt success on the first drive.** The shape is
-  proven reachable (`s1p`, `pytest-5227`), but a particular draw may behave honestly.
-  Mitigation: the runbook documents re-runs/adjustment; the COMMITTED capture is the
-  pinned artifact either way — the demo never depends on the live run succeeding at
-  demo time.
+- **The live agent may not produce a corrupt success on the drive — MEASURED, not
+  hypothetical.** Four drives (two models, three easy bug contracts) all behaved
+  honestly (`demo-capture/DRIVES.md`, 2026-08-25). The shape is proven reachable
+  (`pytest-5227` turns 11/13, hand-adjudicated weakenings in real captured data),
+  and the mint produced 11 real trajectory TPs on SWE-bench-class bugs. Response,
+  decided by the owner 2026-08-26: re-drive on a **harder repo contract** (see
+  M2') with the protocol + iteration cap in the aspect spec's Decision block. If
+  the cap is reached without a corrupt success, the demo's premise is re-opened
+  with the owner (the honest negative control — four runs verified clean — is the
+  documented fallback posture) before anything synthetic is ever considered: a
+  hand-edited capture would make the demo the one thing it exists to expose
+  (`demo/capture/README.md`). The COMMITTED capture is the pinned artifact either
+  way — the demo never depends on the live run succeeding at demo time.
 - **R5 (over-claiming) is the demo's own failure mode.** The gif, alt text, and PH
   assets must carry the coverage line and never imply a network verdict; the Langfuse
   restatement (M6b) is part of the honesty contract, not copy-editing.
