@@ -182,11 +182,13 @@ def test_the_console_image_renders_a_mounted_trace() -> None:
     """The container serves the real API: a mounted trace lists and derives.
 
     The RED half of the console-container-api aspect: the container's server
-    (server-static.mjs today) serves the SPA and /health but NO /api/* routes,
-    so a trace mounted at the console's trace dir must list under /api/traces
-    and derive into turns under /api/trace. This is the L7 demo's minimum —
-    the demo capture renders only if the compose console can read a trace and
-    derive its turns. The fixture is the console's own roundtrip trace
+    must serve the real API — a trace mounted at the console's trace dir lists
+    under /api/traces and derives into turns under /api/trace. Before the
+    aspect, the container's server (a static-only server) served the SPA and
+    /health but NO /api/* routes, so this test failed with 404s; the container
+    now runs the real console server. This is the L7 demo's minimum — the demo
+    capture renders only if the compose console can read a trace and derive its
+    turns. The fixture is the console's own roundtrip trace
     (console/fixtures/trace-clean.jsonl, 2 turns — write_note, list_files),
     produced through the real writer; the render check exercises the READ
     paths only, so no snapshots/manifests are mounted (verify/replay need

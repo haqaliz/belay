@@ -21,8 +21,9 @@ to `BELAY_CONSOLE_EVENTS` (default `~/.belay/console-events.jsonl`).
 ## Test and build
 
 ```bash
-npm run test       # vitest, fully offline — synthetic fixtures, stub engine, injected clocks
-npm run build      # vue-tsc + vite build (the server serves console/dist statically)
+npm run test        # vitest, fully offline — synthetic fixtures, stub engine, injected clocks
+npm run build       # vue-tsc + vite build (the server serves console/dist statically)
+npm run build:server # tsc — the API server as plain JS (dist-server/), what the container runs
 ```
 
 The C7 correctness tests are the component specs: UNVERIFIED renders distinctly
@@ -33,3 +34,13 @@ without context renders a named-cause UNVERIFIED.
 The engine wrapper is tested against `fixtures/stub-engine.mjs`, which emits the
 pinned `verify --json` contract documents; the console never computes a verdict
 of its own.
+
+## In the container
+
+The compose console (`docker compose up console`) runs THIS server, not a static
+fallback: the image builds the SPA and `dist-server/` in-image and serves the
+full API — traces list, per-trace derivation, live feed, verify/replay, events,
+and `/health` (the healthcheck contract: 200 `{"ok": true, "engine": "<version>"}`
+via the bundled engine, honest 503 with `null` when the probe fails). A trace in
+the shared `/workspace/traces` mount renders in the container exactly as it does
+locally — one server, one behavior.
