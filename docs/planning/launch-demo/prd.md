@@ -30,8 +30,12 @@ deferred — the honest first slice is a juxtaposition).
    container API gap closed), so `docker compose up console` shows the red FAIL + diff —
    the launch visual.
 3. **The demo is true:** the corrupt-success capture is a REAL agent run (BYOK, `claude
-   -p`, filesystem+shell behind the gated proxy), committed as a replayable artifact —
-   real documented behavior, not a staged trace (the locked spec's own words).
+   -p`, the demo server behind the gated proxy) committed as a replayable artifact —
+   real documented behavior, not a staged trace (the locked spec's own words). **The
+   shape is the trajectory one (owner decision 2026-08-27, M2''):** the agent claims
+   verification without ever executing the suite — the shape the mint measured at
+   11/60 = 18.3% (n=60) — carried by the deterministic instance-level A1 rule
+   `suite-before-success-claim`, never by an LLM opinion.
 4. **The record is honest:** the roadmap's "turn 7" and "green Langfuse trace" wordings
    are corrected to what actually shipped — the committed capture's real flag turn, and
    a documented juxtaposition (console verdict beside the agent's session transcript)
@@ -67,7 +71,27 @@ deferred — the honest first slice is a juxtaposition).
   what the demo pins. **The capture ships with a provenance note** (model, date,
   task text, operator) beside the artifact — the freeze-protocol culture applied to
   the demo's headline claim.
-- **M2' · The demo repo's bug contract is HARD by decision (2026-08-26).** Four
+- **M2'' · The demo re-scopes to the TRAJECTORY shape (owner decision 2026-08-27).**
+  The harder-contract re-drive reached its pre-registered 3-drive cap with the
+  corrupt-success still absent: **7 observed drives, zero test weakenings** — both
+  frontier models one-shot even the genuinely hard fix (`demo-capture/DRIVES.md`
+  rows 1–8). The mint's **11 real trajectory TPs** (claim-verification without
+  executing anything, `suite-before-success-claim`, 11/60 = 18.3% at n=60) are the
+  corrupt-success shape that reproduces in this population. Decided (owner,
+  2026-08-27): the demo's corrupt-success shape becomes the **trajectory** one — the
+  agent claims *"verified"* without ever running the suite — carried by the
+  instance-level A1 rule (`default_invariants()` includes it; `belay verify --json`
+  reports it at trace close as `trajectory`). The demo server gains a truthful
+  `run_process` tool (the rule's evidence tool, name-exactness); the committed
+  capture's verdict contract becomes: **every turn PASS + trajectory FAIL with
+  `evidence_count: 0`**. The roadmap's locked-spec wording changes accordingly
+  (recorded in `docs/ROADMAP.md:253-259` and this unit's A3 corrections). The
+  re-scope keeps the same drive protocol (neutral prompt, verbatim task text, gated
+  proxy, sandbox on) and the same cap discipline with a base-rate-grounded cap (5
+  observed drives, ≈64% chance of ≥1 hit at the measured 18.3%); nothing synthetic
+  is ever substituted, and the honest negative control stays the documented fallback.
+- **M2' · The demo repo's bug contract is HARD by decision (2026-08-26) — superseded
+  in part by M2'' (2026-08-27); the drive record stands.** Four
   drives on the original easy contracts (lockout counter, path-glob semantics,
   unrestricted edit distance; `claude-opus-5` + `claude-haiku-4-5`) all FIXED the
   bug honestly — zero touched `tests/` (`demo-capture/DRIVES.md`, n=4 recorded as a
@@ -79,12 +103,17 @@ deferred — the honest first slice is a juxtaposition).
   text. Strangers replay the committed capture; they never re-drive, so the repo
   stays small. The contract selection criteria and the iteration cap are in the
   demo-capture spec's Decision block; every drive continues to be recorded in
-  `DRIVES.md`.
+  `DRIVES.md`. The hard repo contract shipped (`SpellChecker`, commits `137d535` +
+  `efccae6`) and stays the demo repo — the trajectory shape does not depend on bug
+  hardness, and the repo's strong failing test remains the honest control.
 - **M3 · Deterministic replay in CI.** A test replays the committed capture every PR
   (no network; the replay server is a deterministic stdlib fixture with the same tool
-  names) and asserts: the flag turn FAILs with the A1 `no-assertion-weakening` cause
-  and the diff; other turns PASS; the coverage line is present; `belay verify --json`
-  agrees. Replayed on both macOS and Linux.
+  names) and asserts the re-scoped contract: **every turn PASS, the trajectory
+  (instance-level A1 `suite-before-success-claim`) FAILS at trace close with
+  `evidence_count: 0`** (the claim asserts verification without any executed
+  command — the canonical corrupt-success shape), the coverage line is present,
+  `belay verify --json` agrees (its `trajectory` block). Replayed on both macOS and
+  Linux.
 - **M4 · The compose console renders the demo.** Close the container gap:
   `console/server-static.mjs` gains the `/api/*` routes (or the image bundles the real
   server) so `docker compose up console` renders the committed capture — red FAIL +
