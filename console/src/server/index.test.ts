@@ -307,6 +307,32 @@ describe("static SPA serving", () => {
   });
 });
 
+describe("GET /health", () => {
+  it("reports ok with the engine version when the probe succeeds", async () => {
+    const local = await startServer({ engineVersion: async () => "0.23.0" });
+    try {
+      const res = await fetch(`${local.base}/health`);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { ok: boolean; engine: string | null };
+      expect(body).toEqual({ ok: true, engine: "0.23.0" });
+    } finally {
+      await local.stop();
+    }
+  });
+
+  it("answers 503 with an honest null when the engine probe fails", async () => {
+    const local = await startServer({ engineVersion: async () => null });
+    try {
+      const res = await fetch(`${local.base}/health`);
+      expect(res.status).toBe(503);
+      const body = (await res.json()) as { ok: boolean; engine: string | null };
+      expect(body).toEqual({ ok: false, engine: null });
+    } finally {
+      await local.stop();
+    }
+  });
+});
+
 describe("routing", () => {
   it("404s unknown API routes with a named error", async () => {
     const res = await fetch(`${harness.base}/api/nope`);

@@ -74,6 +74,11 @@ services:
       BELAY_CONSOLE_TRACE_DIR: ${BELAY_CONSOLE_TRACE_DIR:-/workspace/traces}
       # The bundled engine's snapshot dir (verify/replay in-container).
       BELAY_SNAPSHOT_DIR: ${BELAY_SNAPSHOT_DIR:-/workspace/snapshots}
+      # The server's dev defaults are loopback + 8787; in the container the
+      # published port is reached via the container's network interface, so
+      # the bind must be 0.0.0.0 and the port the mapping + healthcheck expect.
+      BELAY_CONSOLE_PORT: ${BELAY_CONSOLE_PORT:-8080}
+      BELAY_CONSOLE_HOST: ${BELAY_CONSOLE_HOST:-0.0.0.0}
     healthcheck:
       # /health answers 200 only when the bundled engine reports its version; a
       # 503 (engine unreportable) reads as unhealthy — the honest state.

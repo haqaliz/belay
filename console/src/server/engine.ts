@@ -9,7 +9,7 @@
 // are a missing binary, an unparseable document, or an empty stdout.
 
 import { execFile } from "node:child_process";
-import type { EngineResult, VerifyJsonDoc } from "./types";
+import type { EngineResult, VerifyJsonDoc } from "./types.js";
 
 export interface VerifyOptions {
   /** Trace path, passed positionally as the last argument. */
@@ -27,6 +27,30 @@ export interface VerifyOptions {
 export function resolveBelayBinary(env: NodeJS.ProcessEnv = process.env): string {
   const override = env.BELAY_CONSOLE_ENGINE;
   return typeof override === "string" && override.length > 0 ? override : "belay";
+}
+
+/**
+ * The bundled engine's version, probed the way the container's static server
+ * probed it: `python -c "import belay; print(belay.__version__)"`. `null` on
+ * ANY failure — the probe is a liveness fact, and an unreportable engine must
+ * answer as `null`, never a guessed version (the /health 503 contract).
+ */
+export function probeEngineVersion(timeoutMs = 10_000): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile(
+      "python",
+      ["-c", "import belay; print(belay.__version__)"],
+      { timeout: timeoutMs, maxBuffer: 64 * 1024 },
+      (error, stdout) => {
+        if (error !== null) {
+          resolve(null);
+          return;
+        }
+        const version = String(stdout).trim();
+        resolve(version.length > 0 ? version : null);
+      },
+    );
+  });
 }
 
 export function verifyArgv(opts: VerifyOptions): string[] {

@@ -1,6 +1,7 @@
 // The console's local server: node `http` only (no express), serving the built
 // SPA statically and exposing the API the SPA consumes:
 //
+//   GET  /health                     the healthcheck contract (engine version)
 //   GET  /api/traces                 list trace-*.jsonl under the trace dir
 //   GET  /api/trace?path=            one trace, derived into turns
 //   GET  /api/feed?path=&cursor=     tail deltas (append-only polling)
@@ -16,10 +17,10 @@ import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { runVerifyJson } from "./engine";
-import { createTailState, readTail } from "./tail";
-import type { TailState } from "./tail";
-import { deriveTurns } from "./trace";
+import { probeEngineVersion, runVerifyJson } from "./engine.js";
+import { createTailState, readTail } from "./tail.js";
+import type { TailState } from "./tail.js";
+import { deriveTurns } from "./trace.js";
 
 export interface ServerConfig {
   traceDir?: string;
@@ -28,6 +29,8 @@ export interface ServerConfig {
   env?: NodeJS.ProcessEnv;
   now?: () => Date;
   log?: (line: string) => void;
+  /** The /health engine-version probe; injected for tests, python-based by default. */
+  engineVersion?: () => Promise<string | null>;
 }
 
 export interface TraceListing {
@@ -59,6 +62,7 @@ export function createServer(config: ServerConfig = {}): Server {
   const now = config.now ?? (() => new Date());
   const log = config.log ?? ((line: string) => console.error(`[belay-console] ${line}`));
   const env = config.env ?? process.env;
+  const engineVersion = config.engineVersion ?? probeEngineVersion;
 
   let eventsErrorLogged = false;
 
@@ -237,6 +241,18 @@ export function createServer(config: ServerConfig = {}): Server {
     const method = req.method ?? "GET";
     const route = url.pathname;
 
+    if (method === "GET" && route === "/health") {
+      // The healthcheck contract, mirrored from the container's static server:
+      // 200 {"ok": true, "engine": "<version>"} when the bundled engine reports
+      // its version; 503 with an honest null when the probe fails — never a
+      // claimed ok (the console's no-engine state renders honestly).
+      void (async () => {
+        const engine = await engineVersion();
+        const ok = engine !== null;
+        sendJson(res, ok ? 200 : 503, { ok, engine });
+      })();
+      return;
+    }
     if (method === "GET" && route === "/api/traces") {
       void handleTraces(res);
       return;
