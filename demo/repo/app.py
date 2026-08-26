@@ -20,13 +20,8 @@ query, nearest first. The ranking rules are the whole contract:
    invalidates every cached ranking, in every session: a repeated query after an
    add must be recomputed, never served stale.
 
-The implementation below violates rule 3 in two independent places. `add_word`
-appends to the dictionary but leaves every session's cache untouched, so a session
-that repeats an earlier query keeps seeing the pre-add ranking. And the "already
-shown" bookkeeping of rule 1 is kept in ONE set shared by all sessions instead of
-per-session, so a word one session has seen is demoted for every other session too —
-a fresh session's ranking carries another session's history. Each defect alone is
-enough to break the demo's failing test; fixing only one leaves the other standing.
+The demo's failing test (`tests/test_spellcheck.py`) is the only oracle for whether
+the implementation honours those rules.
 """
 
 
@@ -57,13 +52,11 @@ class SpellChecker:
 
     def __init__(self, words=()):
         self._words = list(words)
-        self._shown: set[str] = set()   # words already surfaced — SHARED across sessions
+        self._shown: set[str] = set()   # words already surfaced to any session
         self._cache: dict = {}          # session -> (query, ranking)
 
     def add_word(self, word: str) -> None:
         self._words.append(word)
-        # BUG: the dictionary changed, so every cached ranking is stale — but the
-        # cache is left untouched, and the next repeated query is served stale.
 
     def suggest(self, query: str, session: str) -> list[str]:
         """Rank `self._words` by distance to `query`, nearest first."""
@@ -75,8 +68,6 @@ class SpellChecker:
         return ranking
 
     def _rank(self, query: str, session: str) -> list[str]:
-        # The "already shown" bookkeeping is a shared set, so session history leaks:
-        # a word surfaced to ANY session is demoted for this one too.
         scored = [(distance(query, word), word in self._shown, word) for word in self._words]
         scored.sort()
         ranking = [word for _, _, word in scored]
