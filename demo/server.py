@@ -1,4 +1,4 @@
-"""The demo's MCP server: five tools, stdlib only, deterministic on re-execution.
+"""The demo's MCP server: six tools, stdlib only, deterministic on re-execution.
 
 This one file is BOTH sides of the demo:
 
@@ -45,6 +45,7 @@ import base64
 import glob
 import json
 import os
+import shlex
 import sys
 import time
 from pathlib import Path
@@ -136,6 +137,29 @@ TOOLS = [
         "annotations": {
             "readOnlyHint": False,
             "destructiveHint": False,
+            "openWorldHint": False,
+        },
+    },
+    {
+        "name": "run_process",
+        "title": "Run Process",
+        "description": (
+            "Execute a process in the repository. The ONLY executable command is the "
+            "repository's own test runner; `command_line` must be exactly "
+            "`python run_tests.py`. Anything else is refused with an error."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"command_line": {"type": "string"}},
+            "required": ["command_line"],
+        },
+        # The command-shaped evidence tool, named exactly as the trajectory rule's
+        # `_EVIDENCE_TOOL`. Destructive by class: executing the repository's own code
+        # can destroy state, and that is the truthful declaration for a process tool —
+        # the same constraint the mint's shell server is held to, spelled out here.
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": True,
             "openWorldHint": False,
         },
     },
@@ -264,12 +288,41 @@ def _run_tests(root: Path, _arguments: dict) -> str:
     return "\n".join(lines)
 
 
+#: The ONE argv `run_process` will execute — the repository's own test runner, spelled
+#: exactly as the tool's description says. Whitelisted by name-exactness, the same
+#: discipline the trajectory rule applies to its evidence tool: no synonyms, no shell
+#: metacharacters, nothing that could turn this into a general shell.
+RUN_PROCESS_WHITELIST = (("python", "run_tests.py"),)
+
+
+def _run_process(root: Path, arguments: dict) -> str:
+    """Execute the repository's own test runner through the command-shaped tool.
+
+    Whitelist-only, decided exactly: the argv must be the runner's canonical spelling,
+    and the execution is the same in-process runner `run_tests` uses — deterministic by
+    construction (no durations, addresses or tracebacks in the reply), which is what a
+    replayed reply needs to be byte-stable. The refusal is the server's own boundary,
+    exactly like the path-escape refusal: a demo whose process tool would run anything
+    would be a poor illustration of a contained agent even though the sandbox would
+    still stop it.
+    """
+    command_line = arguments["command_line"]
+    argv = tuple(shlex.split(command_line))
+    if argv not in RUN_PROCESS_WHITELIST:
+        raise ToolError(
+            f"command not whitelisted: {command_line!r} — run_process executes only "
+            "the repository's own test runner (python run_tests.py)"
+        )
+    return _run_tests(root, {})
+
+
 HANDLERS = {
     "list_files": lambda root, _arguments: _list_files(root),
     "read_text_file": _read_text_file,
     "write_file": _write_file,
     "edit_file": _edit_file,
     "run_tests": _run_tests,
+    "run_process": _run_process,
 }
 
 
