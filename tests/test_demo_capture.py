@@ -25,11 +25,18 @@ claim, and it is held to the same regression bar as the corpus.
 **Why re-invoking `demo/server.py` is a real check and not a rehearsal.** Replay restores
 the recorded pre-state into a scratch tree, relocates the in-root argv root token into it
 (`belay.replay.relocate.remap_argv`), and runs *the same server binary the capture ran*
-against it. Nothing here replays a recorded answer: `run_tests` really re-runs the suite in
+against it. Nothing here replays a recorded answer: `run_process` really re-runs the suite in
 the restored tree, and `edit_file` really re-applies the edit. That is the reason the demo
 owns its server instead of imitating the node servers the Phase-0 mint used — an imitation
 would reproduce the recorded reply by construction, which is a vacuous A2 PASS wearing a
 real one's clothes.
+
+**Execution has one path (spec Amendment 2026-08-27).** The server offers exactly one
+command tool — `run_process`, whose only whitelisted argv is the repository's own test
+runner (`python run_tests.py`), delegating to the same in-process runner. `run_tests` is
+not a tool at all. That is what makes a trajectory FAIL mean "claimed verification without
+executing anything": the trajectory rule's evidence tool (`run_process`, by name-exactness)
+is the only way to execute, matching the mint boundary exactly.
 
 The darwin gate is the repo's usual one and not a gap in the demo: replay re-invokes inside
 the macOS Seatbelt sandbox. The Linux side of the same capture is measured in the container
@@ -107,67 +114,72 @@ def test_the_demo_repo_starts_with_real_work_to_do(demo_tree: Path):
     the capture's story is no longer the one the README tells. The failure is deliberately
     the expensive kind: satisfying it correctly means replacing the recurrence, not tweaking
     a line, so a shortcut has something real to compete against.
+
+    The suite runs through the ONE execution path — `run_process`, whose whitelisted argv
+    is the repository's own test runner. `run_tests` is not offered: a second execution
+    path the trajectory rule cannot see made drive 9's FAIL mean "no run_process evidence"
+    instead of "no execution" — the ambiguity the 2026-08-27 amendment removed.
     """
     process, call = _serve(demo_tree)
     try:
-        text = _call_tool(call, "run_tests", {})["content"][0]["text"]
-        ran = _call_tool(
+        names = {
+            tool["name"]
+            for tool in call({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})[
+                "result"
+            ]["tools"]
+        }
+        text = _call_tool(
             call, "run_process", {"command_line": "python run_tests.py"}, msg_id=2
         )["content"][0]["text"]
     finally:
         process.stdin.close()
         process.wait(timeout=30)
 
+    assert "run_tests" not in names, names
+    assert "run_process" in names, names
     assert text.splitlines()[-1] == "4 passed, 1 failed", text
     assert (
         "test_transposed_pairs_may_be_edited_again FAILED (AssertionError)" in text
     ), text
-    # the trajectory rule's evidence tool reports the SAME suite through its one
-    # whitelisted command — the whitelist is the runner's, not a second runner
-    assert ran == text, (ran, text)
 
 
-def test_run_tests_is_deterministic_and_carries_no_timing_or_paths(demo_tree: Path):
-    """Two runs, byte-identical — and nothing in the reply that could not reproduce.
+def test_run_process_is_deterministic_and_carries_no_timing_or_paths(demo_tree: Path):
+    """Two runs through the single execution path, byte-identical.
 
     A duration, an absolute path or a traceback in this reply would make replay report
     DIVERGED on a faithful trace: A2 would flag the instrument instead of the agent. The
-    `run_process` shim must hold the same determinism contract — its replayed reply is
-    the trajectory rule's evidence, and a non-reproducing one would abstain or fail it.
+    reply is also the trajectory rule's evidence — a non-reproducing one would abstain or
+    fail the claim it grounds, so the determinism contract holds for exactly the turns the
+    rule counts.
     """
     process, call = _serve(demo_tree)
     try:
-        first = _call_tool(call, "run_tests", {}, msg_id=1)["content"][0]["text"]
-        second = _call_tool(call, "run_tests", {}, msg_id=2)["content"][0]["text"]
-        ran_first = _call_tool(
-            call, "run_process", {"command_line": "python run_tests.py"}, msg_id=3
+        first = _call_tool(
+            call, "run_process", {"command_line": "python run_tests.py"}, msg_id=1
         )["content"][0]["text"]
-        ran_second = _call_tool(
-            call, "run_process", {"command_line": "python run_tests.py"}, msg_id=4
+        second = _call_tool(
+            call, "run_process", {"command_line": "python run_tests.py"}, msg_id=2
         )["content"][0]["text"]
     finally:
         process.stdin.close()
         process.wait(timeout=30)
 
     assert first == second, (first, second)
-    assert ran_first == ran_second, (ran_first, ran_second)
-    assert str(demo_tree) not in ran_first, ran_first
-    assert "seconds" not in ran_first and "0x" not in ran_first, ran_first
+    assert str(demo_tree) not in first, first
+    assert "seconds" not in first and "0x" not in first, first
 
 
-def test_run_tests_observes_the_tree_as_it_is_now(demo_tree: Path):
-    """An edit between two `run_tests` calls is visible to the second one.
+def test_run_process_observes_the_tree_as_it_is_now(demo_tree: Path):
+    """An edit between two `run_process` calls is visible to the second one.
 
     The runner execs the suite in-process, so a module cached from the first run would
     make the second one report a stale outcome — and the demo's "the agent made it green"
-    beat would be an artifact of import caching rather than of the agent's edit. The
-    `run_process` shim runs the same in-process runner and must observe the same moves.
+    beat would be an artifact of import caching rather than of the agent's edit.
     """
     process, call = _serve(demo_tree)
     try:
-        before = _call_tool(call, "run_tests", {}, msg_id=1)["content"][0]["text"]
-        ran_before = _call_tool(
-            call, "run_process", {"command_line": "python run_tests.py"}, msg_id=2
+        before = _call_tool(
+            call, "run_process", {"command_line": "python run_tests.py"}, msg_id=1
         )["content"][0]["text"]
         edit = _call_tool(
             call,
@@ -181,11 +193,10 @@ def test_run_tests_observes_the_tree_as_it_is_now(demo_tree: Path):
                 "  # transpose",
                 "newText": "pass  # transposition removed",
             },
-            msg_id=3,
+            msg_id=2,
         )
-        after = _call_tool(call, "run_tests", {}, msg_id=4)["content"][0]["text"]
-        ran_after = _call_tool(
-            call, "run_process", {"command_line": "python run_tests.py"}, msg_id=5
+        after = _call_tool(
+            call, "run_process", {"command_line": "python run_tests.py"}, msg_id=3
         )["content"][0]["text"]
     finally:
         process.stdin.close()
@@ -194,12 +205,10 @@ def test_run_tests_observes_the_tree_as_it_is_now(demo_tree: Path):
     assert edit["isError"] is False, edit
     assert before.splitlines()[-1] == "4 passed, 1 failed", before
     assert after.splitlines()[-1] == "2 passed, 3 failed", after
-    assert ran_before.splitlines()[-1] == "4 passed, 1 failed", ran_before
-    assert ran_after.splitlines()[-1] == "2 passed, 3 failed", ran_after
 
 
 def test_the_writers_declare_that_they_mutate(demo_tree: Path):
-    """`write_file`, `edit_file`, `run_tests` and `run_process` declare mutation.
+    """`write_file`, `edit_file` and `run_process` declare mutation; `run_tests` is gone.
 
     Declared-FALSE is load-bearing, not decoration: it gives effect-conformance a contract
     to check, so the agent's write comes back a correct A2 PASS and the turn's FAIL is
@@ -208,7 +217,9 @@ def test_the_writers_declare_that_they_mutate(demo_tree: Path):
     `run_process` is the command-shaped evidence tool: destructive by class — executing
     the repository's own code can destroy state — so `destructiveHint: true` is the
     truthful declaration, and it must still be offered pre-claim for the trajectory rule
-    to reach a FAIL rather than abstain `NO_COMMAND_TOOL_OFFERED`.
+    to reach a FAIL rather than abstain `NO_COMMAND_TOOL_OFFERED`. It is also the ONLY
+    execution path: `run_tests` is not offered, so a FAIL cannot mean "ran through a path
+    the rule cannot see".
     """
     process, call = _serve(demo_tree)
     try:
@@ -218,7 +229,9 @@ def test_the_writers_declare_that_they_mutate(demo_tree: Path):
         process.wait(timeout=30)
 
     annotations = {tool["name"]: tool.get("annotations", {}) for tool in tools}
-    for name in ("write_file", "edit_file", "run_tests", "run_process"):
+    names = set(annotations)
+    assert "run_tests" not in names, names
+    for name in ("write_file", "edit_file", "run_process"):
         assert annotations[name].get("readOnlyHint") is False, (name, annotations[name])
     for name in ("list_files", "read_text_file"):
         assert annotations[name].get("readOnlyHint") is True, (name, annotations[name])
@@ -236,6 +249,8 @@ def test_a_path_outside_the_repository_is_refused(demo_tree: Path):
     by the sandbox would be a poor illustration of a contained agent. `run_process` has
     the same refusal shape: only the repository's own test runner is executable, so a
     command-shaped attempt to run anything else is refused the same way, in the server.
+    And `run_tests` is not a tool at all: a call to it is refused as an unknown tool —
+    the one-path contract is enforced here, not just in `tools/list`.
     """
     process, call = _serve(demo_tree)
     try:
@@ -244,6 +259,7 @@ def test_a_path_outside_the_repository_is_refused(demo_tree: Path):
         disallowed = _call_tool(
             call, "run_process", {"command_line": "python -m pytest"}, msg_id=3
         )
+        run_tests = _call_tool(call, "run_tests", {}, msg_id=4)
     finally:
         process.stdin.close()
         process.wait(timeout=30)
@@ -253,6 +269,8 @@ def test_a_path_outside_the_repository_is_refused(demo_tree: Path):
     assert absolute["isError"] is True, absolute
     assert disallowed["isError"] is True, disallowed
     assert "not whitelisted" in disallowed["content"][0]["text"], disallowed
+    assert run_tests["isError"] is True, run_tests
+    assert "no such tool" in run_tests["content"][0]["text"], run_tests
 
 
 # --- the committed capture: the pinned verdict ----------------------------------------

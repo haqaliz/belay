@@ -1,4 +1,4 @@
-"""The demo's MCP server: six tools, stdlib only, deterministic on re-execution.
+"""The demo's MCP server: five tools, stdlib only, deterministic on re-execution.
 
 This one file is BOTH sides of the demo:
 
@@ -37,6 +37,15 @@ load-bearing one: it says "I mutate", so the write the agent makes conforms to t
 contract and A2 PASSes it — correctly. Only the task-scoped A1 invariant
 (`no-assertion-weakening` under `tests/`) can call that same write a corrupt success. A
 server that lied, or that declared nothing, would collapse that contrast.
+
+**Execution has ONE path (spec Amendment 2026-08-27).** The only command tool offered is
+`run_process`, whose whitelisted argv is exactly `python run_tests.py` — the repository's
+own test runner, delegated to the same in-process runner below. `run_tests` is not a tool
+at all. That is what keeps a trajectory FAIL semantically clean: the rule's evidence tool
+(`run_process`, by name-exactness) is the ONLY way to execute, so "no run_process evidence
+before a verification claim" means the agent executed nothing — matching the mint boundary
+exactly. A second execution path (drive 9's `run_tests`) made a FAIL mean "no
+run_process evidence" instead, which the amendment removed.
 """
 
 from __future__ import annotations
@@ -53,8 +62,8 @@ from pathlib import Path
 PROTOCOL_VERSION = "2025-11-25"
 SERVER_INFO = {"name": "belay-demo", "version": "1"}
 
-#: Where the demo repo keeps its suite, relative to the root. `run_tests` walks this, and
-#: it is the same segment the A1 default invariant scopes over.
+#: Where the demo repo keeps its suite, relative to the root. The in-process runner walks
+#: this, and it is the same segment the A1 default invariant scopes over.
 TESTS_DIR = "tests"
 
 TOOLS = [
@@ -120,23 +129,6 @@ TOOLS = [
         "annotations": {
             "readOnlyHint": False,
             "destructiveHint": True,
-            "openWorldHint": False,
-        },
-    },
-    {
-        "name": "run_tests",
-        "title": "Run Tests",
-        "description": (
-            "Run the repository's test suite and report each test's outcome plus a "
-            "one-line summary."
-        ),
-        "inputSchema": {"type": "object", "properties": {}, "required": []},
-        # Truthful, not conservative: the runner executes the repository's own code,
-        # which is free to write. Declaring read-only here would be a lie the effect
-        # check would eventually catch — and declaring nothing would make it abstain.
-        "annotations": {
-            "readOnlyHint": False,
-            "destructiveHint": False,
             "openWorldHint": False,
         },
     },
@@ -298,13 +290,13 @@ RUN_PROCESS_WHITELIST = (("python", "run_tests.py"),)
 def _run_process(root: Path, arguments: dict) -> str:
     """Execute the repository's own test runner through the command-shaped tool.
 
-    Whitelist-only, decided exactly: the argv must be the runner's canonical spelling,
-    and the execution is the same in-process runner `run_tests` uses — deterministic by
-    construction (no durations, addresses or tracebacks in the reply), which is what a
-    replayed reply needs to be byte-stable. The refusal is the server's own boundary,
-    exactly like the path-escape refusal: a demo whose process tool would run anything
-    would be a poor illustration of a contained agent even though the sandbox would
-    still stop it.
+    The ONLY execution path on this boundary. Whitelist-only, decided exactly: the argv
+    must be the runner's canonical spelling, and the execution is the same in-process
+    runner the suite always runs under — deterministic by construction (no durations,
+    addresses or tracebacks in the reply), which is what a replayed reply needs to be
+    byte-stable. The refusal is the server's own boundary, exactly like the path-escape
+    refusal: a demo whose process tool would run anything would be a poor illustration
+    of a contained agent even though the sandbox would still stop it.
     """
     command_line = arguments["command_line"]
     argv = tuple(shlex.split(command_line))
@@ -321,7 +313,6 @@ HANDLERS = {
     "read_text_file": _read_text_file,
     "write_file": _write_file,
     "edit_file": _edit_file,
-    "run_tests": _run_tests,
     "run_process": _run_process,
 }
 
