@@ -178,6 +178,118 @@ def test_the_console_image_builds_and_reports_health_with_the_engine() -> None:
         )
 
 
+def test_the_console_image_renders_a_mounted_trace() -> None:
+    """The container serves the real API: a mounted trace lists and derives.
+
+    The RED half of the console-container-api aspect: the container's server
+    (server-static.mjs today) serves the SPA and /health but NO /api/* routes,
+    so a trace mounted at the console's trace dir must list under /api/traces
+    and derive into turns under /api/trace. This is the L7 demo's minimum —
+    the demo capture renders only if the compose console can read a trace and
+    derive its turns. The fixture is the console's own roundtrip trace
+    (console/fixtures/trace-clean.jsonl, 2 turns — write_note, list_files),
+    produced through the real writer; the render check exercises the READ
+    paths only, so no snapshots/manifests are mounted (verify/replay need
+    them, and those stay covered by the offline suite and, in-container, by
+    the demo capture's own snapshots once A1 lands).
+    """
+    import json
+    import os
+    import shutil
+    import tempfile
+
+    fixture_dir = tempfile.mkdtemp(prefix="belay-console-render-")
+    os.chmod(fixture_dir, 0o755)
+    trace_name = "trace-render.jsonl"
+    fixture_trace = _REPO_ROOT / "console" / "fixtures" / "trace-clean.jsonl"
+    assert fixture_trace.is_file(), "the console roundtrip fixture must exist"
+    mounted_trace = Path(fixture_dir) / trace_name
+    shutil.copyfile(fixture_trace, mounted_trace)
+    os.chmod(mounted_trace, 0o644)  # the container's non-root user must read it
+
+    tag = "belay:console-render-test"
+    build = subprocess.run(
+        ["docker", "build", "-f", "console/Dockerfile", "-t", tag, "."],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        errors="replace",
+        timeout=900,
+    )
+    assert build.returncode == 0, build.stderr[-4000:]
+
+    run = subprocess.run(
+        [
+            "docker", "run", "--rm", "-d", "--name", "belay-console-render-test",
+            "-p", "127.0.0.1:18081:8080",
+            "-v", f"{fixture_dir}:/workspace/traces:ro",
+            tag,
+        ],
+        capture_output=True,
+        text=True,
+        errors="replace",
+        timeout=120,
+    )
+    assert run.returncode == 0, run.stderr
+    try:
+        import time
+
+        health = ""
+        for _ in range(30):
+            probe = subprocess.run(
+                ["curl", "-s", "http://127.0.0.1:18081/health"],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=10,
+            )
+            health = probe.stdout
+            try:
+                if json.loads(health).get("ok") is True:
+                    break
+            except (ValueError, TypeError):
+                pass
+            time.sleep(1)
+        payload = json.loads(health)
+        assert payload.get("ok") is True, health
+        assert payload.get("engine") == _project_version(), health
+
+        traces = subprocess.run(
+            ["curl", "-s", "http://127.0.0.1:18081/api/traces"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=10,
+        )
+        assert traces.returncode == 0, traces.stderr
+        listing = json.loads(traces.stdout)
+        names = [t["name"] for t in listing["traces"]]
+        assert names == [trace_name], traces.stdout
+        assert listing["traces"][0]["turns"] == 2, traces.stdout
+
+        trace_view = subprocess.run(
+            [
+                "curl", "-s",
+                f"http://127.0.0.1:18081/api/trace?path={trace_name}",
+            ],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=10,
+        )
+        assert trace_view.returncode == 0, trace_view.stderr
+        view = json.loads(trace_view.stdout)
+        tools = [t["tool"] for t in view["view"]["turns"]]
+        assert tools == ["write_note", "list_files"], trace_view.stdout
+    finally:
+        subprocess.run(
+            ["docker", "rm", "-f", "belay-console-render-test"],
+            capture_output=True,
+            timeout=60,
+        )
+        shutil.rmtree(fixture_dir, ignore_errors=True)
+
+
 def _project_version() -> str:
     """The version pyproject.toml states — what the bundled engine must report."""
     text = (_REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
