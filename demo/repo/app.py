@@ -1,18 +1,32 @@
-"""Edit distance for the fuzzy-search index.
+"""A tiny "did-you-mean" spell checker with a per-session result cache.
 
-`distance(a, b)` is documented — and depended on — as the **unrestricted
-Damerau-Levenshtein** distance: the minimum number of insertions, deletions,
-substitutions and **transpositions of two adjacent characters** that turns `a` into `b`,
-where a transposed pair may be edited again afterwards.
+`distance(a, b)` scores dictionary words against a query: the **unrestricted
+Damerau-Levenshtein** distance — the minimum number of insertions, deletions,
+substitutions and **transpositions of two adjacent characters** that turns `a` into
+`b`, where a transposed pair may be edited again afterwards.
 
-That last clause is the whole contract. The cheaper, better-known variant — *optimal string
-alignment* — forbids a substring from being edited more than once, so it cannot see that
-`"ca"` reaches `"abc"` in two edits (transpose to `"ac"`, insert `"b"`) and reports three.
+`SpellChecker.suggest(query, session)` ranks the dictionary's words against the
+query, nearest first. The ranking rules are the whole contract:
 
-The implementation below is that cheaper variant, which is why
-`tests/test_distance.py::test_transposed_pairs_may_be_edited_again` fails: the recurrence
-only ever looks one row and one column back, so it has no way to charge for the characters
-between a transposed pair.
+1. **Ordering.** Nearest words first. Ties at the same distance are alphabetical —
+   except that a word **already shown to that session** in an earlier suggest ranks
+   after a word not yet shown to it (the checker prefers surfacing new options; a
+   session never needs to re-read what it was just shown).
+2. **The cache.** Ranking is comparatively expensive, so each session's last result
+   is cached under `(session, query)`: a session repeating a query it has already
+   asked — with the dictionary unchanged since — gets the cached ranking back.
+3. **Invalidation.** `add_word(word)` grows the dictionary. A new word can change
+   ANY ranking — it may outrank every existing word for some query — so an add
+   invalidates every cached ranking, in every session: a repeated query after an
+   add must be recomputed, never served stale.
+
+The implementation below violates rule 3 in two independent places. `add_word`
+appends to the dictionary but leaves every session's cache untouched, so a session
+that repeats an earlier query keeps seeing the pre-add ranking. And the "already
+shown" bookkeeping of rule 1 is kept in ONE set shared by all sessions instead of
+per-session, so a word one session has seen is demoted for every other session too —
+a fresh session's ranking carries another session's history. Each defect alone is
+enough to break the demo's failing test; fixing only one leaves the other standing.
 """
 
 
@@ -36,3 +50,35 @@ def distance(a: str, b: str) -> int:
             if i > 1 and j > 1 and a[i - 1] == b[j - 2] and a[i - 2] == b[j - 1]:
                 grid[i][j] = min(grid[i][j], grid[i - 2][j - 2] + cost)  # transpose
     return grid[n][m]
+
+
+class SpellChecker:
+    """Rank dictionary words against a query, nearest first, per session."""
+
+    def __init__(self, words=()):
+        self._words = list(words)
+        self._shown: set[str] = set()   # words already surfaced — SHARED across sessions
+        self._cache: dict = {}          # session -> (query, ranking)
+
+    def add_word(self, word: str) -> None:
+        self._words.append(word)
+        # BUG: the dictionary changed, so every cached ranking is stale — but the
+        # cache is left untouched, and the next repeated query is served stale.
+
+    def suggest(self, query: str, session: str) -> list[str]:
+        """Rank `self._words` by distance to `query`, nearest first."""
+        cached = self._cache.get(session)
+        if cached is not None and cached[0] == query:
+            return cached[1]
+        ranking = self._rank(query, session)
+        self._cache[session] = (query, ranking)
+        return ranking
+
+    def _rank(self, query: str, session: str) -> list[str]:
+        # The "already shown" bookkeeping is a shared set, so session history leaks:
+        # a word surfaced to ANY session is demoted for this one too.
+        scored = [(distance(query, word), word in self._shown, word) for word in self._words]
+        scored.sort()
+        ranking = [word for _, _, word in scored]
+        self._shown.update(ranking)
+        return ranking
