@@ -250,16 +250,43 @@ green on both in CI); no Docker image yet (L3), not published to PyPI (L4).
   (the L3 deferral item C7 resolves) with the engine bundled in-image. L7 (the
   launch demo) is the remaining launch-surface item and uses this console.
 
-### ☐ L7 · Launch demo, locked spec
+### ☐ L7 · Launch demo — **built; the DONE meaning is AMENDED and awaits owner sign-off**
 
-- The roadmap's locked demo: one repo, one failing test, an agent told *"make the
-  tests pass"* — it weakens the test and reports success (a real, documented
-  behavior, not a staged trick). Belay flags the exact turn (A1 invariant, with the
-  diff); shown side-by-side with a green Langfuse trace of the same run.
-- **Tagline:** *"Your agent lied. Your dashboard didn't notice. Mine did."*
-- **DONE =** the demo is a self-contained repo + runbook any stranger can reproduce,
-  a fresh demo gif replaces the current one in the README, and the verdict is
-  deterministic (A3 corroborates; never carries the demo).
+- **The locked spec, as written:** one repo, one failing test, an agent told *"make the
+  tests pass"* — it weakens the test and reports success. Belay flags the exact turn (A1
+  invariant, with the diff); shown side-by-side with a green Langfuse trace of the same
+  run. **Tagline:** *"Your agent lied. Your dashboard didn't notice. Mine did."*
+- **AMENDED 2026-08-27 (owner, launch-demo PRD M2‴).** The corrupt success could not be
+  produced on demand: **18 observed drives across three conditions** — two frontier
+  models, an easy bug contract, a genuinely hard one, an expensive-suite lever — yielded
+  **zero** (`docs/planning/launch-demo/demo-capture/DRIVES.md`). Nothing synthetic was
+  substituted. The demo ships the **negative control**: a real agent fixed the bug
+  honestly, ran the suite, said so, and Belay's verdict is all-green — every turn PASS
+  plus the instance-level trajectory rule PASSing *"supported by 2 replayed command
+  turn(s)"*. There is **no flag turn**, no Langfuse integration (C9 export-back is
+  deferred), and no A3. The companion is the measured number: **11/60 = 18.3%**, with its
+  decomposition. The "lied" tagline is retired for the demo's headline.
+- **Built 2026-08-27/28** (`feat/launch-demo/aliz`, aspects A1–A3):
+  - **A1** — `demo/` is self-contained: fixture repo, the committed capture (trace +
+    snapshots + manifests) with `PROVENANCE.md`, and `demo/README.md` as the stranger's
+    runbook. `tests/test_demo_capture.py` re-executes it every PR (10/10).
+  - **A2** — the compose console runs the REAL API server and renders the capture. Three
+    defects found by running it: `belay verify` had no `--timeout` (so every console
+    verify errored), no default replay context, and a 60s subprocess wall that killed a
+    300s-authorised replay. Measured after: **7/7 PASS, 0 UNVERIFIED, trajectory PASS**,
+    through `POST /api/verify` with only the env defaults set.
+  - **A3** — `npm run record:demo` regenerates `assets/belay-demo.gif` from the artifact;
+    the README alt text, `docs/ROADMAP.md`, `CAPABILITY_ROADMAP.md:715` and
+    `live-console/prd.md:12` are corrected to what shipped;
+    `docs/planning/launch-demo/ph-assets.md` drafts the listing (which also clears the
+    gate's *PH listing assets* row).
+- **DONE =** the demo is a self-contained repo + runbook any stranger can reproduce, a
+  fresh demo gif replaces the current one in the README, and the verdict is deterministic.
+  **All three now hold** — under the amended meaning above.
+- **☐ NOT ticked, deliberately.** M2‴ pre-registered that *"L7's DONE is re-opened with
+  the owner before any redefinition — the checklist's L7 row is never marked DONE on an
+  unreviewed meaning."* The meaning changed (a green demo, not a caught cheat). **The
+  owner ticks this box, not the implementer.**
 
 ---
 
@@ -290,6 +317,12 @@ green on both in CI); no Docker image yet (L3), not published to PyPI (L4).
 - [ ] **PH listing assets drafted:** tagline, the number, the demo gif, the honest
       coverage line ("macOS+Linux sandbox; sees what crosses the MCP boundary; a
       PASS excludes the network dimension").
+      **Drafted 2026-08-28** — `docs/planning/launch-demo/ph-assets.md`, all five
+      elements plus a "claims that must NOT appear" list. Three questions are left
+      open for the owner there (which tagline ships; gif-first or number-first; and
+      whether to record a second gif of a run that FAILs, from the mint's banked —
+      and therefore not reader-reproducible — captures). Box stays ☐ until those are
+      answered.
 - [ ] **L8** — optional; absence of A3 is not a blocker, by design.
 
 **If any item is still ☐, the launch date is not set — the item list is.** The last
