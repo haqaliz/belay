@@ -1,0 +1,46 @@
+{
+  "handle": "97f0dc57e80a4978beff13b9ac1a0989",
+  "tree_path": "../snapshots/turn-0004",
+  "backend": "clonefile-apfs",
+  "capabilities": [
+    "acls",
+    "clonefile",
+    "dir-mtimes",
+    "hardlinks",
+    "special-modes"
+  ],
+  "fidelity_gaps": [
+    "UNRESTORABLE_ATIME",
+    "UNRESTORABLE_CTIME",
+    "UNRESTORABLE_BIRTHTIME",
+    "UNRESTORABLE_INODE_IDENTITY"
+  ],
+  "sidecar": {
+    "link_groups": [],
+    "special_modes": [],
+    "dir_times": [
+      [
+        "X19weWNhY2hlX18=",
+        [
+          1787789075318863264,
+          1787788632953553929
+        ]
+      ],
+      [
+        "dGVzdHM=",
+        [
+          1787789075318417805,
+          1787789056416325469
+        ]
+      ],
+      [
+        "Lg==",
+        [
+          1787788632954468179,
+          1787788632953347554
+        ]
+      ]
+    ]
+  },
+  "source_root": "/Users/aliz/dev/at/belay/.claude/worktrees/feat-launch-demo/demo/.capture-runs/run-014/workspace"
+}
