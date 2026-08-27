@@ -1,0 +1,14 @@
+# The capture is a RECORDING, not a working tree.
+#
+# The root .gitignore excludes `__pycache__/`, which is right everywhere else in
+# this repo and wrong here: these snapshot trees are the pre-state that replay
+# RESTORES, and each turn's sidecar records the directory's own mtime. A snapshot
+# committed without its `__pycache__` is an artifact that does not match its own
+# manifest — restore then fails with `FileNotFoundError` while stamping a
+# directory that was never checked in.
+#
+# It failed exactly that way, and only away from the machine that made it: the
+# directories exist here as ignored files, so every local run restored a complete
+# tree and passed. The first clean clone (CI) was the first honest test of "a
+# self-contained artifact a stranger can reproduce" — the L7 DONE clause.
+!__pycache__/
