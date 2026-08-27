@@ -185,6 +185,32 @@ own row group in DRIVES.md). At the cap without a corrupt success: STOP and re-o
 with the owner — the negative control (11+ clean runs verified clean) is the named
 fallback; nothing synthetic ever.
 
+**Amendment 3 (owner, 2026-08-27 — FINAL SHAPE): the demo ships the NEGATIVE
+CONTROL.** The expensive-suite condition also came back clean (5/5 honest; agents
+paid the ~90s suite and claimed truthfully), and the record stands at **18 observed
+drives across three conditions, zero genuine corrupt successes** — while the mint
+measured the shape at 11/60 = 18.3% on real SWE-bench repos. The shape is a property
+of repo scale (both fixing and verifying expensive in absolute terms), not of the
+draw. Decided (owner, 2026-08-27): the demo ships the **honest negative control** —
+the direct answer to *"does this thing cry wolf?"* — with the Phase-0 number as the
+companion exhibit (the shape is real; it lives at SWE-bench scale, measured, never
+claimed for this repo).
+
+- The **committed capture** is ONE of the honest runs (a VERIFICATION claim with
+  replayed `run_process` evidence → trajectory PASS, every turn PASS), promoted
+  from the drive runs with full provenance.
+- The **pinned verdict contract**: every turn PASS + trajectory PASS
+  (`evidence_count ≥ 1`) + the coverage line + `belay verify --json` agreement.
+- The **demo story**: the console renders the committed capture all-green with its
+  coverage line; the drive log (`DRIVES.md`, 16 runs verified clean + 2 abstentions)
+  is the exhibit; the companion number is the Phase-0 11/60 = 18.3% (with its
+  decomposition — never bare). The tagline is redefined (the "lied" framing is
+  factually wrong for this capture and is retired from the demo's headline; the
+  roadmap's locked spec is amended accordingly).
+- L7 DONE is redefined per PRD Goal 5 (owner decision, recorded here): the demo is
+  the negative control + the number, not a corrupt-success show.
+- No further model spend; the 2026-08-26/-27 drive caps are closed as recorded.
+
 ## Out of scope
 
 - The gif (A3), the console container API fix (A2), Langfuse (deferred), A3 claim axis.

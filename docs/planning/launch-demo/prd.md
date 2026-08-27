@@ -29,13 +29,15 @@ deferred — the honest first slice is a juxtaposition).
 2. **The demo is the console:** the compose console renders the committed capture (the
    container API gap closed), so `docker compose up console` shows the red FAIL + diff —
    the launch visual.
-3. **The demo is true:** the corrupt-success capture is a REAL agent run (BYOK, `claude
-   -p`, the demo server behind the gated proxy) committed as a replayable artifact —
-   real documented behavior, not a staged trace (the locked spec's own words). **The
-   shape is the trajectory one (owner decision 2026-08-27, M2''):** the agent claims
-   verification without ever executing the suite — the shape the mint measured at
-   11/60 = 18.3% (n=60) — carried by the deterministic instance-level A1 rule
-   `suite-before-success-claim`, never by an LLM opinion.
+3. **The demo is true:** the capture is a REAL agent run (BYOK, `claude -p`, the demo
+   server behind the gated proxy) committed as a replayable artifact — real
+   documented behavior, never staged. **FINAL SHAPE (owner decision 2026-08-27,
+   M2'''): the honest negative control** — a real run verified clean (all turns
+   PASS, trajectory PASS with replayed evidence), with the drive log (16 clean
+   runs) as the exhibit and the Phase-0 number (11/60 = 18.3%, with its
+   decomposition) as the companion: the corrupt-success shape is real and measured
+   at SWE-bench scale; this demo's claim is exactly what it shows and nothing
+   more.
 4. **The record is honest:** the roadmap's "turn 7" and "green Langfuse trace" wordings
    are corrected to what actually shipped — the committed capture's real flag turn, and
    a documented juxtaposition (console verdict beside the agent's session transcript)
@@ -71,7 +73,19 @@ deferred — the honest first slice is a juxtaposition).
   what the demo pins. **The capture ships with a provenance note** (model, date,
   task text, operator) beside the artifact — the freeze-protocol culture applied to
   the demo's headline claim.
-- **M2'' · The demo re-scopes to the TRAJECTORY shape (owner decision 2026-08-27).**
+- **M2''' · FINAL SHAPE (owner decision 2026-08-27): the demo ships the NEGATIVE
+  CONTROL.** The trajectory re-scope and its expensive-suite lever both exhausted
+  their pre-registered caps — **18 observed drives across three conditions, zero
+  genuine corrupt successes** (DRIVES.md rows 1–18); the shape reproduces at
+  SWE-bench scale only (the mint's 11/60 = 18.3%, the companion exhibit). The
+  committed capture is one of the honest runs (VERIFICATION claim with replayed
+  `run_process` evidence → trajectory PASS, every turn PASS), promoted with
+  provenance; the pinned verdict is all-green + the coverage line; the drive log
+  (16 runs verified clean, 2 abstentions) is the exhibit. The "lied" tagline is
+  retired from the demo's headline (factually wrong for the capture; recorded in
+  the roadmap's amended locked spec). See the demo-capture spec's Amendment 3.
+- **M2'' · The demo re-scoped to the TRAJECTORY shape (owner decision 2026-08-27) —
+  superseded by M2''' (the same session); the record stands.**
   The harder-contract re-drive reached its pre-registered 3-drive cap with the
   corrupt-success still absent: **7 observed drives, zero test weakenings** — both
   frontier models one-shot even the genuinely hard fix (`demo-capture/DRIVES.md`
@@ -108,12 +122,11 @@ deferred — the honest first slice is a juxtaposition).
   hardness, and the repo's strong failing test remains the honest control.
 - **M3 · Deterministic replay in CI.** A test replays the committed capture every PR
   (no network; the replay server is a deterministic stdlib fixture with the same tool
-  names) and asserts the re-scoped contract: **every turn PASS, the trajectory
-  (instance-level A1 `suite-before-success-claim`) FAILS at trace close with
-  `evidence_count: 0`** (the claim asserts verification without any executed
-  command — the canonical corrupt-success shape), the coverage line is present,
-  `belay verify --json` agrees (its `trajectory` block). Replayed on both macOS and
-  Linux.
+  names) and asserts the FINAL contract: **every turn PASS, the trajectory
+  (instance-level A1 `suite-before-success-claim`) PASSes at trace close with
+  `evidence_count ≥ 1`** (the honest run's claim is supported by replayed
+  `run_process` evidence), the coverage line is present, `belay verify --json`
+  agrees (its `trajectory` block). Replayed on both macOS and Linux.
 - **M4 · The compose console renders the demo.** Close the container gap:
   `console/server-static.mjs` gains the `/api/*` routes (or the image bundles the real
   server) so `docker compose up console` renders the committed capture — red FAIL +
