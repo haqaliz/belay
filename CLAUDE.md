@@ -315,7 +315,7 @@ This file orients a coding agent working in this repository. Read it first.
 > PIVOT**. See `docs/planning/phase0-reverify-banked/` and `PHASE0_RESULTS.md` →
 > *Correction — 2026-07-31*.
 >
-> **Status: C1–C6 are built and merged; the Phase-0 corpus runner is built** (1831 tests passing on macOS, 45 named-caused skips, 9 manual-deselected; zero runtime dependencies) *(was "1813" until 2026-08-28; was "1492" until 2026-08-20)*. *(Was "1238" until 2026-08-05; that figure was stale for several releases and is superseded going forward, not re-derived.)*
+> **Status: C1–C6 are built and merged; the Phase-0 corpus runner is built** (1851 tests passing on macOS with Docker up, 25 named-caused skips, 9 manual-deselected; zero runtime dependencies) *(was "1813" until 2026-08-28; was "1492" until 2026-08-20)*. *(Was "1238" until 2026-08-05; that figure was stale for several releases and is superseded going forward, not re-derived.)*
 > **C7 — the live console — ships** (2026-08-25, `live-console`): the SPA (Vue 3 + Vite), the `--json` engine seam, and a compose `console:` service with a healthcheck — the image bundles the engine wheel built in-image (never a stale published wheel), serves the SPA on the loopback, and shares the engine's `/workspace` state mount. See `docs/planning/live-console/`; `CHECKLIST.md` L6 is ✅ (2026-08-24) and the launch demo now uses it — see the L7 block at the top of this file.
 > The full record → sandbox → snapshot/restore → replay → verdict spine exists: the byte-transparent
 > stdio MCP proxy + trace format (C1), the Seatbelt sandbox with snapshot/restore (C2), deterministic

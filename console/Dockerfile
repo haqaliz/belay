@@ -53,5 +53,22 @@ COPY --from=spa-build /console/dist-server /console/dist-server
 RUN adduser --disabled-password --uid 1000 --gecos "" belay
 WORKDIR /console
 USER belay
+# The IMAGE's own defaults, not the dev server's. `run.ts` defaults to 8787 on
+# 127.0.0.1 and reads traces from ~/.belay/traces — right for `npm run server` on
+# a laptop, wrong in a container: the loopback bind is the container's own, the
+# port disagrees with EXPOSE below, and the trace dir is not the `/workspace`
+# state mount this image is deployed with. So `docker run -p 127.0.0.1:8080:8080`
+# published a port nothing listened on, and a trace mounted at /workspace/traces
+# was invisible. Compose set all of these by hand and was therefore the only path
+# that ever worked. An image must be correct when run plainly; compose may still
+# override, and does.
+#
+# NOT set here, deliberately: BELAY_CONSOLE_VERIFY_SERVER (no server command can
+# be guessed — the engine's fail-closed error is the honest answer) and
+# BELAY_CONSOLE_VERIFY_TIMEOUT (deployment-specific; compose pins the demo's 300).
+ENV BELAY_CONSOLE_PORT=8080 \
+    BELAY_CONSOLE_HOST=0.0.0.0 \
+    BELAY_CONSOLE_TRACE_DIR=/workspace/traces \
+    BELAY_SNAPSHOT_DIR=/workspace/snapshots
 EXPOSE 8080
 CMD ["node", "dist-server/run.js"]

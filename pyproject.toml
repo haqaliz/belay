@@ -95,4 +95,12 @@ addopts = "-m 'not manual and not install'"
 # imports and undefined helper names in them are facts about the captured agent run, not
 # defects. Excluded rather than per-rule-ignored because the next fixture will carry some
 # other real-world untidiness and must not need a config change to be checked in intact.
-extend-exclude = ["tests/fixtures/assertions"]
+#
+# `demo/capture/` is the same category and the stronger case: it is a FROZEN RECORDING of
+# a real agent run — trace, manifests, and the snapshotted pre-state trees the replay
+# restores. Its README says "nothing in here is edited by hand, ever", and a verdict is
+# only meaningful because the bytes are the ones the run actually saw. `ruff --fix` on a
+# snapshot would silently change what replay re-executes, which is trace tampering by
+# linter. (It fires today: the agent's own `l = last_col` is an E741 in
+# `snapshots/turn-0006/app.py`.)
+extend-exclude = ["tests/fixtures/assertions", "demo/capture"]
