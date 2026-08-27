@@ -45,6 +45,34 @@ describe("verifyArgv", () => {
     ]);
   });
 
+  it("adds --timeout <seconds> before the trace when replayTimeoutSeconds is set", () => {
+    expect(verifyArgv({ trace: "/t/trace-a.jsonl", replayTimeoutSeconds: 300 })).toEqual([
+      "verify",
+      "--json",
+      "--timeout",
+      "300",
+      "/t/trace-a.jsonl",
+    ]);
+  });
+
+  it("keeps --timeout ahead of --turn and the trace (both regular options)", () => {
+    expect(verifyArgv({ trace: "/t/trace-a.jsonl", turn: 3, replayTimeoutSeconds: 300 })).toEqual([
+      "verify",
+      "--json",
+      "--timeout",
+      "300",
+      "--turn",
+      "3",
+      "/t/trace-a.jsonl",
+    ]);
+  });
+
+  it("omits --timeout when replayTimeoutSeconds is not set (current behavior)", () => {
+    const argv = verifyArgv({ trace: "/t/trace-a.jsonl" });
+    expect(argv).not.toContain("--timeout");
+    expect(argv).toEqual(["verify", "--json", "/t/trace-a.jsonl"]);
+  });
+
   it("keeps the trace ahead of REMAINDER-style extra args (--server swallows the tail)", () => {
     // `belay verify`'s `--server` is nargs=REMAINDER: a trace placed after it
     // would be eaten and argparse would die with "required: trace".

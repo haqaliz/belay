@@ -64,6 +64,18 @@ export function createServer(config: ServerConfig = {}): Server {
   const env = config.env ?? process.env;
   const engineVersion = config.engineVersion ?? probeEngineVersion;
 
+  // `BELAY_CONSOLE_VERIFY_TIMEOUT` (seconds) → `verify --timeout <seconds>`,
+  // passed to the engine whenever the verify/replay handlers run. The engine's
+  // default per-replay timeout (10s) cannot replay the demo capture's ~44s
+  // `run_process` turns — those would render UNVERIFIED. Absent, or not a
+  // positive integer, means nothing is passed (the engine default applies);
+  // a value is never guessed.
+  const rawVerifyTimeout = env.BELAY_CONSOLE_VERIFY_TIMEOUT;
+  const verifyTimeoutSeconds =
+    typeof rawVerifyTimeout === "string" && /^\d+$/.test(rawVerifyTimeout) && Number(rawVerifyTimeout) > 0
+      ? Number(rawVerifyTimeout)
+      : undefined;
+
   let eventsErrorLogged = false;
 
   function resolveInside(root: string, requested: string): string | null {
@@ -184,7 +196,13 @@ export function createServer(config: ServerConfig = {}): Server {
     const extraArgs: string[] = [];
     if (typeof body?.manifest === "string") extraArgs.push("--manifest-dir", body.manifest);
     if (typeof body?.server === "string") extraArgs.push("--server", body.server);
-    const result = await runVerifyJson({ trace: resolved, turn, extraArgs, env });
+    const result = await runVerifyJson({
+      trace: resolved,
+      turn,
+      extraArgs,
+      env,
+      replayTimeoutSeconds: verifyTimeoutSeconds,
+    });
     sendJson(res, 200, result);
   }
 

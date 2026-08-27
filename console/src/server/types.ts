@@ -94,7 +94,7 @@ export interface VerifyJsonDoc {
   aggregate: VerifyAggregate;
   coverage: Record<string, CoverageBlock>;
   exposure: { recorded: boolean; judged_turns: number; comparisons: number };
-  trajectory: { status: string; cause: string | null; message: string } | null;
+  trajectory: { status: VerdictStatus; cause: string | null; message: string } | null;
   error: { cause: string } | null;
 }
 

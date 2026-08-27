@@ -16,6 +16,13 @@ export interface VerifyOptions {
   trace: string;
   /** `--turn N` — the console's replay path (N1: replay uses verify --turn N). */
   turn?: number;
+  /**
+   * `--timeout <seconds>` — the per-replay timeout passthrough. The engine's
+   * default (10s) cannot replay the demo capture's ~44s `run_process` turns,
+   * so the demo surfaces set this; absent means nothing is passed and the
+   * engine default applies.
+   */
+  replayTimeoutSeconds?: number;
   /** Extra positional flags (e.g. `--server`, `--manifest-dir` for replay). */
   extraArgs?: string[];
   env?: NodeJS.ProcessEnv;
@@ -58,6 +65,7 @@ export function verifyArgv(opts: VerifyOptions): string[] {
   // is nargs=REMAINDER, so everything after it is swallowed as the server
   // command — a trace placed last would vanish (argparse: "required: trace").
   const argv = ["verify", "--json"];
+  if (opts.replayTimeoutSeconds !== undefined) argv.push("--timeout", String(opts.replayTimeoutSeconds));
   if (opts.turn !== undefined) argv.push("--turn", String(opts.turn));
   argv.push(opts.trace);
   if (opts.extraArgs !== undefined) argv.push(...opts.extraArgs);

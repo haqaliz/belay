@@ -221,6 +221,73 @@ describe("POST /api/verify and /api/replay", () => {
     expect(body.ok).toBe(false);
     expect(body.error.cause).toBe("missing-context");
   });
+
+  it("passes --timeout from BELAY_CONSOLE_VERIFY_TIMEOUT (the demo's slow turns)", async () => {
+    const local = await startServer({
+      env: {
+        ...process.env,
+        BELAY_CONSOLE_ENGINE: stub,
+        BELAY_CONSOLE_VERIFY_TIMEOUT: "300",
+        STUB_ENGINE_MODE: "argv",
+      },
+    });
+    try {
+      const res = await fetch(`${local.base}/api/verify`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ trace: "trace-clean.jsonl" }),
+      });
+      const body = (await res.json()) as { ok: boolean; doc: { argv: string[] } };
+      expect(body.ok).toBe(true);
+      expect(body.doc.argv).toContain("--timeout");
+      expect(body.doc.argv).toContain("300");
+      const traceIndex = body.doc.argv.findIndex((a) => a.endsWith("trace-clean.jsonl"));
+      expect(traceIndex).toBeGreaterThan(body.doc.argv.indexOf("--timeout"));
+    } finally {
+      await local.stop();
+    }
+  });
+
+  it("passes nothing when BELAY_CONSOLE_VERIFY_TIMEOUT is absent", async () => {
+    const local = await startServer({
+      env: { ...process.env, BELAY_CONSOLE_ENGINE: stub, STUB_ENGINE_MODE: "argv" },
+    });
+    try {
+      const res = await fetch(`${local.base}/api/verify`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ trace: "trace-clean.jsonl" }),
+      });
+      const body = (await res.json()) as { ok: boolean; doc: { argv: string[] } };
+      expect(body.ok).toBe(true);
+      expect(body.doc.argv).not.toContain("--timeout");
+    } finally {
+      await local.stop();
+    }
+  });
+
+  it("treats a non-numeric BELAY_CONSOLE_VERIFY_TIMEOUT as absent (never a guessed value)", async () => {
+    const local = await startServer({
+      env: {
+        ...process.env,
+        BELAY_CONSOLE_ENGINE: stub,
+        BELAY_CONSOLE_VERIFY_TIMEOUT: "soon",
+        STUB_ENGINE_MODE: "argv",
+      },
+    });
+    try {
+      const res = await fetch(`${local.base}/api/verify`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ trace: "trace-clean.jsonl" }),
+      });
+      const body = (await res.json()) as { ok: boolean; doc: { argv: string[] } };
+      expect(body.ok).toBe(true);
+      expect(body.doc.argv).not.toContain("--timeout");
+    } finally {
+      await local.stop();
+    }
+  });
 });
 
 describe("POST /api/events", () => {

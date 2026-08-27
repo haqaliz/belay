@@ -98,6 +98,10 @@ function onExpand(turn: TraceView["turns"][number]): void {
         <VerdictBadge status="UNVERIFIED" /> <span class="agg-num">{{ doc.aggregate.UNVERIFIED }}</span>
         <span class="agg-verified">{{ doc.aggregate.turns_verified }} turns verified</span>
       </div>
+      <div v-if="doc && doc.trajectory" class="trajectory-line" data-testid="trajectory-line">
+        <VerdictBadge :status="doc.trajectory.status" :cause="doc.trajectory.cause ?? null" />
+        <span class="traj-message">{{ doc.trajectory.message }}</span>
+      </div>
       <VerdictBadge v-else-if="engineError" status="no-engine" />
     </header>
 
@@ -163,6 +167,19 @@ function onExpand(turn: TraceView["turns"][number]): void {
 .agg-verified {
   color: #64748b;
   font-weight: 500;
+}
+.trajectory-line {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  font: 500 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding: 3px 8px;
+  border: 1px solid #bbf7d0;
+  border-radius: 4px;
+  background: #f0fdf4;
+}
+.trajectory-line .traj-message {
+  color: #334155;
 }
 .engine-unavailable,
 .load-error {

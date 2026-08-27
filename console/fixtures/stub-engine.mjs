@@ -22,6 +22,12 @@ if (mode === "bad-json") {
 if (mode === "empty") {
   process.exit(1);
 }
+if (mode === "argv") {
+  // Echo the argv as a JSON doc: the seam for "did the server pass X?" —
+  // the timeout-passthrough tests read this instead of inferring from success.
+  process.stdout.write(JSON.stringify({ schema: 1, argv }));
+  process.exit(0);
+}
 
 const hasTurn = argv.includes("--turn");
 // The trace is the FIRST positional after the `verify` subcommand:

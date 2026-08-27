@@ -74,6 +74,12 @@ services:
       BELAY_CONSOLE_TRACE_DIR: ${BELAY_CONSOLE_TRACE_DIR:-/workspace/traces}
       # The bundled engine's snapshot dir (verify/replay in-container).
       BELAY_SNAPSHOT_DIR: ${BELAY_SNAPSHOT_DIR:-/workspace/snapshots}
+      # Per-replay verify timeout in seconds, passed to `belay verify
+      # --timeout`. The engine's default (10s) cannot replay the demo capture's
+      # ~44s run_process turns — they would render UNVERIFIED — so the console
+      # service pins the demo's needs; a mounted capture with the same shape
+      # needs the same value (console/README.md).
+      BELAY_CONSOLE_VERIFY_TIMEOUT: ${BELAY_CONSOLE_VERIFY_TIMEOUT:-300}
       # The server's dev defaults are loopback + 8787; in the container the
       # published port is reached via the container's network interface, so
       # the bind must be 0.0.0.0 and the port the mapping + healthcheck expect.

@@ -18,6 +18,20 @@ The server shells out to the local `belay` CLI for verdicts: PATH first, with a
 `BELAY_CONSOLE_TRACE_DIR` (default `~/.belay/traces`); click/expand events append
 to `BELAY_CONSOLE_EVENTS` (default `~/.belay/console-events.jsonl`).
 
+**Verify timeout knob.** `BELAY_CONSOLE_VERIFY_TIMEOUT` (seconds) is passed to
+`belay verify --timeout` on every verify/replay the server runs. The engine's
+default per-replay timeout is 10s, which cannot replay the launch demo capture's
+~44s `run_process` turns — without the knob they render `UNVERIFIED` (a false
+abstention, never a false PASS). Set it for the demo (the compose console
+service pins `300`):
+
+```bash
+BELAY_CONSOLE_TRACE_DIR=demo/capture BELAY_CONSOLE_VERIFY_TIMEOUT=300 npm run server
+```
+
+Absent (or not a positive integer) means nothing is passed and the engine
+default applies.
+
 ## Test and build
 
 ```bash
