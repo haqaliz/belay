@@ -11,6 +11,7 @@
 //
 // Every verdict travels in the engine's document; this server computes none.
 
+import { statSync } from "node:fs";
 import { appendFile, readFile, readdir, stat } from "node:fs/promises";
 import { createServer as httpCreateServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
@@ -54,6 +55,39 @@ const MIME: Record<string, string> = {
   ".woff2": "font/woff2",
 };
 
+/**
+ * A command string split into argv tokens on whitespace. Deliberately NOT a shell
+ * parser: no quoting, no escapes, no expansion — a token with a space in it is not
+ * expressible here, and pretending otherwise would silently mis-split an operator's
+ * command. An absent or blank value yields no tokens at all.
+ */
+export function splitCommand(command: string | undefined): string[] {
+  if (typeof command !== "string") return [];
+  const trimmed = command.trim();
+  return trimmed.length === 0 ? [] : trimmed.split(/\s+/);
+}
+
+/**
+ * The `<trace-stem>.manifests` sibling of a trace — the mint convention the gate writes
+ * and `belay phase0 run` resolves — or `null` when it is not a directory that exists.
+ *
+ * `null` means NO `--manifest-dir` is passed, and `belay verify` requires the flag: the
+ * engine's own "required: --manifest-dir" error is then the honest outcome. Guessing a
+ * path that is not there would turn a missing replay context into a wall of UNVERIFIED
+ * turns with a cause that blamed the snapshots rather than the setup.
+ */
+export function siblingManifestDir(tracePath: string): string | null {
+  const candidate = path.join(
+    path.dirname(tracePath),
+    `${path.basename(tracePath, path.extname(tracePath))}.manifests`,
+  );
+  try {
+    return statSync(candidate).isDirectory() ? candidate : null;
+  } catch {
+    return null;
+  }
+}
+
 export function createServer(config: ServerConfig = {}): Server {
   const traceDir = config.traceDir ?? process.env.BELAY_CONSOLE_TRACE_DIR ?? path.join(homedir(), ".belay", "traces");
   const eventsFile =
@@ -75,6 +109,15 @@ export function createServer(config: ServerConfig = {}): Server {
     typeof rawVerifyTimeout === "string" && /^\d+$/.test(rawVerifyTimeout) && Number(rawVerifyTimeout) > 0
       ? Number(rawVerifyTimeout)
       : undefined;
+
+  // `BELAY_CONSOLE_VERIFY_SERVER` — the default `--server` command for verify/replay,
+  // whitespace-split into argv tokens. The engine's `--server` is nargs=REMAINDER: it
+  // takes the command as separate tokens, so a single string would be exec'd as one
+  // absurd filename ("python3 /srv/demo/server.py {workspace}"). The demo container
+  // sets it so the console's verdicts are real re-execution rather than an operator
+  // typing the command in by hand. Absent means nothing is passed and the engine's own
+  // fail-closed error ("a server command is required") is the honest outcome.
+  const defaultServerTokens = splitCommand(env.BELAY_CONSOLE_VERIFY_SERVER);
 
   let eventsErrorLogged = false;
 
@@ -193,15 +236,41 @@ export function createServer(config: ServerConfig = {}): Server {
     }
     // Order matters: `--manifest-dir` must precede `--server`, which is
     // nargs=REMAINDER and would swallow everything after it.
+    //
+    // A request-carried server/manifest always wins over the env defaults: the operator
+    // typing a command into the replay dialog is a deliberate act, and the defaults exist
+    // only so the packaged demo has a working replay context without one.
+    const manifest =
+      typeof body?.manifest === "string" && body.manifest.length > 0
+        ? body.manifest
+        : siblingManifestDir(resolved);
+    const serverTokens =
+      typeof body?.server === "string" && body.server.trim().length > 0
+        ? splitCommand(body.server)
+        : defaultServerTokens;
     const extraArgs: string[] = [];
-    if (typeof body?.manifest === "string") extraArgs.push("--manifest-dir", body.manifest);
-    if (typeof body?.server === "string") extraArgs.push("--server", body.server);
+    if (manifest !== null) extraArgs.push("--manifest-dir", manifest);
+    if (serverTokens.length > 0) extraArgs.push("--server", ...serverTokens);
+    // The wall around the subprocess is sized from the SAME per-replay budget the
+    // engine was given: a whole-trace verify replays every turn, so a wall fixed at
+    // one turn's worth would kill a run the operator authorised (and report it as an
+    // engine failure). A trace we cannot derive counts as one turn — the wall only
+    // shrinks, and a shrunken wall is a named error, never a verdict.
+    let turnsInScope = 1;
+    if (turn === undefined) {
+      try {
+        turnsInScope = deriveTurns(resolved).turns.length;
+      } catch {
+        turnsInScope = 1;
+      }
+    }
     const result = await runVerifyJson({
       trace: resolved,
       turn,
       extraArgs,
       env,
       replayTimeoutSeconds: verifyTimeoutSeconds,
+      turnsInScope,
     });
     sendJson(res, 200, result);
   }

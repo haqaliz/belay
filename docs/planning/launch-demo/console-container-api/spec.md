@@ -58,3 +58,48 @@ show it.
   already used for `npm run server`, so its output shape is known).
 - The render check needs docker — it runs in the docker CI job's module (the existing
   `test_docker_compose.py` gate), not the default suite.
+## Amendment — 2026-08-27: the console's verdicts needed one engine flag
+
+**Out of scope said "any engine change". This aspect made one, deliberately, and it is
+recorded here rather than absorbed silently.**
+
+The console shells out to `belay verify --json`. The demo capture's `run_process` turns
+re-run a real suite in ~44s, and `verify`'s per-replay timeout was the fixed 10s default
+— so the console's headline turns rendered UNVERIFIED. A prior commit on this branch
+answered that by passing `--timeout` from `BELAY_CONSOLE_VERIFY_TIMEOUT`. **The flag did
+not exist on `verify`.** `corpus add`, `phase0 run` and `interop correlate` each had one;
+`verify` did not. argparse answered `unrecognized arguments: --timeout <trace>` with an
+EMPTY stdout and exit 2, so with the compose service's pinned `300` **every** console
+verify degraded to the `empty-output` error path — strictly worse than the abstention it
+was meant to fix, and invisible to the console's own suite, whose stub engine echoes argv
+and cannot object.
+
+Three changes, each pinned by a test:
+
+1. **`belay verify --timeout <seconds>`** (`tests/test_verify_cli_timeout.py`) — the same
+   flag the three sibling surfaces already carry, defaulting to the same
+   `cli.DEFAULT_TIMEOUT`, passed through to `verify_turn`. No verdict axis, invariant or
+   status changed; a raised timeout can only turn an UNVERIFIED-by-clock into whatever
+   the replay actually finds.
+2. **The console's replay context by default** — `BELAY_CONSOLE_VERIFY_SERVER`
+   (whitespace-split into `--server` argv tokens; `verify --server` is a REMAINDER and
+   takes separate tokens, so the previous single-string push would have exec'd the whole
+   command as one filename) and `--manifest-dir` defaulting to the trace's
+   `<trace-stem>.manifests` sibling **only when it exists**. Absent either, nothing is
+   passed and the engine's own fail-closed error stands. A request-carried
+   `server`/`manifest` always wins.
+3. **The console's own subprocess wall, derived rather than fixed** — the wall was 60s
+   while the authorised per-replay budget was 300s, so the console SIGTERMed a legitimate
+   replay at exactly 60.0s and reported `empty-output`, blaming the engine for its own
+   kill. The wall is now `timeout x turns-in-scope` (floored at the old 60s default) and
+   a wall that does fire reports `console-wall-timeout`, a distinct named cause.
+
+**Measured end-to-end on the committed capture**, not inferred from stubs:
+`belay verify --json --timeout 300 ... --server python3 demo/server.py '{workspace}'`
+→ **7/7 PASS, 0 UNVERIFIED, trajectory PASS — supported by 2 replayed command turn(s)**,
+exit 0, ~2m12s; the same verdict through the console's `POST /api/verify` with only the
+env defaults set; and the slow `run_process` turn 6 through `POST /api/replay` → **PASS**
+in 66s (the run that was being killed at 60s).
+
+**Still out of scope and untouched:** the gif (A3), the capture itself (A1), the GHCR
+publish, and every verdict axis, invariant and status.

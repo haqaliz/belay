@@ -32,6 +32,39 @@ BELAY_CONSOLE_TRACE_DIR=demo/capture BELAY_CONSOLE_VERIFY_TIMEOUT=300 npm run se
 Absent (or not a positive integer) means nothing is passed and the engine
 default applies.
 
+**Replay context.** `belay verify` needs two more things to re-execute a turn:
+the MCP server to replay against and the snapshot manifests of the recorded
+pre-state. The server supplies both by default so a packaged capture verifies
+without an operator typing them in:
+
+- `BELAY_CONSOLE_VERIFY_SERVER` — the `--server` command, **split on whitespace**
+  into argv tokens (`verify --server` is a remainder and takes the command as
+  separate tokens). Unset means no `--server` is passed and the engine's own
+  fail-closed error — *"a server command is required. Nothing to replay
+  against."* — is the answer, never a guessed command replayed against the wrong
+  binary.
+- `--manifest-dir` defaults to the trace's `<trace-stem>.manifests` **sibling**,
+  the convention the gate writes and `belay phase0 run` resolves, and only when
+  that directory actually exists. Otherwise nothing is passed and `verify`'s
+  required-argument error stands.
+
+Both are defaults: a `server`/`manifest` carried on the request (the replay
+dialog's inputs) always wins.
+
+The server's own wall around the `belay` subprocess is **derived from the same
+per-replay budget** (`timeout x turns in scope`, floored at 60s), not fixed: a
+wall smaller than the budget the operator authorised would SIGTERM a legitimate
+replay, and a killed engine leaves empty stdout. When the wall does fire the
+cause is `console-wall-timeout`, deliberately distinct from `empty-output` —
+the console never blames the engine for its own kill.
+
+```bash
+BELAY_CONSOLE_TRACE_DIR=demo/capture \
+BELAY_CONSOLE_VERIFY_TIMEOUT=300 \
+BELAY_CONSOLE_VERIFY_SERVER="python3 $(pwd)/demo/server.py {workspace}" \
+  npm run server
+```
+
 ## Test and build
 
 ```bash

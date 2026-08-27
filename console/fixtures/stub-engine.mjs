@@ -22,6 +22,12 @@ if (mode === "bad-json") {
 if (mode === "empty") {
   process.exit(1);
 }
+if (mode === "hang") {
+  // Never answers, and never exits: the seam for "whose timeout fired?" — the
+  // caller's wall must report ITSELF as the cause rather than blaming the engine
+  // for empty stdout. Top-level await, so nothing below this runs.
+  await new Promise(() => {});
+}
 if (mode === "argv") {
   // Echo the argv as a JSON doc: the seam for "did the server pass X?" —
   // the timeout-passthrough tests read this instead of inferring from success.

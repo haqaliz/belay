@@ -37,10 +37,11 @@ is a macOS path; the Linux side of the same measurement runs in the container
    uv run pytest tests/test_demo_capture.py -q    # 10/10, ~5 min (the suite is deliberately slow)
    ```
 
-2. **One stock command over the committed artifact** — `belay phase0 run` is the
-   timeout-capable surface (`--timeout` above the engine's fixed 10s per-replay default,
-   which cannot replay the honest capture's ~44s `run_process` turns; `{workspace}` is
-   substituted with the capture's own recorded root and relocated into the scratch):
+2. **One stock command over the committed artifact** — `belay phase0 run` reports the
+   mint's ledger shape over the whole directory (`--timeout` raises the engine's 10s
+   per-replay default, which cannot replay the honest capture's ~44s `run_process`
+   turns; `{workspace}` is substituted with the capture's own recorded root and
+   relocated into the scratch):
 
    ```sh
    belay phase0 run demo/capture \
@@ -54,17 +55,35 @@ is a macOS path; the Linux side of the same measurement runs in the container
    the coverage and exposure lines travelling alongside. (`--ledger` must precede
    `--server`: the server command is a remainder.)
 
-   Why not `belay verify` here: its per-replay timeout is the fixed 10s default, so the
-   expensive `run_process` turns would come back UNVERIFIED — a false abstention, never a
-   false PASS. The tests drive the identical computation with the raised timeout and
-   render through the same JSON builders `belay verify --json` uses
-   (`tests/test_demo_capture.py`).
+   `belay verify` reaches the same verdict on the same artifact — it carries `--timeout`
+   too, which is what the console shells out with:
+
+   ```sh
+   belay verify --json --timeout 300 \
+     demo/capture/trace-*.jsonl \
+     --manifest-dir demo/capture/trace-*.manifests \
+     --server python3 "$(pwd)/demo/server.py" '{workspace}'
+   ```
+
+   7/7 PASS, 0 UNVERIFIED, trajectory **PASS — supported by 2 replayed command turn(s)**,
+   exit 0, ~2 min. Without `--timeout` the expensive `run_process` turns come back
+   UNVERIFIED — a false abstention, never a false PASS. (`--manifest-dir` must precede
+   `--server`: the server command is a remainder.)
 
 ## Watch it in the console
 
 ```sh
-BELAY_CONSOLE_TRACE_DIR=demo/capture npm run server   # console/ — the live-verdict SPA
+cd console && BELAY_CONSOLE_TRACE_DIR=../demo/capture \
+  BELAY_CONSOLE_VERIFY_TIMEOUT=300 \
+  BELAY_CONSOLE_VERIFY_SERVER="python3 $(pwd)/../demo/server.py {workspace}" \
+  npm run server                                      # the live-verdict SPA
 ```
+
+The two extra variables are the capture's replay context: the raised per-replay timeout
+its ~44s `run_process` turns need, and the server to re-invoke against. Without them the
+console still renders the recorded trace, but its verdicts degrade honestly — UNVERIFIED,
+or the engine's "a server command is required" — never a PASS it did not earn. The
+manifest dir is found automatically: `<trace-stem>.manifests`, the capture's own sibling.
 
 (`console/README.md` has the full commands; the console never computes a verdict — it
 renders the engine's `--json` document.)

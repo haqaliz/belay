@@ -105,6 +105,10 @@ export type EngineErrorCause =
   | "spawn-failed"
   | "unparseable-json"
   | "empty-output"
+  // The console's own wall killed the subprocess. Kept distinct from
+  // `empty-output`: a killed engine leaves empty stdout too, and conflating the
+  // two blames the engine for the caller's SIGTERM.
+  | "console-wall-timeout"
   | "missing-context";
 
 export interface EngineError {

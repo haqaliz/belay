@@ -1,7 +1,16 @@
 // Endpoint tests for the console server, fully offline: synthetic fixture
 // traces, the stub engine binary, and tmp dirs for events and the SPA dist.
 
-import { appendFileSync, chmodSync, copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  chmodSync,
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -284,6 +293,119 @@ describe("POST /api/verify and /api/replay", () => {
       const body = (await res.json()) as { ok: boolean; doc: { argv: string[] } };
       expect(body.ok).toBe(true);
       expect(body.doc.argv).not.toContain("--timeout");
+    } finally {
+      await local.stop();
+    }
+  });
+});
+
+describe("verify replay-context defaults (the demo capture's verdicts)", () => {
+  it("injects BELAY_CONSOLE_VERIFY_SERVER as whitespace-split --server tokens after the trace", async () => {
+    mkdirSync(path.join(harness.traceDir, "trace-clean.manifests"), { recursive: true });
+    const local = await startServer({
+      traceDir: harness.traceDir,
+      env: {
+        ...process.env,
+        BELAY_CONSOLE_ENGINE: stub,
+        STUB_ENGINE_MODE: "argv",
+        BELAY_CONSOLE_VERIFY_SERVER: "python3 /srv/demo/server.py {workspace}",
+      },
+    });
+    try {
+      const res = await fetch(`${local.base}/api/verify`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ trace: "trace-clean.jsonl" }),
+      });
+      const body = (await res.json()) as { ok: boolean; doc: { argv: string[] } };
+      expect(body.ok).toBe(true);
+      const argv = body.doc.argv;
+      expect(argv).toContain("--server");
+      const serverIndex = argv.indexOf("--server");
+      expect(argv.slice(serverIndex + 1)).toEqual([
+        "python3",
+        "/srv/demo/server.py",
+        "{workspace}",
+      ]);
+      expect(serverIndex).toBeGreaterThan(argv.findIndex((a) => a.endsWith("trace-clean.jsonl")));
+    } finally {
+      await local.stop();
+    }
+  });
+
+  it("defaults --manifest-dir to the trace's sibling <stem>.manifests when it exists", async () => {
+    mkdirSync(path.join(harness.traceDir, "trace-clean.manifests"), { recursive: true });
+    const local = await startServer({
+      traceDir: harness.traceDir,
+      env: { ...process.env, BELAY_CONSOLE_ENGINE: stub, STUB_ENGINE_MODE: "argv" },
+    });
+    try {
+      const res = await fetch(`${local.base}/api/verify`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ trace: "trace-clean.jsonl" }),
+      });
+      const body = (await res.json()) as { ok: boolean; doc: { argv: string[] } };
+      expect(body.ok).toBe(true);
+      const argv = body.doc.argv;
+      const manifestIndex = argv.indexOf("--manifest-dir");
+      expect(manifestIndex).toBeGreaterThan(-1);
+      expect(argv[manifestIndex + 1]).toBe(path.join(harness.traceDir, "trace-clean.manifests"));
+      // The pinned argv order (engine.test.ts): the trace positional first, then
+      // --manifest-dir, then --server LAST — `verify --server` is nargs=REMAINDER and
+      // swallows everything after it.
+      expect(manifestIndex).toBeGreaterThan(argv.findIndex((a) => a.endsWith("trace-clean.jsonl")));
+    } finally {
+      await local.stop();
+    }
+  });
+
+  it("passes no --manifest-dir when the sibling does not exist (the engine's fail-closed error is the honest outcome)", async () => {
+    const local = await startServer({
+      traceDir: harness.traceDir,
+      env: { ...process.env, BELAY_CONSOLE_ENGINE: stub, STUB_ENGINE_MODE: "argv" },
+    });
+    try {
+      const res = await fetch(`${local.base}/api/verify`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ trace: "trace-clean.jsonl" }),
+      });
+      const body = (await res.json()) as { ok: boolean; doc: { argv: string[] } };
+      expect(body.ok).toBe(true);
+      expect(body.doc.argv).not.toContain("--manifest-dir");
+    } finally {
+      await local.stop();
+    }
+  });
+
+  it("lets a request-carried server/manifest win over the env defaults", async () => {
+    mkdirSync(path.join(harness.traceDir, "trace-clean.manifests"), { recursive: true });
+    const local = await startServer({
+      traceDir: harness.traceDir,
+      env: {
+        ...process.env,
+        BELAY_CONSOLE_ENGINE: stub,
+        STUB_ENGINE_MODE: "argv",
+        BELAY_CONSOLE_VERIFY_SERVER: "python3 /srv/demo/server.py {workspace}",
+      },
+    });
+    try {
+      const res = await fetch(`${local.base}/api/verify`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          trace: "trace-clean.jsonl",
+          server: "python my-own-server.py",
+          manifest: "/tmp/my-manifests",
+        }),
+      });
+      const body = (await res.json()) as { ok: boolean; doc: { argv: string[] } };
+      expect(body.ok).toBe(true);
+      const argv = body.doc.argv;
+      expect(argv.slice(argv.indexOf("--server") + 1)).toEqual(["python", "my-own-server.py"]);
+      expect(argv[argv.indexOf("--manifest-dir") + 1]).toBe("/tmp/my-manifests");
+      expect(argv).not.toContain("/srv/demo/server.py");
     } finally {
       await local.stop();
     }
