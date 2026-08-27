@@ -65,6 +65,31 @@ BELAY_CONSOLE_VERIFY_SERVER="python3 $(pwd)/demo/server.py {workspace}" \
   npm run server
 ```
 
+## Record the demo gif
+
+```bash
+npm run record:demo      # -> assets/belay-demo.gif
+```
+
+**Manual by design, never CI.** It drives a real browser (Playwright's chromium — a
+separate per-machine download: `npx playwright install chromium`) and it re-executes the
+committed capture through the engine, which takes minutes. The gif is committed; nothing
+regenerates it on a push.
+
+What makes the output deterministic is not the clock: the subject is a frozen artifact
+and each beat waits on the STATE it is about (the verdict landing, not a sleep), while
+the frame sequence and per-frame delays are fixed constants in the script. The PNG decode
+and the GIF encode both happen inside the browser page — it already has a PNG decoder and
+gifenc is pure JS — so there is no ffmpeg and no image dependency in node.
+
+| Variable | Effect |
+|---|---|
+| `BELAY_DEMO_TRACE_DIR` | what to record (default `demo/capture`) |
+| `BELAY_DEMO_FRAME_DIR` | also write each beat as a PNG, for inspecting the composition |
+| `BELAY_DEMO_FROM_FRAMES` | re-encode an existing frame dir instead of re-driving the console — tuning the palette or the delays should not cost another few minutes of real re-execution |
+| `BELAY_DEMO_PALETTE` | GIF palette size (default 64; the console is flat UI) |
+| `BELAY_DEMO_VERDICT_TIMEOUT_MS` | how long to wait for the verdict before giving up (default 15 min) |
+
 ## Test and build
 
 ```bash

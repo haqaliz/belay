@@ -214,4 +214,29 @@ describe("TraceView", () => {
     await wrapper.find(".back-btn").trigger("click");
     expect(wrapper.emitted("back")).toBeTruthy();
   });
+
+  it("heads with the trace's name, never the operator's absolute path", async () => {
+    // The trace list hands over absolute paths (the API resolves them inside the
+    // trace dir), so a naive heading prints someone's home directory — and this
+    // view is the launch asset's subject. The full path stays reachable as a title.
+    mockFetch({
+      "/api/trace": {
+        view: {
+          path: "/Users/someone/dev/belay/demo/capture/trace-abc.jsonl",
+          turns: [],
+          frames: 0,
+          skipped: { unparseableLines: 0, unknownKinds: [], gaps: [] },
+          windows: { open: true, close: true },
+        },
+      },
+      "/api/verify": { ok: true, doc: failedDoc },
+    });
+    const wrapper = mount(TraceView, {
+      props: { tracePath: "/Users/someone/dev/belay/demo/capture/trace-abc.jsonl" },
+    });
+    await flushPromises();
+    const name = wrapper.get(".trace-name");
+    expect(name.text()).toBe("trace-abc.jsonl");
+    expect(name.attributes("title")).toBe("/Users/someone/dev/belay/demo/capture/trace-abc.jsonl");
+  });
 });

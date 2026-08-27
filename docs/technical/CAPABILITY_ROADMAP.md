@@ -712,7 +712,11 @@ corpus on day 1 rather than starting empty.
 **Why it is moat.** Not the moat itself — the *surface* through which the moat is legible.
 The streaming, steerable live-run feed is a proven shape (mirroring a sibling project's
 `watch` command), and it
-is what makes the launch demo land: a green Langfuse trace beside Belay's red turn-7 verdict.
+is what makes the launch demo land: the verdict, rendered per turn, beside the agent's own
+session transcript — which reports success and carries no verdict at all. (Written as "a green
+Langfuse trace beside Belay's red turn-7 verdict"; corrected 2026-08-27 — the shipped demo is
+the negative control, there is no turn 7, and no Langfuse integration exists. See
+`docs/ROADMAP.md` -> The launch demo.)
 It is also the "watch and steer" primitive the team/approval layer grows out of in Phase 2.
 
 **What we build:**

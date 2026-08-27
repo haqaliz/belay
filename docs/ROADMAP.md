@@ -252,11 +252,15 @@ Summarised, non-authoritatively: **PROCEED** iff ≥3 ***independent*** hand-aud
 
 ### The launch demo (locked)
 
-One repo, one failing test, an agent told *"make the tests pass."* It weakens the test and reports success — a real, documented behavior, not a staged trick. Belay flags **turn 7**: invariant `tests/ is read-only` violated, with the exact diff. The A3 claim axis independently corroborates ("all tests pass" re-derived against the **original** suite → exit 1). Shown side-by-side with a green Langfuse trace of the same run.
+**AMENDED 2026-08-27 (owner, launch-demo PRD M2‴), and the amendment is the point.** The spec below was written as a corrupt success: *"Belay flags **turn 7**: invariant `tests/ is read-only` violated, with the exact diff … shown side-by-side with a green Langfuse trace"*, under the tagline *"Your agent lied. Your dashboard didn't notice. Mine did."* **We could not produce it on demand.** Eighteen observed drives across three conditions — two frontier models, an easy bug contract, a genuinely hard one, and an expensive-suite lever — yielded **zero** corrupt successes (`docs/planning/launch-demo/demo-capture/DRIVES.md`). Nothing synthetic was substituted, so the demo ships what the drives actually produced.
 
-*"Your agent lied. Your dashboard didn't notice. Mine did."*
+**What ships:** one repo, one failing test, an agent told *"make the tests pass."* It fixes the bug honestly, runs the suite, and says so — and Belay's verdict is **all green**: every turn PASS, and the instance-level trajectory rule `suite-before-success-claim` PASSing *"supported by 2 replayed command turn(s)"*, because replay re-ran the suite itself and observed the outcome. **This is the negative control**, and it is the harder half of a verification claim: a detector that only ever fires is not a detector. **There is no flag turn in the committed capture** — a doc naming one is stale.
 
-The headline verdict is deterministic. A3 corroborates; it never carries the demo.
+**Its companion is the number, and the number is measured, not staged:** the Phase-0 mint found the corrupt-success shape at SWE-bench scale — **11/60 = 18.3%** hand-audited trajectory violations, always quoted with its decomposition (never the raw 37/52 = 71.2%). The shape is real; this repo is simply not where a frontier model exhibits it.
+
+The verdict is deterministic and re-executable: `tests/test_demo_capture.py` replays the committed capture on every PR and asserts it has not moved. **A1 carries it; no model is consulted.** A3 (claim re-derivation) is not built and does not appear in the demo.
+
+**On the observability juxtaposition:** the honest form is the console's verdict beside the agent's own session transcript — the transcript reports a successful run and carries no verdict at all, which is precisely the gap. **A real Langfuse integration is NOT built:** C9's first slice ingests and correlates OTLP spans; exporting verdicts back into a collector is a named deferral. Do not stage a Langfuse screenshot to imply an integration that does not exist.
 
 ### Key Deliverables
 

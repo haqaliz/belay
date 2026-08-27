@@ -9,8 +9,10 @@ Sources: `docs/planning/_card/issue.md` (brief), `docs/planning/_card/understand
 
 The launch demo is CLI output and gifs: the moat is real but **not legible**. C7 — the
 live console — is the surface through which the moat is seen
-(`CAPABILITY_ROADMAP.md:712-714`): a green Langfuse trace beside Belay's red turn-7
-verdict is the launch visual. It is also the "watch and steer" primitive the Phase-2
+(`CAPABILITY_ROADMAP.md:712-714`): the per-turn verdict, rendered, is the launch visual.
+(Written here as "a green Langfuse trace beside Belay's red turn-7 verdict"; corrected
+2026-08-27 — the shipped demo is the negative control, there is no turn 7, and no Langfuse
+integration exists. See `docs/ROADMAP.md` -> The launch demo.) It is also the "watch and steer" primitive the Phase-2
 team/approval layer grows out of. Nothing renders verdicts today except the human-text
 CLI — there is no frontend, no `verify --json` structured output, no streaming source
 beyond the append-only trace file, and no click/override machinery (all confirmed in the

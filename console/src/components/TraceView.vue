@@ -70,6 +70,11 @@ const coverageEntries = computed<CoverageEntry[] | null>(() => {
 
 const turns = computed(() => view.value?.turns ?? []);
 
+// The trace list hands over ABSOLUTE paths (the API resolves them inside the trace
+// dir), so heading with the raw prop prints the operator's home directory. The name
+// is what identifies a run; the full path stays reachable as the title.
+const traceName = computed(() => props.tracePath.split("/").pop() || props.tracePath);
+
 const verdictByOrdinal = computed(() => {
   const map = new Map<number, VerdictTurn>();
   for (const turn of doc.value?.turns ?? []) map.set(turn.ordinal, turn);
@@ -90,7 +95,7 @@ function onExpand(turn: TraceView["turns"][number]): void {
   <section class="trace-view">
     <header class="trace-head">
       <button type="button" class="back-btn" @click="emit('back')">← all traces</button>
-      <h2 class="trace-name">{{ tracePath }}</h2>
+      <h2 class="trace-name" :title="tracePath">{{ traceName }}</h2>
       <div v-if="doc" class="aggregate-strip" data-testid="aggregate-strip">
         <VerdictBadge status="PASS" /> <span class="agg-num">{{ doc.aggregate.PASS }}</span>
         <VerdictBadge status="WARN" /> <span class="agg-num">{{ doc.aggregate.WARN }}</span>

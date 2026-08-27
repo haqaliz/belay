@@ -9,7 +9,8 @@
     "build:server": "tsc -p tsconfig.server.json",
     "preview": "vite preview",
     "test": "vitest run",
-    "server": "tsx src/server/run.ts"
+    "server": "tsx src/server/run.ts",
+    "record:demo": "node scripts/record-demo-gif.mjs"
   },
   "dependencies": {
     "vue": "^3.5.41"

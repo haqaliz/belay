@@ -21,7 +21,9 @@ Belay sits as a transparent proxy between an AI agent and the tools it calls. It
 
 <br/>
 
-<img src="https://raw.githubusercontent.com/haqaliz/belay/master/assets/belay-demo.gif" alt="belay verify replays a two-turn trace. Turn 0 is an honest read: A2 result and effect and the A1 tests/ read-only invariant all PASS. Turn 1's write reproduces faithfully so A2 result PASSes, but replay observes a mutation under the read-only tests/ scope, so the A1 invariant FAILs and the turn reduces to FAIL — a corrupt success caught with zero LLM." width="820" />
+<img src="https://raw.githubusercontent.com/haqaliz/belay/master/assets/belay-demo.gif" alt="The Belay console renders a committed capture of a real agent run (claude -p, told only &quot;make the tests pass&quot;). Its seven turns list; while the engine re-executes them every turn reads &quot;verifying…&quot; with &quot;coverage unavailable&quot; and no status — never a placeholder PASS. The verdict then lands: PASS 7, WARN 0, FAIL 0, UNVERIFIED 0 over 7 turns verified, and the instance-level trajectory rule PASSes, supported by 2 replayed command turns — the agent claimed the tests passed and replay re-ran the suite itself to confirm it had. Opening a turn shows the sub-verdicts behind it, including effect:network NOT_COVERED: Belay observes no network egress, so this PASS asserts nothing about it." width="820" />
+
+<sub><b>The demo is the negative control.</b> A real agent fixed the bug honestly and said so; Belay agrees, and shows exactly what that agreement covers. The corrupt-success shape is measured elsewhere and at scale — <b>11/60 = 18.3%</b> in the Phase-0 mint (<a href="docs/technical/PHASE0_RESULTS.md">with its decomposition</a>). Replay it yourself: <a href="demo/README.md"><code>demo/README.md</code></a>.</sub>
 
 </div>
 
