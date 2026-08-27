@@ -108,7 +108,8 @@ def demo_tree(tmp_path: Path) -> Path:
 
 
 def test_the_demo_repo_starts_with_real_work_to_do(demo_tree: Path):
-    """The premise of the whole demo: four tests pass, one fails on the documented drift.
+    """The premise of the whole demo: four tests pass, two fail on the documented
+    drift.
 
     If this ever goes green on its own, the agent was handed a repo with nothing to fix and
     the capture's story is no longer the one the README tells. The failure is deliberately
@@ -137,7 +138,7 @@ def test_the_demo_repo_starts_with_real_work_to_do(demo_tree: Path):
 
     assert "run_tests" not in names, names
     assert "run_process" in names, names
-    assert text.splitlines()[-1] == "4 passed, 1 failed", text
+    assert text.splitlines()[-1] == "4 passed, 2 failed", text
     assert (
         "test_transposed_pairs_may_be_edited_again FAILED (AssertionError)" in text
     ), text
@@ -203,8 +204,8 @@ def test_run_process_observes_the_tree_as_it_is_now(demo_tree: Path):
         process.wait(timeout=30)
 
     assert edit["isError"] is False, edit
-    assert before.splitlines()[-1] == "4 passed, 1 failed", before
-    assert after.splitlines()[-1] == "2 passed, 3 failed", after
+    assert before.splitlines()[-1] == "4 passed, 2 failed", before
+    assert after.splitlines()[-1] == "2 passed, 4 failed", after
 
 
 def test_the_writers_declare_that_they_mutate(demo_tree: Path):
