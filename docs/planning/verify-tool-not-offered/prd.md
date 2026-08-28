@@ -95,12 +95,50 @@ actually do the right thing?"*
     server-specific: the demo server says `no such tool: 'run_process'`; the node reference
     server says `MCP error -32602: Tool run_process not found`. Text matching would be
     exactly the heuristic this project refuses.
-- **M2 · Lazy, gated on DIVERGED.** The probe runs **only** when the engine is about to
-  emit a result-equivalence FAIL. A non-diverged turn costs nothing and its code path is
-  untouched.
+- **M2 · Lazy, gated on DIVERGED — and placed BEFORE the determinism gate.** The probe
+  runs **only** on a DIVERGED reply. It must run **before** `classify_determinism`, not
+  after: that gate re-invokes the server `--replays` (>=3) more times
+  (`src/belay/verify/result.py:236-241`), and re-proving that `"no such tool"` is
+  self-consistent is pure waste. Probing first **saves 3 spawns** on such a turn instead of
+  adding one. (Adversarial review finding 6.)
+- **M2b · BOTH A2 sub-verdicts are gated, not just result-equivalence.** Result-equivalence
+  and effect-conformance are two independent sub-verdicts computed from the **same** replay.
+  Fixing only the first leaves the second asserting fabricated confidence.
+  **Reproduced by adversarial review** on the same capture — the corrected turn renders:
+
+  ```
+  A2 replay  UNVERIFIED  (tool not offered)
+  A2 effect  PASS        "effect-conformance PASS: tool 'run_process' declared
+                          readOnlyHint: false ...; the observed effect conforms"
+  ```
+
+  Nothing was observed — the tool was never invoked. `render_effect_verdict`
+  (`src/belay/verify/effect.py:18-21`) reads the trace's recorded annotation and the
+  replay's (empty) delta, and the rule table maps declared-false + any delta -> PASS.
+  The turn's reduced status is still UNVERIFIED (worst-status-wins), so **there is no
+  turn-level false PASS** — but `corpus show` and the console render sub-verdicts
+  individually, and "the observed effect conforms" beside an honest abstention is exactly
+  the partial-honesty failure this project names elsewhere.
+  **Decision: gate `render_effect_verdict` on the same tool-offered evidence** — it
+  abstains with its own named cause when the boundary never offered the tool.
+
 - **M3 · Fail-closed vocabulary.** Offered by exactly one configured server -> the FAIL
   stands (a real divergence). Offered by **none** -> UNVERIFIED with a named cause. Offered
   by **two or more** -> UNVERIFIED with a named cause. **Never a guess.**
+- **M3b · The probe must use the SAME resolved argv the replay used — `{workspace}` is a
+  template, not a command.** *(Adversarial review finding 2.)* `WORKSPACE_PLACEHOLDER`
+  (`{workspace}`) is substituted **per turn, from that turn's own manifest `source_root`**,
+  and the substitution happens **privately inside `engine.replay_turn`
+  (`src/belay/replay/engine.py:508-521`) and is never returned to the caller**. `verify_turn`
+  only ever holds the *unsubstituted* command. So the probe cannot "use the resolved server
+  command" today — that resolution must be **exported as a helper and shared**, never
+  duplicated (a second copy would diverge silently).
+  **Consequence for caching: there is NO cross-turn cache in v1.** Keying a cache on the
+  operator-typed template would let a probe answer from trace A's workspace decide trace B's
+  turn under `phase0 run` (which processes a whole directory) — a stale answer standing in
+  for positive evidence, precisely what M3/M4 forbid. If caching is added later the key must
+  be the `(resolved argv, source_root)` pair.
+
 - **M4 · Probe failure is not evidence.** If the probe itself cannot run (spawn failure,
   timeout, unparseable reply), the engine must **not** conclude "not offered". It reports
   UNVERIFIED with a distinct cause naming the probe failure. Absence of evidence is never
@@ -111,17 +149,34 @@ actually do the right thing?"*
   (`src/belay/cli.py:2561`), same single-quoted-string shape and same fail-closed
   `shlex.split` (`--server` is `nargs=REMAINDER` and cannot host a second remainder —
   `src/belay/cli.py:1770`).
-- **M7 · Closed-set registration.** The new cause is a **module-level `REPLAYED_*` constant
-  in `src/belay/replay/report.py`** and is added to `_REPLAYED_CAUSES`
-  (`src/belay/interop/attach.py:81`).
-  - *Trap the plan must state:* the guard test
-    (`tests/test_interop_attach.py:475`) reflects over `REPLAYED_*` names in `report.py`. A
-    cause hand-built inline elsewhere is **invisible to the guard** and would be silently
-    misreported by C9 as `unrestorable-pre-state` — asserting a snapshot-restore failure
-    that never happened. This is the `interop-merge-repair` bug class.
-- **M8 · `_PREFIX_LABELS` ordering.** `canonical_cause` returns the **first** prefix match
-  (`src/belay/replay/report.py:111-142`); the new label must be ordered so it cannot be
-  shadowed by, or shadow, an existing prefix.
+- **M7 · The distinct bucket needs a new sub-verdict KIND, not just a new constant.**
+  *(Corrected — the first draft of M7 was mechanically wrong; confirmed independently by
+  adversarial review finding 5.)*
+  `_replayed_cause` (`src/belay/verify/turn.py:196-201`) builds
+  `f"{REPLAYED_SUB_VERDICT} {axis}/{kind}: {message}"`, and `canonical_cause` buckets by
+  **prefix on `axis/kind`**. The existing entry
+  `("replayed but unverified A2/replay", REPLAYED_RESULT_UNVERIFIED)` already matches
+  **every** result-axis UNVERIFIED. So declaring a `REPLAYED_TOOL_NOT_OFFERED` constant and
+  registering it would pass the reflection guard **while the bucket sits permanently
+  unreached** — G4 silently unmet while the M7 checkbox looks ticked.
+  **Decision: give the abstention a new sub-verdict `kind`** (e.g. `replay:tool-not-offered`,
+  mirroring the existing `effect:network` precedent) and insert its `_PREFIX_LABELS` entry
+  **before** the `A2/replay` catch-all.
+  *Rejected alternative:* discriminating on **message text** (the only field left if `kind`
+  is unchanged) — brittle, and it couples a bucket label to prose.
+  **`axis` stays `A2`; "A2 only" constrains the AXIS, not the kind.**
+- **M7b · Closed-set registration.** The new bucket label is a **module-level `REPLAYED_*`
+  constant in `src/belay/replay/report.py`** and is added to `_REPLAYED_CAUSES`
+  (`src/belay/interop/attach.py:81`). The guard test
+  (`tests/test_interop_attach.py:476-495`) is **reflection-based**, so registration is
+  mechanically enforced *once the constant is module-level* — a cause hand-built inline is
+  invisible to it and would be misreported by C9 as `unrestorable-pre-state`
+  (the `interop-merge-repair` bug class).
+- **M8 · `_PREFIX_LABELS` ordering, concretely.** The collision is named:
+  `("replayed but unverified A2/replay", REPLAYED_RESULT_UNVERIFIED)`
+  (`src/belay/replay/report.py:118`). The new entry must precede it, exactly as
+  `effect:network` precedes `effect` today. A test must assert the new bucket is
+  **actually reached**, not merely declared.
 - **M9 · The cause renders on every surface** — `verify` text, `verify --json`,
   `corpus show`, `interop correlate` (text + `--json`), `phase0 report`, and the console —
   with its coverage line, mirroring `tests/test_coverage_rendering.py`'s per-surface
@@ -237,3 +292,53 @@ boundary sidesteps this entirely, and asks the more honest question.
 - Any change to A1, the trajectory rule, the claim classifier, or the verdict vocabulary
   beyond adding one UNVERIFIED cause (plus M4's).
 - Re-deriving, re-editing or re-adjudicating any published Phase-0 number.
+
+---
+
+## Adversarial review — findings and dispositions (2026-08-28)
+
+An independent reviewer re-verified every load-bearing claim against the code and
+**reproduced the PRD's own repro** plus one new defect. Dispositions, including where I
+disagree:
+
+| # | Finding | Disposition |
+|---|---|---|
+| 1 | **Effect-conformance stays a fabricated PASS** on a tool the boundary never offered — reproduced live | **ACCEPTED, requirement added (M2b).** Real gap: the draft fixed one of two A2 sub-verdicts sharing the same false premise. No turn-level false PASS (worst-status-wins holds), but sub-verdicts render individually on `corpus show` and the console. |
+| 2 | **`{workspace}` templating breaks the caching design**; resolution is private to `engine.replay_turn` and never returned | **ACCEPTED, requirement added (M3b).** The draft's "cached per resolved server command per run" was unimplementable as written and would have been a correctness bug under `phase0 run`. Cross-turn caching is dropped from v1; a resolution helper must be exported and shared. |
+| 3 | **The probe treats `tools/list` as timeless**, against the codebase's own positional precedent (`offered_toolset`, `TOOLSET_UNKNOWN`) | **ACCEPTED IN PART.** The reasoning gap is real and is now stated (below). But I **disagree with the severity**: in the stateful case abstention is the *correct* answer, not a wrongful one — see *Statefulness*. |
+| 4 | `tools/list` is a **self-declared, adversarially-gameable** surface | **ACCEPTED as a documented limitation.** The escape direction is FAIL -> UNVERIFIED — an abstention, never a false PASS. Belay claims nothing there. Recorded alongside the existing annotations caveat. |
+| 5 | The new bucket would be **permanently unreached** if `axis/kind` are unchanged | **ACCEPTED — confirms an error found independently.** M7 is rewritten; the fix is a new `kind`, not message-text matching. |
+| 6 | The probe should run **before** `classify_determinism`, saving 3 spawns rather than adding 1 | **ACCEPTED, folded into M2.** |
+
+Claims the reviewer **verified as TRUE**: the trajectory rule provably cannot move
+(`assemble_turn_facts` reads only `replayed_is_error`; the `verdict.status` at
+`trajectory.py:619` is a naming collision, not a `TurnVerdict`); Gap B is real; and the
+`turn.py:275-278` "LATENT, not live" rooting comment genuinely does not cover this shape,
+so a mis-rooted-but-tool-present server still correctly FAILs.
+
+### Statefulness — the reasoning, stated rather than assumed
+
+An MCP toolset is **not** static: annotations can change mid-session
+(`src/belay/verify/effect.py:39`) and the trajectory rule reads the toolset **positionally**
+for exactly this reason (`TOOLSET_UNKNOWN`, `src/belay/verify/trajectory.py:144-170`). A
+fresh probe asks a *different* question than "was this tool offered at the point this turn
+ran".
+
+**Why abstention is nonetheless correct there**, and why this is not the wrongful-abstention
+failure mode: Belay's replay model **already** re-invokes a single turn against a **fresh**
+server with a restored *filesystem* pre-state — never a restored *conversational* pre-state.
+So a tool that exists only after a stateful exchange is **outside what replay can verify at
+all**. UNVERIFIED is more correct there than either PASS or FAIL; FAILing it would be the
+fabricated verdict.
+
+**Refinement adopted:** the trace's own recorded `tools/list` snapshot **enriches the
+message** — "the capture recorded this tool as offered; this replay boundary does not offer
+it" is a materially better finding than either fact alone. The **decision** to abstain rests
+on the live probe; the recorded snapshot never promotes a verdict.
+
+### Residual limitations, stated not hidden
+
+- A server may omit a tool from `tools/list` while still answering calls to it.
+  `tools/list` is self-declared, exactly as MCP annotations are (`CLAUDE.md`). The
+  consequence is an abstention, never a false PASS.
+- The probe cannot reconstruct a session-positional toolset; see above.
