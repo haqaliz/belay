@@ -89,6 +89,7 @@ SCAN_AREA: frozenset[str] = frozenset(
         "test_verify_json.py",
         "test_verify_pass_on_cheat.py",
         "test_verify_result.py",
+        "test_verify_shell_server_cli.py",
     }
 )
 
