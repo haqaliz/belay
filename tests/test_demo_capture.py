@@ -430,48 +430,6 @@ def test_the_capture_is_committed_with_its_provenance():
         assert field in text, f"{field!r} missing from {PROVENANCE}"
 
 
-def test_nothing_in_the_capture_is_untracked_or_ignored():
-    """"Self-contained" means self-contained IN GIT — the clone is the artifact.
-
-    This is the clause that actually broke. The root `.gitignore` excludes
-    `__pycache__/`, which is correct everywhere else in this repo and wrong inside a
-    RECORDING: each snapshot tree is a pre-state replay restores, and each turn's
-    sidecar records that directory's own mtime. The seven `__pycache__` directories
-    were therefore never committed, and restore died stamping a directory that was not
-    in the clone (`FileNotFoundError` in `clone._repair`).
-
-    The failure was invisible on the machine that made the capture — the directories
-    sit there as ignored files, so every local run restored a complete tree and passed.
-    The first clean clone was the first honest test of it, which is exactly the L7 DONE
-    clause: *a self-contained repo a stranger can reproduce*. So the check is on the
-    clone, not the working tree: nothing under `demo/capture/` may be untracked, and
-    nothing may be ignored.
-
-    Cheap and offline (two `git ls-files` calls, no replay), so it runs on every
-    platform rather than behind the darwin gate — the defect is not platform-specific.
-    """
-    import shutil
-
-    if shutil.which("git") is None or not (REPO_ROOT / ".git").exists():
-        pytest.skip("no-git-checkout: the completeness check reads the index of a git clone")
-
-    def _listed(*flags: str) -> list[str]:
-        out = subprocess.run(
-            ["git", "ls-files", *flags, "--", str(CAPTURE.relative_to(REPO_ROOT))],
-            cwd=REPO_ROOT, capture_output=True, text=True, timeout=60,
-        )
-        assert out.returncode == 0, out.stderr
-        return [line for line in out.stdout.splitlines() if line.strip()]
-
-    ignored = _listed("--others", "--ignored", "--exclude-standard")
-    assert ignored == [], (
-        "these capture files are git-IGNORED, so a clone gets an artifact that does not "
-        f"match its own snapshot manifests: {ignored}"
-    )
-    untracked = _listed("--others", "--exclude-standard")
-    assert untracked == [], f"these capture files were never committed: {untracked}"
-
-
 @pytestmark_capture
 def test_the_committed_capture_replays_to_the_same_verdict(report):
     """The pinned verdict: every turn PASS, and the instance-level trajectory PASS.

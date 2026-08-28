@@ -71,7 +71,12 @@ _DEV_DEPS = ("pytest", "mcp==1.28.1")
 #: HOST kernel; the image cannot supply one). `docker-unavailable` is this module
 #: and its A1 sibling skipping themselves — there is no docker daemon inside the
 #: container, and recursion is not the acceptance. `linux-simulated` marks the
-#: tests that fake a Linux box that is not this one.
+#: tests that fake a Linux box that is not this one. `no-git-checkout` is the
+#: committed-capture completeness guard (`test_demo_assets.py`), which reads the git
+#: index to assert nothing under `demo/capture/` is ignored or untracked: the copy
+#: below excludes `./.git` by design, so inside the container there is no index to
+#: read. It is a fact about where the suite runs from, never a platform fact, which
+#: is why it is registered here and not in README's platform coverage table.
 #:
 #: An unknown cause FAILs. So does an unnamed one: the skip report is the honesty
 #: surface, and a bare `pytest.skip()` inside a green run is exactly how coverage
@@ -87,6 +92,7 @@ _ALLOWED_SKIP_CAUSES = frozenset(
         "reflink-unavailable",
         "landlock-unavailable",
         "docker-unavailable",
+        "no-git-checkout",
     }
 )
 

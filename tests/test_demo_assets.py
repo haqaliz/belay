@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -86,3 +88,54 @@ def test_the_readme_demo_alt_carries_the_coverage_boundary() -> None:
     alt = _demo_img_tag().lower()
     assert "not_covered" in alt, "the demo alt text dropped the coverage boundary"
     assert "network" in alt, "the demo alt text no longer names the uncovered dimension"
+
+
+def test_nothing_in_the_capture_is_untracked_or_ignored() -> None:
+    """"Self-contained" means self-contained IN GIT — the clone is the artifact.
+
+    This is the clause that actually broke. The root `.gitignore` excludes
+    `__pycache__/`, which is correct everywhere else in this repo and wrong inside a
+    RECORDING: each snapshot tree under `demo/capture/snapshots/` is a pre-state replay
+    restores, and each turn's sidecar records that directory's own mtime. The seven
+    `__pycache__` directories were therefore never committed, and restore died stamping
+    a directory that was not in the clone (`FileNotFoundError` in `clone._repair`).
+
+    The failure was invisible on the machine that made the capture — those directories
+    sit there as ignored files, so every local run restored a complete tree and passed.
+    The first clean clone was the first honest test of it, which is exactly the L7 DONE
+    clause: *a self-contained repo a stranger can reproduce*. So the check is on the
+    clone, not the working tree.
+
+    It lives here rather than in `test_demo_capture.py` on purpose. That module is in
+    `test_platform_gate_named_causes.py`'s scan area, where every skip must name a cause
+    from README's PLATFORM coverage table — and "there is no git checkout" is not a
+    platform fact. It is a fact about where the suite is running from: the in-image run
+    copies the checkout with `--exclude=./.git` by design, so the skip is real and its
+    cause is honest, but the platform table is the wrong register for it.
+
+    The cause is still NAMED and registered — `no-git-checkout`, in
+    `test_docker_inimage.py`'s `_ALLOWED_SKIP_CAUSES`, which is the checker that can
+    actually observe this skip firing. An unnamed skip inside a green in-image run is
+    exactly how coverage disappears quietly, and this one really does fire there.
+    """
+    if shutil.which("git") is None or not (REPO_ROOT / ".git").exists():
+        pytest.skip("no-git-checkout: the suite is running from a tree with no git index")
+
+    def _listed(*flags: str) -> list[str]:
+        out = subprocess.run(
+            ["git", "ls-files", *flags, "--", "demo/capture"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert out.returncode == 0, out.stderr
+        return [line for line in out.stdout.splitlines() if line.strip()]
+
+    ignored = _listed("--others", "--ignored", "--exclude-standard")
+    assert ignored == [], (
+        "these capture files are git-IGNORED, so a clone gets an artifact that does not "
+        f"match its own snapshot manifests: {ignored}"
+    )
+    untracked = _listed("--others", "--exclude-standard")
+    assert untracked == [], f"these capture files were never committed: {untracked}"
