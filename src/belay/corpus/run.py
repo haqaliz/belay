@@ -142,7 +142,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 from belay.corpus.add import add_case
 from belay.corpus.case import Case, load_case
@@ -476,7 +476,13 @@ def classify_case(
     return CaseResult(case_id=case_id, outcome=REGRESSION, divergences=divergences)
 
 
-def _recompute_trajectory_case(case_dir: Path, case: Case, expected: dict) -> CaseResult:
+def _recompute_trajectory_case(
+    case_dir: Path,
+    case: Case,
+    expected: dict,
+    *,
+    shell_server_command: Optional[Sequence[str]] = None,
+) -> CaseResult:
     """Recompute an INSTANCE-LEVEL case through the instance path, and classify it.
 
     A trajectory case's expected verdict is whole-trajectory, so no single `verify_turn`
@@ -493,6 +499,19 @@ def _recompute_trajectory_case(case_dir: Path, case: Case, expected: dict) -> Ca
     `ingest=False` is what makes this a pure re-verification: `_verify_one_trace` skips
     the ingest loop wholesale, so a re-run over the case can never collide with it or
     write anything.
+
+    **`shell_server_command` is the dual-server axis, and this is the ONE place in the
+    corpus that needs it.** A case stores exactly ONE resolved command (schema v4, and it
+    stays that way): `phase0/runner.py:_resolve_server_command` picked it at ingest time
+    from the case's TARGET turn, which for a trajectory case is the FINAL turn. But this
+    function re-verifies the WHOLE stored trace, so every OTHER turn was being recomputed
+    against a command it never replayed against — a `run_process` turn against the stored
+    filesystem command, silently. The case cannot carry the second boundary without
+    growing the format, so the caller supplies it, exactly as `belay phase0 run
+    --shell-server` and `belay verify --shell-server` supply it; `_verify_one_trace`
+    then applies the SAME `_resolve_server_command` rule per turn. `None` — the default,
+    and what every caller passed before this existed — is byte-for-byte the old
+    behaviour, so no banked case needs re-adding.
     """
     invariants = [
         Invariant(scope=os.fsencode(d["scope"]), rule=d["rule"]) for d in case.invariants
@@ -502,6 +521,9 @@ def _recompute_trajectory_case(case_dir: Path, case: Case, expected: dict) -> Ca
         source_trace_id=case.id,
         corpus_dir=case_dir,
         server_command=case.server_command,
+        shell_server_command=(
+            list(shell_server_command) if shell_server_command is not None else None
+        ),
         invariants=invariants,
         captured_at=case.provenance.get("captured_at", ""),
         replays=case.replays,
@@ -521,7 +543,9 @@ def _recompute_trajectory_case(case_dir: Path, case: Case, expected: dict) -> Ca
     )
 
 
-def run_case(case_dir: Path) -> CaseResult:
+def run_case(
+    case_dir: Path, *, shell_server_command: Optional[Sequence[str]] = None
+) -> CaseResult:
     """Load a case, recompute its target turn by REAL re-verification, and classify it.
 
     `load_case` runs FIRST and is fail-closed: a corrupt case dir raises here, on every
@@ -534,6 +558,16 @@ def run_case(case_dir: Path) -> CaseResult:
     per-turn `verify_turn` below cannot re-derive a whole-trajectory verdict, and a
     trajectory case sent down it would regress against a final turn's verdict that is
     not its contract. Every other case takes the per-turn path below, byte-for-byte.
+
+    **`shell_server_command` reaches the trajectory path ONLY, and that asymmetry is the
+    point, not an oversight.** A trajectory case re-verifies its whole stored trace
+    against one stored command, so its non-target turns need the routing rule (see
+    `_recompute_trajectory_case`). A PER-TURN case has exactly one turn to recompute and
+    its stored `server_command` IS the command `_resolve_server_command` resolved for
+    that very turn at ingest — a shell case already carries the shell command. Letting a
+    caller-supplied boundary displace it would make the case recompute against a server
+    it never replayed against, which is the defect this fix closes, pointed the other
+    way. Pinned by test.
 
     On darwin AND linux the turn is recomputed with `verify_turn`, passing
     `manifest_dir=case_dir`: the engine globs `case_dir/*.json`, matches the turn's
@@ -559,7 +593,10 @@ def run_case(case_dir: Path) -> CaseResult:
         )
 
     if case.trajectory is not None:
-        return _recompute_trajectory_case(case_dir, case, case.trajectory)
+        return _recompute_trajectory_case(
+            case_dir, case, case.trajectory,
+            shell_server_command=shell_server_command,
+        )
 
     records = read_trace(Path(case_dir) / "trace.jsonl").records
     invariants = [
@@ -579,16 +616,24 @@ def run_case(case_dir: Path) -> CaseResult:
     )
 
 
-def run_corpus(corpus_dir: Path) -> CorpusRun:
+def run_corpus(
+    corpus_dir: Path, *, shell_server_command: Optional[Sequence[str]] = None
+) -> CorpusRun:
     """Re-verify every case directory under `corpus_dir` and aggregate the outcomes.
 
     Iterates the immediate subdirectories as case dirs and `run_case`s each. A corrupt case
     dir is fail-closed: `run_case`'s `load_case` raises a named `ValueError`, propagated here
     rather than swallowed, because a corpus that quietly dropped an unreadable case would
     regress against fewer cases than it holds — the exact false-completeness the corpus refuses.
+
+    `shell_server_command` is threaded to every case unchanged; see `run_case` for which
+    half of the corpus it reaches and why.
     """
     corpus_dir = Path(corpus_dir)
-    results = [run_case(d) for d in sorted(p for p in corpus_dir.iterdir() if p.is_dir())]
+    results = [
+        run_case(d, shell_server_command=shell_server_command)
+        for d in sorted(p for p in corpus_dir.iterdir() if p.is_dir())
+    ]
     return CorpusRun(results=results)
 
 
