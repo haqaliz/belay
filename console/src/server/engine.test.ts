@@ -7,7 +7,7 @@
 import { chmodSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveBelayBinary, runVerifyJson, verifyArgv } from "./engine";
+import { resolveBelayBinary, runVerifyJson, subprocessWallMs, verifyArgv } from "./engine";
 
 const stub = new URL("../../fixtures/stub-engine.mjs", import.meta.url).pathname;
 const clean = path.join(path.dirname(stub), "trace-clean.jsonl");
@@ -45,6 +45,34 @@ describe("verifyArgv", () => {
     ]);
   });
 
+  it("adds --timeout <seconds> before the trace when replayTimeoutSeconds is set", () => {
+    expect(verifyArgv({ trace: "/t/trace-a.jsonl", replayTimeoutSeconds: 300 })).toEqual([
+      "verify",
+      "--json",
+      "--timeout",
+      "300",
+      "/t/trace-a.jsonl",
+    ]);
+  });
+
+  it("keeps --timeout ahead of --turn and the trace (both regular options)", () => {
+    expect(verifyArgv({ trace: "/t/trace-a.jsonl", turn: 3, replayTimeoutSeconds: 300 })).toEqual([
+      "verify",
+      "--json",
+      "--timeout",
+      "300",
+      "--turn",
+      "3",
+      "/t/trace-a.jsonl",
+    ]);
+  });
+
+  it("omits --timeout when replayTimeoutSeconds is not set (current behavior)", () => {
+    const argv = verifyArgv({ trace: "/t/trace-a.jsonl" });
+    expect(argv).not.toContain("--timeout");
+    expect(argv).toEqual(["verify", "--json", "/t/trace-a.jsonl"]);
+  });
+
   it("keeps the trace ahead of REMAINDER-style extra args (--server swallows the tail)", () => {
     // `belay verify`'s `--server` is nargs=REMAINDER: a trace placed after it
     // would be eaten and argparse would die with "required: trace".
@@ -66,6 +94,36 @@ describe("verifyArgv", () => {
       "python",
       "server.py",
     ]);
+  });
+});
+
+describe("the console's OWN subprocess wall", () => {
+  // The engine's `--timeout` is PER REPLAY; this is the wall around the whole
+  // subprocess. When the wall is the smaller of the two it silently overrides the
+  // budget the operator authorised, and the engine — SIGTERMed mid-run — leaves
+  // empty stdout. Reporting that as `empty-output` blames the engine for the
+  // caller's kill, so the two are different named causes.
+  it("names ITSELF as the cause when it kills the engine, never empty-output", async () => {
+    const result = await runVerifyJson({
+      trace: clean,
+      env: env({ STUB_ENGINE_MODE: "hang" }),
+      timeoutMs: 200,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.cause).toBe("console-wall-timeout");
+    expect(result.error.detail).toContain("200");
+  });
+
+  it("scales the wall to the per-replay budget and the turns in scope", () => {
+    // A whole-trace verify at 300s/replay over 7 turns really can take ~2 minutes;
+    // a wall below that is a guaranteed false error. The floor is the old default,
+    // so an unset timeout behaves exactly as before.
+    expect(subprocessWallMs(undefined, 7)).toBe(60_000);
+    expect(subprocessWallMs(300, 1)).toBeGreaterThanOrEqual(300_000);
+    expect(subprocessWallMs(300, 7)).toBeGreaterThanOrEqual(7 * 300_000);
+    // Never below the floor, even for a tiny authorised budget.
+    expect(subprocessWallMs(1, 1)).toBe(60_000);
   });
 });
 

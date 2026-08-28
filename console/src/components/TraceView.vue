@@ -70,6 +70,11 @@ const coverageEntries = computed<CoverageEntry[] | null>(() => {
 
 const turns = computed(() => view.value?.turns ?? []);
 
+// The trace list hands over ABSOLUTE paths (the API resolves them inside the trace
+// dir), so heading with the raw prop prints the operator's home directory. The name
+// is what identifies a run; the full path stays reachable as the title.
+const traceName = computed(() => props.tracePath.split("/").pop() || props.tracePath);
+
 const verdictByOrdinal = computed(() => {
   const map = new Map<number, VerdictTurn>();
   for (const turn of doc.value?.turns ?? []) map.set(turn.ordinal, turn);
@@ -90,13 +95,17 @@ function onExpand(turn: TraceView["turns"][number]): void {
   <section class="trace-view">
     <header class="trace-head">
       <button type="button" class="back-btn" @click="emit('back')">← all traces</button>
-      <h2 class="trace-name">{{ tracePath }}</h2>
+      <h2 class="trace-name" :title="tracePath">{{ traceName }}</h2>
       <div v-if="doc" class="aggregate-strip" data-testid="aggregate-strip">
         <VerdictBadge status="PASS" /> <span class="agg-num">{{ doc.aggregate.PASS }}</span>
         <VerdictBadge status="WARN" /> <span class="agg-num">{{ doc.aggregate.WARN }}</span>
         <VerdictBadge status="FAIL" /> <span class="agg-num">{{ doc.aggregate.FAIL }}</span>
         <VerdictBadge status="UNVERIFIED" /> <span class="agg-num">{{ doc.aggregate.UNVERIFIED }}</span>
         <span class="agg-verified">{{ doc.aggregate.turns_verified }} turns verified</span>
+      </div>
+      <div v-if="doc && doc.trajectory" class="trajectory-line" data-testid="trajectory-line">
+        <VerdictBadge :status="doc.trajectory.status" :cause="doc.trajectory.cause ?? null" />
+        <span class="traj-message">{{ doc.trajectory.message }}</span>
       </div>
       <VerdictBadge v-else-if="engineError" status="no-engine" />
     </header>
@@ -163,6 +172,19 @@ function onExpand(turn: TraceView["turns"][number]): void {
 .agg-verified {
   color: #64748b;
   font-weight: 500;
+}
+.trajectory-line {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  font: 500 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding: 3px 8px;
+  border: 1px solid #bbf7d0;
+  border-radius: 4px;
+  background: #f0fdf4;
+}
+.trajectory-line .traj-message {
+  color: #334155;
 }
 .engine-unavailable,
 .load-error {

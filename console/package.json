@@ -6,9 +6,11 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
+    "build:server": "tsc -p tsconfig.server.json",
     "preview": "vite preview",
     "test": "vitest run",
-    "server": "tsx src/server/run.ts"
+    "server": "tsx src/server/run.ts",
+    "record:demo": "node scripts/record-demo-gif.mjs"
   },
   "dependencies": {
     "vue": "^3.5.41"
@@ -18,7 +20,9 @@
     "@vitejs/plugin-vue": "^6.0.8",
     "@vue/test-utils": "^2.4.6",
     "@vue/tsconfig": "^0.9.1",
+    "gifenc": "^1.0.3",
     "jsdom": "^27.0.0",
+    "playwright": "^1.62.1",
     "tsx": "^4.20.0",
     "typescript": "~6.0.2",
     "vite": "^8.2.2",

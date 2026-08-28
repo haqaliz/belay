@@ -22,6 +22,27 @@ if (mode === "bad-json") {
 if (mode === "empty") {
   process.exit(1);
 }
+if (mode === "hang") {
+  // Never answers, and never exits: the seam for "whose timeout fired?" — the
+  // caller's wall must report ITSELF as the cause rather than blaming the engine
+  // for empty stdout.
+  //
+  // The timer is load-bearing, not decoration. A bare `await new Promise(() => {})`
+  // does NOT hang: with nothing left in the event loop node detects the unsettled
+  // top-level await and exits immediately with code 13 and empty stdout — which the
+  // caller reads as `empty-output`, the very thing this stub exists to distinguish
+  // from a kill. That made the test a race against process start-up: green on macOS,
+  // red on the Linux runner. The interval keeps the loop alive, so the only way out
+  // is the caller's signal.
+  setInterval(() => {}, 1000);
+  await new Promise(() => {});
+}
+if (mode === "argv") {
+  // Echo the argv as a JSON doc: the seam for "did the server pass X?" —
+  // the timeout-passthrough tests read this instead of inferring from success.
+  process.stdout.write(JSON.stringify({ schema: 1, argv }));
+  process.exit(0);
+}
 
 const hasTurn = argv.includes("--turn");
 // The trace is the FIRST positional after the `verify` subcommand:

@@ -459,7 +459,7 @@ def test_report_trajectory_section_survives_instrument_suspect() -> None:
 
 
 def _canned_verifier(status: Status = Status.PASS, *, is_error: bool = False):
-    def verifier(records, n, *, server_command, manifest_dir, replays, invariants):
+    def verifier(records, n, *, server_command, manifest_dir, replays, invariants, timeout):
         return TurnVerdict(
             turn_index=n,
             tool_name="edit_file",

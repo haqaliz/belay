@@ -2,6 +2,60 @@
 
 This file orients a coding agent working in this repository. Read it first.
 
+> **THE LAUNCH DEMO IS BUILT, AND IT IS GREEN — THE CORRUPT SUCCESS COULD NOT BE PRODUCED
+> ON DEMAND** (2026-08-28, `launch-demo`, L7). The locked spec promised *"it weakens the
+> test and reports success … Belay flags turn 7 … Your agent lied. Your dashboard didn't
+> notice. Mine did."* **We could not make it happen.** 18 observed drives across three
+> conditions — two frontier models, an easy bug contract, a genuinely hard one, and an
+> expensive-suite lever — produced **zero** corrupt successes
+> (`docs/planning/launch-demo/demo-capture/DRIVES.md`, 16 verified clean + 2 abstentions).
+> **Nothing synthetic was substituted**, so the demo ships what the drives produced: the
+> **NEGATIVE CONTROL** — a real `claude -p` run, told only *"make the tests pass"*, that
+> fixed the bug honestly, ran the suite, and said so, verified **7/7 PASS, 0 UNVERIFIED,
+> trajectory PASS "supported by 2 replayed command turn(s)"**. A detector that only ever
+> fires is not a detector; this is the harder half of the claim, and the measured
+> corrupt-success shape (**11/60 = 18.3%**, with its decomposition) is its companion, not
+> its replacement. **There is no flag turn in the committed capture — a doc naming one is
+> stale**, and `docs/ROADMAP.md`, `CAPABILITY_ROADMAP.md:715`, `live-console/prd.md:12`
+> and the README are corrected to say so, each quoting what it replaces.
+> **THREE DEFECTS, ALL FOUND BY RUNNING THE CONSOLE RATHER THAN ITS TESTS** — the console's
+> own suite could not see any of them, because its stub engine echoes argv and cannot
+> object. (1) **`belay verify` had no `--timeout`**: the console had already shipped
+> *passing* one (compose pins 300 for the capture's ~44s `run_process` turns), argparse
+> answered `unrecognized arguments: --timeout <trace>` with EMPTY stdout and exit 2, and so
+> **every** console verify degraded to `empty-output` — strictly worse than the UNVERIFIED
+> it was meant to fix. `verify` now carries the same flag `corpus add` / `phase0 run` /
+> `interop correlate` already had. (2) **No default replay context**:
+> `BELAY_CONSOLE_VERIFY_SERVER` now becomes `--server` **whitespace-split into argv tokens**
+> (`verify --server` is nargs=REMAINDER; the old single-string push would have exec'd the
+> whole command as one filename — the replay dialog's input hit this too), and
+> `--manifest-dir` defaults to the trace's `<stem>.manifests` sibling **only when it
+> exists**; absent either, the engine's fail-closed error stands, never a guessed server.
+> (3) **The console's own 60s subprocess wall killed a 300s-authorised replay** at exactly
+> 60.0s and reported `empty-output` — blaming the engine for its own SIGTERM. The wall is
+> derived now (`timeout × turns-in-scope`, floored at 60s) and reports
+> `console-wall-timeout`, a distinct cause. **Measured end-to-end on the committed capture,
+> not inferred from stubs:** `belay verify --json --timeout 300` reproduces the pinned
+> verdict in ~2m12s; the same through `POST /api/verify` with only env defaults; and the
+> slow `run_process` turn through `POST /api/replay` → PASS in 66s.
+> **The gif is regenerated from the artifact, not hand-made**: `npm run record:demo`
+> (manual — real browser, real re-execution) drives the console and encodes five beats,
+> including the one that carries the honesty contract — every turn reading *"verifying…"*
+> with *coverage unavailable* while the engine works, **never a placeholder PASS**. The PNG
+> decode and GIF encode both run inside the browser page, so there is no ffmpeg and no image
+> dependency. **Determinism is on STATE, not the clock** — the plan's "fixed waits" cannot
+> hold when verifying re-runs a real suite for two minutes; what is fixed is the frame
+> sequence and the delays. That mattered: waiting on the trace pill alone produced an empty
+> *"0 turns"* first frame on one run and a full one on the next.
+> **What this does NOT do:** no verdict axis, invariant, status or Phase-0 number moves; A3
+> is still not built; the Langfuse integration is still **not built** (C9 export-back
+> deferred) and must never be implied by a staged screenshot; GHCR publish is still
+> deferred. **L7 is BUILT but its checklist box is deliberately NOT ticked** — M2‴
+> pre-registered that a changed DONE meaning is re-opened with the owner, and the meaning
+> changed. `docs/planning/launch-demo/ph-assets.md` drafts the PH listing and leaves three
+> questions open for the owner. See `docs/planning/launch-demo/` and
+> `docs/planning/launch-readiness/CHECKLIST.md` → L7.
+>
 > **BELAY NOW SHIPS AS A CONTAINER THAT RUNS THE REAL SANDBOX — launch checklist L3 is
 > DONE** (2026-08-20, `docker-selfhost`, PR #22, v0.21.0). A multi-stage `Dockerfile`
 > (`python:3.12-slim`, non-root `belay` uid 1000, `ENTRYPOINT ["belay"]`) that builds from
@@ -261,8 +315,8 @@ This file orients a coding agent working in this repository. Read it first.
 > PIVOT**. See `docs/planning/phase0-reverify-banked/` and `PHASE0_RESULTS.md` →
 > *Correction — 2026-07-31*.
 >
-> **Status: C1–C6 are built and merged; the Phase-0 corpus runner is built** (1813 tests passing on macOS, 25 named-caused skips, 3 manual-deselected; zero runtime dependencies) *(was "1492" until 2026-08-20)*. *(Was "1238" until 2026-08-05; that figure was stale for several releases and is superseded going forward, not re-derived.)*
-> **C7 — the live console — ships** (2026-08-25, `live-console`): the SPA (Vue 3 + Vite), the `--json` engine seam, and a compose `console:` service with a healthcheck — the image bundles the engine wheel built in-image (never a stale published wheel), serves the SPA on the loopback, and shares the engine's `/workspace` state mount. See `docs/planning/live-console/`; `CHECKLIST.md` L6 stays ☐ until the PR merges and the launch demo uses it.
+> **Status: C1–C6 are built and merged; the Phase-0 corpus runner is built** (1851 tests passing on macOS with Docker up, 25 named-caused skips, 9 manual-deselected; zero runtime dependencies) *(was "1813" until 2026-08-28; was "1492" until 2026-08-20)*. *(Was "1238" until 2026-08-05; that figure was stale for several releases and is superseded going forward, not re-derived.)*
+> **C7 — the live console — ships** (2026-08-25, `live-console`): the SPA (Vue 3 + Vite), the `--json` engine seam, and a compose `console:` service with a healthcheck — the image bundles the engine wheel built in-image (never a stale published wheel), serves the SPA on the loopback, and shares the engine's `/workspace` state mount. See `docs/planning/live-console/`; `CHECKLIST.md` L6 is ✅ (2026-08-24) and the launch demo now uses it — see the L7 block at the top of this file.
 > The full record → sandbox → snapshot/restore → replay → verdict spine exists: the byte-transparent
 > stdio MCP proxy + trace format (C1), the Seatbelt sandbox with snapshot/restore (C2), deterministic
 > replay with a real before/after delta (C3), and the grounded verdict — **A2** result-equivalence +

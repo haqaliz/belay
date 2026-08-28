@@ -15,3 +15,6 @@ __pycache__/
 # Local build output. The image builds its own wheel in the `build` stage, so a
 # stale local wheel must not reach the context and cannot shadow it.
 dist/
+# The console's server build output. The image builds its own `dist-server` in
+# the `spa-build` stage, so a stale local build must not reach the context.
+dist-server/

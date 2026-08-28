@@ -689,7 +689,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
             verdict = verify_turn(
                 records, n,
                 server_command=args.server, manifest_dir=manifest_dir, replays=args.replays,
-                invariants=invariants,
+                timeout=args.timeout, invariants=invariants,
             )
             verdicts.append(verdict)
             if json_mode:
@@ -2181,6 +2181,12 @@ def _parser() -> argparse.ArgumentParser:
         type=_verify_replays,
         default=3,
         help="on a DIVERGED reply, re-invoke this many times to classify determinism (default: 3, minimum: 3)",
+    )
+    verify.add_argument(
+        "--timeout",
+        type=float,
+        default=DEFAULT_TIMEOUT,
+        help=f"per-replay timeout in seconds (default: {DEFAULT_TIMEOUT:g})",
     )
     verify.add_argument(
         "--invariants",

@@ -17,7 +17,7 @@ import type {
   ToolAnnotations,
   TraceGap,
   TraceView,
-} from "./types";
+} from "./types.js";
 
 interface SnapshotRecord {
   seq: number;

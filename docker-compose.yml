@@ -74,6 +74,23 @@ services:
       BELAY_CONSOLE_TRACE_DIR: ${BELAY_CONSOLE_TRACE_DIR:-/workspace/traces}
       # The bundled engine's snapshot dir (verify/replay in-container).
       BELAY_SNAPSHOT_DIR: ${BELAY_SNAPSHOT_DIR:-/workspace/snapshots}
+      # Per-replay verify timeout in seconds, passed to `belay verify
+      # --timeout`. The engine's default (10s) cannot replay the demo capture's
+      # ~44s run_process turns — they would render UNVERIFIED — so the console
+      # service pins the demo's needs; a mounted capture with the same shape
+      # needs the same value (console/README.md).
+      BELAY_CONSOLE_VERIFY_TIMEOUT: ${BELAY_CONSOLE_VERIFY_TIMEOUT:-300}
+      # The default `--server` command verify/replay re-invoke against, split on
+      # whitespace into argv tokens. Unset by default: a console pointed at some
+      # other capture must be told ITS server, and the engine's own fail-closed
+      # error ("a server command is required") is the honest answer until it is —
+      # never a guessed command that would replay against the wrong binary.
+      BELAY_CONSOLE_VERIFY_SERVER: ${BELAY_CONSOLE_VERIFY_SERVER:-}
+      # The server's dev defaults are loopback + 8787; in the container the
+      # published port is reached via the container's network interface, so
+      # the bind must be 0.0.0.0 and the port the mapping + healthcheck expect.
+      BELAY_CONSOLE_PORT: ${BELAY_CONSOLE_PORT:-8080}
+      BELAY_CONSOLE_HOST: ${BELAY_CONSOLE_HOST:-0.0.0.0}
     healthcheck:
       # /health answers 200 only when the bundled engine reports its version; a
       # 503 (engine unreportable) reads as unhealthy — the honest state.

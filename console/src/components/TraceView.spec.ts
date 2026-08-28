@@ -121,6 +121,83 @@ describe("TraceView", () => {
     expect(wrapper.find(".verdict-unverified").exists()).toBe(false);
   });
 
+  it("renders the engine's instance-level trajectory block when the doc carries one", async () => {
+    const view = {
+      path: "x",
+      turns: [] as unknown[],
+      frames: 0,
+      skipped: { unparseableLines: 0, unknownKinds: [], gaps: [] },
+      windows: { open: true, close: true },
+    };
+    mockFetch({
+      "/api/trace": { view },
+      "/api/verify": {
+        ok: true,
+        doc: {
+          ...failedDoc,
+          trajectory: {
+            status: "UNVERIFIED",
+            cause: "NO_CLAIM_RECORDED",
+            message: "no claim record in this trace — nothing was claimed, nothing judged",
+          },
+        },
+      },
+    });
+    const wrapper = mount(TraceView, { props: { tracePath: "trace-x.jsonl" } });
+    await flushPromises();
+    const line = wrapper.find('[data-testid="trajectory-line"]');
+    expect(line.exists()).toBe(true);
+    expect(line.text()).toContain("NO_CLAIM_RECORDED");
+    expect(line.text()).toContain("nothing was claimed, nothing judged");
+  });
+
+  it("renders a trajectory PASS with its evidence count (the demo capture's shape)", async () => {
+    const view = {
+      path: "x",
+      turns: [] as unknown[],
+      frames: 0,
+      skipped: { unparseableLines: 0, unknownKinds: [], gaps: [] },
+      windows: { open: true, close: true },
+    };
+    mockFetch({
+      "/api/trace": { view },
+      "/api/verify": {
+        ok: true,
+        doc: {
+          ...failedDoc,
+          trajectory: {
+            status: "PASS",
+            cause: null,
+            message: "PASS — the claim is supported by 2 replayed command turn(s)",
+          },
+        },
+      },
+    });
+    const wrapper = mount(TraceView, { props: { tracePath: "trace-x.jsonl" } });
+    await flushPromises();
+    const line = wrapper.find('[data-testid="trajectory-line"]');
+    expect(line.exists()).toBe(true);
+    expect(line.text()).toContain("supported by 2 replayed command turn(s)");
+    expect(line.find(".verdict-pass").exists()).toBe(true);
+  });
+
+  it("renders no trajectory line when the doc carries none (null)", async () => {
+    const view = {
+      path: "x",
+      turns: [] as unknown[],
+      frames: 0,
+      skipped: { unparseableLines: 0, unknownKinds: [], gaps: [] },
+      windows: { open: true, close: true },
+    };
+    mockFetch({
+      "/api/trace": { view },
+      "/api/verify": { ok: true, doc: { ...failedDoc, trajectory: null } },
+    });
+    const wrapper = mount(TraceView, { props: { tracePath: "trace-x.jsonl" } });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="trajectory-line"]').exists()).toBe(false);
+  });
+
   it("emits back", async () => {
     mockFetch({
       "/api/trace": {
@@ -136,5 +213,30 @@ describe("TraceView", () => {
     await flushPromises();
     await wrapper.find(".back-btn").trigger("click");
     expect(wrapper.emitted("back")).toBeTruthy();
+  });
+
+  it("heads with the trace's name, never the operator's absolute path", async () => {
+    // The trace list hands over absolute paths (the API resolves them inside the
+    // trace dir), so a naive heading prints someone's home directory — and this
+    // view is the launch asset's subject. The full path stays reachable as a title.
+    mockFetch({
+      "/api/trace": {
+        view: {
+          path: "/Users/someone/dev/belay/demo/capture/trace-abc.jsonl",
+          turns: [],
+          frames: 0,
+          skipped: { unparseableLines: 0, unknownKinds: [], gaps: [] },
+          windows: { open: true, close: true },
+        },
+      },
+      "/api/verify": { ok: true, doc: failedDoc },
+    });
+    const wrapper = mount(TraceView, {
+      props: { tracePath: "/Users/someone/dev/belay/demo/capture/trace-abc.jsonl" },
+    });
+    await flushPromises();
+    const name = wrapper.get(".trace-name");
+    expect(name.text()).toBe("trace-abc.jsonl");
+    expect(name.attributes("title")).toBe("/Users/someone/dev/belay/demo/capture/trace-abc.jsonl");
   });
 });
