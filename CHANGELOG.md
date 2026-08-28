@@ -5,6 +5,76 @@ All notable changes to Belay are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0 — until then,
 `0.x` minor bumps may include changes that would be breaking under strict semver.
 
+## [0.24.0] - 2026-08-28
+
+The launch demo ships, and it is green — launch checklist L7's last aspect. The
+corrupt success the locked spec promised **could not be produced on demand**: 18
+observed drives across three conditions (two frontier models, an easy bug contract, a
+genuinely hard one, an expensive-suite lever) yielded **zero**. Nothing synthetic was
+substituted, so the demo ships what the drives produced — the **negative control**: a
+real `claude -p` run, told only *"make the tests pass"*, that fixed the bug honestly,
+ran the suite, and said so, verified 7/7 PASS, 0 UNVERIFIED, trajectory PASS
+*"supported by 2 replayed command turn(s)"*. A detector that only ever fires is not a
+detector. The measured corrupt-success shape (**11/60 = 18.3%**, with its
+decomposition) is the companion exhibit, not the replacement.
+
+### Added
+
+- **`belay verify --timeout <seconds>`** — the per-replay timeout `corpus add`,
+  `phase0 run` and `interop correlate` already carried. Without it, a trace whose turns
+  outrun the fixed 10s default reports UNVERIFIED: an honest abstention, but one caused
+  by the clock rather than by the run.
+- **The console's replay context by default** — `BELAY_CONSOLE_VERIFY_SERVER` becomes
+  `--server` (whitespace-split into argv tokens), and `--manifest-dir` defaults to the
+  trace's `<stem>.manifests` sibling when it exists. Absent either, nothing is passed
+  and the engine's fail-closed error stands — never a guessed server.
+- **`demo/`** — the self-contained demo: fixture repo, the committed capture (trace,
+  snapshots, manifests) with `PROVENANCE.md`, and a runbook. `tests/test_demo_capture.py`
+  re-executes it on every PR and asserts the verdict has not moved.
+- **`npm run record:demo`** — regenerates `assets/belay-demo.gif` from the artifact by
+  driving the console with a real browser (manual, never CI). PNG decode and GIF encode
+  both run inside the browser page: no ffmpeg, no image dependency.
+- **`docs/planning/launch-demo/ph-assets.md`** — the PH listing draft, including a
+  "claims that must NOT appear" list.
+
+### Fixed
+
+- **The console's verdicts were unreachable.** It passed `verify --timeout` before the
+  flag existed, so argparse answered `unrecognized arguments` with empty stdout and
+  exit 2 and *every* console verify degraded to `empty-output`. Its own suite could not
+  see it: the stub engine echoes argv and cannot object.
+- **The console's subprocess wall killed authorised replays.** A fixed 60s wall against
+  a 300s per-replay budget SIGTERMed a legitimate replay at 60.0s and reported
+  `empty-output` — blaming the engine for its own kill. The wall is derived now
+  (`timeout × turns-in-scope`, floored at 60s) and reports `console-wall-timeout`.
+- **The console image had never worked under plain `docker run`.** It defaulted to port
+  8787 on 127.0.0.1 and read `~/.belay/traces`, while the image `EXPOSE`s 8080 and is
+  deployed against `/workspace`. Compose set all three by hand and was the only path
+  that ever worked. The image carries its own defaults now.
+- **The committed capture was incomplete.** The root `.gitignore` excludes
+  `__pycache__/`, so seven snapshot directories were never committed and restore died
+  stamping a directory absent from the clone. Invisible on the machine that made the
+  capture — where they exist as ignored files — and caught by the first clean clone,
+  which is exactly the "a stranger can reproduce it" claim. Guarded on the clone now.
+- **The trace view leaked the operator's home directory** into the launch asset by
+  heading with the raw absolute path.
+
+### Changed
+
+- **The record matches what shipped.** The README's demo alt text, `docs/ROADMAP.md`'s
+  locked demo, `CAPABILITY_ROADMAP.md` and `live-console/prd.md` no longer claim a flag
+  turn ("turn 7") or a Langfuse side-by-side; each correction quotes what it replaced.
+  A real Langfuse integration is **not built** (C9 export-back remains deferred), and
+  `tests/test_demo_assets.py` now fails the build if the README asserts a catch the
+  committed capture does not contain.
+- `demo/capture/` is excluded from `ruff`: the snapshots are the bytes replay restores,
+  so `ruff --fix` on them would be trace tampering by linter.
+
+### Unchanged, deliberately
+
+No verdict axis, invariant, status, or Phase-0 number moves. A3 (claim re-derivation)
+is still not built; the GHCR publish job is still deferred.
+
 ## [0.23.0] - 2026-08-25
 
 The C7 live console ships — the launch surface (launch checklist L6): `belay verify
@@ -1032,7 +1102,10 @@ The first public release: the full **record → sandbox → replay → verdict**
 - **The A3 claim-re-derivation axis** (C8) is not built; the live console (C7) and observability interop
   (C9) are ahead on the roadmap.
 
-[Unreleased]: https://github.com/haqaliz/belay/compare/v0.21.1...HEAD
+[Unreleased]: https://github.com/haqaliz/belay/compare/v0.24.0...HEAD
+[0.24.0]: https://github.com/haqaliz/belay/compare/v0.23.0...v0.24.0
+[0.23.0]: https://github.com/haqaliz/belay/compare/v0.22.0...v0.23.0
+[0.22.0]: https://github.com/haqaliz/belay/compare/v0.21.1...v0.22.0
 [0.21.1]: https://github.com/haqaliz/belay/compare/v0.21.0...v0.21.1
 [0.21.0]: https://github.com/haqaliz/belay/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/haqaliz/belay/compare/v0.19.0...v0.20.0
