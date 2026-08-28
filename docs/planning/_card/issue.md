@@ -1,72 +1,72 @@
-# Card: Launch demo, locked spec (launch checklist L7)
+# Card — feat/verify-multi-server-seam/aliz
 
-Source: inline brief from the checklist + `docs/ROADMAP.md:253-259` (the locked demo) +
-the belay-next/live-console handoffs. No GitHub issue exists; the id lives in the branch and PR.
+**Source:** no GitHub issue (`gh issue list` → "No Issues"; the repo's tracker is empty).
+The source of record is the inline brief below, produced by the `belay-next` pick on
+2026-08-28 against the committed record.
 
 ## Brief
 
-L7 of `docs/planning/launch-readiness/CHECKLIST.md` — the locked launch demo: one repo,
-one failing test, an agent told *"make the tests pass"* — it weakens the test and reports
-success (a real, documented behavior, not a staged trick). Belay flags the exact turn
-(A1 invariant, with the diff). Tagline: *"Your agent lied. Your dashboard didn't notice.
-Mine did."* DONE = the demo is a self-contained repo + runbook any stranger can
-reproduce; a fresh demo gif replaces the current one in the README; the verdict is
-deterministic (A3 corroborates; never carries the demo).
+Fix the **U9 replay seam**.
 
-**Ground truth that already exists** (dig): the deterministic verdict machinery is
-pinned — `tests/test_launch_demo.py` proves A2 PASS + A1 FAIL → reduced FAIL, A1 the
-sole catcher, with non-vacuity guards; the real corrupt-success shape is documented
-(`s1p`, `pytest-5227`); the minting driver (`eval/minting_driver/` + `ClaudeCliModel`,
-`claude -p` BYOK) drives real agents through the gated proxy with filesystem+shell MCP
-servers; the console (C7, v0.23.0) renders traces + verdicts.
+Today `belay verify --server` takes ONE server command (`src/belay/replay/client.py:342`,
+`src/belay/replay/engine.py:416` — `server_command: Sequence[str]` threaded through the
+whole replay path). So a turn whose tool that single server does not offer replays as
+`MCP error -32602: Tool run_process not found`. That error reply *parses* as JSON and
+*reproduces deterministically*, so `src/belay/verify/result.py:18` scores it
+DIVERGED + DETERMINISTIC → **FAIL**.
 
-**Gaps found by the dig** (what L7 actually builds): (1) no self-contained demo repo or
-runbook exists; (2) the current `assets/belay-demo.gif` has no generator (no recording
-machinery in the repo); (3) the **compose console container serves a dead SPA** —
-`console/server-static.mjs` has no `/api/*` routes, so `docker compose up console`
-cannot render a trace or verdict (a real L6 gap that L7's demo needs closed); (4) the
-"green Langfuse trace" side-by-side is aspirational — no Langfuse integration exists and
-C9 export-back is deferred; today it must be an honest juxtaposition; (5) the roadmap's
-"turn 7" wording doesn't match the implemented single-turn demo — the real-agent run's
-flag turn is whatever it is, and the wording needs correcting to the committed capture's
-truth.
+That is a **false FAIL**, measured **171 times** in the gate mint
+(`docs/planning/mint-shell-toolset-run/audit-and-publish/AUDIT.md:10`), hand-verified on
+`trace-django__django-12125.jsonl` turn 8 (the trace records a real exit-0 `run_process`;
+replay through the filesystem-only `--server` reproduces the -32602 error).
 
-## DONE criteria (from CHECKLIST.md L7 + the locked spec)
+The **pre-registered disposition** said this would degrade honestly, not fail:
+`docs/planning/mint-shell-toolset-run/prd.md:173` (risk P5) — *"Pre-stated composition:
+echoed, UNVERIFIED-by-cause, never counted as replayed evidence; a divergence is a
+recorded finding, not a silent adjustment."* The engine diverged from its own contract.
 
-> ☐ L7 · Launch demo, locked spec — DONE = the demo is a self-contained repo + runbook
-> any stranger can reproduce, a fresh demo gif replaces the current one in the README,
-> and the verdict is deterministic (A3 corroborates; never carries the demo).
+### Two halves
 
-## Blockers / dependencies
+1. **Honesty half (must).** A turn whose recorded tool is offered by no replay server is
+   **UNVERIFIED with a named cause**, never a result-equivalence FAIL.
+2. **Coverage half (should).** `belay verify` accepts more than one `--server`, and each
+   turn is routed to the server that offered its tool — decided from the trace's recorded
+   `tools/list` snapshot (the `derive_annotations` fact the trajectory rule already reads),
+   never guessed.
 
-- **Depends on nothing unshipped:** L1–L6 done; the console (v0.23.0) is the demo's
-  visual; the A1 deterministic verdict is shipped and pinned by test; the minting
-  driver + BYOK `claude -p` path exist (manual-marked, never CI).
-- **Known caveats (named before the dig):** the compose console's missing API routes
-  (a real gap the demo needs); the Langfuse side-by-side cannot be a real integration
-  in this slice (C9 export-back deferred) — the honest first slice is a juxtaposition;
-  a live agent run is manual/BYOK (real model spend, trajectory varies) — the
-  *committed capture* is what makes the demo deterministic.
+### Acceptance sketch (test-first, from the handoff)
 
-## Open questions (flag for the PRD)
+1. A turn whose recorded tool is offered by no replay server → UNVERIFIED with a named
+   cause, never a result-equivalence FAIL. Fixture from the committed `django-12125`
+   capture.
+2. `verify` accepts multiple `--server` specs; each turn routes to the server that offered
+   its tool, decided from the trace's recorded `tools/list` snapshot.
+3. Fail-closed on ambiguity: a tool offered by **zero** or by **two** servers is UNVERIFIED
+   with a named cause — never routed on a guess.
+4. Single-server traces produce **byte-identical** verdicts (regression).
+5. The new cause is added to the closed `_REPLAYED_CAUSES` set
+   (`src/belay/interop/attach.py:81`) in the same PR, with its guard test; the coverage
+   line travels on every surface (`verify` text, `--json`, console, `corpus show`).
 
-- Demo repo location: inside the belay repo (`demo/`) vs a separate repo?
-- Demo artifact: commit a real captured corrupt-success run (trace + snapshots +
-  manifests) that CI replays deterministically, with the live reproduction as a manual
-  runbook path?
-- Close the container-console API gap in this unit so the compose console renders the
-  demo?
-- Langfuse side-by-side: honest juxtaposition (console red verdict beside the agent's
-  transcript) with the real integration named deferred?
-- Demo gif: Playwright-driven console recording (automated, reproducible) vs terminal
-  recording of `belay verify`?
+### Caveats carried in from the pick
 
-## Context links
+- **This is a RECLASSIFICATION, not improved detection.** The UNVERIFIED rate rises by
+  design. `11/60 = 18.3%`, the 11 hand-audited TPs, `precision 0.00`, `1/15`, `4/16` and
+  every other published number stand **unedited** (the discipline `trajectory-toolset-rescope`
+  set).
+- Any newly-replayable trajectory FAIL (the 12 "unverifiable-by-seam") is **evidence for the
+  owner to re-adjudicate**, never a verdict this unit re-decides.
+- **R7** (UNVERIFIED dominance) is the risk this touches; **R5** (over-claiming what A2
+  proves) is what it retires.
+- Hazard from the record: `_REPLAYED_CAUSES` is a **closed** vocabulary with a guard test,
+  and `interop-merge-repair` documents a unit that broke C9 silently by adding a cause
+  without updating it.
 
-- Checklist: `docs/planning/launch-readiness/CHECKLIST.md` L7 (lines 253–262), READY-TO-PUBLISH gate (285–292)
-- Locked demo: `docs/ROADMAP.md:253-259`
-- Demo ground truth: `tests/test_launch_demo.py`; `tests/test_verify_weakening.py:243-248`
-- Capture path: `eval/minting_driver/` (loop/capture/bridge/composite), `eval/README.md:132-233`, `ClaudeCliModel` (`clients/claude_cli_client.py:345-447`)
-- Console: `console/` (v0.23.0); the container gap at `console/server-static.mjs`
-- Corrupt-success records: `CLAUDE.md` s1p block; `PHASE0_RESULTS.md` (pytest-5227)
-- Assets: `assets/belay-demo.gif` (current, no generator), README:22-26, README:177
+## Related record (not issues — commits/docs)
+
+- `docs/planning/mint-shell-toolset-run/audit-and-publish/AUDIT.md` — the 171-FAIL finding,
+  the hand-verification, the corpus-banking consequence.
+- `docs/technical/PHASE0_RESULTS.md:1159` — the same fact in the published record.
+- `docs/planning/mint-shell-toolset-run/prd.md:109,173` — U9 and P5 as pre-registered.
+- `docs/planning/phase0-gate-readiness/` — `interop-merge-repair`, the `_REPLAYED_CAUSES`
+  hazard.
