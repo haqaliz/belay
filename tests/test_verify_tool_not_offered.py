@@ -937,3 +937,240 @@ def test_a_reply_that_reproduced_is_never_probed(tmp_path, monkeypatch):
     assert probed == [], ("a reply that reproduced must not spawn a probe", probed)
     assert spy.calls == 0
     assert next(s for s in verdict.sub_verdicts if s.kind == "replay").status is Status.PASS
+
+
+# =====================================================================================
+# Phase 5 — the second fabricated sub-verdict: effect-conformance on a turn nothing ran
+# =====================================================================================
+#
+# Phase 4 stopped the RESULT axis fabricating a FAIL. It left the EFFECT axis fabricating
+# a PASS from the same false premise, and an adversarial review reproduced it live on the
+# committed demo capture:
+#
+#     A2 replay  UNVERIFIED  (tool not offered)
+#     A2 effect  PASS        "effect-conformance PASS: tool 'run_process' declared
+#                             readOnlyHint: false (it may mutate); the observed effect
+#                             conforms — there is no read-only contract to violate"
+#
+# Nothing was observed. The tool was never invoked: the boundary answered that it has no
+# such tool, and `render_effect_verdict` then weighed the TRACE's recorded annotation
+# against the replay's (empty) delta, where the rule table maps declared-false + any delta
+# -> PASS. **A declaration read out of the capture is not an observation of this replay.**
+#
+# The turn's reduced status is UNVERIFIED either way (worst-status-wins), so there is no
+# turn-level false PASS and no published number can move. That is exactly why this is worth
+# fixing rather than shrugging at: `belay corpus show` and the C7 console render sub-verdicts
+# INDIVIDUALLY, so a reader sees "the observed effect conforms" sitting beside an honest
+# abstention. Partial honesty is the failure mode this project names everywhere else.
+#
+# The gate is the SAME evidence the result axis already uses — the `tool_offered` decision
+# `verify_turn` computed once from one probe. It is threaded, never recomputed: a second
+# probe would be a second answer, and two answers about one boundary is how the two axes
+# come to disagree.
+
+from fixtures.shell_command_server import RUN_TOOL as _RUN_TOOL  # noqa: E402
+
+from belay.snapshot.bth1 import FieldDiff  # noqa: E402
+from belay.verify.effect import render_effect_verdict  # noqa: E402
+
+#: The exact sentence this phase exists to make unreachable on an un-executed turn. Asserted
+#: as a literal substring, because the defect is the CLAIM, not the status.
+CONFORMS = "the observed effect conforms"
+
+
+def _declares(read_only: bool) -> bytes:
+    """A `tools/list` response declaring `run_process`'s `readOnlyHint` — the demo shape.
+
+    The committed demo capture's shell server declares `readOnlyHint: false` and
+    `openWorldHint: false`, which is what routes the turn down the declared-false -> PASS
+    branch. `test_replay_relocation_shell_e2e._tools_list_response` declares NO annotations
+    (already UNVERIFIED for effect), so it cannot express this defect; this builder can.
+    """
+    return json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "result": {
+                "tools": [
+                    {
+                        "name": _RUN_TOOL,
+                        "inputSchema": {"type": "object", "properties": {}},
+                        "annotations": {
+                            "readOnlyHint": read_only,
+                            "openWorldHint": False,
+                        },
+                    }
+                ]
+            },
+        }
+    ).encode()
+
+
+def _declared_records(tmp_path, name: str, *, read_only: bool = False) -> list[dict]:
+    """A one-turn `run_process` trace whose tool DECLARES a `readOnlyHint`."""
+    return shell_trace(
+        tmp_path,
+        name,
+        [
+            ("c2s", _tools_list_request(), None),
+            ("s2c", _declares(read_only), None),
+            ("c2s", shell_call({"command_line": "printf hi", "reply_format": "plain"}), None),
+            ("s2c", IS_ERROR_RECORDED, None),
+        ],
+    )
+
+
+# --- 15. AC-3: the effect axis abstains when the boundary never offered the tool -------
+
+
+def test_effect_conformance_abstains_when_the_boundary_never_offered_the_tool(tmp_path):
+    """The reproduced finding, at the renderer: not offered -> UNVERIFIED, never PASS.
+
+    `readOnlyHint: false` is still declared in the capture and still read here — that is
+    unchanged, and it is the point: the declaration is the *server's* statement about what
+    the tool may do, not evidence that this replay ran it. With the boundary saying it does
+    not offer the tool, no effect was observed, so there is nothing for an effect to conform
+    TO, and the honest answer is an abstention naming why.
+    """
+    records = _declared_records(tmp_path, "effect-not-offered")
+
+    verdict = render_effect_verdict(records, 0, [], tool_offered=False)
+
+    assert verdict.status is Status.UNVERIFIED, verdict
+    assert verdict.status is not Status.PASS, verdict
+    assert CONFORMS not in verdict.message, verdict.message
+    assert "does not offer" in verdict.message, verdict.message
+    assert _RUN_TOOL in verdict.message, verdict.message
+    assert verdict.observed is None, (
+        "nothing was observed, so the verdict must not report an observation", verdict,
+    )
+
+
+def test_an_undecided_boundary_abstains_on_effect_too_and_says_so_differently(tmp_path):
+    """AC-4's discipline, carried onto the effect axis: unread is not empty.
+
+    A probe that could not be run or read, and two configured servers both claiming the
+    tool, are IGNORANCE about the boundary. The effect axis must abstain for them as well —
+    an un-attributable divergence is an un-attributable effect — and must not word it as
+    "the boundary does not offer it", which would sell absence of evidence as evidence of
+    absence on a second surface.
+    """
+    records = _declared_records(tmp_path, "effect-undecided")
+
+    verdict = render_effect_verdict(
+        records, 0, [], tool_offered=None, probe_note="the probe could not be read",
+    )
+
+    assert verdict.status is Status.UNVERIFIED, verdict
+    assert CONFORMS not in verdict.message, verdict.message
+    assert "does not offer" not in verdict.message, verdict.message
+    assert "the probe could not be read" in verdict.message, verdict.message
+
+    settled = render_effect_verdict(records, 0, [], tool_offered=False)
+    assert verdict.message != settled.message, (
+        "'could not decide' and 'does not offer' must not render as the same finding",
+    )
+
+
+def test_the_effect_gate_precedes_even_the_read_only_fail(tmp_path):
+    """Fail-closed in BOTH directions: a not-offered turn cannot manufacture an effect FAIL.
+
+    The mirror of the PASS defect, and it must be closed by the same gate. A delta observed
+    on a turn the boundary never served is not that tool's effect, so scoring it against a
+    declared `readOnlyHint: true` would fabricate a FAIL out of the replay harness's own
+    footprint. The gate therefore sits AHEAD of the whole rule table, not inside its
+    declared-false branch.
+    """
+    records = _declared_records(tmp_path, "effect-not-offered-ro", read_only=True)
+    delta = [FieldDiff(path=b"a.txt", field="content", left=b"x", right=b"y")]
+
+    verdict = render_effect_verdict(records, 0, delta, tool_offered=False)
+
+    assert verdict.status is Status.UNVERIFIED, verdict
+    assert verdict.status is not Status.FAIL, verdict
+
+
+def test_a_not_offered_turn_renders_no_sub_verdict_claiming_the_effect_conforms(
+    tmp_path, monkeypatch
+):
+    """AC-3 composed: on a not-offered turn NO sub-verdict says the effect conforms.
+
+    The end the review actually hit. `corpus show` and the console iterate `sub_verdicts`
+    and print each one, so the assertion is over the whole list rather than over the effect
+    verdict alone — a fabricated conformance claim anywhere in that list is the defect,
+    whichever sub-verdict carries it. Both A2 sub-verdicts must abstain; the turn's reduced
+    status is UNVERIFIED before and after, which is what keeps this a partial-honesty repair
+    rather than a verdict change.
+    """
+    reply = _replayed_with_boundary(recorded=IS_ERROR_RECORDED, replayed=IS_ERROR_REPLAYED)
+    spy = _DeterminismSpy()
+    _wire(monkeypatch, reply, {"read_text_file"}, spy)
+
+    verdict = verify_turn(
+        _declared_records(tmp_path, "effect-composed"),
+        0,
+        server_command=shell_server_cmd(),
+        manifest_dir="/nonexistent",
+    )
+
+    assert all(CONFORMS not in s.message for s in verdict.sub_verdicts), [
+        s.message for s in verdict.sub_verdicts
+    ]
+    result = next(s for s in verdict.sub_verdicts if s.kind == "replay")
+    effect = next(s for s in verdict.sub_verdicts if s.kind == "effect")
+    assert result.status is Status.UNVERIFIED, result.message
+    assert effect.status is Status.UNVERIFIED, effect.message
+    assert verdict.status is Status.UNVERIFIED, verdict
+
+
+def test_the_network_boundary_is_still_declared_on_a_turn_that_never_ran(
+    tmp_path, monkeypatch
+):
+    """`NOT_COVERED` survives the gate, deliberately — it is a fact about BELAY.
+
+    `effect:network` says "Belay has no network instrument". That is true of every trace
+    ever recorded, whether or not this particular turn was re-invoked, so gating it on
+    `tool_offered` would make a permanent coverage boundary look like a per-run abstention
+    and lose the declared-false-vs-silent distinction the whole `NOT_COVERED` release exists
+    to keep. It never lifts a turn (`reduce` drops it) and it never PASSes, so leaving it in
+    place cannot manufacture confidence.
+    """
+    reply = _replayed_with_boundary(recorded=IS_ERROR_RECORDED, replayed=IS_ERROR_REPLAYED)
+    _wire(monkeypatch, reply, set(), _DeterminismSpy())
+
+    verdict = verify_turn(
+        _declared_records(tmp_path, "effect-network"),
+        0,
+        server_command=shell_server_cmd(),
+        manifest_dir="/nonexistent",
+    )
+
+    net = next(s for s in verdict.sub_verdicts if s.kind == "effect:network")
+    assert net.status is Status.NOT_COVERED, net
+    assert "openWorldHint" in net.message, net.message
+
+
+# --- 16. The offered path is untouched — the anti-overreach guard, effect edition ------
+
+
+def test_an_offered_tool_still_renders_the_effect_verdict_it_always_did(tmp_path, monkeypatch):
+    """The guard: gating the effect axis must not cost it a single verdict it used to make.
+
+    Same trace, same delta, an OFFERED tool — the declared-false PASS is byte-identical to
+    the ungated renderer's, message included. If this ever goes red, the gate has become a
+    discriminator rather than a gate, and the effect axis has been quietly widened into an
+    abstention machine exactly the way tests 1-6 forbid for the result axis.
+    """
+    records = _declared_records(tmp_path, "effect-offered")
+    ungated = render_effect_verdict(records, 0, [])
+
+    assert ungated.status is Status.PASS, ungated
+    assert CONFORMS in ungated.message, ungated.message
+    assert render_effect_verdict(records, 0, [], tool_offered=True) == ungated
+
+    reply = _replayed_with_boundary(recorded=IS_ERROR_RECORDED, replayed=IS_ERROR_REPLAYED)
+    _wire(monkeypatch, reply, {_RUN_TOOL}, _DeterminismSpy())
+    composed = verify_turn(
+        records, 0, server_command=shell_server_cmd(), manifest_dir="/nonexistent",
+    )
+    assert next(s for s in composed.sub_verdicts if s.kind == "effect") == ungated

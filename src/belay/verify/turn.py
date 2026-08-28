@@ -416,7 +416,17 @@ def verify_turn(
         reply, determinism,
         tool_offered=tool_offered, tool_name=tool_name, probe_note=probe_note,
     )
-    effect_verdict = render_effect_verdict(records, n, reply.delta)
+    # The SAME `tool_offered` decision, threaded — never a second probe. Both A2
+    # sub-verdicts rest on "was this call re-executed?", so they must rest on ONE answer to
+    # it: the effect axis read the CAPTURE's declared `readOnlyHint` against the replay's
+    # (empty) delta and reported "the observed effect conforms" beside the result axis's
+    # honest abstention. Nothing was observed. The turn reduced to UNVERIFIED either way, so
+    # no status and no published number moves — but `corpus show` and the C7 console render
+    # sub-verdicts individually, and a fabricated conformance claim beside an abstention is
+    # the partial honesty this project refuses everywhere else.
+    effect_verdict = render_effect_verdict(
+        records, n, reply.delta, tool_offered=tool_offered, probe_note=probe_note,
+    )
     sub_verdicts = [result_verdict, effect_verdict]
     # The NETWORK dimension is a THIRD, separate sub-verdict — never folded into the
     # filesystem `effect_verdict` (that made a PASS message carry an UNVERIFIED status).
