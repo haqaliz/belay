@@ -31,6 +31,7 @@ cause.
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import io
 import json
@@ -350,6 +351,16 @@ def test_the_readme_subsection_describes_the_abstention_that_shipped_and_nothing
     (`cause-and-surfaces`). So while no such constant exists, the subsection must SAY it
     does not — the exact wording is asserted, so the admission cannot quietly evaporate in
     an edit.
+
+    **Rewritten a second time, for the EFFECT axis** (aspect `boundary-probe`, phase 5).
+    The subsection used to admit a second gap in as many words — *"Nor is the effect
+    sub-verdict gated yet — on such a turn it can still read 'the observed effect conforms'
+    although nothing was observed"*. That half has now shipped: `render_effect_verdict`
+    takes the same single `tool_offered` answer and abstains rather than reading the
+    capture's declared `readOnlyHint` as though it were an observation of this replay. So
+    the admission must be GONE (a stale admission is its own dishonesty — it under-claims a
+    fix users depend on), the subsection must describe what replaced it, and — as with the
+    status half — the engine is made to prove it here rather than the prose being trusted.
     """
     section = _limits_section().split(REPLAY_BOUNDARY_HEADING, 1)[1].split("\n### ", 1)[0]
 
@@ -388,6 +399,64 @@ def test_the_readme_subsection_describes_the_abstention_that_shipped_and_nothing
             "say the abstention carries no distinct named cause yet — the docs may not "
             "imply a bucket the engine has not got"
         )
+
+    # 3. The EFFECT axis is gated now, so the admission that it was not must be gone…
+    assert "Nor is the *effect* sub-verdict gated yet" not in section, (
+        "the effect sub-verdict IS gated now; leaving the admission standing under-claims "
+        "a shipped fix, which is as much a drift as over-claiming one"
+    )
+    assert "the observed effect conforms" in section, (
+        "the subsection must still QUOTE the sentence it removed, so a reader can see what "
+        "changed rather than find the paragraph silently shorter"
+    )
+    assert "effect-conformance" in section or "effect sub-verdict" in section, section
+
+    # …and the engine really does abstain on that axis, on the same evidence.
+    from belay.verify.effect import render_effect_verdict
+
+    records = _run_process_trace_records()
+    effect = render_effect_verdict(records, 0, [], tool_offered=False)
+    assert effect.status is Status.UNVERIFIED, (
+        "the README describes an effect abstention the engine does not make", effect,
+    )
+    assert "the observed effect conforms" not in effect.message, effect.message
+    assert render_effect_verdict(records, 0, []).status is Status.PASS, (
+        "and gating it must not have cost the axis the verdict it always made on an "
+        "offered tool"
+    )
+
+
+def _run_process_trace_records() -> list[dict]:
+    """A one-turn `run_process` trace whose tool declares `readOnlyHint: false`.
+
+    The demo capture's shape, built in-memory: a `tools/list` response declaring the hint,
+    then the `tools/call`. It is the declaration that routes the turn down the
+    declared-false -> PASS branch, so it is what the abstention has to override.
+    """
+    frames = [
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+        {
+            "jsonrpc": "2.0", "id": 2,
+            "result": {"tools": [{
+                "name": "run_process",
+                "inputSchema": {"type": "object", "properties": {}},
+                "annotations": {"readOnlyHint": False, "openWorldHint": False},
+            }]},
+        },
+        {
+            "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+            "params": {"name": "run_process", "arguments": {"command_line": "printf hi"}},
+        },
+        {"jsonrpc": "2.0", "id": 3, "result": {"content": [], "isError": False}},
+    ]
+    directions = ["c2s", "s2c", "c2s", "s2c"]
+    return [
+        {
+            "kind": "frame", "seq": i, "dir": d, "t_in": float(i),
+            "raw": base64.b64encode(json.dumps(f).encode()).decode(),
+        }
+        for i, (d, f) in enumerate(zip(directions, frames))
+    ]
 
 
 # --- AC-3: the payoff, end to end on the COMMITTED demo capture ----------------------

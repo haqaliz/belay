@@ -1174,3 +1174,251 @@ def test_an_offered_tool_still_renders_the_effect_verdict_it_always_did(tmp_path
         records, 0, server_command=shell_server_cmd(), manifest_dir="/nonexistent",
     )
     assert next(s for s in composed.sub_verdicts if s.kind == "effect") == ungated
+
+
+# =====================================================================================
+# Phase 6 — the aspect moves NOTHING else: the no-op regression and the two invariants
+# =====================================================================================
+#
+# The abstention paths are pinned above. This section pins the far larger claim the aspect
+# depends on for its whole release story: **no other verdict moved.** Two properties carry
+# it, and neither may be asserted by reading the source.
+#
+# **AC-6 — a fully-offered trace is byte-identical to before this aspect.** The gate is keyed
+# on DIVERGED, so on the overwhelmingly common turn — one that reproduced — no probe spawns,
+# no classifier runs, and both A2 sub-verdicts must come out EXACTLY as the pre-aspect
+# composition produced them. "Exactly" is checkable rather than assertable in prose: the
+# pre-aspect composition WAS `render_result_verdict(reply, determinism)` +
+# `render_effect_verdict(records, n, reply.delta)` + `network_subverdict(records, n)`, with
+# no boundary argument in sight. Calling the renderers that way is calling yesterday's code,
+# because `tool_offered=True` is the default on both and the default is the untouched path.
+# The comparison is whole-`Verdict` equality — axis, kind, status, observed, expected AND
+# message — so a changed word is a red test, not a shrug.
+#
+# **AC-8 — the trajectory axis structurally CANNOT see this aspect.** This is the load-bearing
+# one, and it is what lets the record say the 2026-08-12 gate's 11/60 = 18.3% stands unedited.
+# `assemble_turn_facts` (`src/belay/verify/trajectory.py:248-286`) reads exactly two fields off
+# a `TurnVerdict` — `replayed_is_error` and `tool_name` — and never `.status` or `.cause`.
+# The aspect changes `.status`, `.cause` and sub-verdict messages on a not-offered turn and
+# touches neither of those two fields. That is an argument; the tests below are the proof:
+#
+#   (a) `replayed_is_error` is IDENTICAL across all three probe answers on the same replay —
+#       it is a fact read off the replayed reply, not a consequence of the verdict.
+#   (b) an instance-level trajectory verdict over such turns is IDENTICAL — same status, same
+#       cause, same evidence count, same message.
+#   (c) the seam is proved structurally too: mutating a not-offered verdict's `.status` to
+#       FAIL and clearing its `.cause` changes NO turn fact. If a future edit ever taught
+#       `assemble_turn_facts` to read the status, (c) goes red immediately — before any mint
+#       re-derives a published number under a rule that quietly started seeing A2.
+#
+# These are guards, so they are GREEN on arrival, exactly like tests 1-6. Their teeth were
+# shown by mutation, not by hoping. Three were run and reverted; none is in the tree:
+#
+#   * `assemble_turn_facts` fed `replayed=False` whenever the verdict's status is UNVERIFIED
+#     — the most plausible way the AC-8 invariant would ever break. (a) stays green, (b) and
+#     (c) both fail, which is exactly the discrimination those two exist for.
+#   * the probe's `if reply.result_equivalence == DIVERGED` guard removed, so it fires on
+#     every reply. `test_a_reply_that_reproduced_is_never_probed` and AC-6's first test fail.
+#   * `render_effect_verdict`'s `tool_offered` default flipped from `True` to `None`, so the
+#     gate abstains for every ungated caller. Both AC-6 tests fail.
+
+import dataclasses  # noqa: E402
+
+from belay.replay.engine import EQUAL as _EQUAL  # noqa: E402
+from belay.verify.effect import network_subverdict  # noqa: E402
+from belay.verify.invariants import (  # noqa: E402
+    RULE_SUITE_BEFORE_SUCCESS_CLAIM,
+    Invariant,
+)
+from belay.verify.trajectory import (  # noqa: E402
+    assemble_turn_facts,
+    evaluate_trajectory_invariant,
+    offered_toolset,
+)
+
+
+def _fields(verdict) -> tuple:
+    """Every field of a Verdict, so equality cannot pass on status alone."""
+    return (
+        verdict.axis, verdict.kind, verdict.status,
+        verdict.observed, verdict.expected, verdict.message,
+    )
+
+
+# --- 17. AC-6: a fully-offered trace is what it always was ----------------------------
+
+
+def test_a_fully_offered_trace_renders_exactly_the_pre_aspect_verdicts(tmp_path, monkeypatch):
+    """AC-6: no probe, no classifier, and every sub-verdict identical to the ungated ones.
+
+    The reply reproduced, so the gate never fires and the composed turn must be the one the
+    engine produced before any of this existed. Reconstructing that composition from the
+    pure renderers with NO boundary argument is not an approximation of the old code — it IS
+    the old code path, since `tool_offered=True` is the default on both renderers and the
+    default branch is the one this aspect left untouched.
+    """
+    records = _declared_records(tmp_path, "fully-offered")
+    reply = TurnReplay(
+        turn_index=0,
+        status=REPLAYED,
+        reinvoked=True,
+        result_equivalence=_EQUAL,
+        recorded_reply=IS_ERROR_RECORDED,
+        replayed_reply=IS_ERROR_RECORDED,
+        delta=[],
+        boundary=ReplayBoundary(argv=("srv",), manifest_path="/manifests/abc.json"),
+    )
+    spy = _DeterminismSpy()
+    probed = _wire(monkeypatch, reply, lambda _argv: {_RUN_TOOL}, spy)
+
+    verdict = verify_turn(
+        records, 0, server_command=shell_server_cmd(), manifest_dir="/nonexistent",
+    )
+
+    # The pre-aspect composition, called the pre-aspect way.
+    expected = [
+        render_result_verdict(reply, None),
+        render_effect_verdict(records, 0, reply.delta),
+    ]
+    net = network_subverdict(records, 0)
+    if net is not None:
+        expected.append(net)
+
+    assert probed == [], ("a reproduced reply must ask the boundary nothing", probed)
+    assert spy.calls == 0, "and must classify nothing"
+    assert [_fields(s) for s in verdict.sub_verdicts] == [_fields(s) for s in expected]
+    assert verdict.status is Status.PASS, verdict
+    assert verdict.cause is None, verdict
+
+
+def test_a_diverged_offered_turn_also_renders_exactly_the_pre_aspect_verdicts(
+    tmp_path, monkeypatch
+):
+    """AC-6's harder half: even where the probe DOES fire, an offered tool is unchanged.
+
+    A reproduced turn never reaches the gate at all, which is a weak place to prove
+    invariance. This one diverges, so the probe runs, answers "offered", and the classifier
+    is consulted exactly as it always was — and the composed sub-verdicts must still equal
+    the ungated renderers' output field for field, message included. This is where a gate
+    that had quietly become a discriminator would show up.
+    """
+    records = _declared_records(tmp_path, "diverged-offered")
+    reply = _replayed_with_boundary(recorded=IS_ERROR_RECORDED, replayed=IS_ERROR_REPLAYED)
+    spy = _DeterminismSpy()
+    _wire(monkeypatch, reply, lambda _argv: {_RUN_TOOL}, spy)
+
+    verdict = verify_turn(
+        records, 0, server_command=shell_server_cmd(), manifest_dir="/nonexistent",
+    )
+
+    determinism = DeterminismResult(
+        turn_index=0, classification=DETERMINISTIC, replays=3, tool=RUN_TOOL
+    )
+    expected = [
+        render_result_verdict(reply, determinism),
+        render_effect_verdict(records, 0, reply.delta),
+    ]
+    net = network_subverdict(records, 0)
+    if net is not None:
+        expected.append(net)
+
+    assert spy.calls == 1, spy.calls
+    assert [_fields(s) for s in verdict.sub_verdicts] == [_fields(s) for s in expected]
+    assert verdict.status is Status.FAIL, verdict
+
+
+# --- 18. AC-8: the trajectory axis cannot see any of this -----------------------------
+
+
+#: A verification claim in the classifier's closed vocabulary, and a seq after every frame
+#: in the one-turn traces above, so the `run_process` turn counts as "before the claim".
+_CLAIM_TEXT = "I ran the suite and verified the fix; the tests pass."
+_CLAIM_SEQ = 10_000
+
+TRAJECTORY_RULE = Invariant(scope=b"", rule=RULE_SUITE_BEFORE_SUCCESS_CLAIM)
+
+
+def _turn_under(tmp_path, monkeypatch, name: str, offered):
+    """One `verify_turn` over the same replay, differing ONLY in the probe's answer."""
+    reply = _replayed_with_boundary(recorded=IS_ERROR_RECORDED, replayed=IS_ERROR_REPLAYED)
+    _wire(monkeypatch, reply, offered, _DeterminismSpy())
+    records = _declared_records(tmp_path, name)
+    return records, verify_turn(
+        records, 0, server_command=shell_server_cmd(), manifest_dir="/nonexistent",
+    )
+
+
+def _trajectory(records, verdict):
+    """The instance-level trajectory verdict over one turn, through the narrow facts seam."""
+    facts = assemble_turn_facts(records, {0: verdict})
+    return facts, evaluate_trajectory_invariant(
+        TRAJECTORY_RULE,
+        claim_text=_CLAIM_TEXT,
+        claim_seq=_CLAIM_SEQ,
+        turn_facts=facts,
+        toolset=offered_toolset(records, claim_seq=_CLAIM_SEQ),
+    )
+
+
+def test_replayed_is_error_is_unchanged_by_the_boundary_decision(tmp_path, monkeypatch):
+    """AC-8 (a): the trajectory rule's evidence field is a fact of the REPLAY, not the verdict.
+
+    `replayed_is_error` is read off the replayed reply's `result.isError`. The boundary
+    decision changes the STATUS and the MESSAGES of a turn; it must not touch this, or every
+    trajectory verdict ever computed over a not-offered turn would move and the 2026-08-12
+    gate's numbers would need re-deriving. All three probe answers, one replay, one value.
+    """
+    _r1, offered = _turn_under(tmp_path, monkeypatch, "traj-offered", {_RUN_TOOL})
+    _r2, absent = _turn_under(tmp_path, monkeypatch, "traj-absent", set())
+    _r3, undecided = _turn_under(tmp_path, monkeypatch, "traj-undecided", None)
+
+    assert offered.status is Status.FAIL and absent.status is Status.UNVERIFIED, (
+        "the three answers must really differ, or this invariant is vacuous",
+        offered.status, absent.status, undecided.status,
+    )
+    assert offered.replayed_is_error is True, offered
+    assert absent.replayed_is_error == offered.replayed_is_error
+    assert undecided.replayed_is_error == offered.replayed_is_error
+
+
+def test_the_instance_trajectory_verdict_is_identical_before_and_after(tmp_path, monkeypatch):
+    """AC-8 (b): the whole instance-level verdict is identical across the three answers.
+
+    Not just the evidence field — the rule's OUTPUT. Same status, same cause, same evidence,
+    same message, whether the boundary offered the tool, said it did not, or could not be
+    read. That is the sentence the release needs: this unit is strictly A2, and no A1
+    trajectory number can have moved under it.
+    """
+    records_a, offered = _turn_under(tmp_path, monkeypatch, "traj-v-offered", {_RUN_TOOL})
+    records_b, absent = _turn_under(tmp_path, monkeypatch, "traj-v-absent", set())
+    records_c, undecided = _turn_under(tmp_path, monkeypatch, "traj-v-undecided", None)
+
+    facts_a, verdict_a = _trajectory(records_a, offered)
+    facts_b, verdict_b = _trajectory(records_b, absent)
+    facts_c, verdict_c = _trajectory(records_c, undecided)
+
+    assert facts_a == facts_b == facts_c, (facts_a, facts_b, facts_c)
+    assert _fields(verdict_a) == _fields(verdict_b) == _fields(verdict_c), (
+        verdict_a, verdict_b, verdict_c,
+    )
+
+
+def test_the_turn_facts_seam_cannot_read_a_status_or_a_cause(tmp_path, monkeypatch):
+    """AC-8 (c): the STRUCTURAL proof, so the invariant survives a future edit.
+
+    (a) and (b) show the invariant holds for the values this aspect produces. This shows
+    WHY, and it is the half that keeps holding when someone later adds a field to
+    `TurnVerdict` or a branch to the trajectory rule: the same verdict with its `.status`
+    forced to FAIL and its `.cause` cleared — a mutation far larger than anything this
+    aspect makes — yields byte-identical turn facts, because `assemble_turn_facts` reads
+    only `replayed_is_error` and `tool_name`. The day that stops being true, this goes red.
+    """
+    records, absent = _turn_under(tmp_path, monkeypatch, "traj-structural", set())
+
+    mutated = dataclasses.replace(
+        absent, status=Status.FAIL, cause=None, sub_verdicts=[],
+    )
+
+    assert assemble_turn_facts(records, {0: absent}) == assemble_turn_facts(
+        records, {0: mutated}
+    ), "the trajectory facts seam must be blind to a turn's status, cause and sub-verdicts"
