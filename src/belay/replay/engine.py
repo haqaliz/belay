@@ -155,6 +155,37 @@ _HANDSHAKE_METHODS = ("initialize", "notifications/initialized")
 
 
 @dataclass(frozen=True)
+class ReplayBoundary:
+    """The boundary a replay actually spawned — the argv, the snapshot, the root.
+
+    A replay is an observation, and *which server produced it* is part of what was
+    observed. Until now that fact was computed inside `replay_turn` and thrown away: the
+    caller held only the operator-typed template, in which `{workspace}` is still a
+    placeholder. So a caller that later wants to ask the same boundary a question — "do you
+    even offer this tool?" — could not, without resolving `{workspace}` a second time, and
+    a second copy of a rooting rule silently drifts from the first (both produce *a*
+    verdict, just not the same one). This carries the resolved fact instead.
+
+    - `argv` is the command as SPAWNED, already through `resolve_server_argv` — the one
+      substitution site — before the client's relocation of in-root tokens.
+    - `manifest_path` is the snapshot that was restored for this turn.
+    - `source_root` is the root the manifest recorded (`None` when it recorded none).
+    - `relocation_root` is what was handed to the client as `source_root`, i.e. the root
+      relocation actually keyed on — `None` for a cwd-relative replay that relocates
+      nothing. It is NOT the same as `source_root`: the relocation gate decides per turn.
+
+    Reported ONLY on a `REPLAYED` status, which is the only status that got as far as
+    spawning a boundary. Absent means "this observation names no boundary", never "the
+    boundary was empty".
+    """
+
+    argv: tuple[str, ...]
+    manifest_path: str
+    source_root: Optional[str] = None
+    relocation_root: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class TurnReplay:
     """What replaying one recorded turn observed — never a verdict.
 
@@ -179,6 +210,8 @@ class TurnReplay:
     version_drift: bool = False
     workspace: Optional[str] = None
     outcomes: Optional[list[FrameOutcome]] = None
+    #: The boundary this replay spawned, on a REPLAYED status only. See `ReplayBoundary`.
+    boundary: Optional[ReplayBoundary] = None
 
 
 def _frames_by_seq(records: Sequence[dict]) -> dict[int, dict]:
@@ -665,6 +698,14 @@ def replay_turn(
         version_drift=version_drift,
         workspace=result.workspace,
         outcomes=result.outcomes,
+        # Report the boundary this turn was actually replayed against, so a caller can ask
+        # that same boundary a question without re-resolving `{workspace}` itself.
+        boundary=ReplayBoundary(
+            argv=tuple(server_command),
+            manifest_path=str(manifest_path),
+            source_root=source_root,
+            relocation_root=relocation_root,
+        ),
     )
 
 
@@ -708,6 +749,7 @@ __all__ = [
     "UNROOTABLE_SERVER_COMMAND",
     "UNVERIFIED",
     "WORKSPACE_PLACEHOLDER",
+    "ReplayBoundary",
     "TurnReplay",
     "replay_turn",
     "resolve_server_argv",

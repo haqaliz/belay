@@ -332,31 +332,61 @@ def test_the_readme_subsection_names_the_flag_and_its_ordering():
     assert "before `--server`" in section, section
 
 
-def test_the_readme_subsection_does_not_promise_an_abstention_that_has_not_shipped():
+def test_the_readme_subsection_describes_the_abstention_that_shipped_and_nothing_more():
     """The honesty guard on this documentation, and the reason it is a test.
 
-    The A2 abstention for a tool the boundary never offered (UNVERIFIED with a named
-    cause) is a SEPARATE aspect of `verify-tool-not-offered` and has not landed. Until it
-    does, the shipped behavior on such a turn is a result-equivalence FAIL, and the README
-    says exactly that. A subsection that described the abstention early would be the
-    README claiming coverage the engine does not have — the one thing this file's
-    neighbouring subsections exist to prevent.
+    **This test and the subsection it guards were rewritten together**, as the version it
+    replaces required: the A2 abstention landed (`verify-tool-not-offered` aspect
+    `boundary-probe`). On a DIVERGED reply the engine now asks the boundary what it offers
+    and reports `UNVERIFIED` rather than a fabricated result-equivalence FAIL when the
+    recorded tool is absent, so the README saying so is no longer docs running ahead of the
+    engine — and the first half below **proves** it by scoring that exact shape through the
+    real renderer rather than trusting the prose.
 
-    When that aspect lands it must rewrite the subsection AND this test together.
+    The guard therefore flips direction rather than disappearing. What the README could now
+    over-claim is not the STATUS but the **cause bucket**: the abstention travels as a
+    message and buckets under the generic replayed-but-unverified cause, because giving it
+    a `kind`, a `REPLAYED_*` constant and a `_PREFIX_LABELS` entry is a later slice
+    (`cause-and-surfaces`). So while no such constant exists, the subsection must SAY it
+    does not — the exact wording is asserted, so the admission cannot quietly evaporate in
+    an edit.
     """
     section = _limits_section().split(REPLAY_BOUNDARY_HEADING, 1)[1].split("\n### ", 1)[0]
-    offered_names_a_status = "UNVERIFIED" in section
-    if offered_names_a_status:
-        import belay.replay.report as report
 
-        assert any(
-            "tool-not-offered" in getattr(report, name, "")
-            for name in dir(report)
-            if name.startswith("REPLAYED_")
-        ), (
-            "the README describes an UNVERIFIED abstention for a tool the boundary never "
-            "offered, but no such cause exists in belay.replay.report — the docs are "
-            "ahead of the engine"
+    # 1. The README describes the abstention — and the engine really abstains.
+    assert "UNVERIFIED" in section, section
+    from belay.replay.engine import DIVERGED, REPLAYED, TurnReplay
+    from belay.verify.result import render_result_verdict
+
+    reply = TurnReplay(
+        turn_index=0,
+        status=REPLAYED,
+        reinvoked=True,
+        result_equivalence=DIVERGED,
+        recorded_reply=b'{"jsonrpc":"2.0","id":3,"result":{"isError":false}}',
+        replayed_reply=b'{"jsonrpc":"2.0","id":3,"result":{"isError":true}}',
+        delta=[],
+    )
+    verdict = render_result_verdict(
+        reply, None, tool_offered=False, tool_name="run_process"
+    )
+    assert verdict.status is Status.UNVERIFIED, (
+        "the README describes an abstention the engine does not make", verdict,
+    )
+
+    # 2. The cause BUCKET has not landed, so the README must admit it in as many words.
+    import belay.replay.report as report
+
+    has_bucket = any(
+        "tool-not-offered" in getattr(report, name, "")
+        for name in dir(report)
+        if name.startswith("REPLAYED_")
+    )
+    if not has_bucket:
+        assert "does not yet carry a distinct named cause" in section, (
+            "no tool-not-offered cause exists in belay.replay.report, so the README must "
+            "say the abstention carries no distinct named cause yet — the docs may not "
+            "imply a bucket the engine has not got"
         )
 
 

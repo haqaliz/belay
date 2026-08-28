@@ -57,7 +57,14 @@ from belay.frames import message_of
 from belay.index import derive_correlation, tool_calls
 from belay.replay.client import DEFAULT_TIMEOUT
 from belay.replay.determinism import DeterminismResult, classify_determinism
-from belay.replay.engine import DIVERGED, REPLAYED, TurnReplay, replay_turn
+from belay.replay.engine import (
+    DIVERGED,
+    REPLAYED,
+    TurnReplay,
+    replay_turn,
+    resolve_server_argv,
+)
+from belay.replay.probe import offered_tools
 from belay.replay.report import REPLAYED_SUB_VERDICT, canonical_cause
 from belay.verify.effect import network_subverdict, render_effect_verdict
 from belay.verify.invariants import (
@@ -202,6 +209,102 @@ def _replayed_cause(sub_verdicts: Sequence[Verdict]) -> Optional[str]:
     )
 
 
+#: What `_boundary_offer` reports when the boundary itself could not be settled. These are
+#: message DETAIL, not bucket labels: they explain an abstention in prose and are
+#: deliberately not registered anywhere — naming and rendering the bucket is a later slice.
+_PROBE_UNREADABLE = (
+    "the tools/list probe against that boundary could not be run, or its answer could not "
+    "be read"
+)
+
+
+def _boundary_offer(
+    reply: TurnReplay,
+    tool_name: Optional[str],
+    *,
+    routed: Sequence[str],
+    configured: Sequence[Sequence[str]],
+    network: Any,
+    timeout: float,
+) -> tuple[Optional[bool], Optional[str]]:
+    """Ask the replay boundary whether it offers this turn's tool. `(tool_offered, note)`.
+
+    Three-way and fail-closed, mirroring the probe's own contract:
+
+    - `(True, None)` — the routed boundary offers the tool and no OTHER configured server
+      does, so routing was not a choice and today's scoring stands.
+    - `(False, None)` — the routed boundary was asked and does not offer it.
+    - `(None, note)` — undecided, for one of two reasons the note distinguishes: the probe
+      could not be read at all, or **two or more configured servers offer the tool**, which
+      makes "which server should have served this turn" a guess. `verify_turn` routes
+      `run_process` to `--shell-server` by tool NAME (see below), so two servers that both
+      claim a tool is a real, reachable ambiguity the moment `--shell-server` is given, and
+      a guess is exactly what a fail-closed engine must refuse.
+
+    **The routed boundary is asked FIRST and can settle the turn alone.** If it does not
+    offer the tool, that is decisive no matter what the other server offers: the reply the
+    comparison diverged against came from *this* boundary. Only when it DOES offer the tool
+    does the alternate matter, and only then is a second spawn paid for.
+
+    **The argv is never re-resolved for the routed server.** `reply.boundary.argv` is the
+    command `replay_turn` actually spawned, already through the single `resolve_server_argv`
+    site, so the probe asks the same boundary by construction rather than by agreement. An
+    ALTERNATE server was never spawned, so its `{workspace}` must be resolved — through that
+    same exported helper, against the same manifest root, never a second copy of the rule.
+
+    A replay observation with no `boundary` names no boundary to ask, so there is nothing to
+    settle and the answer is `(True, None)` — byte-for-byte the scoring that preceded this
+    gate. The real engine cannot produce that on a REPLAYED status (manifest, resolved argv
+    and relocation decision are all settled before it can spawn); it is reachable only from
+    a hand-built or stubbed observation, and there "score as before" is the honest default.
+    """
+    boundary = reply.boundary
+    if boundary is None or tool_name is None:
+        return True, None
+
+    routed_offer = offered_tools(
+        list(boundary.argv),
+        snapshot_manifest=boundary.manifest_path,
+        source_root=boundary.relocation_root,
+        network=network,
+        timeout=timeout,
+    )
+    if routed_offer is None:
+        return None, _PROBE_UNREADABLE
+    if tool_name not in routed_offer:
+        return False, None
+
+    # The routed boundary offers it. Ambiguity is now the only thing left to rule out, and
+    # it exists only when the operator configured a server this turn was NOT routed to.
+    for other in configured:
+        if list(other) == list(routed):
+            continue
+        argv, rootless = resolve_server_argv(other, boundary.source_root)
+        if argv is None:
+            return None, (
+                f"another configured server could not be resolved against this turn's "
+                f"recorded root ({rootless}), so whether it also offers this tool is unknown"
+            )
+        other_offer = offered_tools(
+            argv,
+            snapshot_manifest=boundary.manifest_path,
+            source_root=boundary.relocation_root,
+            network=network,
+            timeout=timeout,
+        )
+        if other_offer is None:
+            return None, (
+                "another configured server could not be probed, so whether it also offers "
+                "this tool is unknown"
+            )
+        if tool_name in other_offer:
+            return None, (
+                "more than one configured server offers this tool, so which one should have "
+                "served this turn is a routing guess, and this engine does not guess"
+            )
+    return True, None
+
+
 def verify_turn(
     records: Sequence[dict],
     n: int,
@@ -221,6 +324,16 @@ def verify_turn(
     reduce worst-status-wins. On any non-REPLAYED status the turn is UNVERIFIED directly —
     nothing was re-invoked, so A2 verified nothing, and an un-restored or un-snapshotted
     turn must never fall through to PASS. Emits a grounded verdict; no model anywhere.
+
+    **Boundary rule (ahead of the determinism gate):** on a DIVERGED reply the boundary is
+    asked what it offers — `offered_tools`, a `tools/list` probe against the SAME resolved
+    argv, snapshot and relocation root the replay used — before `classify_determinism` is
+    consulted. A boundary that does not offer the recorded tool never re-executed the call,
+    so the divergence refutes nothing and the result sub-verdict abstains; an undecided
+    boundary (unreadable probe, or two configured servers both offering the tool) abstains
+    with distinct wording. Only an offered tool reaches the classifier, which is both the
+    correctness fix and a saving: the classifier re-invokes the turn `replays` (>=3) more
+    times, and those are spent on the turns that deserve them.
 
     **Server routing rule:** a turn whose recorded tool name is exactly `_EVIDENCE_TOOL`
     (`run_process`) and for which `shell_server_command` is given replays against the
@@ -276,14 +389,33 @@ def verify_turn(
     # spawn, so the mis-rooted case short-circuits above and never reaches this call. Do not
     # "fix" it by loosening the classifier — the real repair is to make the probe's comparison
     # root-aware, which is its own unit.
+    #
+    # BEFORE the classifier, ask the boundary what it offers. A server that does not offer
+    # the recorded tool answers readably and identically every time, so the divergence is
+    # determinable and the tool classifies DETERMINISTIC — a correct chain to a fabricated
+    # conclusion, because nothing was re-executed. Probing first both fixes that and SAVES
+    # the classifier's three re-invocations on exactly the turns that deserve them least;
+    # it is skipped entirely unless the reply DIVERGED, so an EQUAL turn costs nothing.
     determinism: Optional[DeterminismResult] = None
+    tool_offered: Optional[bool] = True
+    probe_note: Optional[str] = None
     if reply.result_equivalence == DIVERGED:
-        determinism = classify_determinism(
-            records, n,
-            server_command=resolved, manifest_dir=manifest_dir,
-            replays=replays, network=network, timeout=timeout,
+        tool_offered, probe_note = _boundary_offer(
+            reply, tool_name,
+            routed=resolved,
+            configured=[c for c in (server_command, shell_server_command) if c is not None],
+            network=network, timeout=timeout,
         )
-    result_verdict = render_result_verdict(reply, determinism)
+        if tool_offered is True:
+            determinism = classify_determinism(
+                records, n,
+                server_command=resolved, manifest_dir=manifest_dir,
+                replays=replays, network=network, timeout=timeout,
+            )
+    result_verdict = render_result_verdict(
+        reply, determinism,
+        tool_offered=tool_offered, tool_name=tool_name, probe_note=probe_note,
+    )
     effect_verdict = render_effect_verdict(records, n, reply.delta)
     sub_verdicts = [result_verdict, effect_verdict]
     # The NETWORK dimension is a THIRD, separate sub-verdict — never folded into the

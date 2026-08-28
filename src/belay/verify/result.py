@@ -15,10 +15,25 @@ result is never a verdict until `determinism.classify_determinism` has decided w
 tool reproduces at all:
 
     EQUAL                       -> PASS         (one replay; the classifier is NOT run)
+    DIVERGED + not offered      -> UNVERIFIED   (the boundary never ran the tool)
     DIVERGED + DETERMINISTIC    -> FAIL         (+ the recorded-vs-observed value diff)
     DIVERGED + NONDETERMINISTIC -> UNVERIFIED   (carry the axis; NEVER FAIL)
     DIVERGED + NOT_REPLAYABLE   -> UNVERIFIED   (could not be re-run enough to decide)
     None (nothing to compare)   -> UNVERIFIED
+
+**A second gate sits in front of the determinism one, and it asks a question about the
+BOUNDARY rather than about the tool.** A replay server that does not offer the recorded
+tool answers *readably* — `no such tool`, or a JSON-RPC error — and answers the same way
+every time, so the divergence is determinable and the tool classifies DETERMINISTIC. Every
+step of that is correct and the conclusion is still fabricated: nothing was re-executed, so
+nothing about the agent's call was refuted. What diverged is the operator's `--server`, not
+the trace. So when the caller has asked the boundary what it offers (a `tools/list` probe —
+positive evidence, never error-text matching, never an `isError` inference) and the answer
+does not contain the tool, the divergence is UNVERIFIED here, and the classifier is never
+consulted: re-proving that `"no such tool"` is self-consistent costs three more spawns and
+buys nothing. An UNDECIDED boundary — the probe could not run, could not be read, or two
+configured servers both claim the tool — is a THIRD outcome and abstains with its own
+wording: absence of evidence is never evidence of absence.
 
 FAIL requires a *determinable value* divergence. An unparseable replayed reply — one of the
 two shapes C3 folds into DIVERGED — cannot be compared as a value, so even on a
@@ -85,14 +100,35 @@ def _decode(reply: Optional[bytes]) -> tuple[bool, Any]:
 
 
 def render_result_verdict(
-    reply: TurnReplay, determinism: Optional[DeterminismResult]
+    reply: TurnReplay,
+    determinism: Optional[DeterminismResult],
+    *,
+    tool_offered: Optional[bool] = True,
+    tool_name: Optional[str] = None,
+    probe_note: Optional[str] = None,
 ) -> Verdict:
     """Turn one replay observation (and its determinism decision) into an A2 verdict.
 
     Pure: it re-runs nothing and consults no model. `determinism` must be supplied
-    whenever `reply.result_equivalence` is DIVERGED — that is the gate, and calling this
-    with a DIVERGED reply and `determinism=None` is a programming error (the orchestrator
-    is what runs the classifier). For EQUAL and None it is ignored.
+    whenever `reply.result_equivalence` is DIVERGED **and the boundary offered the tool** —
+    that is the gate, and calling this with such a reply and `determinism=None` is a
+    programming error (the orchestrator is what runs the classifier). For EQUAL and None it
+    is ignored.
+
+    `tool_offered` is the boundary evidence, three-way and read ONLY on a DIVERGED reply:
+
+    - `True` (the default) — the boundary offers the tool, so scoring is exactly what it
+      has always been. It is the default because it is the assumption every caller made
+      implicitly before the probe existed; a caller that has no boundary to ask gets
+      today's behavior rather than an abstention it cannot justify.
+    - `False` — the boundary was ASKED and does not offer the tool. The recorded call was
+      never re-executed, so the divergence says nothing about it -> UNVERIFIED.
+    - `None` — the boundary could not be settled (`probe_note` says why: an unreadable
+      probe, or two configured servers both offering the tool). Ignorance, not knowledge
+      of absence -> UNVERIFIED, worded so it can never be read as "not offered".
+
+    `tool_name` names the tool in those two abstention messages; the FAIL path keeps taking
+    the name from `determinism`, which is the classifier's own record of what it re-ran.
     """
     eq = reply.result_equivalence
 
@@ -116,6 +152,13 @@ def render_result_verdict(
         )
 
     if eq == DIVERGED:
+        # The BOUNDARY gate, ahead of the determinism gate — see the module docstring.
+        # It is first because it is cheaper and because it can settle the turn outright:
+        # a boundary that never offered the tool makes the classifier's three extra
+        # re-invocations pure waste.
+        boundary = _boundary_abstention(reply, tool_offered, tool_name, probe_note)
+        if boundary is not None:
+            return boundary
         if determinism is None:
             raise ValueError(
                 "a DIVERGED result must be gated on determinism before a verdict; "
@@ -124,6 +167,57 @@ def render_result_verdict(
         return _diverged_verdict(reply, determinism)
 
     raise ValueError(f"unrecognised result_equivalence {eq!r}")
+
+
+def _boundary_abstention(
+    reply: TurnReplay,
+    tool_offered: Optional[bool],
+    tool_name: Optional[str],
+    probe_note: Optional[str],
+) -> Optional[Verdict]:
+    """The divergence the BOUNDARY explains, or `None` to let the determinism gate decide.
+
+    Two shapes abstain, and they are kept apart in words because they are apart in fact:
+
+    - **the boundary does not offer the tool** — it was asked and it answered. The reply
+      the comparison diverged against was produced by a server that never ran the recorded
+      call, so there is no re-execution to compare and nothing was refuted. Naming the tool
+      and the boundary is what makes this actionable: the fix is the operator's `--server`.
+    - **the boundary could not be settled** — the probe could not run or could not be read,
+      or more than one configured server claims the tool so routing would be a guess.
+      Whether the divergence belongs to the tool is UNDECIDED, and this wording must never
+      read as "the boundary does not offer it": that would sell absence of evidence as
+      evidence of absence, which is the one mistake this gate exists to avoid.
+
+    Both carry the two replies as evidence, exactly as the FAIL does, so a reader can see
+    what was compared and judge the abstention rather than take it on trust.
+    """
+    if tool_offered is True:
+        return None
+    named = repr(tool_name) if tool_name is not None else "the recorded tool"
+    _rec_ok, rec = _decode(reply.recorded_reply)
+    _rep_ok, rep = _decode(reply.replayed_reply)
+    if tool_offered is False:
+        message = (
+            f"result-equivalence UNVERIFIED on tool {named}: the replay boundary does not "
+            f"offer this tool, so the recorded call was never re-invoked and the reply this "
+            f"comparison diverged against is the boundary's answer, not the tool's. Nothing "
+            f"was re-executed, so nothing was refuted; a FAIL here would charge the trace "
+            f"for the server it was replayed against"
+        )
+    else:
+        note = probe_note or "the boundary could not be asked what it offers"
+        message = (
+            f"result-equivalence UNVERIFIED on tool {named}: the divergence cannot be "
+            f"attributed, because the replay boundary's toolset is undecided ({note}). "
+            f"Absence of evidence is never evidence of absence — this is NOT a finding that "
+            f"the boundary lacks the tool, and it is not a finding against the trace either"
+        )
+    return Verdict(
+        _AXIS, _KIND, Status.UNVERIFIED,
+        observed=rep, expected=rec,
+        message=message,
+    )
 
 
 def _diverged_verdict(reply: TurnReplay, determinism: DeterminismResult) -> Verdict:
@@ -172,14 +266,21 @@ def _deterministic_divergence_verdict(
 ) -> Verdict:
     """A DETERMINISTIC tool that diverges — a FAIL only when the values are comparable.
 
-    The two shapes C3 folds into DIVERGED get different verdicts, because FAIL is the
-    strong claim and only one shape earns it:
+    FAIL is the strong claim and only one shape earns it. Three shapes reach a DIVERGED
+    reply and only the first is a finding against the trace:
 
     - a genuine value mismatch (both replies parse) is a determinable divergence -> FAIL,
       showing recorded vs observed.
     - an unparseable replayed reply cannot be compared as a value, so it does not clear
       the bar for a FAIL -> UNVERIFIED, with a message that names the parse failure
       plainly (a distinct grounding, never read as a value diff).
+    - **a readable reply from a boundary that never offered the tool** parses perfectly,
+      differs deterministically, and still refutes nothing — the divergence is between the
+      trace and the operator's `--server`, not between the trace and re-execution. It is
+      decided by `_boundary_abstention` UPSTREAM of this function rather than here, for
+      one reason: it must be settled BEFORE the classifier spends three more spawns
+      re-proving that a `"no such tool"` reply is self-consistent. Same reasoning, earlier
+      gate.
     """
     tool = determinism.tool
     _rec_ok, rec = _decode(reply.recorded_reply)
@@ -225,6 +326,14 @@ def verify_result(
     `classify_determinism` re-invokes the turn `replays` times, and the divergence is a
     FAIL only if the tool reproduces deterministically. This is the one place a false
     verdict is most likely, and the gate is what prevents it.
+
+    **This orchestrator does NOT run the boundary probe**, and says so rather than
+    leaving it to be discovered: it is the single-verdict entry point (no product
+    surface reaches it today — `belay verify` composes through `verify.turn`), and the
+    probe needs the configured server SET to decide ambiguity, which a single
+    `server_command` cannot supply. So `tool_offered` keeps its `True` default here and
+    a not-offered tool still scores as it did before the probe existed. If this entry
+    point ever becomes load-bearing, it must grow the same gate `verify_turn` has.
     """
     reply = replay_turn(
         records, n,

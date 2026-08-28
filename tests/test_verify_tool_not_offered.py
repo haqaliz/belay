@@ -80,6 +80,7 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -104,6 +105,7 @@ from test_replay_relocation_e2e import (
     _server_cmd as fs_server_cmd,
 )
 from test_replay_relocation_shell_e2e import (
+    _abs_path as shell_abs_path,
     _call as shell_call,
     _reply as shell_reply,
     _server_cmd as shell_server_cmd,
@@ -442,3 +444,496 @@ def test_a_deterministic_divergence_is_never_abstained() -> None:
         assert verdict.status is not Status.UNVERIFIED, (label, verdict)
         assert verdict.expected == json.loads(recorded), (label, verdict)
         assert verdict.observed == json.loads(replayed), (label, verdict)
+
+
+# =====================================================================================
+# Phase 4 — the fix: a tool the boundary never offered is UNVERIFIED, never a FAIL
+# =====================================================================================
+#
+# Everything above pins what must NOT move. Everything below is the defect itself.
+#
+# The seam these tests drive is `verify_turn`, because that is where the decision is made:
+# on a DIVERGED reply it asks the replay boundary what it offers — `offered_tools`, the
+# probe built in phase 3 — BEFORE consulting `classify_determinism`, and threads a
+# three-way `tool_offered` into `render_result_verdict`. Ordering is not an optimisation
+# here: the classifier re-invokes the turn `--replays` (>=3) more times, and re-proving
+# that `"no such tool"` is self-consistent is pure waste (PRD M2). AC-9 asserts the saving
+# rather than assuming it.
+#
+# **Where the probe's inputs come from, and why it matters for the guard above.** The probe
+# must ask the SAME boundary the replay spawned — same resolved argv, same snapshot, same
+# relocation root. Those are facts of the replay, so the replay now reports them:
+# `TurnReplay.boundary` (`ReplayBoundary`) carries the argv `replay_turn` actually spawned,
+# already resolved through the single `resolve_server_argv` site, together with the manifest
+# it restored and the relocation root it used. Re-deriving them in `verify_turn` would be a
+# second resolution of `{workspace}`, which the phase-2 guard exists to forbid.
+#
+# A consequence, deliberate and named: a `TurnReplay` that carries NO boundary is not a
+# boundary that answered — it is a replay observation with no boundary identity at all, and
+# the real engine never produces one on a REPLAYED status (the manifest, the resolved argv
+# and the relocation decision are all settled before it can spawn). It is reachable only
+# from a hand-built or stubbed replay, and there it means exactly "there is nothing here to
+# ask", so scoring is byte-for-byte what it was before this phase. That is why guard test 3
+# above — which stubs re-execution wholesale — is untouched by this phase, and it is
+# asserted directly by `test_a_real_replayed_turn_always_reports_its_boundary`.
+
+from belay.replay.engine import ReplayBoundary  # noqa: E402
+
+
+def _replayed_with_boundary(*, recorded: bytes, replayed: bytes, argv=("srv",)) -> TurnReplay:
+    """A REPLAYED + DIVERGED observation that reports the boundary it spawned.
+
+    The shape the real engine returns for the defect: the server answered readably, the
+    answer differs from the recording, and the replay names the boundary that produced it
+    so the probe can go and ask that same boundary what it offers.
+    """
+    return TurnReplay(
+        turn_index=0,
+        status=REPLAYED,
+        reinvoked=True,
+        result_equivalence=DIVERGED,
+        recorded_reply=recorded,
+        replayed_reply=replayed,
+        delta=[],
+        boundary=ReplayBoundary(
+            argv=tuple(argv), manifest_path="/manifests/abc.json", source_root=None,
+            relocation_root=None,
+        ),
+    )
+
+
+def _run_process_records(tmp_path, name: str) -> list[dict]:
+    """A one-turn trace whose recorded `run_process` SUCCEEDED — the PRD's shape."""
+    return shell_trace(
+        tmp_path,
+        name,
+        [
+            ("c2s", _tools_list_request(), None),
+            ("s2c", _tools_list_response(), None),
+            ("c2s", shell_call({"command_line": "printf hi", "reply_format": "plain"}), None),
+            ("s2c", IS_ERROR_RECORDED, None),
+        ],
+    )
+
+
+class _DeterminismSpy:
+    """A stand-in for `classify_determinism` that RECORDS whether it was consulted.
+
+    AC-9 is a cost claim — probing first *saves* three spawns rather than adding one — and a
+    cost claim asserted by reading the source is not asserted at all. The spy makes the call
+    observable; a test that expects no classification asserts `calls == 0`.
+    """
+
+    def __init__(self, classification=DETERMINISTIC, tool=RUN_TOOL) -> None:
+        self.calls = 0
+        self._result = DeterminismResult(
+            turn_index=0, classification=classification, replays=3, tool=tool
+        )
+
+    def __call__(self, *args, **kwargs):
+        self.calls += 1
+        return self._result
+
+
+def _wire(monkeypatch, reply: TurnReplay, offered, spy: _DeterminismSpy):
+    """Point `verify_turn` at a fixed replay observation, a fixed probe answer, and the spy.
+
+    `offered` is handed to the probe seam exactly as `offered_tools` would return it: a set
+    of names, `set()`, or `None`. Stubbing the probe (rather than spawning) is what lets the
+    three-way DECISION — the part most likely to regress — be tested on both platforms,
+    which is the split `tests/test_verify_dual_server.py` established.
+    """
+    monkeypatch.setattr(turn_module, "replay_turn", lambda *a, **k: reply)
+    monkeypatch.setattr(turn_module, "classify_determinism", spy)
+    seen: list[list[str]] = []
+
+    def _probe(argv, **kwargs):
+        seen.append(list(argv))
+        return offered(list(argv)) if callable(offered) else offered
+
+    monkeypatch.setattr(turn_module, "offered_tools", _probe)
+    return seen
+
+
+# --- 7. AC-1: the boundary does not offer the tool -> UNVERIFIED, not FAIL -------------
+
+
+def test_a_tool_the_boundary_does_not_offer_is_unverified_not_fail(tmp_path, monkeypatch):
+    """The defect, at the deciding seam: not offered -> UNVERIFIED, never FAIL.
+
+    The recorded `run_process` succeeded; the replay boundary answers an error because it
+    has no such tool. Nothing was re-executed, so nothing was refuted, and a FAIL would be
+    a claim about the agent grounded in a fact about the operator's `--server`. The probe
+    asks the boundary and gets back a toolset without `run_process`, which is POSITIVE
+    evidence of absence (PRD M1) — not error-text matching, not an `isError` inference.
+    """
+    reply = _replayed_with_boundary(recorded=IS_ERROR_RECORDED, replayed=IS_ERROR_REPLAYED)
+    spy = _DeterminismSpy()
+    _wire(monkeypatch, reply, {"read_text_file", "write_file"}, spy)
+
+    verdict = verify_turn(
+        _run_process_records(tmp_path, "not-offered"),
+        0,
+        server_command=shell_server_cmd(),
+        manifest_dir="/nonexistent",  # never reached: replay_turn is stubbed
+    )
+
+    result = next(s for s in verdict.sub_verdicts if s.kind == "replay")
+    assert result.status is Status.UNVERIFIED, result.message
+    assert result.status is not Status.FAIL, result.message
+    assert "does not offer" in result.message, result.message
+    assert RUN_TOOL in result.message, result.message
+    assert verdict.status is Status.UNVERIFIED, verdict
+    assert verdict.cause is not None, (
+        "every UNVERIFIED turn must trace to a named cause", verdict,
+    )
+
+
+# --- 8. AC-9: the classifier is NOT consulted on a not-offered turn --------------------
+
+
+def test_the_determinism_classifier_is_not_run_on_a_not_offered_turn(tmp_path, monkeypatch):
+    """AC-9, the cost claim, asserted by a spy: zero calls, so three spawns are SAVED.
+
+    The probe is placed BEFORE the determinism gate precisely so that a boundary which
+    cannot serve the tool is settled at one spawn instead of four. If this ever regresses
+    to "probe after classify", the verdict would still be honest and the run would silently
+    cost 3x on exactly the turns that deserve it least.
+    """
+    reply = _replayed_with_boundary(recorded=IS_ERROR_RECORDED, replayed=IS_ERROR_REPLAYED)
+    spy = _DeterminismSpy()
+    _wire(monkeypatch, reply, set(), spy)
+
+    verify_turn(
+        _run_process_records(tmp_path, "no-classify"),
+        0,
+        server_command=shell_server_cmd(),
+        manifest_dir="/nonexistent",
+    )
+
+    assert spy.calls == 0, (
+        "the determinism classifier re-invokes the turn >=3 times; it must not run once the "
+        "boundary has said it does not offer the tool"
+    )
+
+
+# --- 9. AC-4: a probe that could not decide is DISTINCT, and still never a FAIL --------
+
+
+def test_a_probe_that_could_not_be_read_is_unverified_with_a_distinct_message(
+    tmp_path, monkeypatch
+):
+    """AC-4 / PRD M4: absence of evidence is never evidence of absence.
+
+    `offered_tools` returns `None` when the probe could not run or its answer could not be
+    read. That is ignorance about the boundary, not knowledge that the boundary lacks the
+    tool — so the abstention must NOT say "does not offer", and must not be a FAIL either:
+    a divergence we cannot attribute is not a divergence we can charge to the agent.
+    """
+    reply = _replayed_with_boundary(recorded=IS_ERROR_RECORDED, replayed=IS_ERROR_REPLAYED)
+    spy = _DeterminismSpy()
+    _wire(monkeypatch, reply, None, spy)
+
+    verdict = verify_turn(
+        _run_process_records(tmp_path, "probe-unreadable"),
+        0,
+        server_command=shell_server_cmd(),
+        manifest_dir="/nonexistent",
+    )
+
+    result = next(s for s in verdict.sub_verdicts if s.kind == "replay")
+    assert result.status is Status.UNVERIFIED, result.message
+    assert "does not offer" not in result.message, (
+        "an unreadable probe must never be reported as the boundary lacking the tool",
+        result.message,
+    )
+    assert verdict.status is Status.UNVERIFIED, verdict
+    assert spy.calls == 0, "an undecided boundary buys no determinism classification either"
+
+    # …and it is a DIFFERENT finding from "not offered", in words a reader can tell apart.
+    offered_reply = _replayed_with_boundary(
+        recorded=IS_ERROR_RECORDED, replayed=IS_ERROR_REPLAYED
+    )
+    _wire(monkeypatch, offered_reply, set(), _DeterminismSpy())
+    not_offered = next(
+        s
+        for s in verify_turn(
+            _run_process_records(tmp_path, "probe-not-offered"),
+            0,
+            server_command=shell_server_cmd(),
+            manifest_dir="/nonexistent",
+        ).sub_verdicts
+        if s.kind == "replay"
+    )
+    assert result.message != not_offered.message, (
+        "'could not decide' and 'does not offer' must not render as the same finding"
+    )
+
+
+# --- 10. The FAIL path still runs THROUGH the probe when the tool IS offered -----------
+
+
+def test_a_boundary_that_offers_the_tool_still_reaches_the_failing_verdict(
+    tmp_path, monkeypatch
+):
+    """The guard's property, now through the probe seam: offered -> classify -> FAIL.
+
+    Tests 1-6 pin the renderer and the composition with no probe in the loop. This one pins
+    that INSERTING the probe does not change the answer when the probe's answer is "yes":
+    the classifier is consulted exactly once and the turn is still the FAIL it always was.
+    Without this, the guard could stay green while the probe quietly short-circuited every
+    divergence in production.
+    """
+    reply = _replayed_with_boundary(recorded=IS_ERROR_RECORDED, replayed=IS_ERROR_REPLAYED)
+    spy = _DeterminismSpy()
+    _wire(monkeypatch, reply, {RUN_TOOL, "read_text_file"}, spy)
+
+    verdict = verify_turn(
+        _run_process_records(tmp_path, "offered-still-fails"),
+        0,
+        server_command=shell_server_cmd(),
+        manifest_dir="/nonexistent",
+    )
+
+    result = next(s for s in verdict.sub_verdicts if s.kind == "replay")
+    assert result.status is Status.FAIL, result.message
+    assert spy.calls == 1, ("the classifier must still gate a divergence on an offered tool", spy.calls)
+    assert verdict.status is Status.FAIL, verdict
+
+
+# --- 11. AC-1 end to end, on a REAL capture and a REAL boundary ------------------------
+
+
+@darwin_only
+def test_real_replay_of_a_tool_the_boundary_does_not_offer_is_unverified(tmp_path) -> None:
+    """The PRD's live repro, as a regression test: capture with a shell server, replay
+    against a filesystem-only one.
+
+    A REAL gated capture of a `run_process` turn whose recorded reply SUCCEEDED, replayed
+    against `abs_path_editor_server.py` — a boundary that offers `read_abs` and `edit_abs`
+    and no command tool at all. This is the committed demo capture's shape reduced to
+    fixtures: the reply is readable, it reproduces identically on every replay, and so it
+    took `DIVERGED + DETERMINISTIC -> FAIL` and reported a deterministic failure of a call
+    that really succeeded.
+
+    The call carries an in-root `path` argument, so the engine's relocation gate fires and
+    the boundary is spawned rooted at the scratch — which is exactly the boundary the probe
+    must ask. Asking it the ordinary way (spawn, `tools/list`) returns `{read_abs, edit_abs}`;
+    `run_process` is absent, and the verdict abstains.
+    """
+
+    def frames_for(root: str):
+        return (
+            shell_call(
+                {
+                    "command_line": "printf hi",
+                    "reply_format": "plain",
+                    "path": shell_abs_path(root),
+                }
+            ),
+            shell_reply(PLAIN_REPLY, is_error=False),  # the recorded call SUCCEEDED
+        )
+
+    records, manifest_dir, _work, root = _shell_capture(
+        tmp_path, "boundary-omits-run-process", SHELL_ORIGINAL_CONTENT, frames_for
+    )
+
+    verdict = verify_turn(
+        records,
+        0,
+        server_command=fs_server_cmd(root),  # offers read_abs/edit_abs, never run_process
+        manifest_dir=manifest_dir,
+        invariants=(),
+        timeout=20.0,
+    )
+
+    assert verdict.tool_name == RUN_TOOL, verdict
+    result = next(s for s in verdict.sub_verdicts if s.kind == "replay")
+    assert result.status is Status.UNVERIFIED, result.message
+    assert "result-equivalence FAIL" not in result.message, (
+        "the fabricated FAIL is exactly what this aspect removes", result.message,
+    )
+    assert "does not offer" in result.message, result.message
+    assert verdict.status is Status.UNVERIFIED, verdict
+
+
+# --- 12. The engine always reports its boundary on a REPLAYED turn ---------------------
+
+
+@darwin_only
+def test_a_real_replayed_turn_always_reports_its_boundary(tmp_path) -> None:
+    """The premise the "no boundary -> score as before" branch rests on, asserted.
+
+    `verify_turn` falls back to today's scoring when a replay observation carries no
+    boundary. That fallback is only safe because the REAL engine cannot produce such an
+    observation on a REPLAYED status: the manifest, the resolved argv and the relocation
+    decision are all settled before it can spawn. If that ever stopped being true, the
+    fallback would silently restore the fabricated FAIL, and this test is what would say so.
+    """
+    from belay.replay.engine import REPLAYED as ENGINE_REPLAYED
+    from belay.replay.engine import replay_turn as engine_replay_turn
+
+    def frames_for(root: str):
+        return (fs_call(READ_TOOL, {"path": fs_abs_path(root)}), fs_reply(ABS_ORIGINAL_CONTENT))
+
+    records, manifest_dir, _work, root = _abs_capture(
+        tmp_path, "boundary-reported", ABS_ORIGINAL_CONTENT, frames_for
+    )
+    reply = engine_replay_turn(
+        records, 0, server_command=fs_server_cmd(root), manifest_dir=manifest_dir, timeout=20.0
+    )
+
+    assert reply.status == ENGINE_REPLAYED, reply.cause
+    assert reply.boundary is not None, "a replayed turn must name the boundary it spawned"
+    assert reply.boundary.argv == tuple(fs_server_cmd(root)), reply.boundary
+    assert Path(reply.boundary.manifest_path).exists(), reply.boundary
+
+
+# --- 13. AC-5: two configured servers both offering the tool -> abstain, never guess ---
+
+
+def test_a_tool_offered_by_two_configured_servers_abstains(tmp_path, monkeypatch):
+    """AC-5 / PRD M3: routing between two servers that both claim a tool would be a guess.
+
+    `verify_turn` routes by tool NAME — `run_process` goes to `--shell-server` when one is
+    given, everything else to `--server` — so the moment both configured servers offer the
+    same tool, "which boundary should have served this turn" stops being a fact and becomes
+    a convention. The divergence might be the trace's, or it might be an artifact of routing
+    to the wrong one of two willing servers, and this engine does not guess between them.
+
+    The shape is REACHABLE, not hypothetical: it needs only `--shell-server` plus two
+    servers with an overlapping toolset, which is the ordinary case for a shell server that
+    also exposes file helpers. With no `--shell-server` there is exactly one configured
+    server and the branch cannot fire — asserted by the second half of this test.
+    """
+    reply = _replayed_with_boundary(recorded=IS_ERROR_RECORDED, replayed=IS_ERROR_REPLAYED)
+    spy = _DeterminismSpy()
+    probed = _wire(monkeypatch, reply, lambda _argv: {RUN_TOOL, "read_text_file"}, spy)
+
+    verdict = verify_turn(
+        _run_process_records(tmp_path, "ambiguous"),
+        0,
+        server_command=["python", "fs_server.py"],
+        shell_server_command=shell_server_cmd(),
+        manifest_dir="/nonexistent",
+    )
+
+    result = next(s for s in verdict.sub_verdicts if s.kind == "replay")
+    assert result.status is Status.UNVERIFIED, result.message
+    assert "more than one configured server" in result.message, result.message
+    assert "does not offer" not in result.message, (
+        "an ambiguous boundary is not an absent one", result.message,
+    )
+    assert verdict.status is Status.UNVERIFIED, verdict
+    assert spy.calls == 0, "a routing guess buys no determinism classification"
+    assert len(probed) == 2, (
+        "both configured servers must be asked before ambiguity can be ruled in or out",
+        probed,
+    )
+
+    # …and with only `--server` configured the same probe answer is unambiguous: one
+    # configured server, no routing choice, so the FAIL stands exactly as it always did.
+    spy_one = _DeterminismSpy()
+    _wire(monkeypatch, reply, lambda _argv: {RUN_TOOL, "read_text_file"}, spy_one)
+    single = verify_turn(
+        _run_process_records(tmp_path, "unambiguous"),
+        0,
+        server_command=shell_server_cmd(),
+        manifest_dir="/nonexistent",
+    )
+    assert next(s for s in single.sub_verdicts if s.kind == "replay").status is Status.FAIL
+    assert spy_one.calls == 1
+
+
+def test_an_alternate_server_that_cannot_be_probed_is_undecided_not_ignored(
+    tmp_path, monkeypatch
+):
+    """Fail-closed on the alternate too: an unreadable second probe is UNDECIDED.
+
+    Treating an unreadable alternate as "does not offer it" would silently resolve the
+    ambiguity in the direction that keeps the FAIL — the convenient direction — on no
+    evidence at all. Same rule as everywhere else in this gate: unread is not empty.
+    """
+    reply = _replayed_with_boundary(recorded=IS_ERROR_RECORDED, replayed=IS_ERROR_REPLAYED)
+    spy = _DeterminismSpy()
+    _wire(
+        monkeypatch,
+        reply,
+        lambda argv: {RUN_TOOL} if argv == list(reply.boundary.argv) else None,
+        spy,
+    )
+
+    verdict = verify_turn(
+        _run_process_records(tmp_path, "alternate-unreadable"),
+        0,
+        server_command=["python", "fs_server.py"],
+        shell_server_command=shell_server_cmd(),
+        manifest_dir="/nonexistent",
+    )
+
+    result = next(s for s in verdict.sub_verdicts if s.kind == "replay")
+    assert result.status is Status.UNVERIFIED, result.message
+    assert "could not be probed" in result.message, result.message
+    assert spy.calls == 0
+
+
+def test_the_alternate_is_never_probed_once_the_routed_boundary_has_settled_it(
+    tmp_path, monkeypatch
+):
+    """A not-offered routed boundary is decisive on its own — and costs ONE spawn.
+
+    The reply the comparison diverged against came from the routed boundary. If that
+    boundary does not offer the tool, no answer from any other configured server can make
+    the divergence attributable, so asking one would be a spawn spent on nothing.
+    """
+    reply = _replayed_with_boundary(recorded=IS_ERROR_RECORDED, replayed=IS_ERROR_REPLAYED)
+    spy = _DeterminismSpy()
+    probed = _wire(monkeypatch, reply, lambda _argv: {"read_text_file"}, spy)
+
+    verify_turn(
+        _run_process_records(tmp_path, "routed-settles-it"),
+        0,
+        server_command=["python", "fs_server.py"],
+        shell_server_command=shell_server_cmd(),
+        manifest_dir="/nonexistent",
+    )
+
+    assert len(probed) == 1, ("only the routed boundary needed asking", probed)
+    assert spy.calls == 0
+
+
+# --- 14. The probe never fires on a reply that did not diverge ------------------------
+
+
+def test_a_reply_that_reproduced_is_never_probed(tmp_path, monkeypatch):
+    """No divergence, no question to ask: an EQUAL turn pays for nothing and is unchanged.
+
+    The gate is keyed on DIVERGED, so the overwhelmingly common case — a turn that
+    reproduced — spawns no probe, consults no classifier, and renders the PASS it always
+    did. This is what keeps a fully-offered trace's cost and output where they were.
+    """
+    from belay.replay.engine import EQUAL
+
+    reply = TurnReplay(
+        turn_index=0,
+        status=REPLAYED,
+        reinvoked=True,
+        result_equivalence=EQUAL,
+        recorded_reply=IS_ERROR_RECORDED,
+        replayed_reply=IS_ERROR_RECORDED,
+        delta=[],
+        boundary=ReplayBoundary(argv=("srv",), manifest_path="/manifests/abc.json"),
+    )
+    spy = _DeterminismSpy()
+    probed = _wire(monkeypatch, reply, lambda _argv: set(), spy)
+
+    verdict = verify_turn(
+        _run_process_records(tmp_path, "equal-no-probe"),
+        0,
+        server_command=shell_server_cmd(),
+        manifest_dir="/nonexistent",
+    )
+
+    assert probed == [], ("a reply that reproduced must not spawn a probe", probed)
+    assert spy.calls == 0
+    assert next(s for s in verdict.sub_verdicts if s.kind == "replay").status is Status.PASS
