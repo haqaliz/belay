@@ -412,6 +412,17 @@ requests of its own, in **its own id namespace**, which legitimately starts at 1
 where the client's starts. `id:1` therefore routinely exists twice in one connection meaning two
 different things, and a bare-id table silently answers questions about one with the other.
 
+**Within one key, pending requests are a QUEUE, and a reply answers the oldest.** A key can
+legitimately hold more than one request at a time — the reachable case is a **merged**
+trace, where the dual-server composite broadcast one JSON-RPC id to every session and the
+merge folded the sessions together, renumbering `seq` and **adding no origin tag** (no
+provenance was ever recorded, so none survives). Holding one entry per key made the second
+request overwrite the first: a request that *was* answered read `unanswered`, its reply was
+credited to the wrong request, and the second reply was reported `duplicate-response` though
+both replies were ordinary. Arrival order is the only evidence a session-tagless trace
+carries, so FIFO is what it supports — exact whenever the sessions complete in the order they
+asked, and it never loses a request.
+
 **Classification is structural, never by method.** `result`/`error` present ⇒ response;
 `method` + `id` ⇒ request; `method`, no `id` ⇒ notification. Responses carry no `method` to
 key on, and a non-conforming server that stamps `method` onto a response (one exists in this

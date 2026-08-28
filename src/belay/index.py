@@ -24,6 +24,21 @@ all, so the method cannot be the discriminator; and a non-conforming server that
 puts `method` on a response (one exists in this repo's own fixtures) would fool a
 classifier that looked for it. `result`/`error` decides.
 
+**Within one key, pending requests are a QUEUE, and a reply answers the oldest.**
+A key can legitimately hold more than one request at a time. The reachable case
+is a merged trace: the dual-server composite broadcasts `initialize` and
+`tools/list` to every session under ONE id counter, and `merge_session_traces`
+folds the sessions together, renumbering `seq` and adding no origin tag —
+provenance is destroyed by the merge because none was ever recorded. A table
+holding one entry per key made the second request OVERWRITE the first, which
+left a request that WAS answered recorded as `unanswered`, credited its reply to
+the wrong request, and reported the second reply as `duplicate-response` though
+both replies were perfectly ordinary. Arrival order is the only evidence a
+session-tagless trace carries, so FIFO is what it supports: it is exact whenever
+the sessions complete in the order they asked, and it never loses a request.
+That is the note below made good — appending rather than overwriting was already
+the stated contract, and eviction was an overwrite.
+
 .. note::
    **There is a second correlation model, and it is deliberately not built here:
    Multi Round-Trip Requests (MRTR, SEP-2322), in the 2026-07-28 revision.**
@@ -103,7 +118,13 @@ def derive_correlation(records: list[dict]) -> list[dict]:
     treated as an entry still owed a partner. Nothing is held back at the end,
     so nothing leaks.
     """
-    entries: dict[tuple, dict] = {}
+    # Pending requests per key, oldest first: a key may hold several at once (see the
+    # module docstring). `answered_last` keeps the most recently answered entry per key
+    # so a SECOND reply to an already-answered request still reports `duplicate-response`
+    # with that request's method and seq — unchanged behaviour, just no longer riding on
+    # the single-entry table that caused the eviction.
+    pending: dict[tuple, list[dict]] = {}
+    answered_last: dict[tuple, dict] = {}
     out: list[dict] = []
 
     for record in records:
@@ -137,12 +158,24 @@ def derive_correlation(records: list[dict]) -> list[dict]:
                 "status": "unanswered",
             }
             out.append(entry)
-            entries[_id_key(direction, message.get("id"))] = entry
+            pending.setdefault(_id_key(direction, message.get("id")), []).append(entry)
         elif kind == "response":
             # A response travels back the way its request came, so the request's
             # id space is the opposite direction's.
             origin = _opposite(direction)
-            answered = entries.get(_id_key(origin, message.get("id")))
+            key = _id_key(origin, message.get("id"))
+            queue = pending.get(key)
+            if queue:
+                # The OLDEST unanswered request for this key. A merged multi-session
+                # trace carries no session tag, so arrival order is the only evidence
+                # there is; pairing newest-first, or overwriting, loses a request that
+                # really was answered.
+                answered = queue.pop(0)
+                answered["response_seq"] = record["seq"]
+                answered["status"] = "answered"
+                answered_last[key] = answered
+                continue
+            answered = answered_last.get(key)
             if answered is None:
                 # Legal: the proxy can attach mid-connection, and the request
                 # that earned this reply predates capture.
@@ -157,7 +190,7 @@ def derive_correlation(records: list[dict]) -> list[dict]:
                         "status": "response-without-request",
                     }
                 )
-            elif answered["status"] == "answered":
+            else:
                 # A second reply to an id already answered. Non-conforming, and
                 # both replies really did cross the wire — so this is appended as
                 # its own fact rather than written over the first. Overwriting
@@ -174,9 +207,6 @@ def derive_correlation(records: list[dict]) -> list[dict]:
                         "status": "duplicate-response",
                     }
                 )
-            else:
-                answered["response_seq"] = record["seq"]
-                answered["status"] = "answered"
         elif kind == "unknown":
             out.append(
                 _gap(record, "unknown message shape: neither request, response nor notification")
