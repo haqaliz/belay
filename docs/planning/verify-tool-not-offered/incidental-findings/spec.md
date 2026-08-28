@@ -59,3 +59,38 @@ colliding ids**: a legitimate test, but **not a replay of history**, and the PR 
 - **Independent of A1–A3.** Land last; it must not delay the honesty fix.
 - Finding 2 touches `src/belay/index.py` (engine) and `eval/` — the engine change is the
   load-bearing half and needs the tighter review.
+
+---
+
+## Finding 3 — the platform-gate checker matches PROSE, not gates (recorded 2026-08-28)
+
+`tests/test_platform_gate_named_causes.py::test_every_platform_gate_in_tests_is_accounted_for`
+decides whether a file is "platform-gated" by scanning its **raw text** for the literal
+`sys.platform`:
+
+```python
+if "sys.platform" in path.read_text(encoding="utf-8")
+and path.name not in SCAN_AREA
+```
+
+So a test file carrying **no gate at all** fails the build if its *docstring* mentions the
+token — hit for real during this unit: `tests/test_replay_resolution.py` has no gate, but its
+docstring originally said *"no `sys.platform` gate"* and the checker rejected it. The
+workaround was to reword the prose.
+
+**Why this matters and is not cosmetic:** the check's purpose is *"no silent skips"*, and it
+is load-bearing (it caught a genuine omission in this same unit — `test_verify_tool_not_offered.py`
+was correctly rejected for being gated-but-unregistered). But matching prose means the honest
+way to *document* a gating decision is to avoid naming the mechanism, which pushes authors
+toward vaguer docstrings — mildly against the grain of a repo whose whole discipline is
+naming things exactly.
+
+**A tighter check would parse the AST** (the file already builds one — `_gates(tree)`,
+`ast.parse` at `:183`) and look for `sys.platform` in a *decorator/skipif condition*, rather
+than anywhere in the bytes.
+
+**Disposition: RECORDED, NOT FIXED in this unit.** It is unrelated to the verdict seam, the
+current behavior is fail-safe (it over-reports, never under-reports — the dangerous direction
+is covered), and changing a build-guard's semantics deserves its own unit rather than riding
+along inside a verdict-honesty change. Two authors have now paid the cost, so it is worth
+someone's slice.
