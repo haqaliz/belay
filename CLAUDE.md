@@ -2,6 +2,53 @@
 
 This file orients a coding agent working in this repository. Read it first.
 
+> **`belay verify` NO LONGER FAILS A TURN IT NEVER VERIFIED** (2026-08-29,
+> `verify-tool-not-offered`, v0.25.0). A replay server that does not offer the recorded tool
+> answers **readably** — `no such tool`, or a JSON-RPC error — and answers identically every
+> time, so the comparison DIVERGEd, the classifier called the tool DETERMINISTIC, and A2
+> reported a **deterministic failure of a call that genuinely succeeded at capture**. Every
+> step correct, the conclusion fabricated: nothing was re-executed, so nothing was refuted.
+> What diverged is the operator's `--server`, not the trace. On a DIVERGED reply the engine
+> now **asks the boundary what it offers** (`replay/probe.py`, reusing `client.replay_turn`
+> with `initialize`+`tools/list` — no second sandbox/restore/relocation copy), on **POSITIVE
+> evidence only**: never error-text matching (the demo server says `no such tool`, the node
+> reference server says `MCP error -32602`), and never an `isError` inference (a command that
+> really ran and really failed returns `isError` too). Three-way and fail-closed, with three
+> causes because they call for three different operator fixes: **`replayed but the boundary
+> does not offer the tool`** (name the right `--server` — this is the count the gate mint
+> needed and could not produce), `boundary-ambiguous`, `boundary-undecided`. **Measured on the
+> committed demo capture:** turn 0 goes `"FAIL": 1, "UNVERIFIED": 0` -> `"FAIL": 0,
+> "UNVERIFIED": 1`, and **~146 ms -> ~69 ms** — the probe runs BEFORE `classify_determinism`,
+> so it removes three re-invocations and adds one.
+> **BOTH A2 sub-verdicts abstain, not just one** — gating only result-equivalence left
+> effect-conformance reading *"the observed effect conforms"* about a turn where nothing ran
+> (`readOnlyHint` is read from the CAPTURE; a declaration is not an observation). Found by an
+> adversarial review that **reproduced it**, not by a test.
+> **`belay verify --shell-server`** finally lands the routing parity `phase0 run` has had
+> since `9138cea` — a **flag-parity guard** now fails if a flag reaches two replay-bearing
+> surfaces undeclared, because this defect class had already happened twice (`--timeout` in
+> L7). Two incidental defects fixed: `corpus run` recompute routed a shell turn to the stored
+> filesystem command (no schema bump — v4 still stores one resolved command), and a
+> **broadcast JSON-RPC id could evict its twin** after a trace merge (`index.py` pending
+> requests are a FIFO queue now).
+> **THE HONESTY RULES, and they are the point:** this is a **RECLASSIFICATION, NOT improved
+> detection** — the UNVERIFIED rate **rises by design** (R7), and **`11/60 = 18.3%`, the 11
+> hand-audited TPs, `precision 0.00`, `1/15`, `4/16` STAND UNEDITED**. The mint's **171
+> per-turn FAILs are historical and were NOT recomputed** — they predate the 2026-08-14
+> dual-server routing and **the s6 captures no longer exist on disk**. The broadcast-id fix
+> **could not be validated against real merged mint data** for the same reason; it is pinned by
+> a **constructed** fixture — a legitimate test of the rule, **not a replay of history** —
+> with safety evidenced by all four real traces correlating byte-identically and by exhaustive
+> enumeration of 7381 sequences (190 differ, **every one** containing the defect condition).
+> **A2 KEPT ITS TEETH:** six anti-overreach tests written BEFORE the abstention path existed
+> are untouched and green, all six provably failing under a maximally over-broad
+> discriminator. **No axis moved but A2** — the trajectory rule is proved blind to the change
+> (`assemble_turn_facts` reads only `replayed_is_error`, pinned structurally). **NOT built, by
+> name:** N-server routing, any trace-format provenance field, capture-side multiplexing
+> (`proxy.py` is one pipe by construction, so a trace carries **no server provenance** and
+> replay routing must be TOLD, never inferred), and `corpus run --shell-server`.
+> See `docs/planning/verify-tool-not-offered/`.
+>
 > **THE LAUNCH DEMO IS BUILT, AND IT IS GREEN — THE CORRUPT SUCCESS COULD NOT BE PRODUCED
 > ON DEMAND** (2026-08-28, `launch-demo`, L7). The locked spec promised *"it weakens the
 > test and reports success … Belay flags turn 7 … Your agent lied. Your dashboard didn't
@@ -315,7 +362,7 @@ This file orients a coding agent working in this repository. Read it first.
 > PIVOT**. See `docs/planning/phase0-reverify-banked/` and `PHASE0_RESULTS.md` →
 > *Correction — 2026-07-31*.
 >
-> **Status: C1–C6 are built and merged; the Phase-0 corpus runner is built** (1851 tests passing on macOS with Docker up, 25 named-caused skips, 9 manual-deselected; zero runtime dependencies) *(was "1813" until 2026-08-28; was "1492" until 2026-08-20)*. *(Was "1238" until 2026-08-05; that figure was stale for several releases and is superseded going forward, not re-derived.)*
+> **Status: C1–C6 are built and merged; the Phase-0 corpus runner is built** (1957 tests passing on macOS with Docker up, 25 named-caused skips, 9 manual-deselected; zero runtime dependencies) *(was "1851" until 2026-08-29; was "1813" until 2026-08-28; was "1492" until 2026-08-20)*. *(Was "1238" until 2026-08-05; that figure was stale for several releases and is superseded going forward, not re-derived.)*
 > **C7 — the live console — ships** (2026-08-25, `live-console`): the SPA (Vue 3 + Vite), the `--json` engine seam, and a compose `console:` service with a healthcheck — the image bundles the engine wheel built in-image (never a stale published wheel), serves the SPA on the loopback, and shares the engine's `/workspace` state mount. See `docs/planning/live-console/`; `CHECKLIST.md` L6 is ✅ (2026-08-24) and the launch demo now uses it — see the L7 block at the top of this file.
 > The full record → sandbox → snapshot/restore → replay → verdict spine exists: the byte-transparent
 > stdio MCP proxy + trace format (C1), the Seatbelt sandbox with snapshot/restore (C2), deterministic

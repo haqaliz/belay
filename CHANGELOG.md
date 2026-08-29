@@ -5,6 +5,110 @@ All notable changes to Belay are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0 — until then,
 `0.x` minor bumps may include changes that would be breaking under strict semver.
 
+## [0.25.0] - 2026-08-29
+
+`belay verify` no longer emits a confident **FAIL** on a turn it never verified. A replay
+server that does not offer the recorded tool answers **readably** — `no such tool`, or a
+JSON-RPC error — and answers identically on every re-invoke, so the comparison DIVERGEd, the
+classifier called the tool DETERMINISTIC, and `_deterministic_divergence_verdict` reported a
+deterministic failure of a call that genuinely succeeded at capture. Every step correct, the
+conclusion fabricated: nothing was re-executed, so nothing was refuted. What diverged is the
+operator's `--server`, not the trace.
+
+**Reproduced on the committed demo capture, and fixed there:** turn 0 (`run_process`,
+replayed against a filesystem-only variant of `demo/server.py`) goes from
+`"FAIL": 1, "UNVERIFIED": 0` to `"FAIL": 0, "UNVERIFIED": 1` with cause
+`replayed but the boundary does not offer the tool`.
+
+### Added
+
+- **The boundary probe** (`src/belay/replay/probe.py`) — `offered_tools` asks a replay
+  boundary what it offers by really spawning it, reusing `client.replay_turn` with
+  `initialize` + `tools/list` frames rather than reimplementing sandbox, restore or
+  relocation. Three-way and fail-closed: a set of names; `set()` when the boundary answered
+  and offers nothing; **`None`** when the probe could not run or its answer could not be read
+  — twelve distinct paths, and **never an empty set to mean "could not read"**. It never
+  raises into the verdict path.
+- **`belay verify --shell-server CMD`** — the per-tool routing parity `belay phase0 run` has
+  had since `9138cea` (2026-08-14). Same single-quoted-string shape, `shlex.split` at use,
+  fail-closed on an un-lexable string (exit 2, named). **Write it before `--server`**, which
+  is an argparse remainder and swallows every token after it. A **flag-parity guard**
+  (`tests/test_cli_flag_parity.py`) now fails if a flag reaches two replay-bearing surfaces
+  undeclared — this defect class had already happened twice (`--timeout` in L7).
+- **Three named causes**, each pointing at a different operator fix:
+  `replayed but the boundary does not offer the tool` (name the right `--server` — and this
+  is the count the gate mint needed), `boundary-ambiguous` (two configured servers claim the
+  tool — name one), `boundary-undecided` (the probe was unrunnable or unreadable — make the
+  boundary answerable). Folding them together would inflate exactly the number G4 counts.
+- `resolve_server_argv` — the `{workspace}` substitution, exported so **one** site serves the
+  replay and the probe, with an AST guard asserting there is no second one.
+
+### Changed
+
+- **Both A2 sub-verdicts abstain, not just one.** Result-equivalence and effect-conformance
+  are computed from the same replay; gating only the first left the second reading *"the
+  observed effect conforms"* about a turn where nothing ran (`readOnlyHint` is read from the
+  **capture** — a declaration is not an observation). The gate sits ahead of the whole
+  declared-vs-observed rule, so the mirror is closed too: a stray delta can no longer be
+  scored against a declared `readOnlyHint: true` into a FAIL.
+- **The probe runs before `classify_determinism`, so it is a saving, not a cost.** A
+  not-offered turn settles in 2 boundary spawns instead of 4: ~146 ms → ~69 ms (**~52%
+  less**) on the committed capture. A genuinely diverging turn on an *offered* tool pays one
+  extra probe spawn, ~31 ms. Measured, not predicted.
+- `effect:network` `NOT_COVERED` is deliberately **not** gated: it reports that *Belay* has no
+  network instrument, which is true of every trace whether or not a turn re-executed.
+
+### Fixed
+
+- **`belay corpus run` recompute routed a shell turn to the wrong boundary** — `run_case` and
+  `_recompute_trajectory_case` passed only the stored command, so a trajectory case's
+  `run_process` turns silently recomputed against the filesystem command. The second boundary
+  is now supplied by the caller, keyword-only, defaulting to today's behavior. **No schema
+  bump**: case schema v4 still stores one resolved command, and banked cases load unchanged.
+- **A broadcast JSON-RPC id could evict its twin after a trace merge** (`src/belay/index.py`).
+  Pending requests keyed on `(direction, type(id), id)` with no session component were
+  **overwritten**, so a reply could pair against the wrong request and `status` could
+  misreport `duplicate-response` though both replies really happened. Pending requests are a
+  FIFO queue now; a reply answers the oldest. Repairs the module against its own stated
+  contract (*"appends rather than overwrites … a retried request cannot leak an entry"*).
+- **C9 dropped the cause**: `interop correlate` rendered an abstaining span as a bare,
+  causeless `UNVERIFIED` — invisible on the one surface built to sit beside an observability
+  stack. And the per-turn kind column collided with its status (`A2 effect:networkNOT_COVERED`,
+  since coverage shipped).
+
+### Honesty notes — read before quoting anything
+
+- **This is a RECLASSIFICATION, not improved detection.** The UNVERIFIED rate **rises by
+  design** (risk R7). `11/60 = 18.3%`, the 11 hand-audited TPs, `precision 0.00`, `1/15`,
+  `4/16` and every other published Phase-0 number **stand unedited**.
+- **The mint's 171 per-turn FAILs are historical and were NOT recomputed.** They predate the
+  2026-08-14 dual-server routing, and the s6 captures no longer exist on disk (a since-removed
+  worktree; the holder backup holds `s1..s3` only). No mint was re-run or re-derived.
+- **The broadcast-id fix could not be validated against real merged mint data** for the same
+  reason. It is pinned by a **constructed** two-trace fixture with colliding ids — a
+  legitimate test of the rule, **not a replay of history**. Its safety is evidenced instead by
+  all four real traces in the repo correlating byte-identically under old and new algorithms,
+  and by exhaustive enumeration of all 7381 frame sequences of length 0–4: 190 differ, and
+  **every one contains two simultaneously-pending requests on one key** — the defect condition.
+- **A2 kept its teeth.** Six anti-overreach tests were written *before* the abstention path
+  existed and are untouched and green, including the shape closest to the defect — recorded
+  success vs replayed `isError: true` on a tool the boundary **does** offer, which an
+  over-broad "the replay came back an error" discriminator would swallow first. All six fail
+  under a maximally over-broad discriminator; that was demonstrated by mutation, not assumed.
+- **No verdict axis moved but A2.** A1, the trajectory rule and the claim classifier are
+  untouched; A3 is still unbuilt. The trajectory axis is proved blind to this change:
+  `assemble_turn_facts` reads only `replayed_is_error` and `tool_name`, pinned structurally so
+  a future edit that taught it otherwise goes red.
+
+### Not built, and named
+
+N-server routing (deferred once already, on purpose), any trace-format provenance field, and
+capture-side multiplexing — `src/belay/proxy.py` is one client<->server pipe by construction, so
+a trace carries **no server provenance** and replay-time routing must be told, never inferred.
+`belay corpus run --shell-server` is not exposed as a flag. `phase0 run --shell-server` still
+lets an un-lexable string raise uncaught, where `verify` exits 2 with a named message — a real
+asymmetry, recorded for a follow-up decision.
+
 ## [0.24.0] - 2026-08-28
 
 The launch demo ships, and it is green — launch checklist L7's last aspect. The
