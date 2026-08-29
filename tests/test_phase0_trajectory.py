@@ -459,7 +459,13 @@ def test_report_trajectory_section_survives_instrument_suspect() -> None:
 
 
 def _canned_verifier(status: Status = Status.PASS, *, is_error: bool = False):
-    def verifier(records, n, *, server_command, manifest_dir, replays, invariants, timeout):
+    # `shell_server_command` is accepted because the CLI now always passes it (it is
+    # `None` unless `--shell-server` was given); a stub that refuses it turns a routing
+    # parity change into three unrelated CLI-rendering failures.
+    def verifier(
+        records, n, *, server_command, manifest_dir, replays, invariants, timeout,
+        shell_server_command=None,
+    ):
         return TurnVerdict(
             turn_index=n,
             tool_name="edit_file",

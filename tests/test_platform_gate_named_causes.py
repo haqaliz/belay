@@ -69,6 +69,7 @@ SCAN_AREA: frozenset[str] = frozenset(
         "test_replay_cli.py",
         "test_replay_client.py",
         "test_replay_engine.py",
+        "test_replay_probe.py",
         "test_replay_relocation_e2e.py",
         "test_replay_relocation_shell_e2e.py",
         "test_sandbox_check.py",
@@ -83,10 +84,12 @@ SCAN_AREA: frozenset[str] = frozenset(
         "test_verify_cli_invariants.py",
         "test_verify_cli.py",
         "test_verify_dual_server.py",
+        "test_verify_tool_not_offered.py",
         "test_verify_exposure_cli.py",
         "test_verify_json.py",
         "test_verify_pass_on_cheat.py",
         "test_verify_result.py",
+        "test_verify_shell_server_cli.py",
     }
 )
 

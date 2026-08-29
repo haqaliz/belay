@@ -155,6 +155,37 @@ _HANDSHAKE_METHODS = ("initialize", "notifications/initialized")
 
 
 @dataclass(frozen=True)
+class ReplayBoundary:
+    """The boundary a replay actually spawned — the argv, the snapshot, the root.
+
+    A replay is an observation, and *which server produced it* is part of what was
+    observed. Until now that fact was computed inside `replay_turn` and thrown away: the
+    caller held only the operator-typed template, in which `{workspace}` is still a
+    placeholder. So a caller that later wants to ask the same boundary a question — "do you
+    even offer this tool?" — could not, without resolving `{workspace}` a second time, and
+    a second copy of a rooting rule silently drifts from the first (both produce *a*
+    verdict, just not the same one). This carries the resolved fact instead.
+
+    - `argv` is the command as SPAWNED, already through `resolve_server_argv` — the one
+      substitution site — before the client's relocation of in-root tokens.
+    - `manifest_path` is the snapshot that was restored for this turn.
+    - `source_root` is the root the manifest recorded (`None` when it recorded none).
+    - `relocation_root` is what was handed to the client as `source_root`, i.e. the root
+      relocation actually keyed on — `None` for a cwd-relative replay that relocates
+      nothing. It is NOT the same as `source_root`: the relocation gate decides per turn.
+
+    Reported ONLY on a `REPLAYED` status, which is the only status that got as far as
+    spawning a boundary. Absent means "this observation names no boundary", never "the
+    boundary was empty".
+    """
+
+    argv: tuple[str, ...]
+    manifest_path: str
+    source_root: Optional[str] = None
+    relocation_root: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class TurnReplay:
     """What replaying one recorded turn observed — never a verdict.
 
@@ -179,6 +210,8 @@ class TurnReplay:
     version_drift: bool = False
     workspace: Optional[str] = None
     outcomes: Optional[list[FrameOutcome]] = None
+    #: The boundary this replay spawned, on a REPLAYED status only. See `ReplayBoundary`.
+    boundary: Optional[ReplayBoundary] = None
 
 
 def _frames_by_seq(records: Sequence[dict]) -> dict[int, dict]:
@@ -350,6 +383,40 @@ def _command_relocatable(arguments: object, root: str) -> bool:
     return True
 
 
+def resolve_server_argv(
+    server_command: Sequence[str], source_root: Optional[str]
+) -> tuple[Optional[list[str]], Optional[str]]:
+    """Resolve `{workspace}` against a turn's OWN recorded root. `(argv, cause)`.
+
+    ONE substitution site, exported, so every caller that needs the argv the replay
+    actually spawns — the replay itself, and anything that later asks the same boundary a
+    question — reads the same rule from the same place. A second copy of a rooting rule
+    drifts silently: both copies still produce *a* verdict, just not the same one.
+
+    - `(resolved_argv, None)` — a NEW list, with every token EQUAL to
+      `WORKSPACE_PLACEHOLDER` replaced by `source_root` and every other token untouched.
+      A command with no placeholder token is returned unchanged, root recorded or not.
+      Whole-token only, exactly as `WORKSPACE_PLACEHOLDER` documents: an embedded
+      `--root={workspace}` is NOT substituted here and reads downstream as
+      `UNROOTABLE_SERVER_COMMAND` rather than being silently half-handled.
+    - `(None, ROOTLESS_RELOCATION)` — a placeholder token with NO recorded root. No root
+      is ever guessed, and no half-resolved argv is handed back. The cause is *returned*,
+      never rendered: this function emits no verdict, so `replay_turn`'s honest
+      UNVERIFIED abstention stays `replay_turn`'s to make.
+
+    Mirrors `_relocation_decision`'s `(value, cause)` shape deliberately — the two gates
+    sit next to each other in `replay_turn` and read the same way.
+    """
+    if WORKSPACE_PLACEHOLDER not in server_command:
+        return list(server_command), None
+    if source_root is None:
+        return None, ROOTLESS_RELOCATION
+    return [
+        source_root if token == WORKSPACE_PLACEHOLDER else token
+        for token in server_command
+    ], None
+
+
 def _relocation_decision(
     source_root: Optional[str], arguments: object, argv: Sequence[str]
 ) -> tuple[Optional[str], Optional[str]]:
@@ -512,13 +579,10 @@ def replay_turn(
     # this turn's own recorded root, and everything downstream (the gate, the relocation,
     # the spawn) then sees an ordinary rooted command. Without a recorded root there is
     # nothing to substitute, and guessing one is exactly what UNVERIFIED-never-PASS forbids.
-    if WORKSPACE_PLACEHOLDER in server_command:
-        if source_root is None:
-            return TurnReplay(turn_index=n, status=UNVERIFIED, cause=ROOTLESS_RELOCATION)
-        server_command = [
-            source_root if token == WORKSPACE_PLACEHOLDER else token
-            for token in server_command
-        ]
+    resolved_command, rootless_cause = resolve_server_argv(server_command, source_root)
+    if resolved_command is None:
+        return TurnReplay(turn_index=n, status=UNVERIFIED, cause=rootless_cause)
+    server_command = resolved_command
     relocation_root, fallback_cause = _relocation_decision(
         source_root, _arguments_of(target_message), server_command
     )
@@ -634,6 +698,14 @@ def replay_turn(
         version_drift=version_drift,
         workspace=result.workspace,
         outcomes=result.outcomes,
+        # Report the boundary this turn was actually replayed against, so a caller can ask
+        # that same boundary a question without re-resolving `{workspace}` itself.
+        boundary=ReplayBoundary(
+            argv=tuple(server_command),
+            manifest_path=str(manifest_path),
+            source_root=source_root,
+            relocation_root=relocation_root,
+        ),
     )
 
 
@@ -677,6 +749,8 @@ __all__ = [
     "UNROOTABLE_SERVER_COMMAND",
     "UNVERIFIED",
     "WORKSPACE_PLACEHOLDER",
+    "ReplayBoundary",
     "TurnReplay",
     "replay_turn",
+    "resolve_server_argv",
 ]

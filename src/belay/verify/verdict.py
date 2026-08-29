@@ -78,7 +78,10 @@ class Verdict:
     """One grounded sub-check result.
 
     `axis` names the verdict axis ("A1"/"A2"/"A3"); `kind` names the specific check within
-    it ("replay", "effect", "invariant", …). `observed` and `expected` carry the concrete
+    it ("replay", "effect", "invariant", …). A kind may NARROW with a colon — `effect:network`,
+    `replay:tool-not-offered` — when a dimension needs a bucket of its own; the narrowing is
+    what `replay.report.canonical_cause` files an UNVERIFIED turn by, so it is part of the
+    contract rather than cosmetic. `observed` and `expected` carry the concrete
     grounding — a state diff, an annotation contract and the paths it covers, whatever the
     check compared. They are typed permissively because different checks ground differently;
     a reader inspects them knowing which `kind` produced the verdict. `message` is the

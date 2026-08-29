@@ -61,9 +61,12 @@ from belay.interop.correlate import Ambiguous, Matched, Unmatched, build_turn_in
 from belay.interop.otlp import Span
 from belay.replay.client import DEFAULT_TIMEOUT
 from belay.replay.report import (
+    REPLAYED_BOUNDARY_AMBIGUOUS,
+    REPLAYED_BOUNDARY_UNDECIDED,
     REPLAYED_EFFECT_UNVERIFIED,
     REPLAYED_INVARIANT_UNVERIFIED,
     REPLAYED_RESULT_UNVERIFIED,
+    REPLAYED_TOOL_NOT_OFFERED,
     REPLAYED_UNVERIFIED,
 )
 from belay.verify.invariants import Invariant
@@ -84,6 +87,9 @@ _REPLAYED_CAUSES = frozenset(
         REPLAYED_EFFECT_UNVERIFIED,
         REPLAYED_INVARIANT_UNVERIFIED,
         REPLAYED_UNVERIFIED,
+        REPLAYED_TOOL_NOT_OFFERED,
+        REPLAYED_BOUNDARY_AMBIGUOUS,
+        REPLAYED_BOUNDARY_UNDECIDED,
     }
 )
 UNRESTORABLE_PRE_STATE = "unrestorable-pre-state"
@@ -169,11 +175,21 @@ def correlate_and_attach(
             # Only a cause OUTSIDE the replayed vocabulary means the pre-state could not
             # be restored — anything else would assert a restore failure that never
             # happened.
+            #
+            # A cause INSIDE that vocabulary is now carried through verbatim rather than
+            # dropped to `None`. It used to be dropped because the four buckets it could
+            # hold were all one fact ("something downstream of the replay abstained"), and
+            # the sub-verdicts said which. That stopped being true when the boundary
+            # abstention got its own name: *"the server you named does not offer this tool"*
+            # is actionable, is the number the Phase-0 gate counts, and a span rendered as a
+            # bare, causeless UNVERIFIED hides it on the one surface built to sit beside an
+            # existing observability stack. The rule this codebase applies everywhere else —
+            # the named cause travels with the status — applies here too.
             cause = (
                 UNRESTORABLE_PRE_STATE
                 if turn_verdict.cause is not None
                 and turn_verdict.cause not in _REPLAYED_CAUSES
-                else None
+                else turn_verdict.cause
             )
             results.append(
                 CorrelatedSpan(

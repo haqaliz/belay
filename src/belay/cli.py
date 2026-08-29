@@ -567,7 +567,12 @@ _VERIFY_DESCRIPTION = (
     "Manifests: a turn's snapshot manifest is written by the gate to a SIBLING of the "
     "snapshot dir, e.g. BELAY_SNAPSHOT_DIR=./sn -> ./sn.manifests/. Point "
     "--manifest-dir there; a present turn whose manifest is not found is an honest "
-    "UNVERIFIED, never a fabricated PASS."
+    "UNVERIFIED, never a fabricated PASS.\n\n"
+    "Servers: --server names the ONE boundary every turn replays against, unless "
+    "--shell-server also names a shell command, in which case a recorded run_process "
+    "turn replays against that one instead. WRITE --shell-server BEFORE --server: "
+    "--server is a remainder and swallows every token after it, so a --shell-server "
+    "written afterwards is silently taken as part of the server's own argv."
 )
 
 
@@ -582,6 +587,14 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     grounding, and the UNVERIFIED list with each named cause — never a hidden or
     spun-as-PASS unverified. Exit is non-zero if any turn is FAIL or UNVERIFIED: a run
     Belay could not fully stand behind must not read as success to a shell.
+
+    `--shell-server` is the routing parity `belay phase0 run` has had since `9138cea`: one
+    quoted shell command, shlex-split here, against which a recorded `run_process` turn
+    replays instead of `--server`. It exists because the engine has routed per tool since
+    that commit (`verify_turn(shell_server_command=...)`) while this — the documented
+    surface — could not ask for it, so a trace captured from an agent with more than one
+    MCP server reported a confident FAIL on every turn belonging to a server the operator
+    had no way to name. It must be written BEFORE `--server`, which is a remainder.
 
     `--json` renders the SAME verdicts as one JSON document (see `belay.verify.json`)
     instead of the human report: the document is built from the same `TurnVerdict`
@@ -628,6 +641,30 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         else:
             _emit(message)
         return 2
+
+    # The SHELL boundary, the same single-string shape `belay phase0 run --shell-server`
+    # has carried since 9138cea: `--server` is already nargs=REMAINDER and argparse cannot
+    # host a second remainder, so the command arrives as one quoted string and is
+    # shlex-split here, at the boundary. `None` -> today's behavior, byte-for-byte.
+    #
+    # FAIL-CLOSED on a string shlex cannot tokenize (an unterminated quote is the common
+    # one). Belay must never half-execute a command it could not parse, and must never
+    # quietly degrade the run to "no shell axis" — that would verify the trace against a
+    # boundary the operator did not ask for and report the result as if they had.
+    shell_server_command = None
+    if args.shell_server is not None:
+        try:
+            shell_server_command = shlex.split(args.shell_server)
+        except ValueError as exc:
+            message = (
+                f"belay: --shell-server could not be parsed as a shell command "
+                f"({exc}): {args.shell_server!r}"
+            )
+            if json_mode:
+                _emit(render_json(error_report(args.trace, message)))
+            else:
+                _emit(message)
+            return 2
 
     # The A1 policy this run enforces: the defaults (unless dropped) plus any operator file.
     # A file that will not parse is a fail-closed error — verifying against a silently dropped
@@ -688,7 +725,8 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         for n in indices:
             verdict = verify_turn(
                 records, n,
-                server_command=args.server, manifest_dir=manifest_dir, replays=args.replays,
+                server_command=args.server, shell_server_command=shell_server_command,
+                manifest_dir=manifest_dir, replays=args.replays,
                 timeout=args.timeout, invariants=invariants,
             )
             verdicts.append(verdict)
@@ -761,7 +799,17 @@ def _emit_verdict(verdict) -> None:
     _emit(f"  turn {verdict.turn_index:<3} {tool:<18}{verdict.status.value}")
     for axis in _axes_in_order(verdict.sub_verdicts):
         for sub in (s for s in verdict.sub_verdicts if s.axis == axis):
-            _emit(f"      {sub.axis} {sub.kind:<10}{sub.status.value:<12}{sub.message}")
+            # The kind column pads to 10 and is ALWAYS followed by at least one space. The
+            # bare `:<10}` ran an over-long kind straight into the status column —
+            # `A2 effect:networkNOT_COVERED`, which has been the rendering of the coverage
+            # dimension since it shipped, and would now also read
+            # `A2 replay:tool-not-offeredUNVERIFIED` for the boundary abstentions this
+            # aspect names. A named cause nobody can read at a glance is not much of a name.
+            # Every kind SHORTER than the column is byte-identical to before, which is what
+            # keeps `test_verify_shell_server_cli`'s byte-exact fixture (a different
+            # aspect's "output is unchanged" AC) honest rather than merely re-baselined.
+            kind = f"{sub.kind:<10}" if len(sub.kind) < 10 else f"{sub.kind} "
+            _emit(f"      {sub.axis} {kind}{sub.status.value:<12}{sub.message}")
             if sub.axis == "A1" and sub.kind == "invariant":
                 _emit(f"          {_exposure_prose(sub.expected)}")
     if verdict.cause is not None:
@@ -2214,6 +2262,20 @@ def _parser() -> argparse.ArgumentParser:
             "trajectory disposition, rendered from the same objects; exit codes are "
             "unchanged, and an internal failure emits an error document rather than a "
             "truncated one"
+        ),
+    )
+    verify.add_argument(
+        "--shell-server",
+        default=None,
+        metavar="CMD",
+        help=(
+            "the SHELL server command, as ONE quoted string; a recorded run_process turn "
+            "replays against it instead of --server, while every other turn still replays "
+            "against --server. WRITE THIS BEFORE --server (--server is a remainder and "
+            "swallows everything after it). Example: --shell-server \"node /abs/eval/"
+            "servers/node_modules/mcp-server-commands/build/index.js\". The string is "
+            "shlex-split at use; an un-lexable string is a hard error. Absent -> every "
+            "turn replays against --server, exactly as before"
         ),
     )
     verify.add_argument(

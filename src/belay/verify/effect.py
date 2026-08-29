@@ -74,6 +74,7 @@ from belay.frames import message_of
 from belay.index import derive_correlation, tool_calls
 from belay.replay.client import DEFAULT_TIMEOUT
 from belay.replay.engine import replay_turn
+from belay.replay.probe import BOUNDARY_UNDECIDED, TOOL_NOT_OFFERED
 from belay.snapshot.bth1 import FieldDiff
 from belay.verify.verdict import Status, Verdict
 
@@ -86,6 +87,19 @@ _KIND = "effect"
 #: (and the "never a network PASS" test) can tell the network dimension apart from the
 #: filesystem one at a glance — the two are composed side by side in a turn, never merged.
 _KIND_NETWORK = "effect:network"
+
+
+def _boundary_kind(reason: str) -> str:
+    """`effect:<reason>` — the sub-verdict kind for one boundary abstention.
+
+    The same narrowing `result.py` does, for the same reason: `canonical_cause` buckets by
+    `<axis>/<kind>`, so an abstention that kept the bare `effect` kind is indistinguishable
+    from a declared contract that could not be evaluated. `effect:network` is the precedent
+    and the axis stays `A2`. The reason vocabulary is `belay.replay.probe`'s, imported, so
+    kind / bucket / interop cannot drift apart by a typo.
+    """
+    return f"{_KIND}:{reason}"
+
 
 #: The annotation the FILESYSTEM dimension grounds on. `readOnlyHint` is the declared
 #: contract a filesystem delta can confirm or refute.
@@ -371,8 +385,79 @@ def network_subverdict(records: Sequence[dict], n: int) -> Optional[Verdict]:
     return None
 
 
+def _boundary_abstention(
+    ann: TurnAnnotation,
+    contract: dict,
+    tool_offered: Optional[bool],
+    probe_note: Optional[str],
+    probe_reason: Optional[str] = None,
+) -> Optional[Verdict]:
+    """The effect nothing observed, or `None` to let the declared-vs-delta rule decide.
+
+    The same three-way boundary evidence `render_result_verdict` takes, applied to the
+    other A2 sub-verdict — and it is the SAME decision, threaded from the one probe
+    `verify_turn` already ran, never a second probe. Two answers about one boundary is how
+    two axes come to disagree about whether a call was re-executed.
+
+    **Why the effect axis needs this at all.** `readOnlyHint` is read from the CAPTURE's
+    `tools/list` snapshot, and the delta is read from the replay. On a turn whose tool the
+    boundary does not offer, the capture still declares the hint and the replay still yields
+    a delta (empty), so the rule table happily maps declared-false + any delta -> PASS and
+    says *"the observed effect conforms"*. Nothing was observed: the boundary answered that
+    it has no such tool and never ran it. A declaration is not an observation, and the
+    conformance of an effect that never happened is not a finding.
+
+    It gates the WHOLE rule table, ahead of every branch rather than inside the
+    declared-false one, because the fabrication runs in both directions: a delta seen on a
+    turn the boundary never served belongs to the replay harness, not to the tool, so
+    scoring it against a declared `readOnlyHint: true` would manufacture a FAIL out of a
+    footprint the tool did not leave.
+
+    `True` (the default everywhere) leaves this function returning `None`, so every caller
+    that has no boundary to ask — and every pre-probe call site — scores byte-for-byte as
+    before. `False` and `None` abstain, in deliberately different words: one is the
+    boundary's own answer, the other is ignorance about the boundary, and reading the second
+    as the first would sell absence of evidence as evidence of absence.
+    """
+    if tool_offered is True:
+        return None
+    named = repr(ann.tool) if ann.tool is not None else "the recorded tool"
+    if tool_offered is False:
+        reason = TOOL_NOT_OFFERED
+        message = (
+            f"effect-conformance UNVERIFIED on tool {named}: the replay boundary does not "
+            f"offer this tool, so the recorded call was never re-invoked and NO effect was "
+            f"observed to weigh against the declared contract. The readOnlyHint below is "
+            f"read from the capture, not from this replay — a declaration is not an "
+            f"observation, and an effect that never happened cannot conform"
+        )
+    else:
+        # Unnamed ignorance is `BOUNDARY_UNDECIDED`, never the sharper ambiguity finding —
+        # the same fallback `result.py` makes, from the same single probe answer.
+        reason = probe_reason or BOUNDARY_UNDECIDED
+        note = probe_note or "the boundary could not be asked what it offers"
+        message = (
+            f"effect-conformance UNVERIFIED on tool {named}: the replay boundary's toolset "
+            f"is undecided ({note}), so whether the recorded call was re-invoked at all is "
+            f"unknown and no observed effect can be attributed to it. Absence of evidence is "
+            f"never evidence of absence — this is NOT a finding that the boundary lacks the "
+            f"tool"
+        )
+    return Verdict(
+        _AXIS, _boundary_kind(reason), Status.UNVERIFIED,
+        observed=None, expected=contract,
+        message=message,
+    )
+
+
 def render_effect_verdict(
-    records: Sequence[dict], n: int, delta: Optional[list[FieldDiff]]
+    records: Sequence[dict],
+    n: int,
+    delta: Optional[list[FieldDiff]],
+    *,
+    tool_offered: Optional[bool] = True,
+    probe_note: Optional[str] = None,
+    probe_reason: Optional[str] = None,
 ) -> Verdict:
     """Turn the Nth turn's declared `readOnlyHint` and observed `delta` into an A2 verdict.
 
@@ -388,6 +473,20 @@ def render_effect_verdict(
     BESIDE this one in `verify.turn` rather than folded in here: overlaying it made a
     PASS-message verdict carry an UNVERIFIED status, which is exactly the kind of
     self-contradiction the sub-verdict breakdown exists to prevent.
+
+    **`tool_offered` is the boundary gate, and it comes first** — see `_boundary_abstention`
+    for the whole argument. It is the identical three-way evidence `render_result_verdict`
+    takes, threaded from the ONE probe `verify_turn` ran, so the two A2 sub-verdicts can
+    never disagree about whether the call was re-executed. `True` is the default and is
+    exactly today's behavior; `False`/`None` abstain with distinct wording.
+
+    **The NETWORK sub-verdict is deliberately NOT gated on it** (`network_subverdict`,
+    below). `effect:network` reports that *Belay* has no network instrument — a property of
+    Belay that holds for every trace ever recorded, executed or not. Suppressing it on an
+    un-executed turn would turn a permanent coverage boundary into a per-run abstention and
+    lose the declared-false-vs-silent distinction the `NOT_COVERED` release exists to keep.
+    It never PASSes and `reduce` drops it before ranking, so leaving it in place on a turn
+    nothing ran cannot manufacture confidence — it states a limit, not a finding.
     """
     ann = annotation_for_turn(records, n)
     state = ann.readonly["state"]
@@ -395,6 +494,12 @@ def render_effect_verdict(
     incoherence = ann.incoherence
     contract = {"readOnlyHint": ann.readonly, "incoherence": incoherence}
     note = _incoherence_note(incoherence)
+
+    # The BOUNDARY gate, ahead of the whole declared-vs-delta table: an effect that was
+    # never produced cannot conform to a contract, nor violate one.
+    boundary = _boundary_abstention(ann, contract, tool_offered, probe_note, probe_reason)
+    if boundary is not None:
+        return boundary
 
     if state == DECLARED_TRUE:
         if delta is None:

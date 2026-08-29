@@ -560,3 +560,231 @@ def test_declared_fail_with_command_tool_offered_recomputes_to_match(
     result = run_case(case_dir)
     assert result.outcome == MATCH, (result.outcome, result.divergences)
     assert result.divergences == []
+
+
+# --- (9) S1: the trajectory recompute routes a shell turn to the shell command ---------
+#
+# `docs/planning/verify-tool-not-offered/incidental-findings/spec.md` Finding 1:
+# `_recompute_trajectory_case` re-verifies the WHOLE stored trace, but a case stores
+# exactly ONE resolved command (`_resolve_server_command` picked it at ingest time from
+# the case's TARGET turn). Every other turn in that trace was therefore recomputed
+# against a command it never replayed against — a `run_process` turn against the stored
+# filesystem command. Schema v4 stays single-command; what was missing is the THREADING,
+# so the caller can supply the shell boundary the original run routed to.
+
+
+def _write_mixed_gated_trace(
+    trace_dir: Path, tools: tuple[str, ...], *, offered: tuple[str, ...] = ()
+) -> Path:
+    """`_write_gated_trace`, but with a DIFFERENT tool per turn.
+
+    Routing is decided by the turn's recorded tool NAME, so a single-tool trace cannot
+    show that the fs turns keep the stored command while the shell turn moves. Turn `i`
+    calls `tools[i]` and carries handle `H{i}`, with a manifest and a tree per handle,
+    exactly as `_write_gated_trace` builds them.
+    """
+    writer = TraceWriter.in_directory(trace_dir)
+    try:
+        for direction, raw, _handle in _tool_list_frames(tools[0], extra_tools=tuple(tools[1:]) + offered):
+            writer.observer(direction)(raw, False)
+        for i, tool in enumerate(tools):
+            call_id = 10 + i
+            arguments = (
+                {"command_line": "pytest -q"}
+                if tool == "run_process"
+                else {"path": "/repo/src/a.py"}
+            )
+            call = _call_frame(call_id, tool, arguments)
+            writer.set_state_handle({"status": "present", "handle": f"H{i}"}, frame=call)
+            writer.observer("c2s")(call, False)
+            writer.observer("s2c")(_reply_frame(call_id), False)
+    finally:
+        writer.close()
+    trace_path = writer.path
+
+    manifest_dir = default_manifest_dir_for(trace_path)
+    manifest_dir.mkdir(parents=True)
+    trees = trace_dir / (trace_path.stem + ".trees")
+    for i in range(len(tools)):
+        tree = trees / f"H{i}"
+        (tree / "tests").mkdir(parents=True)
+        (tree / "tests" / "test_auth.py").write_text(PRESTATE_BODY, encoding="utf-8")
+        (manifest_dir / f"H{i}.json").write_text(
+            json.dumps(
+                {
+                    "handle": f"H{i}",
+                    "tree_path": str(tree),
+                    "backend": "clonefile",
+                    "capabilities": ["dir-mtimes", "hardlinks", "setuid"],
+                    "fidelity_gaps": [],
+                    "sidecar": {"link_groups": [], "special_modes": [], "dir_times": []},
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    return trace_path
+
+
+def _recording_replay(monkeypatch) -> list[tuple[str | None, tuple[str, ...]]]:
+    """Stub `replay_turn`, recording `(recorded tool name, resolved server command)`.
+
+    The routing decision is made inside `verify_turn` and is invisible in the verdict,
+    so the only honest way to observe it is at the boundary `verify_turn` hands the
+    resolved command to.
+    """
+    seen: list[tuple[str | None, tuple[str, ...]]] = []
+
+    def fake(records, n, **kwargs):
+        seen.append((turn_module._tool_name(records, n), tuple(kwargs["server_command"])))
+        reply = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "result": {"content": [{"type": "text", "text": "ok"}], "isError": False},
+            }
+        ).encode()
+        return TurnReplay(
+            turn_index=n,
+            status=REPLAYED,
+            reinvoked=True,
+            result_equivalence=EQUAL,
+            recorded_reply=reply,
+            replayed_reply=reply,
+            delta=[],
+            workspace="/unused",
+        )
+
+    monkeypatch.setattr(turn_module, "replay_turn", fake)
+    return seen
+
+
+def _build_mixed_trajectory_case(tmp_path: Path, *, case_name: str) -> Path:
+    """A schema-v4 trajectory case over a trace whose turns are `edit_file` THEN
+    `run_process`, stored against the FILESYSTEM command — the exact shape Finding 1
+    names. `_resolve_server_command` resolved the stored command from the final turn,
+    so nothing on disk records the other boundary."""
+    trace_dir = tmp_path / "traces" / case_name
+    trace_path = _write_mixed_gated_trace(trace_dir, ("edit_file", "run_process"))
+    append_claim_record(trace_path, text="all tests pass")
+    return add_case(
+        tmp_path / "corpus",
+        records=_records_of(trace_path),
+        target_turn_index=1,
+        verdict=_clean_turn("run_process"),
+        manifest_dir=default_manifest_dir_for(trace_path),
+        server_command=["fs-server"],
+        invariants=[TRAJECTORY],
+        replays=3,
+        timeout=20.0,
+        source_trace_id=f"{case_name}-trace",
+        captured_at=CAPTURED_AT,
+        trajectory={"status": "PASS", "cause": None},
+    )
+
+
+def test_trajectory_recompute_routes_run_process_to_the_shell_command(
+    tmp_path, monkeypatch
+) -> None:
+    """AC-1: a trajectory case whose turns include `run_process` recomputes THOSE turns
+    against the routed shell command, and every other turn against the stored one.
+
+    The case still stores exactly one command (schema v4 unchanged); the shell boundary
+    is threaded in by the caller, exactly as `phase0 run` / `belay verify` thread it."""
+    seen = _recording_replay(monkeypatch)
+    case_dir = _build_mixed_trajectory_case(tmp_path, case_name="mixed-routed")
+
+    run_case(case_dir, shell_server_command=["shell-server"])
+
+    assert seen == [
+        ("edit_file", ("fs-server",)),
+        ("run_process", ("shell-server",)),
+    ], seen
+
+
+def test_trajectory_recompute_without_a_shell_command_is_byte_for_byte_today(
+    tmp_path, monkeypatch
+) -> None:
+    """AC-3 (half): omit the shell boundary and every turn replays against the stored
+    command, exactly as before this fix — the default is the old behaviour, so no banked
+    case needs re-adding."""
+    seen = _recording_replay(monkeypatch)
+    case_dir = _build_mixed_trajectory_case(tmp_path, case_name="mixed-default")
+
+    run_case(case_dir)
+
+    assert seen == [
+        ("edit_file", ("fs-server",)),
+        ("run_process", ("fs-server",)),
+    ], seen
+
+
+def test_per_turn_case_ignores_a_supplied_shell_command(tmp_path, monkeypatch) -> None:
+    """AC-2: a per-turn case is UNCHANGED — its stored command is already the one
+    `_resolve_server_command` resolved for that very turn, so a caller-supplied shell
+    boundary must never displace it. Overriding it would make the case recompute against
+    a boundary it never replayed against, which is the defect, not the fix."""
+    seen = _recording_replay(monkeypatch)
+    trace_dir = tmp_path / "traces" / "per-turn-shell"
+    trace_path = _write_mixed_gated_trace(trace_dir, ("edit_file", "run_process"))
+    case_dir = add_case(
+        tmp_path / "corpus",
+        records=_records_of(trace_path),
+        target_turn_index=1,
+        verdict=_clean_turn("run_process"),
+        manifest_dir=default_manifest_dir_for(trace_path),
+        server_command=["stored-shell-server"],
+        invariants=[TRAJECTORY],
+        replays=3,
+        timeout=20.0,
+        source_trace_id="per-turn-shell-trace",
+        captured_at=CAPTURED_AT,
+    )
+
+    run_case(case_dir, shell_server_command=["some-other-shell"])
+
+    assert seen == [("run_process", ("stored-shell-server",))], seen
+
+
+def test_run_corpus_threads_the_shell_command_to_every_case(tmp_path, monkeypatch) -> None:
+    """The corpus-level entry point threads it too: `run_corpus` is what `belay corpus
+    run` calls, so a fix that stopped at `run_case` would be unreachable from a run."""
+    seen = _recording_replay(monkeypatch)
+    _build_mixed_trajectory_case(tmp_path, case_name="mixed-corpus")
+
+    run_corpus(tmp_path / "corpus", shell_server_command=["shell-server"])
+
+    assert ("run_process", ("shell-server",)) in seen, seen
+
+
+def test_a_case_written_in_the_pre_change_format_still_loads_and_recomputes(
+    tmp_path, monkeypatch
+) -> None:
+    """AC-3: no schema bump, no re-add. The stored `case.json` carries exactly the keys
+    it carried before this fix — no shell-command field appeared — and a case written in
+    that format recomputes to the same outcome it always did."""
+    _stub_replay(monkeypatch, is_error=False)
+    case_dir = _build_mixed_trajectory_case(tmp_path, case_name="pre-change-format")
+
+    stored = json.loads((case_dir / "case.json").read_text(encoding="utf-8"))
+    assert set(stored) == {
+        "schema_version",
+        "id",
+        "target_turn_index",
+        "expected",
+        "invariants",
+        "server_command",
+        "replays",
+        "timeout",
+        "provenance",
+        "human_label",
+        "task_prestate",
+        "trajectory",
+        "target_tool",
+        "capture_platform",
+        "capture_capabilities",
+    }, sorted(stored)
+    assert stored["schema_version"] == 4
+    assert stored["server_command"] == ["fs-server"]
+
+    assert run_case(case_dir).outcome == MATCH
