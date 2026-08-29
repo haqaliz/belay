@@ -52,6 +52,22 @@ from typing import Any, Optional, Sequence
 
 from belay.replay.client import ANSWERED, DEFAULT_TIMEOUT, FrameOutcome, replay_turn
 
+#: The three shapes the boundary question can settle into, named ONCE so the sub-verdict
+#: `kind`, the report's bucket label and the interop vocabulary cannot drift apart. They
+#: live here, beside the three-way answer above, because they ARE that answer read as a
+#: finding: `set()` without the tool is `TOOL_NOT_OFFERED`, `None` is `BOUNDARY_UNDECIDED`,
+#: and `BOUNDARY_AMBIGUOUS` is the caller's own reading of two probes that both said yes.
+#:
+#: They are kept APART on purpose. `TOOL_NOT_OFFERED` is a decided fact about the operator's
+#: `--server` and it is the one the Phase-0 gate counts ("how many turns could not be
+#: verified because the boundary lacked the tool"). The other two are ignorance about the
+#: boundary, of two different shapes with two different fixes — name one server, versus make
+#: the probe answerable. Folding either into the first would inflate exactly the number the
+#: gate needs.
+TOOL_NOT_OFFERED = "tool-not-offered"
+BOUNDARY_AMBIGUOUS = "boundary-ambiguous"
+BOUNDARY_UNDECIDED = "boundary-undecided"
+
 #: The JSON-RPC ids the probe's two requests carry. They are `belay-probe-`-prefixed
 #: strings rather than small integers so that nothing in a reply stream can be
 #: confused for an answer to a recorded frame: the probe's conversation is its own.
@@ -194,4 +210,10 @@ def offered_tools(
         return None
 
 
-__all__ = ["offered_tools", "probe_frames"]
+__all__ = [
+    "BOUNDARY_AMBIGUOUS",
+    "BOUNDARY_UNDECIDED",
+    "TOOL_NOT_OFFERED",
+    "offered_tools",
+    "probe_frames",
+]

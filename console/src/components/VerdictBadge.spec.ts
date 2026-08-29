@@ -51,6 +51,32 @@ describe("VerdictBadge — the honesty surface", () => {
     expect(noEngine.text()).toBe("NO ENGINE");
   });
 
+  it("renders the boundary abstention's named cause distinctly from PASS (AC-7)", () => {
+    // Aspect `cause-and-surfaces`: a turn the replay boundary never offered the tool for
+    // is UNVERIFIED with a cause of its own — "replayed but the boundary does not offer
+    // the tool" — kept apart from the generic replayed-but-unverified cause so a mint can
+    // count it. The console is one of the surfaces that must carry the NAME beside the
+    // status; a badge that showed only "UNVERIFIED" would hide the one number the Phase-0
+    // gate needed. The engine owns the string (belay.replay.report), so this asserts the
+    // badge carries whatever cause it is handed, verbatim and never as a PASS.
+    const notOffered = badge(
+      "UNVERIFIED",
+      "replayed but the boundary does not offer the tool",
+    );
+    const generic = badge("UNVERIFIED", "replayed but result unverified");
+
+    expect(notOffered.classes()).toContain("verdict-unverified");
+    expect(notOffered.classes()).not.toContain("verdict-pass");
+    expect(notOffered.text()).toContain("UNVERIFIED");
+    expect(notOffered.text()).toContain("does not offer the tool");
+    expect(notOffered.text()).not.toContain("PASS");
+    // …and it is not rendered as the generic abstention it used to bucket under.
+    expect(notOffered.text()).not.toBe(generic.text());
+    expect(notOffered.attributes("title")).toBe(
+      "replayed but the boundary does not offer the tool",
+    );
+  });
+
   it("carries the data-status attribute for DOM-level assertions", () => {
     expect(badge("UNVERIFIED").attributes("data-status")).toBe("UNVERIFIED");
     expect(badge("PASS").attributes("data-status")).toBe("PASS");

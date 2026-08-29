@@ -344,13 +344,18 @@ def test_the_readme_subsection_describes_the_abstention_that_shipped_and_nothing
     engine — and the first half below **proves** it by scoring that exact shape through the
     real renderer rather than trusting the prose.
 
-    The guard therefore flips direction rather than disappearing. What the README could now
-    over-claim is not the STATUS but the **cause bucket**: the abstention travels as a
-    message and buckets under the generic replayed-but-unverified cause, because giving it
-    a `kind`, a `REPLAYED_*` constant and a `_PREFIX_LABELS` entry is a later slice
-    (`cause-and-surfaces`). So while no such constant exists, the subsection must SAY it
-    does not — the exact wording is asserted, so the admission cannot quietly evaporate in
-    an edit.
+    The guard therefore flips direction rather than disappearing. What the README could then
+    over-claim was not the STATUS but the **cause bucket**, so while no such constant
+    existed the subsection had to SAY so, and this block asserted the admission verbatim.
+
+    **Rewritten a THIRD time, for the cause bucket** (aspect `cause-and-surfaces`). That
+    later slice landed: the abstention now carries its own sub-verdict `kind`, its own
+    `REPLAYED_*` constant and its own `_PREFIX_LABELS` entry ahead of the `A2/replay`
+    catch-all. So the admission must now be GONE, a fragment of it must remain QUOTED (a
+    paragraph that is merely shorter tells a reader nothing about what changed), and — the
+    part that matters most — the bucket must be **reached**, not merely declared: a constant
+    registered behind the catch-all satisfies every reflection guard in the suite and stays
+    permanently empty. The engine proves that here too, off the same rendered verdict.
 
     **Rewritten a second time, for the EFFECT axis** (aspect `boundary-probe`, phase 5).
     The subsection used to admit a second gap in as many words — *"Nor is the effect
@@ -385,20 +390,49 @@ def test_the_readme_subsection_describes_the_abstention_that_shipped_and_nothing
         "the README describes an abstention the engine does not make", verdict,
     )
 
-    # 2. The cause BUCKET has not landed, so the README must admit it in as many words.
-    import belay.replay.report as report
-
-    has_bucket = any(
-        "tool-not-offered" in getattr(report, name, "")
-        for name in dir(report)
-        if name.startswith("REPLAYED_")
+    # 2. The cause BUCKET has LANDED (aspect `cause-and-surfaces`), so the admission that
+    #    it had not must be gone — and the engine must really produce the bucket, not merely
+    #    declare it. This block used to read the other way round:
+    #
+    #        has_bucket = any("tool-not-offered" in getattr(report, name, "") ...)
+    #        if not has_bucket:
+    #            assert "does not yet carry a distinct named cause" in section
+    #
+    #    i.e. it permitted the admission for exactly as long as no bucket existed. That
+    #    condition is now false, so the assertion is inverted rather than deleted: the README
+    #    may not imply a bucket the engine has not got, and it may not keep admitting a gap
+    #    the engine has closed. A stale admission under-claims a shipped fix, which is the
+    #    same drift as over-claiming one.
+    from belay.replay.probe import TOOL_NOT_OFFERED
+    from belay.replay.report import (
+        REPLAYED_RESULT_UNVERIFIED,
+        REPLAYED_SUB_VERDICT,
+        REPLAYED_TOOL_NOT_OFFERED,
+        canonical_cause,
     )
-    if not has_bucket:
-        assert "does not yet carry a distinct named cause" in section, (
-            "no tool-not-offered cause exists in belay.replay.report, so the README must "
-            "say the abstention carries no distinct named cause yet — the docs may not "
-            "imply a bucket the engine has not got"
-        )
+
+    assert "does not yet carry a distinct named cause" not in section, (
+        "the abstention DOES carry a distinct named cause now; leaving the admission "
+        "standing under-claims a shipped fix"
+    )
+    assert "cannot yet separate it by name" in section, (
+        "the subsection must QUOTE the admission it removed, so a reader can see what "
+        "changed rather than find the paragraph silently shorter"
+    )
+
+    # …and the bucket is REACHED, not merely declared: the sub-verdict this section
+    # describes carries its own kind, and `canonical_cause` resolves that kind ahead of the
+    # `A2/replay` catch-all. Without the ordering the bucket would exist and stay empty.
+    assert verdict.kind == f"replay:{TOOL_NOT_OFFERED}", (
+        "the abstention kept the generic replay kind, so its cause buckets with every "
+        "other result-axis abstention and the README's claim is false",
+        verdict,
+    )
+    reached = canonical_cause(
+        f"{REPLAYED_SUB_VERDICT} {verdict.axis}/{verdict.kind}: {verdict.message}"
+    )
+    assert reached == REPLAYED_TOOL_NOT_OFFERED, (reached, verdict.kind)
+    assert reached != REPLAYED_RESULT_UNVERIFIED
 
     # 3. The EFFECT axis is gated now, so the admission that it was not must be gone…
     assert "Nor is the *effect* sub-verdict gated yet" not in section, (

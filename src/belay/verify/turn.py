@@ -64,7 +64,12 @@ from belay.replay.engine import (
     replay_turn,
     resolve_server_argv,
 )
-from belay.replay.probe import offered_tools
+from belay.replay.probe import (
+    BOUNDARY_AMBIGUOUS,
+    BOUNDARY_UNDECIDED,
+    TOOL_NOT_OFFERED,
+    offered_tools,
+)
 from belay.replay.report import REPLAYED_SUB_VERDICT, canonical_cause
 from belay.verify.effect import network_subverdict, render_effect_verdict
 from belay.verify.invariants import (
@@ -210,8 +215,9 @@ def _replayed_cause(sub_verdicts: Sequence[Verdict]) -> Optional[str]:
 
 
 #: What `_boundary_offer` reports when the boundary itself could not be settled. These are
-#: message DETAIL, not bucket labels: they explain an abstention in prose and are
-#: deliberately not registered anywhere — naming and rendering the bucket is a later slice.
+#: message DETAIL, not bucket labels — the BUCKET is the reason code returned beside them
+#: (`belay.replay.probe`'s three names), which decides the sub-verdict `kind` and through it
+#: the named cause the whole run is counted by. Prose explains one turn; the reason counts it.
 _PROBE_UNREADABLE = (
     "the tools/list probe against that boundary could not be run, or its answer could not "
     "be read"
@@ -226,20 +232,27 @@ def _boundary_offer(
     configured: Sequence[Sequence[str]],
     network: Any,
     timeout: float,
-) -> tuple[Optional[bool], Optional[str]]:
-    """Ask the replay boundary whether it offers this turn's tool. `(tool_offered, note)`.
+) -> tuple[Optional[bool], Optional[str], Optional[str]]:
+    """Ask the boundary whether it offers this tool. `(tool_offered, note, reason)`.
 
     Three-way and fail-closed, mirroring the probe's own contract:
 
-    - `(True, None)` — the routed boundary offers the tool and no OTHER configured server
-      does, so routing was not a choice and today's scoring stands.
-    - `(False, None)` — the routed boundary was asked and does not offer it.
-    - `(None, note)` — undecided, for one of two reasons the note distinguishes: the probe
-      could not be read at all, or **two or more configured servers offer the tool**, which
-      makes "which server should have served this turn" a guess. `verify_turn` routes
-      `run_process` to `--shell-server` by tool NAME (see below), so two servers that both
-      claim a tool is a real, reachable ambiguity the moment `--shell-server` is given, and
-      a guess is exactly what a fail-closed engine must refuse.
+    - `(True, None, None)` — the routed boundary offers the tool and no OTHER configured
+      server does, so routing was not a choice and today's scoring stands.
+    - `(False, None, TOOL_NOT_OFFERED)` — the routed boundary was asked and does not offer it.
+    - `(None, note, reason)` — undecided, for one of two reasons: the probe could not be read
+      at all (`BOUNDARY_UNDECIDED`), or **two or more configured servers offer the tool**
+      (`BOUNDARY_AMBIGUOUS`), which makes "which server should have served this turn" a
+      guess. `verify_turn` routes `run_process` to `--shell-server` by tool NAME (see below),
+      so two servers that both claim a tool is a real, reachable ambiguity the moment
+      `--shell-server` is given, and a guess is exactly what a fail-closed engine must refuse.
+
+    **The `reason` is the third element and it is not decoration.** The note explains ONE turn
+    to a human; the reason is the closed vocabulary that becomes the sub-verdict `kind`, the
+    canonical cause, and the line in `phase0 report`'s UNVERIFIED-by-cause table. The two
+    undecided shapes are kept apart there for the same reason they are kept apart in prose:
+    an ambiguous routing is fixed by naming one server, an unreadable probe by making the
+    boundary answerable, and only `TOOL_NOT_OFFERED` is the number the gate counts.
 
     **The routed boundary is asked FIRST and can settle the turn alone.** If it does not
     offer the tool, that is decisive no matter what the other server offers: the reply the
@@ -253,14 +266,14 @@ def _boundary_offer(
     same exported helper, against the same manifest root, never a second copy of the rule.
 
     A replay observation with no `boundary` names no boundary to ask, so there is nothing to
-    settle and the answer is `(True, None)` — byte-for-byte the scoring that preceded this
-    gate. The real engine cannot produce that on a REPLAYED status (manifest, resolved argv
+    settle and the answer is `(True, None, None)` — byte-for-byte the scoring that preceded
+    this gate. The real engine cannot produce that on a REPLAYED status (manifest, resolved argv
     and relocation decision are all settled before it can spawn); it is reachable only from
     a hand-built or stubbed observation, and there "score as before" is the honest default.
     """
     boundary = reply.boundary
     if boundary is None or tool_name is None:
-        return True, None
+        return True, None, None
 
     routed_offer = offered_tools(
         list(boundary.argv),
@@ -270,9 +283,9 @@ def _boundary_offer(
         timeout=timeout,
     )
     if routed_offer is None:
-        return None, _PROBE_UNREADABLE
+        return None, _PROBE_UNREADABLE, BOUNDARY_UNDECIDED
     if tool_name not in routed_offer:
-        return False, None
+        return False, None, TOOL_NOT_OFFERED
 
     # The routed boundary offers it. Ambiguity is now the only thing left to rule out, and
     # it exists only when the operator configured a server this turn was NOT routed to.
@@ -284,7 +297,7 @@ def _boundary_offer(
             return None, (
                 f"another configured server could not be resolved against this turn's "
                 f"recorded root ({rootless}), so whether it also offers this tool is unknown"
-            )
+            ), BOUNDARY_UNDECIDED
         other_offer = offered_tools(
             argv,
             snapshot_manifest=boundary.manifest_path,
@@ -296,13 +309,13 @@ def _boundary_offer(
             return None, (
                 "another configured server could not be probed, so whether it also offers "
                 "this tool is unknown"
-            )
+            ), BOUNDARY_UNDECIDED
         if tool_name in other_offer:
             return None, (
                 "more than one configured server offers this tool, so which one should have "
                 "served this turn is a routing guess, and this engine does not guess"
-            )
-    return True, None
+            ), BOUNDARY_AMBIGUOUS
+    return True, None, None
 
 
 def verify_turn(
@@ -399,8 +412,9 @@ def verify_turn(
     determinism: Optional[DeterminismResult] = None
     tool_offered: Optional[bool] = True
     probe_note: Optional[str] = None
+    probe_reason: Optional[str] = None
     if reply.result_equivalence == DIVERGED:
-        tool_offered, probe_note = _boundary_offer(
+        tool_offered, probe_note, probe_reason = _boundary_offer(
             reply, tool_name,
             routed=resolved,
             configured=[c for c in (server_command, shell_server_command) if c is not None],
@@ -415,6 +429,7 @@ def verify_turn(
     result_verdict = render_result_verdict(
         reply, determinism,
         tool_offered=tool_offered, tool_name=tool_name, probe_note=probe_note,
+        probe_reason=probe_reason,
     )
     # The SAME `tool_offered` decision, threaded — never a second probe. Both A2
     # sub-verdicts rest on "was this call re-executed?", so they must rest on ONE answer to
@@ -426,6 +441,7 @@ def verify_turn(
     # the partial honesty this project refuses everywhere else.
     effect_verdict = render_effect_verdict(
         records, n, reply.delta, tool_offered=tool_offered, probe_note=probe_note,
+        probe_reason=probe_reason,
     )
     sub_verdicts = [result_verdict, effect_verdict]
     # The NETWORK dimension is a THIRD, separate sub-verdict — never folded into the

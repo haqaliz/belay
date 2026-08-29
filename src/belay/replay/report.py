@@ -58,6 +58,11 @@ from belay.replay.engine import (
     TurnReplay,
     replay_turn,
 )
+from belay.replay.probe import (
+    BOUNDARY_AMBIGUOUS,
+    BOUNDARY_UNDECIDED,
+    TOOL_NOT_OFFERED,
+)
 from belay.snapshot.bth1 import FieldDiff
 from belay.snapshot.substrate import UnrestorableCause
 
@@ -103,11 +108,35 @@ REPLAYED_EFFECT_UNVERIFIED = "replayed but effect unverified"
 REPLAYED_INVARIANT_UNVERIFIED = "replayed but invariant unverified"
 REPLAYED_UNVERIFIED = "replayed but sub-verdict unverified"
 
+#: The BOUNDARY buckets. A turn can replay perfectly and still verify nothing, because the
+#: server the operator named never offered the recorded tool — the reply the comparison
+#: diverged against is the boundary's answer, not the tool's. That abstention used to bucket
+#: under `REPLAYED_RESULT_UNVERIFIED` beside unparseable replies and nondeterministic tools,
+#: which is why the 2026-08-12 gate mint could not answer the one question it needed to:
+#: *"how many turns could not be verified because the boundary lacked the tool"*. It has a
+#: name now, and it is counted on its own line wherever the rate breaks down.
+#:
+#: THREE names, not one, because they call for three different actions: `NOT_OFFERED` is a
+#: decided fact about `--server` (name the right server); `AMBIGUOUS` means two configured
+#: servers both claim the tool, so routing would be a guess (name one); `UNDECIDED` means the
+#: probe could not be run or read at all (the boundary is unreachable, not lacking). Folding
+#: the last two into the first would inflate exactly the number the gate counts.
+REPLAYED_TOOL_NOT_OFFERED = "replayed but the boundary does not offer the tool"
+REPLAYED_BOUNDARY_AMBIGUOUS = "replayed but the boundary routing is ambiguous"
+REPLAYED_BOUNDARY_UNDECIDED = "replayed but the boundary toolset is undecided"
+
 #: Prefix-to-label map for the engine's other verbatim unverified causes. Kept short
 #: on purpose: the point is a stable bucket for the rate, not a second copy of the
 #: engine's wording. Order matters — `canonical_cause` returns the FIRST match, so the
 #: more specific replayed-dimension prefixes precede their catch-all (and `effect:network`
 #: precedes `effect`, of which it is a prefix).
+#:
+#: THE SIX BOUNDARY ENTRIES BELOW ARE ORDERED, NOT DECORATIVE. `A2/replay:tool-not-offered`
+#: starts with `A2/replay`, so an entry written after the catch-all can never be reached —
+#: the bucket would exist, be registered, satisfy the interop reflection guard, and stay
+#: permanently empty, which is G4 unmet while the checklist reads done. They are placed
+#: ahead of both catch-alls for exactly the reason `effect:network` is, and the ordering is
+#: asserted by test rather than trusted to this comment.
 _PREFIX_LABELS: tuple[tuple[str, str], ...] = (
     ("no persisted snapshot manifest", MANIFEST_NOT_FOUND),
     (UNANSWERED_TARGET, REPLAY_DID_NOT_ANSWER),
@@ -115,6 +144,12 @@ _PREFIX_LABELS: tuple[tuple[str, str], ...] = (
     ("the tools/call frame could not be read", "unreadable target frame"),
     ("unrecognised state_handle status", "unrecognised state handle"),
     ("an in-root path is embedded in an argument value", "embedded path unrelocatable"),
+    (f"{REPLAYED_SUB_VERDICT} A2/replay:{TOOL_NOT_OFFERED}", REPLAYED_TOOL_NOT_OFFERED),
+    (f"{REPLAYED_SUB_VERDICT} A2/effect:{TOOL_NOT_OFFERED}", REPLAYED_TOOL_NOT_OFFERED),
+    (f"{REPLAYED_SUB_VERDICT} A2/replay:{BOUNDARY_AMBIGUOUS}", REPLAYED_BOUNDARY_AMBIGUOUS),
+    (f"{REPLAYED_SUB_VERDICT} A2/effect:{BOUNDARY_AMBIGUOUS}", REPLAYED_BOUNDARY_AMBIGUOUS),
+    (f"{REPLAYED_SUB_VERDICT} A2/replay:{BOUNDARY_UNDECIDED}", REPLAYED_BOUNDARY_UNDECIDED),
+    (f"{REPLAYED_SUB_VERDICT} A2/effect:{BOUNDARY_UNDECIDED}", REPLAYED_BOUNDARY_UNDECIDED),
     (f"{REPLAYED_SUB_VERDICT} A2/replay", REPLAYED_RESULT_UNVERIFIED),
     (f"{REPLAYED_SUB_VERDICT} A2/effect:network", REPLAYED_UNVERIFIED),
     (f"{REPLAYED_SUB_VERDICT} A2/effect", REPLAYED_EFFECT_UNVERIFIED),

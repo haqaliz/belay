@@ -75,6 +75,7 @@ from belay.replay.determinism import (
     classify_determinism,
 )
 from belay.replay.engine import DIVERGED, EQUAL, TurnReplay, replay_turn
+from belay.replay.probe import BOUNDARY_UNDECIDED, TOOL_NOT_OFFERED
 from belay.verify.verdict import Status, Verdict
 
 #: This module speaks only for the replay axis. A1 (invariants) and A3 (claim
@@ -82,6 +83,22 @@ from belay.verify.verdict import Status, Verdict
 #: in by status alone.
 _AXIS = "A2"
 _KIND = "replay"
+
+def _boundary_kind(reason: str) -> str:
+    """`replay:<reason>` — the sub-verdict kind for one boundary abstention.
+
+    The BOUNDARY abstentions get their own `kind`, not just their own words.
+    `canonical_cause` buckets a replayed-but-unverified turn by the PREFIX `<axis>/<kind>`,
+    so an abstention that kept `kind == "replay"` would be filed beside unparseable replies
+    and nondeterministic tools — and the one number the Phase-0 gate needs ("how many turns
+    could not be verified because the boundary lacked the tool") would stay unproducible
+    however carefully the message was worded. Same shape as `effect:network`: the axis stays
+    `A2`, the kind narrows.
+
+    The reason vocabulary is `belay.replay.probe`'s, imported rather than restated, so the
+    kind, the report's bucket label and interop's closed set cannot drift apart by a typo.
+    """
+    return f"{_KIND}:{reason}"
 
 
 def _decode(reply: Optional[bytes]) -> tuple[bool, Any]:
@@ -106,6 +123,7 @@ def render_result_verdict(
     tool_offered: Optional[bool] = True,
     tool_name: Optional[str] = None,
     probe_note: Optional[str] = None,
+    probe_reason: Optional[str] = None,
 ) -> Verdict:
     """Turn one replay observation (and its determinism decision) into an A2 verdict.
 
@@ -129,6 +147,12 @@ def render_result_verdict(
 
     `tool_name` names the tool in those two abstention messages; the FAIL path keeps taking
     the name from `determinism`, which is the classifier's own record of what it re-ran.
+
+    `probe_reason` is the abstention's BUCKET, one of `belay.replay.probe`'s three reasons,
+    and it decides the sub-verdict's `kind` (`replay:<reason>`) and through it the named
+    cause the whole run is counted by. It is read only on the `tool_offered is None` branch —
+    `False` is `TOOL_NOT_OFFERED` by definition — and an absent reason there falls back to
+    `BOUNDARY_UNDECIDED`, never to the sharper ambiguity finding.
     """
     eq = reply.result_equivalence
 
@@ -156,7 +180,9 @@ def render_result_verdict(
         # It is first because it is cheaper and because it can settle the turn outright:
         # a boundary that never offered the tool makes the classifier's three extra
         # re-invocations pure waste.
-        boundary = _boundary_abstention(reply, tool_offered, tool_name, probe_note)
+        boundary = _boundary_abstention(
+            reply, tool_offered, tool_name, probe_note, probe_reason
+        )
         if boundary is not None:
             return boundary
         if determinism is None:
@@ -174,6 +200,7 @@ def _boundary_abstention(
     tool_offered: Optional[bool],
     tool_name: Optional[str],
     probe_note: Optional[str],
+    probe_reason: Optional[str] = None,
 ) -> Optional[Verdict]:
     """The divergence the BOUNDARY explains, or `None` to let the determinism gate decide.
 
@@ -198,6 +225,7 @@ def _boundary_abstention(
     _rec_ok, rec = _decode(reply.recorded_reply)
     _rep_ok, rep = _decode(reply.replayed_reply)
     if tool_offered is False:
+        reason = TOOL_NOT_OFFERED
         message = (
             f"result-equivalence UNVERIFIED on tool {named}: the replay boundary does not "
             f"offer this tool, so the recorded call was never re-invoked and the reply this "
@@ -206,6 +234,10 @@ def _boundary_abstention(
             f"for the server it was replayed against"
         )
     else:
+        # An UNDECIDED boundary that named no reason is `BOUNDARY_UNDECIDED`, never
+        # ambiguity: an unnamed ignorance is not a routing finding, and guessing the more
+        # specific of the two would put turns in a bucket an operator would act on.
+        reason = probe_reason or BOUNDARY_UNDECIDED
         note = probe_note or "the boundary could not be asked what it offers"
         message = (
             f"result-equivalence UNVERIFIED on tool {named}: the divergence cannot be "
@@ -214,7 +246,7 @@ def _boundary_abstention(
             f"the boundary lacks the tool, and it is not a finding against the trace either"
         )
     return Verdict(
-        _AXIS, _KIND, Status.UNVERIFIED,
+        _AXIS, _boundary_kind(reason), Status.UNVERIFIED,
         observed=rep, expected=rec,
         message=message,
     )

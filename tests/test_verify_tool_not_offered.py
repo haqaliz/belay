@@ -535,6 +535,42 @@ class _DeterminismSpy:
         return self._result
 
 
+def _result_sub(verdict):
+    """The A2 RESULT sub-verdict of a composed turn, whichever `kind` it narrowed to.
+
+    Aspect `cause-and-surfaces` gave the boundary abstentions their own sub-verdict kinds
+    (`replay:tool-not-offered`, `replay:boundary-ambiguous`, `replay:boundary-undecided`),
+    because `canonical_cause` buckets a replayed-but-unverified turn by the prefix
+    `<axis>/<kind>` and an abstention that kept the bare `replay` kind was filed beside every
+    other result-axis abstention — the reason the 2026-08-12 gate mint could not count them.
+    The tests below assert what the abstention SAYS and what status it carries, which is
+    unchanged; only the name it is filed under moved, so the lookup follows the family rather
+    than the exact kind. The FAIL-side guard tests above keep the literal `== "replay"`
+    deliberately: a genuine deterministic divergence must still carry the generic kind.
+    """
+    return next(
+        s
+        for s in verdict.sub_verdicts
+        if s.axis == "A2" and (s.kind == "replay" or s.kind.startswith("replay:"))
+    )
+
+
+def _effect_sub(verdict):
+    """The A2 filesystem-EFFECT sub-verdict, whichever `kind` it narrowed to.
+
+    `effect:network` is excluded by name: it is the permanent coverage boundary, a THIRD
+    sub-verdict that is deliberately never gated on the boundary probe, and folding it in
+    here would make these assertions read the wrong dimension.
+    """
+    return next(
+        s
+        for s in verdict.sub_verdicts
+        if s.axis == "A2"
+        and s.kind != "effect:network"
+        and (s.kind == "effect" or s.kind.startswith("effect:"))
+    )
+
+
 def _wire(monkeypatch, reply: TurnReplay, offered, spy: _DeterminismSpy):
     """Point `verify_turn` at a fixed replay observation, a fixed probe answer, and the spy.
 
@@ -578,7 +614,7 @@ def test_a_tool_the_boundary_does_not_offer_is_unverified_not_fail(tmp_path, mon
         manifest_dir="/nonexistent",  # never reached: replay_turn is stubbed
     )
 
-    result = next(s for s in verdict.sub_verdicts if s.kind == "replay")
+    result = _result_sub(verdict)
     assert result.status is Status.UNVERIFIED, result.message
     assert result.status is not Status.FAIL, result.message
     assert "does not offer" in result.message, result.message
@@ -641,7 +677,7 @@ def test_a_probe_that_could_not_be_read_is_unverified_with_a_distinct_message(
         manifest_dir="/nonexistent",
     )
 
-    result = next(s for s in verdict.sub_verdicts if s.kind == "replay")
+    result = _result_sub(verdict)
     assert result.status is Status.UNVERIFIED, result.message
     assert "does not offer" not in result.message, (
         "an unreadable probe must never be reported as the boundary lacking the tool",
@@ -655,15 +691,13 @@ def test_a_probe_that_could_not_be_read_is_unverified_with_a_distinct_message(
         recorded=IS_ERROR_RECORDED, replayed=IS_ERROR_REPLAYED
     )
     _wire(monkeypatch, offered_reply, set(), _DeterminismSpy())
-    not_offered = next(
-        s
-        for s in verify_turn(
+    not_offered = _result_sub(
+        verify_turn(
             _run_process_records(tmp_path, "probe-not-offered"),
             0,
             server_command=shell_server_cmd(),
             manifest_dir="/nonexistent",
-        ).sub_verdicts
-        if s.kind == "replay"
+        )
     )
     assert result.message != not_offered.message, (
         "'could not decide' and 'does not offer' must not render as the same finding"
@@ -695,7 +729,7 @@ def test_a_boundary_that_offers_the_tool_still_reaches_the_failing_verdict(
         manifest_dir="/nonexistent",
     )
 
-    result = next(s for s in verdict.sub_verdicts if s.kind == "replay")
+    result = _result_sub(verdict)
     assert result.status is Status.FAIL, result.message
     assert spy.calls == 1, ("the classifier must still gate a divergence on an offered tool", spy.calls)
     assert verdict.status is Status.FAIL, verdict
@@ -748,7 +782,7 @@ def test_real_replay_of_a_tool_the_boundary_does_not_offer_is_unverified(tmp_pat
     )
 
     assert verdict.tool_name == RUN_TOOL, verdict
-    result = next(s for s in verdict.sub_verdicts if s.kind == "replay")
+    result = _result_sub(verdict)
     assert result.status is Status.UNVERIFIED, result.message
     assert "result-equivalence FAIL" not in result.message, (
         "the fabricated FAIL is exactly what this aspect removes", result.message,
@@ -818,7 +852,7 @@ def test_a_tool_offered_by_two_configured_servers_abstains(tmp_path, monkeypatch
         manifest_dir="/nonexistent",
     )
 
-    result = next(s for s in verdict.sub_verdicts if s.kind == "replay")
+    result = _result_sub(verdict)
     assert result.status is Status.UNVERIFIED, result.message
     assert "more than one configured server" in result.message, result.message
     assert "does not offer" not in result.message, (
@@ -841,7 +875,7 @@ def test_a_tool_offered_by_two_configured_servers_abstains(tmp_path, monkeypatch
         server_command=shell_server_cmd(),
         manifest_dir="/nonexistent",
     )
-    assert next(s for s in single.sub_verdicts if s.kind == "replay").status is Status.FAIL
+    assert _result_sub(single).status is Status.FAIL
     assert spy_one.calls == 1
 
 
@@ -871,7 +905,7 @@ def test_an_alternate_server_that_cannot_be_probed_is_undecided_not_ignored(
         manifest_dir="/nonexistent",
     )
 
-    result = next(s for s in verdict.sub_verdicts if s.kind == "replay")
+    result = _result_sub(verdict)
     assert result.status is Status.UNVERIFIED, result.message
     assert "could not be probed" in result.message, result.message
     assert spy.calls == 0
@@ -936,7 +970,7 @@ def test_a_reply_that_reproduced_is_never_probed(tmp_path, monkeypatch):
 
     assert probed == [], ("a reply that reproduced must not spawn a probe", probed)
     assert spy.calls == 0
-    assert next(s for s in verdict.sub_verdicts if s.kind == "replay").status is Status.PASS
+    assert _result_sub(verdict).status is Status.PASS
 
 
 # =====================================================================================
@@ -1116,8 +1150,8 @@ def test_a_not_offered_turn_renders_no_sub_verdict_claiming_the_effect_conforms(
     assert all(CONFORMS not in s.message for s in verdict.sub_verdicts), [
         s.message for s in verdict.sub_verdicts
     ]
-    result = next(s for s in verdict.sub_verdicts if s.kind == "replay")
-    effect = next(s for s in verdict.sub_verdicts if s.kind == "effect")
+    result = _result_sub(verdict)
+    effect = _effect_sub(verdict)
     assert result.status is Status.UNVERIFIED, result.message
     assert effect.status is Status.UNVERIFIED, effect.message
     assert verdict.status is Status.UNVERIFIED, verdict
@@ -1173,7 +1207,7 @@ def test_an_offered_tool_still_renders_the_effect_verdict_it_always_did(tmp_path
     composed = verify_turn(
         records, 0, server_command=shell_server_cmd(), manifest_dir="/nonexistent",
     )
-    assert next(s for s in composed.sub_verdicts if s.kind == "effect") == ungated
+    assert _effect_sub(composed) == ungated
 
 
 # =====================================================================================

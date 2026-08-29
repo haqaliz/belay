@@ -799,7 +799,17 @@ def _emit_verdict(verdict) -> None:
     _emit(f"  turn {verdict.turn_index:<3} {tool:<18}{verdict.status.value}")
     for axis in _axes_in_order(verdict.sub_verdicts):
         for sub in (s for s in verdict.sub_verdicts if s.axis == axis):
-            _emit(f"      {sub.axis} {sub.kind:<10}{sub.status.value:<12}{sub.message}")
+            # The kind column pads to 10 and is ALWAYS followed by at least one space. The
+            # bare `:<10}` ran an over-long kind straight into the status column —
+            # `A2 effect:networkNOT_COVERED`, which has been the rendering of the coverage
+            # dimension since it shipped, and would now also read
+            # `A2 replay:tool-not-offeredUNVERIFIED` for the boundary abstentions this
+            # aspect names. A named cause nobody can read at a glance is not much of a name.
+            # Every kind SHORTER than the column is byte-identical to before, which is what
+            # keeps `test_verify_shell_server_cli`'s byte-exact fixture (a different
+            # aspect's "output is unchanged" AC) honest rather than merely re-baselined.
+            kind = f"{sub.kind:<10}" if len(sub.kind) < 10 else f"{sub.kind} "
+            _emit(f"      {sub.axis} {kind}{sub.status.value:<12}{sub.message}")
             if sub.axis == "A1" and sub.kind == "invariant":
                 _emit(f"          {_exposure_prose(sub.expected)}")
     if verdict.cause is not None:

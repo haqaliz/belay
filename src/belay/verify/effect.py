@@ -74,6 +74,7 @@ from belay.frames import message_of
 from belay.index import derive_correlation, tool_calls
 from belay.replay.client import DEFAULT_TIMEOUT
 from belay.replay.engine import replay_turn
+from belay.replay.probe import BOUNDARY_UNDECIDED, TOOL_NOT_OFFERED
 from belay.snapshot.bth1 import FieldDiff
 from belay.verify.verdict import Status, Verdict
 
@@ -86,6 +87,19 @@ _KIND = "effect"
 #: (and the "never a network PASS" test) can tell the network dimension apart from the
 #: filesystem one at a glance — the two are composed side by side in a turn, never merged.
 _KIND_NETWORK = "effect:network"
+
+
+def _boundary_kind(reason: str) -> str:
+    """`effect:<reason>` — the sub-verdict kind for one boundary abstention.
+
+    The same narrowing `result.py` does, for the same reason: `canonical_cause` buckets by
+    `<axis>/<kind>`, so an abstention that kept the bare `effect` kind is indistinguishable
+    from a declared contract that could not be evaluated. `effect:network` is the precedent
+    and the axis stays `A2`. The reason vocabulary is `belay.replay.probe`'s, imported, so
+    kind / bucket / interop cannot drift apart by a typo.
+    """
+    return f"{_KIND}:{reason}"
+
 
 #: The annotation the FILESYSTEM dimension grounds on. `readOnlyHint` is the declared
 #: contract a filesystem delta can confirm or refute.
@@ -376,6 +390,7 @@ def _boundary_abstention(
     contract: dict,
     tool_offered: Optional[bool],
     probe_note: Optional[str],
+    probe_reason: Optional[str] = None,
 ) -> Optional[Verdict]:
     """The effect nothing observed, or `None` to let the declared-vs-delta rule decide.
 
@@ -408,6 +423,7 @@ def _boundary_abstention(
         return None
     named = repr(ann.tool) if ann.tool is not None else "the recorded tool"
     if tool_offered is False:
+        reason = TOOL_NOT_OFFERED
         message = (
             f"effect-conformance UNVERIFIED on tool {named}: the replay boundary does not "
             f"offer this tool, so the recorded call was never re-invoked and NO effect was "
@@ -416,6 +432,9 @@ def _boundary_abstention(
             f"observation, and an effect that never happened cannot conform"
         )
     else:
+        # Unnamed ignorance is `BOUNDARY_UNDECIDED`, never the sharper ambiguity finding —
+        # the same fallback `result.py` makes, from the same single probe answer.
+        reason = probe_reason or BOUNDARY_UNDECIDED
         note = probe_note or "the boundary could not be asked what it offers"
         message = (
             f"effect-conformance UNVERIFIED on tool {named}: the replay boundary's toolset "
@@ -425,7 +444,7 @@ def _boundary_abstention(
             f"tool"
         )
     return Verdict(
-        _AXIS, _KIND, Status.UNVERIFIED,
+        _AXIS, _boundary_kind(reason), Status.UNVERIFIED,
         observed=None, expected=contract,
         message=message,
     )
@@ -438,6 +457,7 @@ def render_effect_verdict(
     *,
     tool_offered: Optional[bool] = True,
     probe_note: Optional[str] = None,
+    probe_reason: Optional[str] = None,
 ) -> Verdict:
     """Turn the Nth turn's declared `readOnlyHint` and observed `delta` into an A2 verdict.
 
@@ -477,7 +497,7 @@ def render_effect_verdict(
 
     # The BOUNDARY gate, ahead of the whole declared-vs-delta table: an effect that was
     # never produced cannot conform to a contract, nor violate one.
-    boundary = _boundary_abstention(ann, contract, tool_offered, probe_note)
+    boundary = _boundary_abstention(ann, contract, tool_offered, probe_note, probe_reason)
     if boundary is not None:
         return boundary
 
