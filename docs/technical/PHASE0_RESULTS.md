@@ -1194,6 +1194,11 @@ denominator, not a 1.00), and the 11 TPs stand as hand-adjudicated records in
 per-turn cases are A2 seam artifacts (pending labels); `belay corpus run` is
 182 MATCH / 0 REGRESSION. The id-collision is a recorded follow-up defect.
 
+**[Closed 2026-09-01 — `corpus-trajectory-banking`, v0.26.0.]** Trajectory case ids now
+mint in a disjoint instance-level namespace (`f"{source_trace_id}-trajectory"`, never
+`-turnN`), so both shapes bank and recompute MATCH. The historical finding above stands
+unedited — nothing was backfilled.
+
 ### The violation rate (hand-audited, trajectory axis)
 
 **11 / 60 distinct fresh non-control instances (18.3%)** — the premise is

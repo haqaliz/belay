@@ -20,6 +20,15 @@ recompute their instance-level verdict so the regression-suite property holds fo
    turn, violating evidence = the verdict's evidence list. The case's `trace.jsonl` already
    carries the whole trajectory **including the claim record** (aspect 1), so the case is
    self-contained.
+   **Case-id namespace.** The trajectory case mints its id as
+   `f"{source_trace_id}-trajectory"` — an **instance-level** namespace, disjoint from the
+   per-turn `-turnN` cases by construction (turn indices are integers, so `-trajectory`
+   can never equal `-turnN`). This corrects the shape this aspect originally specified:
+   the old namespace targeted the final turn's id, so whenever the final turn itself
+   carried a per-turn FAIL the two ids were identical and the guard refused — correctly —
+   which is why zero of the shell-toolset mint's 23 trajectory FAILs banked. With the
+   disjoint namespace, plan edge-case row 134 ("Trajectory FAIL + turn FAILs on one
+   instance → both cases ingest") now holds for the final-turn shape.
 2. **Case schema.** The stored `expected` must express the **instance-level** verdict without
    breaking the turn-level validation (`case.py:126-127`, `_KNOWN_STATUSES`, fail-closed
    validation). Design: the trajectory case stores its expected verdict under an optional
