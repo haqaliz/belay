@@ -211,9 +211,9 @@ def test_trajectory_fail_ingests_a_corrupt_success_case(tmp_path, monkeypatch) -
 
     stem = trace_path.stem
     case_dirs = [p for p in (tmp_path / "corpus").iterdir() if p.is_dir()]
-    assert [p.name for p in case_dirs] == [f"{stem}-turn1"]  # exactly one case, no per-turn one
+    assert [p.name for p in case_dirs] == [f"{stem}-trajectory"]  # exactly one case, no per-turn one
 
-    case = load_case(tmp_path / "corpus" / f"{stem}-turn1")
+    case = load_case(tmp_path / "corpus" / f"{stem}-trajectory")
     # The schema-v4 expected: an INSTANCE-LEVEL FAIL with cause null.
     assert case.trajectory == {"status": "FAIL", "cause": None}
     # The corrupt-success shape: an A1 invariant FAIL under the trajectory rule.
@@ -229,7 +229,7 @@ def test_trajectory_fail_ingests_a_corrupt_success_case(tmp_path, monkeypatch) -
 
     # The stored trace carries the whole trajectory, including the claim record the
     # verdict judged — the case is self-contained.
-    claims = [r for r in _stored_records(tmp_path / "corpus" / f"{stem}-turn1")
+    claims = [r for r in _stored_records(tmp_path / "corpus" / f"{stem}-trajectory")
               if r.get("kind") == "claim"]
     assert len(claims) == 1, claims
     assert claims[0]["text"] == "all tests pass"
@@ -372,7 +372,7 @@ def test_mixed_instance_ingests_both_the_turn_case_and_the_trajectory_case(
     case_names = sorted(
         p.name for p in (tmp_path / "corpus").iterdir() if p.is_dir()
     )
-    assert case_names == [f"{stem}-turn1", f"{stem}-turn2"]
+    assert case_names == [f"{stem}-trajectory", f"{stem}-turn1"]
 
     # The per-turn case is turn-shaped: target = the failing turn, no trajectory verdict.
     turn_case = load_case(tmp_path / "corpus" / f"{stem}-turn1")
@@ -382,10 +382,61 @@ def test_mixed_instance_ingests_both_the_turn_case_and_the_trajectory_case(
 
     # The trajectory case targets the instance's final turn and carries the
     # instance-level expected verdict.
-    trajectory_case = load_case(tmp_path / "corpus" / f"{stem}-turn2")
+    trajectory_case = load_case(tmp_path / "corpus" / f"{stem}-trajectory")
     assert trajectory_case.target_turn_index == 2
     assert trajectory_case.trajectory == {"status": "FAIL", "cause": None}
     assert trajectory_case.invariants == [{"scope": "", "rule": RULE_SUITE_BEFORE_SUCCESS_CLAIM}]
+
+
+def test_final_turn_fail_coexists_with_trajectory_fail(tmp_path) -> None:
+    """The defect shape: a per-turn FAIL on the instance's FINAL turn AND a trajectory FAIL
+    on the same instance bank BOTH cases — the per-turn loop runs first, and the trajectory
+    case's id no longer collides with the final turn's per-turn id."""
+    trace_path = _write_gated_trace(
+        tmp_path / "traces", "edit_file", 3, {"path": "/repo/src/a.py"},
+        offered=("run_process",),
+    )
+    append_claim_record(trace_path, text="all tests pass")
+    canned = {
+        trace_path.stem: [
+            _canned_verdict(0, Status.PASS),
+            _canned_verdict(1, Status.PASS),
+            _canned_verdict(2, Status.FAIL),
+        ]
+    }
+
+    ledger = run_batch(
+        trace_path.parent,
+        corpus_dir=tmp_path / "corpus",
+        server_command=["unused"],
+        invariants=[TRAJECTORY],
+        captured_at=CAPTURED_AT,
+        verifier=_stem_verifier(canned),
+        ingester=add_case,
+        ingest=True,
+    )
+
+    inst = ledger.instances[0]
+    assert inst.flagged_turns == [2]
+    assert inst.flagged_addable == [2]
+    assert inst.trajectory == {"status": "FAIL", "cause": None, "evidence_count": 0}
+    assert inst.trajectory_addable is True
+    assert inst.disposition is Disposition.VERIFIED_FLAGGED
+
+    stem = trace_path.stem
+    case_names = sorted(
+        p.name for p in (tmp_path / "corpus").iterdir() if p.is_dir()
+    )
+    assert case_names == [f"{stem}-trajectory", f"{stem}-turn2"]
+
+    turn_case = load_case(tmp_path / "corpus" / f"{stem}-turn2")
+    assert turn_case.target_turn_index == 2
+    assert turn_case.trajectory is None
+
+    trajectory_case = load_case(tmp_path / "corpus" / f"{stem}-trajectory")
+    assert trajectory_case.target_turn_index == 2
+    assert trajectory_case.trajectory == {"status": "FAIL", "cause": None}
+    assert trajectory_case.expected["reduced_status"] == "FAIL"
 
 
 # --- the corpus-collision guard applies identically to the trajectory case -------------
@@ -404,6 +455,23 @@ def test_rerun_trajectory_collision_never_errors_the_instance(tmp_path, monkeypa
     append_claim_record(trace_path, text="all tests pass")
 
     first = _ingest_run(trace_path, tmp_path, invariants=[TRAJECTORY])
+
+    # A human adjudication on the stored trajectory case must survive the rerun refusal
+    # byte-for-byte — the collision is decided before any write (the per-turn analogue is
+    # pinned in test_corpus_add.py's re-add tests).
+    from belay.corpus.curate import set_label
+
+    stem = trace_path.stem
+    trajectory_case_dir = tmp_path / "corpus" / f"{stem}-trajectory"
+    root_cause = {"key": "suite-before-claim", "note": "verified without running the suite"}
+    set_label(
+        tmp_path / "corpus", f"{stem}-trajectory", "true-positive", root_cause
+    )
+    before = {
+        name: (trajectory_case_dir / name).read_bytes()
+        for name in ("trace.jsonl", "case.json")
+    }
+
     second = _ingest_run(trace_path, tmp_path, invariants=[TRAJECTORY])
 
     assert first.violation_denominator() == 1
@@ -417,3 +485,9 @@ def test_rerun_trajectory_collision_never_errors_the_instance(tmp_path, monkeypa
     assert run_two.trajectory_addable is False
     assert run_two.trajectory_unaddable is not None
     assert "already exists" in run_two.trajectory_unaddable["cause"]
+
+    for name in ("trace.jsonl", "case.json"):
+        assert (trajectory_case_dir / name).read_bytes() == before[name], name
+    stored = load_case(trajectory_case_dir)
+    assert stored.human_label == "true-positive", stored.human_label
+    assert stored.root_cause == root_cause, stored.root_cause
