@@ -25,9 +25,12 @@ from pathlib import Path
 
 from belay.corpus.add import add_case
 from belay.corpus.case import load_case
+from belay.corpus.curate import set_label
+from belay.corpus.metrics import score
 from belay.phase0.ledger import Disposition
 from belay.phase0.runner import default_manifest_dir_for, run_batch
 from belay.replay.engine import EQUAL, REPLAYED, TurnReplay
+from belay.replay.reader import read_trace
 from belay.trace import TraceWriter, append_claim_record
 from belay.verify import turn as turn_module
 from belay.verify.invariants import RULE_SUITE_BEFORE_SUCCESS_CLAIM, Invariant
@@ -491,3 +494,207 @@ def test_rerun_trajectory_collision_never_errors_the_instance(tmp_path, monkeypa
     stored = load_case(trajectory_case_dir)
     assert stored.human_label == "true-positive", stored.human_label
     assert stored.root_cause == root_cause, stored.root_cause
+
+
+# --- aspect 2: the score-denominator proof (measurement pipeline end-to-end) ------------
+
+
+def _mint_trajectory_fail(tmp_path, monkeypatch) -> tuple[Path, Path]:
+    """A synthetic mint whose ONLY failure is the trajectory FAIL; return `(trace, corpus)`.
+
+    The real verifier (stub replay) over a 2-call `edit_file` trace with `run_process`
+    offered and a verification claim — the exact shape of
+    `test_trajectory_fail_ingests_a_corrupt_success_case` — banks exactly one case,
+    `<stem>-trajectory`, targeting the final turn.
+    """
+    _stub_replay(monkeypatch, is_error=False)
+    trace_path = _write_gated_trace(
+        tmp_path / "traces", "edit_file", 2, {"path": "/repo/src/a.py"},
+        offered=("run_process",),
+    )
+    append_claim_record(trace_path, text="all tests pass")
+    _ingest_run(trace_path, tmp_path, invariants=[TRAJECTORY])
+    return trace_path, tmp_path / "corpus"
+
+
+def _mint_clean_per_turn_case(corpus_dir: Path, trace_path: Path) -> Path:
+    """A per-turn case for a CLEAN turn, through the REAL `add_case` — the recorded-miss path.
+
+    The trajectory-rule mint flags no turns, so a per-turn case cannot come from the ingest
+    loop; `add_case` has no verdict precondition by design, so a PASS turn composes just as
+    well — the per-turn shape this proof needs as its second corpus cell.
+    """
+    verdict = TurnVerdict(
+        turn_index=0,
+        tool_name="edit_file",
+        status=Status.PASS,
+        sub_verdicts=[Verdict("A2", "replay", Status.PASS, None, None, "canned")],
+    )
+    return add_case(
+        corpus_dir,
+        records=list(read_trace(trace_path).records),
+        target_turn_index=0,
+        verdict=verdict,
+        manifest_dir=default_manifest_dir_for(trace_path),
+        server_command=["unused"],
+        invariants=[],
+        human_label="pending",
+        replays=3,
+        timeout=20.0,
+        source_trace_id=trace_path.stem,
+        captured_at=CAPTURED_AT,
+    )
+
+
+def _make_final_handle_absent(trace_path: Path) -> None:
+    """Flip the FINAL `tools/call` request's `state_handle` status to `absent`, in place.
+
+    The rig always writes `{"status": "present", ...}` per call; the final turn's handle is
+    the last c2s frame record whose handle is present (the tools/list handshake frames carry
+    the writer's default absent handle and are untouched). Post-editing keeps the real trace
+    shape — the same bytes `read_trace` and `add_case` read — rather than a bespoke writer
+    path.
+    """
+    lines = trace_path.read_text(encoding="utf-8").splitlines()
+    records = [json.loads(line) for line in lines if line]
+    for record in reversed(records):
+        handle = record.get("state_handle")
+        if (
+            record.get("kind") == "frame"
+            and record.get("dir") == "c2s"
+            and isinstance(handle, dict)
+            and handle.get("status") == "present"
+        ):
+            handle["status"] = "absent"
+            break
+    else:
+        raise AssertionError("no present-handle c2s frame found to flip")
+    trace_path.write_text(
+        "\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8"
+    )
+
+
+def test_labeled_trajectory_case_scores_with_real_denominators(
+    tmp_path, monkeypatch
+) -> None:
+    """Acceptance (1): a labeled trajectory FAIL case counts precision/recall with REAL
+    denominators, in a corpus holding BOTH shapes.
+
+    The trajectory case banks as `<stem>-trajectory` and is labeled `true-positive` through
+    the SAME `set_label` API `belay corpus label` uses — never a hand-edited `case.json` —
+    beside a labeled per-turn case (a clean turn minted through the real `add_case`)
+    labeled `false-positive`. Hand-computed from the two cells:
+
+        trajectory FAIL + true-positive   -> TP  (1)
+        per-turn    PASS + false-positive -> TN  (1)
+
+        precision = 1/(1+0) = 1.0, recall = 1/(1+0) = 1.0, coverage = 2/2 = 1.0
+    """
+    trace_path, corpus_dir = _mint_trajectory_fail(tmp_path, monkeypatch)
+    stem = trace_path.stem
+    trajectory_case_dir = corpus_dir / f"{stem}-trajectory"
+    assert trajectory_case_dir.is_dir()
+
+    set_label(
+        corpus_dir,
+        f"{stem}-trajectory",
+        "true-positive",
+        root_cause={"key": "suite-before-claim", "note": "verified without running the suite"},
+    )
+    _mint_clean_per_turn_case(corpus_dir, trace_path)
+    set_label(corpus_dir, f"{stem}-turn0", "false-positive")
+
+    m = score(
+        [
+            load_case(trajectory_case_dir),
+            load_case(corpus_dir / f"{stem}-turn0"),
+        ]
+    )
+
+    assert (m.tp, m.fp, m.fn, m.tn) == (1, 0, 0, 1)
+    assert m.total == 2
+    assert m.pending == 0
+    assert m.precision == 1.0
+    assert m.precision is not None
+    assert m.recall == 1.0
+    assert m.recall is not None
+    assert m.coverage == 1.0
+    assert m.coverage is not None
+
+
+def test_pending_trajectory_label_keeps_precision_na_never_one(
+    tmp_path, monkeypatch
+) -> None:
+    """Acceptance (2): the SAME corpus with the trajectory case's label left `pending`.
+
+    A `pending` label carries no human ground truth, so the trajectory FAIL is excluded from
+    the matrix (the label-trap guard); with the per-turn TN the only decided case, `tp+fp ==
+    0` and precision is `None` — the `_ratio` zero-denominator contract, never a fabricated
+    1.00. Mirrors `test_zero_denominator_recall_is_na_never_one`'s assertion style.
+    """
+    trace_path, corpus_dir = _mint_trajectory_fail(tmp_path, monkeypatch)
+    stem = trace_path.stem
+    trajectory_case_dir = corpus_dir / f"{stem}-trajectory"
+    assert trajectory_case_dir.is_dir()
+
+    _mint_clean_per_turn_case(corpus_dir, trace_path)
+    set_label(corpus_dir, f"{stem}-turn0", "false-positive")
+
+    m = score(
+        [
+            load_case(trajectory_case_dir),
+            load_case(corpus_dir / f"{stem}-turn0"),
+        ]
+    )
+
+    assert (m.tp, m.fp, m.fn, m.tn) == (0, 0, 0, 1)
+    assert m.pending == 1
+    assert m.precision is None
+    assert m.precision != 1.0
+    assert m.recall is None
+    assert m.recall != 1.0
+    # The one decided case keeps coverage real — only the P/R denominator is empty.
+    assert m.coverage == 1.0
+    assert m.coverage is not None
+
+
+def test_unrestorable_prestate_trajectory_fail_stays_unbankable(
+    tmp_path, monkeypatch
+) -> None:
+    """Acceptance (3): an unrestorable-pre-state trajectory FAIL refuses to bank, fail-closed.
+
+    The final turn's `state_handle` is `absent`, so `add_case`'s pre-state check — which runs
+    BEFORE the collision check — refuses the trajectory case. No case is banked, the failure
+    is bucketed in `trajectory_unaddable` with the NAMED pre-state cause (never "already
+    exists"), the disposition stays `VERIFIED_FLAGGED`, and the instance remains in
+    `violation_denominator()`.
+    """
+    _stub_replay(monkeypatch, is_error=False)
+    trace_path = _write_gated_trace(
+        tmp_path / "traces", "edit_file", 2, {"path": "/repo/src/a.py"},
+        offered=("run_process",),
+    )
+    append_claim_record(trace_path, text="all tests pass")
+    _make_final_handle_absent(trace_path)
+
+    ledger = _ingest_run(trace_path, tmp_path, invariants=[TRAJECTORY])
+    inst = ledger.instances[0]
+
+    # The verdict is unchanged: still a trajectory FAIL — the handle never feeds the rule.
+    assert inst.trajectory == {"status": "FAIL", "cause": None, "evidence_count": 0}
+    assert inst.flagged_turns == []
+    assert inst.trajectory_addable is False
+    assert inst.trajectory_unaddable is not None
+    cause = inst.trajectory_unaddable["cause"]
+    assert "no restorable pre-state" in cause, cause
+    assert "absent" in cause, cause
+    assert "already exists" not in cause, cause
+
+    assert inst.disposition is Disposition.VERIFIED_FLAGGED
+    assert inst.error is None
+    assert ledger.violation_denominator() == 1
+    assert ledger.violating_instances() == 1
+    assert ledger.errored_count() == 0
+
+    corpus_dir = tmp_path / "corpus"
+    assert not corpus_dir.exists() or list(corpus_dir.iterdir()) == []
