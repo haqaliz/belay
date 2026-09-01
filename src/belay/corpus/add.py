@@ -119,15 +119,26 @@ _TASK_PRESTATE_DIRNAME = "task_prestate"
 _TASK_MANIFEST_FILENAME = "task_manifest.json"
 
 
-def _safe_case_id(source_trace_id: str, target_turn_index: int) -> str:
+def _safe_case_id(
+    source_trace_id: str, target_turn_index: int, *, trajectory: bool = False
+) -> str:
     """A deterministic, filesystem-safe case dir name from the trace id and turn index.
 
     Derived, never random: the same turn always yields the same case id, so a
     re-compose is idempotent rather than a fresh uuid every time. Any character that is not
     alphanumeric / `-` / `_` / `.` is replaced with `_`, so an awkward trace stem cannot
     escape the corpus dir or name an unwriteable path.
+
+    A `trajectory` case is INSTANCE-level — it targets the final turn, but the FAIL is the
+    whole trajectory — so its id lives in a namespace disjoint from per-turn `-turnN` (turn
+    indices are integers, so `trajectory` can never collide with one). Same derivation, same
+    sanitization.
     """
-    base = f"{source_trace_id}-turn{target_turn_index}"
+    base = (
+        f"{source_trace_id}-trajectory"
+        if trajectory
+        else f"{source_trace_id}-turn{target_turn_index}"
+    )
     return "".join(c if (c.isalnum() or c in "-_.") else "_" for c in base)
 
 
@@ -313,7 +324,9 @@ def add_case(
             f"{manifest_dir}; the pre-state cannot be bundled into a self-contained case"
         )
 
-    case_id = _safe_case_id(source_trace_id, target_turn_index)
+    case_id = _safe_case_id(
+        source_trace_id, target_turn_index, trajectory=trajectory is not None
+    )
     case_dir = Path(corpus_dir) / case_id
     # Collision is decided BEFORE the first write. `trace.jsonl` opens in `"w"` mode below,
     # which used to truncate an existing case's trace on the way to failing in `copytree`.

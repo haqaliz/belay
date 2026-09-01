@@ -140,3 +140,10 @@ per-turn A2 seam artifacts (unlabeled, `pending`). The corpus remains a regressi
 suite (182 MATCH) and its precision/recall read `n/a` — a zero denominator, not a
 1.00. The trajectory-case id-collision is a follow-up defect to fix before any
 future mint trusts `phase0 run`'s trajectory ingest.
+
+**Closed 2026-09-01 (v0.26.0, `corpus-trajectory-banking`):** trajectory case ids
+now mint as `f"{source_trace_id}-trajectory"` — an instance-level namespace, disjoint
+from the per-turn `-turnN` cases by construction — so both shapes bank and recompute
+MATCH. The historical finding above stands verbatim: zero of the 23 banked, because
+the s6 captures no longer exist on disk. **Nothing was backfilled** — the 11 TPs were
+never re-banked, and the fix's value is forward-looking.

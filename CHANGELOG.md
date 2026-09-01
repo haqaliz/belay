@@ -5,6 +5,59 @@ All notable changes to Belay are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0 — until then,
 `0.x` minor bumps may include changes that would be breaking under strict semver.
 
+## [0.26.0] - 2026-09-01
+
+The failure corpus can now hold the trajectory axis — the axis that earned the Phase-0
+number. Trajectory FAILs bank as corpus cases minted `f"{source_trace_id}-trajectory"` — an
+**instance-level** namespace, disjoint from the per-turn `-turnN` cases by construction
+(turn indices are integers). The shape that previously could never bank now does: an
+instance whose **final turn** also carries a per-turn FAIL ingests **both** cases in one
+verify pass, and `belay corpus run` recomputes both as MATCH. The old namespace targeted
+the final turn's id, collided with the final turn's per-turn case, and the guard refused —
+correctly — which is why zero of the shell-toolset mint's 23 trajectory FAILs banked and
+`belay corpus score` read `n/a` on the axis that matters most.
+
+### Added
+
+- **Disjoint trajectory case ids** (`src/belay/corpus/add.py`) — the id minting is
+  shape-aware: trajectory cases mint `f"{source_trace_id}-trajectory"`, derived and
+  deterministic, never random. Per-turn ids are byte-identical; no schema bump (case v4
+  already declares `trajectory`; the id is an implementation detail of the corpus dir
+  name).
+- **Final-turn coexistence** — trajectory FAIL + final-turn per-turn FAIL on one instance
+  banks both cases in the same `_verify_one_trace` invocation (the per-turn loop runs
+  first, the trajectory block second, and the second does not collide).
+- **Score denominators proven real** — with `score()` unchanged, a labeled trajectory case
+  (expected FAIL, human label true-positive) counts into precision/recall with a real
+  denominator, proven end-to-end by test in a mixed per-turn + trajectory corpus.
+
+### Unchanged, and pinned
+
+- **Unrestorable pre-state stays unbankable.** A trajectory FAIL naming an unrestorable
+  pre-state is refused with the named pre-state cause (the pre-state check runs before the
+  collision check — ordering unchanged), and the instance keeps its real disposition and
+  its place in the violation denominator.
+- **Idempotent re-run refusal.** Re-running the same verify refuses both shapes with
+  `CaseExistsError` ("already exists"); for the trajectory shape the rerun refusal
+  preserves the stored case byte-identically, including a human label. No `--overwrite`
+  anywhere.
+
+### Honesty notes — read before quoting anything
+
+- **No historical case was backfilled.** The shell-toolset mint's 11 hand-audited TPs were
+  never re-banked — the s6 captures no longer exist on disk — so `corpus score` still
+  reads `n/a` until a future mint runs under the fixed ingest. The value is
+  **forward-looking**, stated plainly.
+- **Reclassification discipline holds.** `11/60 = 18.3%`, the 11 hand-audited TPs,
+  `precision 0.00`, `1/15` and `4/16` stand unedited. No verdict axis, status, or
+  Phase-0 number moves.
+
+### Not built, and named
+
+`belay corpus run --shell-server` remains unexposed (library seam exists); standalone
+`belay corpus add` trajectory support and any change to per-turn recompute are out of
+scope; no verdict-axis or schema change (no v5).
+
 ## [0.25.0] - 2026-08-29
 
 `belay verify` no longer emits a confident **FAIL** on a turn it never verified. A replay

@@ -328,7 +328,7 @@ def _ingest_trajectory_fail(tmp_path: Path) -> Path:
         ingester=add_case,
         ingest=True,
     )
-    return tmp_path / "corpus" / f"{trace_path.stem}-turn1"
+    return tmp_path / "corpus" / f"{trace_path.stem}-trajectory"
 
 
 # --- (1) an ingested trajectory-FAIL case re-runs to MATCH ------------------------------
