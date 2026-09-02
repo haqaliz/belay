@@ -227,7 +227,8 @@ def test_trajectory_fail_ingests_a_corrupt_success_case(tmp_path, monkeypatch) -
     assert case.invariants == [{"scope": "", "rule": RULE_SUITE_BEFORE_SUCCESS_CLAIM}]
     # The target turn is the instance's FINAL turn.
     assert case.target_turn_index == 1
-    assert case.schema_version == 4
+    # The literal tracks CASE_SCHEMA_VERSION (v5 since claim-re-derivation).
+    assert case.schema_version == 5
     assert case.provenance == {"source_trace_id": stem, "captured_at": CAPTURED_AT}
 
     # The stored trace carries the whole trajectory, including the claim record the

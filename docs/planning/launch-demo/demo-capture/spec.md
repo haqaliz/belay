@@ -211,6 +211,14 @@ claimed for this repo).
   the negative control + the number, not a corrupt-success show.
 - No further model spend; the 2026-08-26/-27 drive caps are closed as recorded.
 
+> **Cross-reference, 2026-09-02 (decision D1, `docs/planning/claim-re-derivation-a3/`):**
+> C8 acceptance 4 was written against the pre-amendment demo (a corrupt success) and is
+> re-scoped against THIS negative control: the committed capture stays all-green **with
+> A3 present** (the suite check exits 0 → silence, never a verdict), and the corrupt
+> success the demo could not produce is carried by a synthetic fixture
+> (`tests/test_a3_corrupt_success_fixture.py`) where A3 FAILs, corroborating A1
+> trajectory FAIL on the same fixture.
+
 ## Out of scope
 
 - The gif (A3), the console container API fix (A2), Langfuse (deferred), A3 claim axis.

@@ -796,8 +796,15 @@ without invalidating the launch.
 - A property test asserts A3 **cannot** produce PASS for any input (exhaustive over the status
   enum).
 - A synthesized check that fails to execute yields UNVERIFIED, never a guess.
-- The launch demo: "all tests pass" re-derived against the **original** suite yields exit 1 →
-  FAIL, corroborating the A1 verdict on the same run from an independent axis.
+- **The demo stays green with A3 present; the corrupt-success FAIL is carried by the
+  synthetic fixture** (acceptance 4, re-scoped **2026-09-02**, decision D1 — the launch
+  demo shipped as the negative control, Amendment 2026-08-27): the committed demo
+  capture re-derives "all tests pass" against the materialized final state and A3 is
+  **silent** by design (D3 — a check exiting 0 is never a PASS, it is no verdict);
+  the synthetic corrupt-success fixture (`tests/test_a3_corrupt_success_fixture.py` —
+  claim VERIFICATION, command tool offered but never used, suite fails at the final
+  state) yields **A3 FAIL (exit 1) corroborating A1 trajectory FAIL on the same
+  fixture** from an independent axis.
 - Model calls are behind an injectable seam and **never run in CI** (fake injected; a manual
   gate covers the live path).
 

@@ -109,10 +109,14 @@ def set_label(
 
     effective_miss = recorded_miss if recorded_miss is not None else case.recorded_miss
     if effective_miss is not None:
-        # Same validator the loader uses, including the FAIL-contradiction check, so a bad
+        # Same validator the loader uses, including the FAIL-contradiction check (on the
+        # per-turn reduced status AND the instance-level claim status), so a bad
         # declaration is rejected here rather than becoming an unloadable case.
         _validate_recorded_miss(
-            effective_miss, case_dir / "case.json", case.expected["reduced_status"]
+            effective_miss,
+            case_dir / "case.json",
+            case.expected["reduced_status"],
+            claim_status=case.claim["status"] if case.claim else None,
         )
 
     # A NEWLY introduced declaration carries the version bump with it. `replace` preserves

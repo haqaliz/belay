@@ -507,7 +507,12 @@ def test_cli_prints_the_instance_level_fail_line_at_close(tmp_path, monkeypatch,
     assert rc == 0, out  # turns are all PASS — the exit code stays turn-based
     assert "suite-before-success-claim" in out, out
     assert "0 evidence turn(s)" in out, out
-    assert "never PASS" not in out, out
+    # The FAIL line must not be joined by the abstention line. Asserted on the
+    # abstention's exact shape (`UNVERIFIED [` is the trajectory/claim abstain
+    # rendering and nothing else in the report) rather than the bare phrase "never
+    # PASS", which the coverage block now legitimately carries in its A3 clause —
+    # the A3 coverage text (C8) names the axis's honesty contract in words.
+    assert "UNVERIFIED [" not in out, out
 
 
 def test_cli_prints_the_abstain_line_without_a_claim(tmp_path, monkeypatch, capsys):

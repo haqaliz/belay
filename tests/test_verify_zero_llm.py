@@ -24,6 +24,14 @@ FAIL naming that line, then reverted — because a guard nobody has watched fail
 guard that might be passing vacuously. The non-vacuity control below (`_modules`
 must find files, and the guard must actually see the imports those files do make)
 keeps it from silently scanning nothing.
+
+**The A3 carve-out is a property of construction, not an exemption.** A3 (C8) is
+live: its author seam (`claims.py`, `author.py`) shells out to the user's own
+command (`BELAY_CLAIM_AUTHOR` / `--claim-author`) — stdlib `subprocess` only, no
+inference SDK, no model client, nothing that could import one — and the check's
+EXECUTION decides the verdict. The scan therefore stays green for the seam without
+a single line of the guard being relaxed; the amended failure note says so in
+words. That is the deliberate, visible decision the note promises.
 """
 
 from __future__ import annotations
@@ -146,10 +154,14 @@ def test_no_module_in_the_verify_layer_imports_an_inference_client() -> None:
         " what was claimed. No model is consulted, and that is the entire answer to"
         " \"isn't this an LLM judge with extra steps?\". A model SDK in the verdict path"
         " turns the grounded verdict into a judge's guess — the up-to-35%-false-positive"
-        " failure mode the project exists to replace. If verification ever legitimately"
-        " needs a model (A3 claim re-derivation, C8), it does so where EXECUTION still"
-        " decides the verdict, behind `--no-claim-axis`, and this guard is updated as a"
-        " deliberate, visible decision — never sidestepped."
+        " failure mode the project exists to replace.\n"
+        "A3 (C8) IS LIVE, and the guard is deliberately NOT widened for it: the A3"
+        " claim author is out-of-process BY CONSTRUCTION — BELAY_CLAIM_AUTHOR /"
+        " --claim-author names the user's OWN command, invoked via subprocess only"
+        " (the check's EXECUTION decides the verdict, and the axis is disabled with"
+        " --no-claim-axis), so the AST scan stays green without exempting anything."
+        " An SDK imported INTO the verdict path is still the failure this guard"
+        " exists to catch — never sidestepped."
     )
 
 

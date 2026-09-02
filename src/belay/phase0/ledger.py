@@ -182,6 +182,23 @@ class InstanceRecord:
     #: failed (a corpus collision on re-run, a missing pre-state) must be a bucketed fact,
     #: never an exception that errors the whole instance and shrinks the denominator.
     trajectory_unaddable: Optional[dict] = None
+    #: The instance-level A3 claim verdict (`claim re-derivation`), held as a serialized
+    #: summary `{"status": <name>, "cause": <named abstain or None>, "check": {"source":
+    #: <str>, "exit_code": <int or None>}}` — the check's source and its OBSERVED exit
+    #: code are the artifacts A3 surfaces. `None` — UNRECORDED — whenever the axis
+    #: produced no verdict (no claim author configured for the run, the axis disabled,
+    #: or D3 silence: the check exited 0), following `trajectory`'s absent-never-zero
+    #: pattern exactly: an absent `claim` means NO A3 verdict was recorded at all, and
+    #: must never be read as (or rendered as) "the claim was clean". Serialized
+    #: additively (`_instance_to_json` omits the key when `None`), so old ledgers
+    #: re-render byte-identically.
+    claim: Optional[dict] = None
+    #: Whether the A3 claim FAIL (if any) was ingested as a corpus case. The same
+    #: `trajectory_addable` conflation and the same additive serialization.
+    claim_addable: bool = False
+    #: Why the A3 claim FAIL could not be ingested as a corpus case, shape `{"cause":
+    #: <str>}` — the same bucketed-fact discipline as `trajectory_unaddable`.
+    claim_unaddable: Optional[dict] = None
 
 
 @dataclass(frozen=True)
@@ -256,6 +273,8 @@ def _instance_to_json(inst: InstanceRecord) -> dict:
     re-render for no information gained, and would put a `null` where the honest answer is
     that the key never existed. `"trajectory"` follows the identical rule: an unrecorded
     instance-level verdict stays absent, never `null` and never a fabricated clean.
+    `"claim"` follows `trajectory` exactly — the A3 instance-level verdict, absent
+    when unrecorded for the identical reason.
     """
     payload: dict[str, object] = {
         "trace_id": inst.trace_id,
@@ -276,6 +295,12 @@ def _instance_to_json(inst: InstanceRecord) -> dict:
         payload["trajectory_addable"] = True
     if inst.trajectory_unaddable is not None:
         payload["trajectory_unaddable"] = dict(inst.trajectory_unaddable)
+    if inst.claim is not None:
+        payload["claim"] = dict(inst.claim)
+    if inst.claim_addable:
+        payload["claim_addable"] = True
+    if inst.claim_unaddable is not None:
+        payload["claim_unaddable"] = dict(inst.claim_unaddable)
     return payload
 
 
@@ -364,6 +389,19 @@ def _instance_from_json(raw: object) -> InstanceRecord:
             dict(raw["trajectory_unaddable"])
             if isinstance(raw.get("trajectory_unaddable"), dict)
             else raw.get("trajectory_unaddable")
+        ),
+        # `claim` / `claim_addable` / `claim_unaddable` follow the identical additive
+        # pattern: absent keys resolve to the dataclass defaults (`None` / `False` /
+        # `None`), so every ledger written before the A3 field exists loads unchanged —
+        # an absent `claim` is "no A3 verdict was recorded", never a fabricated clean.
+        claim=(
+            dict(raw["claim"]) if isinstance(raw.get("claim"), dict) else raw.get("claim")
+        ),
+        claim_addable=bool(raw.get("claim_addable", False)),
+        claim_unaddable=(
+            dict(raw["claim_unaddable"])
+            if isinstance(raw.get("claim_unaddable"), dict)
+            else raw.get("claim_unaddable")
         ),
     )
 

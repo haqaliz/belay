@@ -292,11 +292,20 @@ green on both in CI); no Docker image yet (L3), not published to PyPI (L4).
 
 ## Block D — Optional, only after A–C are done
 
-### ☐ L8 · C8 claim re-derivation (A3) — **cuttable, do not start early**
+### ✅ L8 · C8 claim re-derivation (A3) — **cuttable, do not start early**
 
 - **DONE =** C8 ships with A3 subordinated, `--no-claim-axis` refutation enforced by
   test, and every PASS/FAIL surviving unchanged. If the calendar slips, this is what
   slips — never Block A or B.
+- **Marked DONE 2026-09-02** — C8 shipped: A3 is subordinated (downgrade-only; a
+  WARN/FAIL/UNVERIFIED axis gated behind `--no-claim-axis` on `verify`, `phase0 run`
+  and `corpus run`, absent-never-zero on every surface), and the refutation is
+  enforced by `tests/test_refutation_no_claim_axis.py` ("this test is the company's
+  positioning encoded as CI — it must never be weakened"): a corpus holding per-turn,
+  trajectory and a banked claim case runs with and without the flag — every PASS and
+  every FAIL verdict identical, the claim case SKIPs `CLAIM_AXIS_DISABLED` (never
+  REGRESSION) — and the committed demo capture verifies to the same document with
+  the axis live (D3 silence) and off.
 
 ---
 
@@ -323,7 +332,9 @@ green on both in CI); no Docker image yet (L3), not published to PyPI (L4).
       whether to record a second gif of a run that FAILs, from the mint's banked —
       and therefore not reader-reproducible — captures). Box stays ☐ until those are
       answered.
-- [ ] **L8** — optional; absence of A3 is not a blocker, by design.
+- [x] **L8** — C8 ships (2026-09-02): A3 subordinated, `--no-claim-axis` refutation
+      enforced by `tests/test_refutation_no_claim_axis.py`, every PASS/FAIL surviving
+      unchanged.
 
 **If any item is still ☐, the launch date is not set — the item list is.** The last
 check is "the gate is true," which is checkable, not a feeling.
@@ -334,6 +345,7 @@ check is "the gate is true," which is checkable, not a feeling.
 
 | Date | belay-next pick | L-item | Outcome / commit |
 |------|-----------------|--------|------------------|
+| 2026-09-02 | `claim-re-derivation-a3` | L8 | ✅ DONE. C8 — the last C-capability — ships on `feat/claim-re-derivation-a3/aliz` (v0.27.0, PR pending). Aspects `evaluator` (the A3 engine: claim record → closed classifier gate → final state via final-turn replay → check under `contained`, network deny-all; exit code decides; exit 0 is silence D3; closed causes `NO_CLAIM_RECORDED`/`CLAIM_UNCLASSIFIABLE`/`NO_CHECK_AUTHOR`/`CHECK_DID_NOT_EXECUTE`/`FINAL_STATE_UNOBSERVABLE`; property test — A3 can never emit PASS), `author` (out-of-process BYOK: `BELAY_CLAIM_AUTHOR` / `--claim-author`, JSON-in/JSON-out, zero new deps, nothing leaves the box; live path is a manual gate), `demo-acceptance` (acceptance-4 re-scope D1: the demo capture stays all-green WITH A3 present — silence; a synthetic corrupt-success fixture FAILs on A3 and A1-trajectory from independent axes, A2 never FAILs on it), `corpus` (case schema v5 `claim` expected field, `{trace}-claim` namespace, recompute on the A3 dimension, `CLAIM_AXIS_DISABLED` SKIP never REGRESSION), `surfaces` (`--no-claim-axis` on verify/phase0/corpus + parity guard; text A3 line + JSON `claim_record` absent-key; `A3/...` canonical causes; phase0 A3 FAIL → `VERIFIED_FLAGGED` + banks intent-drift cases; ledger/report absent-never-zero; zero-LLM guard amended deliberately; **the refutation test** — corpus PASS/FAIL identical with and without the flag, "must never be weakened"). **Honesty notes:** A3 is dark by default (no author → absent, named on the coverage line); no real intent-drift case exists yet — the fixture is synthetic, the mint's next run fills the A3 column; `11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16` stand unedited; `verdict.reduce` untouched. 2062 → 2091 tests. |
 | 2026-09-01 | `corpus-trajectory-banking` | Block 0 | ✅ DONE. C6 follow-on, not a checklist item: the recorded mint defect — `phase0 run`'s trajectory ingest minted the same `trace-<instance>-turnN` id as the final turn's per-turn case, the guard refused (correctly), and zero of the shell-toolset mint's 23 trajectory FAILs (incl. all 11 hand-audited TPs) banked, so `corpus score` read `n/a` on the axis that earned the 18.3%. Merged as PR #27 (`6540942`); v0.26.0 released. Shipped as aspects `case-id-namespace` (trajectory cases mint `trace-<instance>-trajectory` — instance-level namespace, disjoint from `-turnN` by construction; one minting site in `add.py`, per-turn ids byte-identical, no schema change; RED-first: the defect shape — final-turn FAIL + trajectory FAIL — now banks both cases and recomputes MATCH), `score-denominator-proof` (labeled trajectory cases score with real denominators, `score()` unchanged; unrestorable pre-state stays unbankable fail-closed), `record-corrections` (corpus-trajectory spec corrected, AUDIT follow-up closed, STATUS.md entry, PHASE0_RESULTS pointer per its own policy). **Reclassification discipline:** `11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16` stand unedited; nothing backfilled (s6 captures gone) — the value is forward-looking: the next mint's trajectory FAILs bank. 1957 → 1961 tests. |
 | 2026-08-29 | `verify-tool-not-offered` | Block 0 | ✅ DONE. A2 correctness fix, not a checklist item: `belay verify` emitted a confident **FAIL** on a turn it never verified — a replay boundary that does not offer the recorded tool answers readably and identically, so DIVERGED + DETERMINISTIC scored a deterministic failure of a call that genuinely succeeded. Reproduced on the committed demo capture and fixed there (`"FAIL": 1` → `"UNVERIFIED": 1`, cause `replayed but the boundary does not offer the tool`, ~146 ms → ~69 ms). Shipped as aspects `boundary-probe` (the tools/list probe, positive evidence only, three-way fail-closed; both A2 sub-verdicts gated), `cause-and-surfaces` (three named causes on every surface incl. C9 and the console), `verify-shell-server` (the `--shell-server` parity `phase0 run` has had since `9138cea`, plus a flag-parity guard — this defect class had happened twice), `incidental-findings` (corpus recompute routing; a broadcast JSON-RPC id evicting its twin in `index.py`). **Reclassification, not improved detection** — UNVERIFIED rises by design (R7); `11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16` stand unedited; the mint's 171 FAILs are historical and were NOT recomputed (the s6 captures no longer exist). A2 kept its teeth: 6 anti-overreach tests written before the abstention path, untouched, all 6 failing under an over-broad discriminator. 1851 → 1957 tests. |
 | 2026-08-25 | `live-console` | L6 | ✅ DONE. Merged as PR #24 (`3c326b9`); v0.23.0 released. Aspects `console-app` (SPA: live run feed, per-turn verdicts, honesty contract — UNVERIFIED never PASS, coverage line on every surface, 77 offline tests), `verify-json` (the `--json` engine seam, pinned machine contract, text byte-identical), `compose-healthcheck` (the console as a compose service: built from this checkout, loopback `8080:8080`, `healthcheck` on `/health`, engine wheel bundled in-image, shares the engine's `/workspace` mount; the flipped `test_the_console_service_ships_with_a_healthcheck` regression-guards it; the image-build + /health test caught one CI-only defect on the pinned Linux runner — compact-JSON substring — fixed before merge). L7 (the launch demo) is the next launch-surface item and uses this console. |

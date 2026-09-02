@@ -208,13 +208,13 @@ def test_declaration_is_not_a_required_field(tmp_path: Path) -> None:
     assert loaded.schema_version == 2
 
 
-def test_schema_version_is_four_and_absent_still_means_one(tmp_path: Path) -> None:
+def test_schema_version_is_five_and_absent_still_means_one(tmp_path: Path) -> None:
     """The version bump, and the unversioned-means-1 precedent it must not disturb."""
-    assert CASE_SCHEMA_VERSION == 4
+    assert CASE_SCHEMA_VERSION == 5
 
     case = _full_case()
     write_case(tmp_path, case)
-    assert load_case(tmp_path).schema_version == 4
+    assert load_case(tmp_path).schema_version == 5
 
     data = json.loads((tmp_path / "case.json").read_text(encoding="utf-8"))
     del data["schema_version"]
@@ -748,7 +748,7 @@ def test_corpus_run_reports_the_two_new_outcomes_and_exits_zero(
     (tmp_path / "corpus").mkdir()
     monkeypatch.setattr(
         "belay.corpus.run.run_corpus",
-        lambda _dir: CorpusRun(
+        lambda _dir, *, disable_claim_axis=False: CorpusRun(
             results=[
                 CaseResult(case_id="trace-pytest-dev__pytest-5227-turn11", outcome=STILL_MISSED),
                 CaseResult(
@@ -793,7 +793,7 @@ def test_the_clean_exit_line_says_a_miss_is_still_open(
     (tmp_path / "corpus").mkdir()
     monkeypatch.setattr(
         "belay.corpus.run.run_corpus",
-        lambda _dir: CorpusRun(
+        lambda _dir, *, disable_claim_axis=False: CorpusRun(
             results=[
                 CaseResult(case_id="kept", outcome=MATCH),
                 CaseResult(case_id="open-miss", outcome=STILL_MISSED),
@@ -837,7 +837,7 @@ def test_a_green_run_can_contain_a_miss_that_is_no_longer_missed(
     )
     assert run.has_regression is False, "the exit contract is REGRESSION-only"
     assert run.still_missed == 0, "the declared case's miss CLOSED; nothing is still missed"
-    monkeypatch.setattr("belay.corpus.run.run_corpus", lambda _dir: run)
+    monkeypatch.setattr("belay.corpus.run.run_corpus", lambda _dir, *, disable_claim_axis=False: run)
 
     assert cli.main(["corpus", "run", str(tmp_path / "corpus")]) == 0
     out = capsys.readouterr().out
@@ -882,7 +882,7 @@ def test_an_unrecognised_outcome_is_never_rendered_as_a_match(
     (tmp_path / "corpus").mkdir()
     monkeypatch.setattr(
         "belay.corpus.run.run_corpus",
-        lambda _dir: CorpusRun(
+        lambda _dir, *, disable_claim_axis=False: CorpusRun(
             results=[CaseResult(case_id="from-the-future", outcome="NOT_YET_INVENTED")]
         ),
     )

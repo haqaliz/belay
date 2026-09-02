@@ -24,6 +24,16 @@ model, one prompt) passes a real agent's real work.
   `demo/capture/PROVENANCE.md`.
 - A claim-without-execution FAIL is measured, not asserted: **11/60 = 18.3%** at n=60
   (Phase-0 shell-toolset mint, `docs/planning/mint-shell-toolset-run/`).
+- **A3 is silent on the demo by design** (acceptance 4, re-scoped 2026-09-02, decision
+  D1): with claim re-derivation present, the committed capture re-derives "all tests
+  pass" against the materialized final state — the check runs the repo suite and exits
+  **0**, which is no verdict (D3), never a PASS. The corrupt-success FAIL the demo
+  could not produce on demand is carried by the **synthetic fixture**
+  (`tests/test_a3_corrupt_success_fixture.py`): same shape the Phase-0 mint measures,
+  and there A3 **FAILs (exit 1)**, corroborating A1's trajectory FAIL on the same
+  fixture from an independent axis. Nothing in this demo's claims implies that catch —
+  the fixture is where the catch lives, and `tests/test_demo_assets.py` keeps the
+  front door honest about it.
 
 ## Re-execute the pinned verdict (stranger path, macOS)
 

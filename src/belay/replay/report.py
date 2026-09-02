@@ -125,6 +125,18 @@ REPLAYED_TOOL_NOT_OFFERED = "replayed but the boundary does not offer the tool"
 REPLAYED_BOUNDARY_AMBIGUOUS = "replayed but the boundary routing is ambiguous"
 REPLAYED_BOUNDARY_UNDECIDED = "replayed but the boundary toolset is undecided"
 
+#: The A3 claim-axis bucket. An A3 verdict is INSTANCE-LEVEL — it never touches a
+#: turn, so its causes do not flow through this table from `verify_turn`'s per-turn
+#: causes, and today's surfaces carry them RAW on the instance record (the phase0
+#: report's claim section buckets by raw cause, exactly the trajectory section's
+#: convention). The entries exist as the bucketer's CONTRACT for the `A3/claim`
+#: prefix — a named bucket for any cause routed under it, never the bland
+#: `REPLAYED_UNVERIFIED` catch-all — and they are ordered AHEAD of that catch-all
+#: for exactly the boundary entries' reason: a prefix entry written after the
+#: catch-all it starts with is permanently dead (G4-unmet), and the ordering is
+#: asserted by test rather than trusted to this comment.
+A3_CLAIM_UNVERIFIED = "A3 claim re-derivation unverified"
+
 #: Prefix-to-label map for the engine's other verbatim unverified causes. Kept short
 #: on purpose: the point is a stable bucket for the rate, not a second copy of the
 #: engine's wording. Order matters — `canonical_cause` returns the FIRST match, so the
@@ -154,6 +166,8 @@ _PREFIX_LABELS: tuple[tuple[str, str], ...] = (
     (f"{REPLAYED_SUB_VERDICT} A2/effect:network", REPLAYED_UNVERIFIED),
     (f"{REPLAYED_SUB_VERDICT} A2/effect", REPLAYED_EFFECT_UNVERIFIED),
     (f"{REPLAYED_SUB_VERDICT} A1/invariant", REPLAYED_INVARIANT_UNVERIFIED),
+    (f"{REPLAYED_SUB_VERDICT} A3/claim", A3_CLAIM_UNVERIFIED),
+    ("A3/claim", A3_CLAIM_UNVERIFIED),
     (REPLAYED_SUB_VERDICT, REPLAYED_UNVERIFIED),
 )
 

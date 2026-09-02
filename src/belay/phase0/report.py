@@ -321,6 +321,86 @@ def _trajectory_line(inst) -> str:
     return f"  {inst.trace_id}: trajectory UNVERIFIED [{named}] — never PASS"
 
 
+#: What an instance WITHOUT a claim verdict must SAY. `claim is None` means the A3 axis
+#: produced no verdict for the run — no claim author was configured, the axis was
+#: disabled, the check exited 0 (D3 silence), or the ledger predates the field — NOT
+#: that the claim was clean. The word "unrecorded" and the "NOT a claim" disclaimer
+#: are the load-bearing half, exactly as in `_TRAJECTORY_UNRECORDED_SENTENCE`.
+_CLAIM_UNRECORDED_SENTENCE = (
+    "claim unrecorded — no A3 verdict was recorded here (no claim author was "
+    "configured for this run, the claim axis was disabled, or this ledger predates "
+    "the field); this is NOT a claim that the intent drift was clean"
+)
+
+
+def _claim_line(inst) -> str:
+    """One instance's claim sentence — FAIL / UNVERIFIED-with-cause / unrecorded, never blank.
+
+    Built from the SERIALIZED summary only (`status`, `cause`, `check`): `belay phase0
+    report` is a pure re-render of the ledger and never re-reads a trace, so this says
+    exactly what the ledger holds and no more. FAIL names the check source and the
+    OBSERVED exit code (the artifacts A3 surfaces) and the disposition the verdict
+    produced; UNVERIFIED names its cause and says never PASS. There is no PASS
+    sentence: A3 never emits PASS, so no branch for it exists.
+    """
+    if inst.claim is None:
+        return f"  {inst.trace_id}: {_CLAIM_UNRECORDED_SENTENCE}"
+    status = inst.claim.get("status")
+    cause = inst.claim.get("cause")
+    check = inst.claim.get("check") or {}
+    if status == "FAIL":
+        return (
+            f"  {inst.trace_id}: claim FAIL — the check {check.get('source')!r} "
+            f"exited {check.get('exit_code')}; this instance is VERIFIED_FLAGGED"
+        )
+    named = cause if cause is not None else "unrecorded"
+    return f"  {inst.trace_id}: claim UNVERIFIED [{named}] — never PASS"
+
+
+def _claim_section(ledger: RunLedger) -> list[str]:
+    """The instance-level A3 verdict (claim re-derivation), per instance.
+
+    Placed OUTSIDE the `instrument_suspect` branch in `render_report`, directly after
+    the trajectory section and under the identical discipline: a claim line is a limit
+    statement about what the axis judged, not a rate, and the headline being
+    suppressed must not suppress it. Every instance is named on its own line, sorted
+    by `trace_id` for determinism — an instance whose claim abstained is as important
+    to be able to check by name as one that FAILed.
+
+    Ends with the should-have aggregate over the verdict-carrying instances only:
+    FAIL / UNVERIFIED counts, with the UNVERIFIED causes named beside them. There is
+    no PASS count: A3 never emits PASS, so the aggregate has no PASS line. An instance
+    without a verdict contributes nothing to the aggregate — its absence is rendered,
+    never counted.
+    """
+    lines = [
+        "claim (A3 — claim re-derivation: a model wrote an executable check, "
+        "EXECUTION decided; a FAIL here marks the instance VERIFIED_FLAGGED):"
+    ]
+    if not ledger.instances:
+        lines.append("  (no instances in this ledger)")
+        return lines
+    for inst in sorted(ledger.instances, key=lambda inst: inst.trace_id):
+        lines.append(_claim_line(inst))
+    carried = [inst.claim for inst in ledger.instances if inst.claim is not None]
+    if not carried:
+        return lines
+    fails = sum(1 for c in carried if c.get("status") == "FAIL")
+    unverified = len(carried) - fails
+    by_cause: dict[str, int] = {}
+    for c in carried:
+        cause = c.get("cause")
+        if cause is not None:
+            by_cause[cause] = by_cause.get(cause, 0) + 1
+    cause_note = ""
+    if by_cause:
+        cause_note = " (by cause: " + ", ".join(
+            f"{cause}: {count}" for cause, count in sorted(by_cause.items())
+        ) + ")"
+    lines.append(f"  aggregate: {fails} FAIL / {unverified} UNVERIFIED{cause_note}")
+    return lines
+
+
 def _trajectory_section(ledger: RunLedger) -> list[str]:
     """The instance-level A1 verdict (`suite-before-success-claim`), per instance.
 
@@ -389,10 +469,15 @@ def render_report(ledger: RunLedger, metrics: Metrics) -> str:
        bare silence. Also placed OUTSIDE the `instrument_suspect` branch, for the identical
        reason as 2b: zero exposure is a limit on what the rule was given to judge, not a
        rate, so an instrument-suspect headline must not hide it.
-    2d. THE TRAJECTORY SECTION, one line per instance carrying the instance-level A1
-       verdict (`suite-before-success-claim`) — FAIL / PASS / UNVERIFIED-with-cause /
-       unrecorded — plus the should-have aggregate over the verdict-carrying instances.
-       Also OUTSIDE the `instrument_suspect` branch, for the identical reason as 2b/2c.
+2d. THE TRAJECTORY SECTION, one line per instance carrying the instance-level A1
+        verdict (`suite-before-success-claim`) — FAIL / PASS / UNVERIFIED-with-cause /
+        unrecorded — plus the should-have aggregate over the verdict-carrying instances.
+        Also OUTSIDE the `instrument_suspect` branch, for the identical reason as 2b/2c.
+    2e. THE CLAIM SECTION, one line per instance carrying the instance-level A3
+        verdict (claim re-derivation) — FAIL / UNVERIFIED-with-cause / unrecorded —
+        plus the should-have aggregate (FAIL / UNVERIFIED; there is no PASS line, A3
+        never emits PASS). Also OUTSIDE the `instrument_suspect` branch, for the
+        identical reason as 2b/2c/2d.
     3. Per-turn FAIL rate (`fail_turns()/total_turns()`), same n/a discipline.
     4. UNVERIFIED rate by named cause (`unverified_by_cause()`), one line per bucket,
        plus the overall UNVERIFIED turn share.
@@ -426,6 +511,9 @@ def render_report(ledger: RunLedger, metrics: Metrics) -> str:
     lines.append("")
 
     lines.extend(_trajectory_section(ledger))
+    lines.append("")
+
+    lines.extend(_claim_section(ledger))
     lines.append("")
 
     fail_rate = _ratio(ledger.fail_turns(), ledger.total_turns())
