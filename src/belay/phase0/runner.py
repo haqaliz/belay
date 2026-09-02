@@ -32,6 +32,11 @@ must not die on trace #37; it must SAY #37 broke and keep going.
   verification claim with zero observed command evidence — the corrupt-success shape) ->
   `VERIFIED_FLAGGED`, same bucket as a turn FAIL (PRD decision). A trajectory
   UNVERIFIED abstention never flags.
+- OR the instance-level A3 claim verdict is FAIL (claim re-derivation: the check a model
+  wrote ran in the materialized final state and exited non-zero — intent drift) ->
+  `VERIFIED_FLAGGED`, the same bucket again (C8 PRD decision), and it banks a
+  `{trace}-claim` intent-drift case. An A3 UNVERIFIED abstention never flags, and D3
+  silence (the check exited 0) records no verdict at all.
 - Else, any turn REPLAYED (status PASS or WARN -- a real, decided, non-UNVERIFIED verdict) ->
   `VERIFIED_CLEAN`. One decided turn is a real verification, even alongside UNVERIFIED
   siblings.
@@ -74,6 +79,13 @@ from belay.phase0.ledger import Disposition, InstanceRecord, RunLedger
 from belay.replay.client import DEFAULT_TIMEOUT
 from belay.replay.reader import ReadResult, read_trace
 from belay.replay.report import canonical_cause
+from belay.verify.claims import (
+    Check,
+    CheckAuthor,
+    RecordingAuthor,
+    claim_case,
+    evaluate_claim,
+)
 from belay.verify.invariants import INSTANCE_LEVEL_RULES, Invariant, trajectory_case
 from belay.verify.trajectory import (
     _EVIDENCE_TOOL,
@@ -137,6 +149,8 @@ def run_batch(
     verifier: Callable[..., TurnVerdict] = verify_turn,
     ingester: Callable[..., Path] = add_case,
     ingest: bool = True,
+    disable_claim_axis: bool = False,
+    claim_author: Optional[CheckAuthor] = None,
 ) -> RunLedger:
     """Verify every trace in `trace_dir`, ingest FAILing turns, and return the `RunLedger`.
 
@@ -168,6 +182,12 @@ def run_batch(
     call, so a corpus case stores the command its turn actually replayed against. With
     `None` (the default) the resolved command is always `server_command` and everything
     is byte-for-byte today.
+
+    `disable_claim_axis` / `claim_author` (optional) are the A3 claim-axis seam: the
+    author is injected by the caller (the CLI boundary reads `BELAY_CLAIM_AUTHOR` —
+    this module stays deterministic), and with `disable_claim_axis=True` the axis is
+    OFF for the whole batch: no claim is evaluated, no claim summary is recorded, and
+    no A3 FAIL flags or banks an instance — the refutation's batch surface.
     """
     if (server_command is None) == (server_command_for is None):
         raise TypeError("run_batch requires exactly one of server_command / server_command_for")
@@ -194,6 +214,8 @@ def run_batch(
                 verifier=verifier,
                 ingester=ingester,
                 ingest=ingest,
+                disable_claim_axis=disable_claim_axis,
+                claim_author=claim_author,
             )
         except Exception as exc:  # noqa: BLE001 -- one bad trace must never abort the batch
             instance = InstanceRecord(
@@ -231,13 +253,16 @@ def _verify_one_trace(
     verifier: Callable[..., TurnVerdict],
     ingester: Callable[..., Path],
     ingest: bool = True,
+    disable_claim_axis: bool = False,
+    claim_author: Optional[CheckAuthor] = None,
 ) -> InstanceRecord:
     """One trace file, fully verified: every `tools/call` turn, every FAIL ingested.
 
-    Ingest covers two shapes: the FAILing TURNS (one case each, target = the failing
-    turn) and, when the instance's trajectory verdict is FAIL, ONE instance-level
-    corrupt-success case (target = the final turn, schema-v4 `trajectory` expected) —
-    see the ingest block below.
+    Ingest covers three shapes: the FAILing TURNS (one case each, target = the failing
+    turn), a FAILing INSTANCE-LEVEL trajectory verdict (one corrupt-success case,
+    target = the final turn, schema-v4 `trajectory` expected) and a FAILing
+    INSTANCE-LEVEL A3 claim verdict (one intent-drift case, target = the final turn,
+    schema-v5 `claim` expected) — see the ingest block below.
 
     Raises whatever `read_trace` / `verifier` / `ingester` raise for anything other than the
     ingester's `ValueError` (the one exception this function itself handles, per turn and
@@ -383,10 +408,35 @@ def _verify_one_trace(
         verdicts=verdicts,
     )
 
+    # A3 — the claim re-derivation, at the SAME instance-level site and under the SAME
+    # whole-trace rule as the trajectory seam: one claim, one verdict, decided at
+    # trace close. The axis is ABSENT when no author was configured or
+    # `disable_claim_axis` is set — absent, never UNVERIFIED, never PASS. The author
+    # is wrapped in a recorder so the banked case can carry the EXACT check the
+    # verdict was decided by (its source is what `corpus run` later re-executes).
+    claim = None
+    claim_check = None
+    if not disable_claim_axis and claim_author is not None:
+        recorder = RecordingAuthor(claim_author)
+        claim = evaluate_claim(
+            records=records,
+            skips=read_result.skips,
+            verdicts=verdicts,
+            author=recorder,
+            manifest_dir=manifest_dir,
+            server_command=server_command,
+            shell_server_command=shell_server_command,
+            timeout=timeout,
+            replays=replays,
+        )
+        claim_check = recorder.last_check
+
     flagged_addable: list[int] = []
     flagged_unaddable: list[dict] = []
     trajectory_addable = False
     trajectory_unaddable: Optional[dict] = None
+    claim_addable = False
+    claim_unaddable: Optional[dict] = None
     # `ingest=False` means the corpus is never written, so the ingester is never CALLED --
     # skipping the loop is the whole implementation. The turn buckets therefore stay empty:
     # a turn nobody tried to add is NOT an unaddable turn, and recording it as one would
@@ -498,12 +548,67 @@ def _verify_one_trace(
                     except ValueError as exc:
                         trajectory_unaddable = {"cause": str(exc)}
 
-    # The disposition rule, PRD decision: a trajectory FAIL lands in the SAME bucket as
-    # a turn FAIL — the instance is VERIFIED_FLAGGED and counts in the violation
-    # numerator, whatever its turns said. A trajectory UNVERIFIED (no claim, an
-    # unclassifiable claim, unobservable evidence) never flags — an abstention is not a
-    # violation — so only status FAIL participates here.
-    if flagged_turns or (trajectory is not None and trajectory.get("status") == "FAIL"):
+        # An A3 claim FAIL banks its OWN case too — the intent-drift case, in the
+        # disjoint `{trace}-claim` namespace (schema-v5 `claim` expected, shaped by
+        # `claims.claim_case` with the exact check the verdict was decided by). It
+        # targets the instance's FINAL turn like the trajectory case, and the stored
+        # trace carries the claim record (the reader's skips) so `corpus run` can
+        # re-judge it. A FAILing ingest is a bucketed fact, never an exception (the
+        # same `ValueError` handling as the per-turn and trajectory loops, so a
+        # re-run over an existing case cannot error the instance and shrink the
+        # denominator). An A3 UNVERIFIED abstention or D3 silence ingests nothing.
+        if claim is not None and claim.status is Status.FAIL:
+            final_turn = len(calls) - 1
+            final_tool_name = (
+                verdicts[final_turn].tool_name if final_turn in verdicts else None
+            )
+            claim_records = [
+                *records,
+                *(
+                    skip.record
+                    for skip in read_result.skips
+                    if skip.kind == "claim" and skip.record is not None
+                ),
+            ]
+            claim_verdict = TurnVerdict(
+                turn_index=final_turn,
+                tool_name=final_tool_name,
+                status=Status.FAIL,
+                sub_verdicts=[claim],
+            )
+            try:
+                ingester(
+                    corpus_dir,
+                    records=claim_records,
+                    target_turn_index=final_turn,
+                    verdict=claim_verdict,
+                    manifest_dir=manifest_dir,
+                    server_command=_resolve_server_command(
+                        final_tool_name, server_command, shell_server_command
+                    ),
+                    invariants=list(invariants),
+                    human_label="pending",
+                    replays=replays,
+                    timeout=timeout,
+                    source_trace_id=source_trace_id,
+                    captured_at=captured_at,
+                    claim=claim_case(claim, check=claim_check),
+                )
+                claim_addable = True
+            except ValueError as exc:
+                claim_unaddable = {"cause": str(exc)}
+
+    # The disposition rule, PRD decision: a trajectory FAIL and an A3 claim FAIL land
+    # in the SAME bucket as a turn FAIL — the instance is VERIFIED_FLAGGED and counts
+    # in the violation numerator, whatever its turns said. A trajectory or claim
+    # UNVERIFIED (no claim, an unclassifiable claim, unobservable evidence, an absent
+    # author) never flags — an abstention is not a violation — so only status FAIL
+    # participates here.
+    if (
+        flagged_turns
+        or (trajectory is not None and trajectory.get("status") == "FAIL")
+        or (claim is not None and claim.status is Status.FAIL)
+    ):
         disposition = Disposition.VERIFIED_FLAGGED
     elif replayed_any:
         disposition = Disposition.VERIFIED_CLEAN
@@ -524,7 +629,36 @@ def _verify_one_trace(
         trajectory=trajectory,
         trajectory_addable=trajectory_addable,
         trajectory_unaddable=trajectory_unaddable,
+        claim=_claim_summary(claim, claim_check),
+        claim_addable=claim_addable,
+        claim_unaddable=claim_unaddable,
     )
+
+
+def _claim_summary(claim: Optional[Verdict], check: Optional[Check]) -> Optional[dict]:
+    """The A3 verdict as the ledger's serialized summary, or None — absent-never-zero.
+
+    Mirrors the trajectory summary's `{"status", "cause", ...}` shape on the claim
+    dimension, carrying the artifacts A3 surfaces: the status (FAIL or UNVERIFIED —
+    A3 never emits PASS), the named abstention cause when there is one (a FAIL has
+    none: the check ran and decided), and the check's source plus the OBSERVED exit
+    code (`None` when the check did not execute). `None` when no verdict exists at
+    all — the axis was absent or disabled, or the check exited 0 (D3 silence) — and
+    `None` must never be read as (or rendered as) "the claim was clean".
+    """
+    if claim is None:
+        return None
+    expected = claim.expected if isinstance(claim.expected, dict) else {}
+    return {
+        "status": claim.status.value,
+        "cause": expected.get("cause"),
+        "check": {
+            "source": (
+                check.source if check is not None else expected.get("check_source", "")
+            ),
+            "exit_code": claim.observed,
+        },
+    }
 
 
 __all__ = ["run_batch", "default_manifest_dir_for"]

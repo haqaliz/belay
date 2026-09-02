@@ -1924,6 +1924,7 @@ def _cmd_phase0_run(args: argparse.Namespace) -> int:
     from belay.phase0 import runner as phase0_runner
     from belay.phase0.ledger import DetectorIdentity, to_json
     from belay.phase0.report import render_report
+    from belay.verify.author import author_from_env
     from belay.verify.invariants import default_invariants, load_invariants
 
     trace_dir = Path(args.trace_dir)
@@ -1954,6 +1955,11 @@ def _cmd_phase0_run(args: argparse.Namespace) -> int:
     shell_server_command = (
         shlex.split(args.shell_server) if args.shell_server is not None else None
     )
+    # The A3 author: env-only on the batch surface (`BELAY_CLAIM_AUTHOR`), built at
+    # the CLI boundary so the runner stays deterministic. `--no-claim-axis` disables
+    # the axis for the WHOLE batch and wins over the env — an operator can turn A3
+    # off without unsetting anything.
+    claim_author = None if args.no_claim_axis else author_from_env()
     ledger = phase0_runner.run_batch(
         trace_dir,
         corpus_dir=corpus_dir,
@@ -1964,6 +1970,8 @@ def _cmd_phase0_run(args: argparse.Namespace) -> int:
         replays=args.replays,
         timeout=args.timeout,
         ingest=ingest,
+        disable_claim_axis=args.no_claim_axis,
+        claim_author=claim_author,
         # Looked up off the module at call time (not bound as this function's own default)
         # so a test can monkeypatch `belay.phase0.runner.verify_turn`/`.add_case` and have
         # it take effect here -- exactly the seam `run_batch` itself documents.
