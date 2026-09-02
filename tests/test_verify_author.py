@@ -26,8 +26,9 @@ from pathlib import Path
 
 import pytest
 
-from belay.verify import author
-from belay.verify.claims import Check
+from belay.replay.reader import Skip
+from belay.verify import author, claims
+from belay.verify.claims import Check, CheckResult
 from belay.verify.trajectory import TurnFact
 
 FAKE_AUTHOR = Path(__file__).parent / "fixtures" / "fake_claim_author.py"
@@ -123,3 +124,39 @@ def test_author_from_env_lexes_the_command(
 def test_author_from_env_unlexable_is_none(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(author.AUTHOR_ENV, 'python "unbalanced')
     assert author.author_from_env() is None  # absent, never a crash (cli.py:654-667 mirrors)
+
+
+# --- the seam proof: env-configured author drives the evaluator end-to-end --------------
+
+
+def test_env_configured_author_drives_the_evaluator_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    command = f"{shlex.quote(sys.executable)} {shlex.quote(str(FAKE_AUTHOR))}"
+    monkeypatch.setenv(author.AUTHOR_ENV, command)
+    monkeypatch.setattr(claims, "runner", _RecordingRunner())
+
+    verdict = claims.evaluate_claim(
+        records=[],
+        skips=[Skip(reason="unknown kind 'claim'", seq=21, kind="claim",
+                    record={"text": CLAIM})],
+        verdicts={},
+        author=author.author_from_env(),
+        manifest_dir=tmp_path / "m",
+        server_command=("node", "s.js"),
+        workspace=tmp_path,  # the test seam: no replay, no sandbox; the runner is recorded
+    )
+
+    assert verdict is None  # silence: the authored check exited 0 — never PASS
+    assert claims.runner.seen == [CHECK]  # the check came from the REAL fake-author subprocess
+
+
+class _RecordingRunner:
+    """The runner seam, recording the check the evaluator hands it; exit 0 = silence."""
+
+    def __init__(self) -> None:
+        self.seen: list[Check] = []
+
+    def run(self, check, *, workspace, timeout):
+        self.seen.append(check)
+        return CheckResult(0, "clean", None)
