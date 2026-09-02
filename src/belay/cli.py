@@ -551,7 +551,14 @@ _VERIFY_COVERAGE = (
     "  coverage block in the aggregate for what each run left uncovered. Belay observes\n"
     "  no outbound bytes — successful egress under allow-all is uncaptured, and a\n"
     "  deny-all denial cannot be told from a filesystem one.\n"
-    "  No model is consulted. The verdict is re-execution and diffing — no LLM."
+    "  A1 and A2 consult no model: the verdict is re-execution and diffing — no LLM.\n"
+    "  A3 (claim re-derivation) is the ONE place a model may sit, and only by your\n"
+    "  choice: BELAY_CLAIM_AUTHOR (or --claim-author) names a LOCAL command that\n"
+    "  writes an executable check for the trace's claim; EXECUTION decides — the check\n"
+    "  runs contained in the sandbox and its exit code is the verdict, and A3 NEVER\n"
+    "  PASSes: an exit 0 is silence (D3), never a PASS. No author configured — or\n"
+    "  --no-claim-axis — means the axis is ABSENT: no A3 verdict exists, never PASS,\n"
+    "  never a fabricated UNVERIFIED."
 )
 
 _VERIFY_DESCRIPTION = (
@@ -563,7 +570,10 @@ _VERIFY_DESCRIPTION = (
     "tests and testing, on unless --no-default-invariants; add more with --invariants "
     "FILE). All sub-verdicts are "
     "reduced worst-status-wins to one PASS/FAIL/UNVERIFIED per turn, each shown so a "
-    "FAIL is explainable.\n\n" + _VERIFY_COVERAGE + "\n\n"
+    "FAIL is explainable. The A3 claim axis evaluates the trace's closing claim when "
+    "an author is configured (BELAY_CLAIM_AUTHOR, or --claim-author CMD): a model "
+    "writes an executable check, EXECUTION decides, and A3 never PASSes. Disable the "
+    "axis with --no-claim-axis.\n\n" + _VERIFY_COVERAGE + "\n\n"
     "Manifests: a turn's snapshot manifest is written by the gate to a SIBLING of the "
     "snapshot dir, e.g. BELAY_SNAPSHOT_DIR=./sn -> ./sn.manifests/. Point "
     "--manifest-dir there; a present turn whose manifest is not found is an honest "
@@ -605,6 +615,8 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     """
     from belay.index import derive_correlation, tool_calls
     from belay.replay.reader import TraceCorrupt, read_trace
+    from belay.verify.author import SubprocessAuthor, author_from_env
+    from belay.verify.claims import RecordingAuthor, evaluate_claim
     from belay.verify.invariants import default_invariants, load_invariants
     from belay.verify.trajectory import evaluate_trajectory_rules
     from belay.verify.turn import verify_turn
@@ -615,6 +627,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         from belay.verify.json import (
             VerifyReport,
             aggregate_record,
+            claim_record,
             coverage_record,
             error_report,
             exposure_record,
@@ -665,6 +678,31 @@ def _cmd_verify(args: argparse.Namespace) -> int:
             else:
                 _emit(message)
             return 2
+
+    # The A3 author. `--claim-author CMD` is the interactive surface, ONE quoted
+    # string shlex-split here — the same fail-closed rule as `--shell-server`: Belay
+    # must never half-execute a command it could not parse, and must never quietly
+    # degrade the run to "no claim axis". Absent, `BELAY_CLAIM_AUTHOR` decides at use;
+    # both absent -> the axis is ABSENT (never UNVERIFIED, never PASS). `--no-claim-axis`
+    # disables the axis ENTIRELY and wins over both, so an operator can turn A3 off
+    # without unsetting anything.
+    claim_author = None
+    if not args.no_claim_axis:
+        if args.claim_author is not None:
+            try:
+                claim_author = SubprocessAuthor(tuple(shlex.split(args.claim_author)))
+            except ValueError as exc:
+                message = (
+                    f"belay: --claim-author could not be parsed as a shell command "
+                    f"({exc}): {args.claim_author!r}"
+                )
+                if json_mode:
+                    _emit(render_json(error_report(args.trace, message)))
+                else:
+                    _emit(message)
+                return 2
+        else:
+            claim_author = author_from_env()
 
     # The A1 policy this run enforces: the defaults (unless dropped) plus any operator file.
     # A file that will not parse is a fail-closed error — verifying against a silently dropped
@@ -741,6 +779,8 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         # evidence turn could read as a false FAIL. The rule is instance-level by
         # construction, so the whole trace is the only honest scope for its line.
         trajectory = None
+        claim = None
+        claim_check = None
         if args.turn is None:
             trajectory = evaluate_trajectory_rules(
                 invariants,
@@ -748,11 +788,32 @@ def _cmd_verify(args: argparse.Namespace) -> int:
                 records=records,
                 verdicts={v.turn_index: v for v in verdicts},
             )
+            # A3 at the SAME instance-level site, whole-trace only, under the identical
+            # partial-facts rule. The author is wrapped in a recorder so the surfaces
+            # can carry the EXACT check the verdict was decided by — its source is what
+            # the banked corpus case and the JSON record carry, and the evaluator
+            # returns only the verdict. Absent author -> the axis is ABSENT (the
+            # coverage block names it); the check exiting 0 -> D3 silence (None), never
+            # a PASS.
+            if claim_author is not None:
+                recorder = RecordingAuthor(claim_author)
+                claim = evaluate_claim(
+                    records=records,
+                    skips=read.skips,
+                    verdicts={v.turn_index: v for v in verdicts},
+                    author=recorder,
+                    manifest_dir=manifest_dir,
+                    server_command=args.server,
+                    shell_server_command=shell_server_command,
+                    timeout=args.timeout,
+                    replays=args.replays,
+                )
+                claim_check = recorder.last_check
 
         if json_mode:
             # One document, rendered from the SAME objects the text renderers consumed:
             # the TurnVerdicts above, the shared exposure accumulator, and the same
-            # trajectory summary. Nothing is recomputed for the machine surface.
+            # trajectory/claim summaries. Nothing is recomputed for the machine surface.
             report = VerifyReport(
                 trace=args.trace,
                 turns=report_turns,
@@ -760,6 +821,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
                 coverage=coverage_record(verdicts),
                 exposure=exposure_record(_exposure_summary(verdicts)),
                 trajectory=trajectory_record(trajectory),
+                claim=claim_record(claim, check=claim_check),
                 error=None,
             )
             _emit(render_json(report))
@@ -767,6 +829,8 @@ def _cmd_verify(args: argparse.Namespace) -> int:
             _emit_aggregate(verdicts, Status)
             if args.turn is None:
                 _emit_trajectory(trajectory)
+                if claim_author is not None:
+                    _emit_claim(claim, Status)
             _emit()
             for line in _VERIFY_COVERAGE.splitlines():
                 _emit(line)
@@ -1015,6 +1079,36 @@ def _emit_trajectory(trajectory) -> None:
         )
         return
     named = cause if cause is not None else "unrecorded"
+    _emit(f"    UNVERIFIED [{named}] — never PASS")
+
+
+def _emit_claim(claim, Status) -> None:
+    """This trace's instance-level A3 verdict — the claim re-derivation line.
+
+    Printed at trace close, after the trajectory line, ONLY when a claim author was
+    configured for this run (the axis is otherwise ABSENT, and the coverage block
+    names that absence in words — never PASS, never a fabricated UNVERIFIED). The
+    evaluator's verdict is at most FAIL or a named UNVERIFIED — A3 never PASSes — and
+    D3 silence (the check exited 0) renders as silence, never as a PASS and never as
+    a fabricated clean. `claim` is the VERDICT the evaluator returned; the FAIL line
+    carries its message, which always holds the check source and the real exit code.
+    """
+    _emit()
+    _emit(
+        "  claim re-derivation (A3 — the check a model wrote, EXECUTION decides: "
+        "the check runs contained in the sandbox and its exit code is the verdict)"
+    )
+    if claim is None:
+        _emit(
+            "    silence — the check exited 0 (D3): an exit 0 is never a PASS, it is "
+            "no verdict at all"
+        )
+        return
+    if claim.status is Status.FAIL:
+        _emit(f"    FAIL — {claim.message}")
+        return
+    expected = claim.expected if isinstance(claim.expected, dict) else {}
+    named = expected.get("cause") or "unrecorded"
     _emit(f"    UNVERIFIED [{named}] — never PASS")
 
 
@@ -1324,7 +1418,7 @@ def _cmd_corpus_run(args: argparse.Namespace) -> int:
         return 2
 
     try:
-        run = run_corpus(corpus_dir)
+        run = run_corpus(corpus_dir, disable_claim_axis=args.no_claim_axis)
     except ValueError as exc:
         # A corrupt/unreadable case dir is fail-closed — never a silent skip.
         _emit(f"belay: {exc}")
@@ -2316,6 +2410,28 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     verify.add_argument(
+        "--no-claim-axis",
+        action="store_true",
+        help=(
+            "disable the A3 claim axis ENTIRELY: no claim re-derivation runs and no A3 "
+            "verdict exists — never PASS, never a fabricated UNVERIFIED. Wins over "
+            "--claim-author and BELAY_CLAIM_AUTHOR. The refutation: every PASS/FAIL "
+            "verdict is identical with the axis off"
+        ),
+    )
+    verify.add_argument(
+        "--claim-author",
+        default=None,
+        metavar="CMD",
+        help=(
+            "the claim-author command, as ONE quoted string (shlex-split at use): "
+            "BELAY_CLAIM_AUTHOR as a flag. The command receives the claim plus the "
+            "observed facts on stdin and answers with an executable check; EXECUTION "
+            "decides (A3 never PASSes). An un-lexable string is a hard error. Absent "
+            "-> BELAY_CLAIM_AUTHOR decides; no author configured -> the axis is ABSENT"
+        ),
+    )
+    verify.add_argument(
         "--server",
         nargs=argparse.REMAINDER,
         default=[],
@@ -2450,6 +2566,15 @@ def _parser() -> argparse.ArgumentParser:
         nargs="?",
         default="corpus/local",
         help="the corpus directory of case dirs to re-verify (default: ./corpus/local, which is gitignored so cases never get committed)",
+    )
+    corpus_run.add_argument(
+        "--no-claim-axis",
+        action="store_true",
+        help=(
+            "disable the A3 claim axis: claim cases SKIP with CLAIM_AXIS_DISABLED "
+            "(never a REGRESSION), every other case is byte-identical — the "
+            "refutation, at the corpus surface"
+        ),
     )
     corpus_run.set_defaults(func=_cmd_corpus_run)
 
@@ -2630,6 +2755,16 @@ def _parser() -> argparse.ArgumentParser:
         help=(
             "do not apply the built-in default invariants (no-assertion-weakening "
             "under the tests and testing path segments)"
+        ),
+    )
+    phase0_run.add_argument(
+        "--no-claim-axis",
+        action="store_true",
+        help=(
+            "disable the A3 claim axis for the WHOLE BATCH: no claim re-derivation "
+            "runs, no A3 verdict is recorded, and no A3 FAIL flags or banks an "
+            "instance — the refutation: every PASS/FAIL verdict is identical with the "
+            "axis off"
         ),
     )
     phase0_run.add_argument(

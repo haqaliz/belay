@@ -207,6 +207,44 @@ class ContainedRunner:
 runner: CheckRunner = ContainedRunner()
 
 
+class RecordingAuthor:
+    """Wrap a `CheckAuthor` and remember the LAST check it produced (or None).
+
+    The surfaces need the authored check AFTER `evaluate_claim` returns — the banked
+    corpus case and the JSON/text records carry its source and exit code — and the
+    evaluator returns only the verdict. This wrapper is that seam: what the author
+    last wrote is exactly the check the returned verdict was decided by. `last_check`
+    is `None` when the author abstained (returned `None`) or raised (the evaluator
+    files `NO_CHECK_AUTHOR`; the wrapper resets before re-raising so it never
+    remembers a check from a different invocation).
+    """
+
+    def __init__(self, inner: CheckAuthor):
+        self._inner = inner
+        self.last_check: Optional[Check] = None
+
+    def author_check(
+        self,
+        claim_text: str,
+        *,
+        classification: str,
+        turns: Sequence[TurnFact],
+        final_state_files: Sequence[str],
+    ) -> Optional[Check]:
+        try:
+            check = self._inner.author_check(
+                claim_text,
+                classification=classification,
+                turns=turns,
+                final_state_files=final_state_files,
+            )
+        except Exception:  # noqa: BLE001  (the evaluator owns the abstention; reset + re-raise)
+            self.last_check = None
+            raise
+        self.last_check = check
+        return check
+
+
 def evaluate_claim(
     *,
     records: Sequence[dict],
@@ -494,6 +532,7 @@ __all__ = [
     "CheckResult",
     "CheckRunner",
     "ContainedRunner",
+    "RecordingAuthor",
     "claim_case",
     "evaluate_claim",
     "runner",

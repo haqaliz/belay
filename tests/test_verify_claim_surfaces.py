@@ -25,6 +25,7 @@ flags exist — which is precisely the late failure this guard exists to prevent
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -36,8 +37,9 @@ from belay.verify.turn import TurnVerdict
 from belay.verify.verdict import Status
 
 #: The A3 line every surface renders at trace close — asserted absent wherever a run
-#: must not emit an A3 verdict.
-A3_LINE_HEAD = "claim re-derivation"
+#: must not emit an A3 verdict. The em-dash disambiguates from the coverage block's
+#: own "A3 (claim re-derivation) is the ONE place..." clause, which IS always present.
+A3_LINE_HEAD = "claim re-derivation (A3 —"
 
 
 def _canned_verifier(status: Status = Status.PASS, *, is_error: bool = False):
@@ -263,3 +265,260 @@ def test_flag_wins_when_no_claim_axis_and_claim_author_are_both_given(
 
     assert rc == 0, out
     assert A3_LINE_HEAD not in out, out
+
+
+# --- the deterministic A3 seams (a REAL subprocess author, stubbed engine) -------------
+
+
+def _claim_author_cmd(*, source: str = "pytest -q", argv: list[str] | None = None,
+                      error: bool = False) -> str:
+    """A real `--claim-author` command (a real subprocess): answers the check JSON, or
+    `{"error": ...}` for the no-check abstention. Deterministic, cross-platform."""
+    payload = {"error": "no check this run"} if error else {
+        "source": source, "argv": argv or ["pytest", "-q"]
+    }
+    code = f"import json,sys;json.dump({json.dumps(payload)},sys.stdout)"
+    return f"{sys.executable} -c '{code}'"
+
+
+class _FixedRunner:
+    """The check-runner seam, deterministic: the configured exit code — never a model."""
+
+    def __init__(self, exit_code):
+        self._exit_code = exit_code
+
+    def run(self, check, *, workspace, timeout):
+        from belay.verify.claims import CheckResult
+
+        return CheckResult(self._exit_code, "captured output", "captured stderr")
+
+
+def _stub_claim_seams(monkeypatch, tmp_path, *, exit_code: int) -> None:
+    """Stub the two A3 engine seams: the final-state replay and the check runner.
+
+    The author stays REAL (a subprocess); only the re-execution machinery is
+    deterministic, so the A3 verdict is decided by the same evaluator the product
+    runs, at a fraction of the cost.
+    """
+    from belay.replay.engine import EQUAL, REPLAYED, TurnReplay
+    from belay.verify import claims
+
+    workspace = tmp_path / "stub-workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    def fake_replay(records, n, **kwargs):
+        reply = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "result": {"content": [{"type": "text", "text": "ok"}], "isError": False},
+            }
+        ).encode()
+        return TurnReplay(
+            turn_index=n,
+            status=REPLAYED,
+            reinvoked=True,
+            result_equivalence=EQUAL,
+            recorded_reply=reply,
+            replayed_reply=reply,
+            delta=[],
+            workspace=str(workspace),
+        )
+
+    monkeypatch.setattr(claims, "replay_turn", fake_replay)
+    monkeypatch.setattr(claims, "runner", _FixedRunner(exit_code))
+
+
+# --- (5) the A3 line: FAIL with source + exit code, UNVERIFIED, silence, absent --------
+
+
+def test_verify_renders_the_a3_fail_line_with_source_and_exit_code(
+    tmp_path, monkeypatch, capsys
+):
+    """The instance-level A3 line at trace close: FAIL carries the check source and
+    the real exit code — the artifacts A3 surfaces. The author is a REAL subprocess;
+    the check's exit decides."""
+    monkeypatch.setattr(turn_module, "verify_turn", _canned_verifier())
+    _stub_claim_seams(monkeypatch, tmp_path, exit_code=1)
+    trace_path = _edit_trace(tmp_path, claim="all tests pass")
+
+    rc = cli.main(
+        [
+            "verify", str(trace_path),
+            "--manifest-dir", str(tmp_path / "m"),
+            "--claim-author", _claim_author_cmd(),
+            "--server", "unused",
+        ]
+    )
+    out = capsys.readouterr().out
+
+    assert rc == 0, out
+    assert A3_LINE_HEAD in out, out
+    assert "FAIL — pytest -q · exit 1" in out, out
+
+
+def test_verify_json_carries_the_a3_record_after_trajectory(
+    tmp_path, monkeypatch, capsys
+):
+    """`--json` carries the A3 record after the trajectory record, with the check
+    source and the OBSERVED exit code — the pinned machine shape."""
+    monkeypatch.setattr(turn_module, "verify_turn", _canned_verifier())
+    _stub_claim_seams(monkeypatch, tmp_path, exit_code=1)
+    trace_path = _edit_trace(tmp_path, claim="all tests pass")
+
+    rc = cli.main(
+        [
+            "verify", str(trace_path),
+            "--manifest-dir", str(tmp_path / "m"),
+            "--json",
+            "--claim-author", _claim_author_cmd(),
+            "--server", "unused",
+        ]
+    )
+    doc = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert doc["claim"] == {
+        "axis": "A3",
+        "kind": "claim",
+        "status": "FAIL",
+        "cause": None,
+        "check": {"source": "pytest -q", "exit_code": 1},
+    }
+    keys = list(doc)
+    assert keys.index("trajectory") < keys.index("claim") < keys.index("error"), keys
+
+
+def test_verify_renders_a3_unverified_with_its_named_cause(tmp_path, monkeypatch, capsys):
+    """An author that answers `{"error": ...}` abstains with NO_CHECK_AUTHOR — the A3
+    line names the cause and says never PASS, in text and JSON (check exit null: did
+    not execute)."""
+    monkeypatch.setattr(turn_module, "verify_turn", _canned_verifier())
+    _stub_claim_seams(monkeypatch, tmp_path, exit_code=1)
+    trace_path = _edit_trace(tmp_path, claim="all tests pass")
+
+    rc = cli.main(
+        [
+            "verify", str(trace_path),
+            "--manifest-dir", str(tmp_path / "m"),
+            "--json",
+            "--claim-author", _claim_author_cmd(error=True),
+            "--server", "unused",
+        ]
+    )
+    out = capsys.readouterr().out
+    doc = json.loads(out)
+
+    assert rc == 0
+    assert doc["claim"] == {
+        "axis": "A3",
+        "kind": "claim",
+        "status": "UNVERIFIED",
+        "cause": "NO_CHECK_AUTHOR",
+        "check": {"source": "", "exit_code": None},
+    }
+
+
+def test_verify_renders_silence_never_pass_when_the_check_exits_zero(
+    tmp_path, monkeypatch, capsys
+):
+    """D3 on the surface: the check exits 0 -> NO verdict. The text line says silence
+    (never a PASS, never a fabricated clean); the JSON document omits the claim key —
+    silence is not a verdict, and absent-never-zero keeps the pinned fixture green."""
+    monkeypatch.setattr(turn_module, "verify_turn", _canned_verifier())
+    _stub_claim_seams(monkeypatch, tmp_path, exit_code=0)
+    trace_path = _edit_trace(tmp_path, claim="all tests pass")
+
+    rc = cli.main(
+        [
+            "verify", str(trace_path),
+            "--manifest-dir", str(tmp_path / "m"),
+            "--claim-author", _claim_author_cmd(),
+            "--server", "unused",
+        ]
+    )
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert A3_LINE_HEAD in out, out
+    assert "silence" in out, out
+    assert "no verdict at all" in out, out
+
+    rc = cli.main(
+        [
+            "verify", str(trace_path),
+            "--manifest-dir", str(tmp_path / "m"),
+            "--json",
+            "--claim-author", _claim_author_cmd(),
+            "--server", "unused",
+        ]
+    )
+    doc = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert "claim" not in doc, doc
+
+
+def test_verify_without_an_author_omits_the_a3_line_and_json_key(
+    tmp_path, monkeypatch, capsys
+):
+    """No author configured (env unset, no --claim-author): the axis is ABSENT — no A3
+    line in the text (the coverage block names the absence), and no claim key in the
+    JSON document. This is the absent-never-zero rule that keeps the pinned `--json`
+    fixture green for every trace without a claim/author."""
+    monkeypatch.setattr(turn_module, "verify_turn", _canned_verifier())
+    monkeypatch.delenv("BELAY_CLAIM_AUTHOR", raising=False)
+    trace_path = _edit_trace(tmp_path, claim="all tests pass")
+
+    rc = cli.main(
+        [
+            "verify", str(trace_path),
+            "--manifest-dir", str(tmp_path / "m"),
+            "--json",
+            "--server", "unused",
+        ]
+    )
+    doc = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert "claim" not in doc, doc
+
+    rc = cli.main(
+        [
+            "verify", str(trace_path),
+            "--manifest-dir", str(tmp_path / "m"),
+            "--server", "unused",
+        ]
+    )
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert A3_LINE_HEAD not in out, out
+    assert "ABSENT" in out, "the coverage block must name the absent axis"
+
+
+# --- (6) canonical_cause maps the A3/claim prefix ahead of the catch-all --------------
+
+AUTHOR_ENV_VAR = "BELAY_CLAIM_AUTHOR"
+
+
+def test_canonical_cause_maps_every_a3_claim_prefix_ahead_of_the_catch_all() -> None:
+    """Acceptance 5, asserted on the FUNCTION (the boundary entries' pattern): an A3
+    cause routed under the `A3/claim` prefix — either bare or in the replayed-cause
+    shape — resolves to the named bucket, NEVER the bland `REPLAYED_UNVERIFIED`
+    catch-all, and the table orders both prefixes ahead of it (a prefix written after
+    the catch-all it starts with is permanently dead)."""
+    from belay.replay.report import (
+        A3_CLAIM_UNVERIFIED,
+        REPLAYED_SUB_VERDICT,
+        REPLAYED_UNVERIFIED,
+        _PREFIX_LABELS,
+        canonical_cause,
+    )
+
+    for cause in (
+        "A3/claim NO_CLAIM_RECORDED",
+        f"{REPLAYED_SUB_VERDICT} A3/claim NO_CLAIM_RECORDED",
+    ):
+        assert canonical_cause(cause) == A3_CLAIM_UNVERIFIED, cause
+        assert canonical_cause(cause) != REPLAYED_UNVERIFIED, cause
+
+    positions = {prefix: i for i, (prefix, _label) in enumerate(_PREFIX_LABELS)}
+    assert positions["A3/claim"] < positions[REPLAYED_SUB_VERDICT]
+    assert positions[f"{REPLAYED_SUB_VERDICT} A3/claim"] < positions[REPLAYED_SUB_VERDICT]

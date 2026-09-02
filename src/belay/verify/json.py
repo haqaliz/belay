@@ -44,10 +44,16 @@ _SCORED = ("PASS", "WARN", "FAIL", "UNVERIFIED")
 class VerifyReport:
     """One run's machine report: the structured truth both renderers could print.
 
-    `turns`/`aggregate`/`coverage`/`exposure`/`trajectory` are plain dicts derived from
-    the same verdict objects the text renderers consumed (`turn_record` and friends);
-    `error` is `None` on a clean run and `{"cause": ...}` on a failed one, in which case
-    `turns` stays empty — the never-truncated contract.
+    `turns`/`aggregate`/`coverage`/`exposure`/`trajectory`/`claim` are plain dicts
+    derived from the same verdict objects the text renderers consumed (`turn_record`
+    and friends); `error` is `None` on a clean run and `{"cause": ...}` on a failed
+    one, in which case `turns` stays empty — the never-truncated contract.
+
+    `claim` follows `trajectory`'s absent-never-zero rule, one step stricter: an
+    absent key is OMITTED from the document (never `null`), because a trace without a
+    claim verdict — no author configured, the axis disabled, or D3 silence — is the
+    common case, and writing `"claim": null` would rewrite the pinned `--json`
+    snapshot for every such trace.
     """
 
     trace: Optional[str]
@@ -56,11 +62,12 @@ class VerifyReport:
     coverage: dict
     exposure: dict
     trajectory: Optional[dict]
+    claim: Optional[dict]
     error: Optional[dict]
 
     def as_dict(self) -> dict:
         """The document, in the contract's key order."""
-        return {
+        payload = {
             "schema": SCHEMA,
             "trace": self.trace,
             "turns": self.turns,
@@ -68,8 +75,11 @@ class VerifyReport:
             "coverage": self.coverage,
             "exposure": self.exposure,
             "trajectory": self.trajectory,
-            "error": self.error,
         }
+        if self.claim is not None:
+            payload["claim"] = self.claim
+        payload["error"] = self.error
+        return payload
 
 
 def render_json(report: VerifyReport) -> str:
@@ -90,6 +100,7 @@ def error_report(trace: Optional[str], cause: str) -> VerifyReport:
         coverage={},
         exposure={"recorded": False, "judged_turns": 0, "comparisons": 0},
         trajectory=None,
+        claim=None,
         error={"cause": cause},
     )
 
@@ -214,10 +225,44 @@ def trajectory_record(trajectory) -> Optional[dict]:
     return {"status": status, "cause": cause, "message": message}
 
 
+def claim_record(claim, *, check=None) -> Optional[dict]:
+    """The instance-level A3 disposition, from the SAME `Verdict` the text renders.
+
+    The record carries the artifacts A3 surfaces — `{"axis", "kind", "status",
+    "cause", "check": {"source", "exit_code"}}` — where `source` is the exact check
+    the verdict was decided by (the recording author's `last_check`; an UNVERIFIED
+    verdict falls back to its own `expected["check_source"]`, and never fabricates a
+    source) and `exit_code` is the OBSERVED one (an UNVERIFIED abstention's check did
+    not execute, so `null`).
+
+    `None` mirrors the suppressed text line — a trace with no claim verdict (no
+    author configured, the axis disabled, or D3 silence: the check exited 0) carries
+    NO claim record at all, never a fabricated clean and never `null` — the
+    absent-never-zero rule that keeps the pinned `--json` snapshot green for every
+    trace without a claim/author.
+    """
+    if claim is None:
+        return None
+    expected = claim.expected if isinstance(claim.expected, dict) else {}
+    source = (
+        check.source
+        if check is not None
+        else expected.get("check_source", "")
+    )
+    return {
+        "axis": claim.axis,
+        "kind": claim.kind,
+        "status": claim.status.value,
+        "cause": expected.get("cause"),
+        "check": {"source": source, "exit_code": claim.observed},
+    }
+
+
 __all__ = [
     "SCHEMA",
     "VerifyReport",
     "aggregate_record",
+    "claim_record",
     "coverage_record",
     "error_report",
     "exposure_record",
