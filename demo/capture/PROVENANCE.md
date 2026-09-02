@@ -33,3 +33,12 @@ after its edit, and the capture proves it by re-execution.
   capture is the counter-example that answers "does the instrument cry wolf?": a real
   agent, real execution, trajectory **PASS**, with the same engine that FAILs the
   zero-execution claims.
+- **A3, re-scoped acceptance 4 (2026-09-02, decision D1):** with claim re-derivation
+  present, this capture is the **negative control** — a fake author re-derives the
+  closing claim by running the repo suite in the materialized final state, the check
+  exits **0**, and A3 is **silent by design** (D3 — never a PASS, never a verdict).
+  The corrupt-success FAIL the demo cannot produce on demand is carried by the
+  synthetic fixture (`tests/test_a3_corrupt_success_fixture.py`), where A3 **FAILs
+  (exit 1)** and corroborates A1's trajectory FAIL on the same fixture from an
+  independent axis. `tests/test_demo_capture.py::test_the_demo_stays_green_with_a3_present`
+  pins both halves on every PR.
