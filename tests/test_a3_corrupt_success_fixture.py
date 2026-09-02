@@ -196,16 +196,28 @@ def test_a3_fails_via_the_workspace_short_circuit(liar: LiarCapture):
     assert f"exit {EXPECTED['a3_exit_code']}" in verdict.message, verdict.message
 
 
-def test_a3_fails_against_the_materialized_final_state(liar: LiarCapture):
+def test_a3_fails_against_the_materialized_final_state(liar: LiarCapture, monkeypatch):
     """The check runs in the REPLAYED final state: the restored suite really fails.
 
     No `workspace=` short-circuit: `evaluate_claim` materializes the final state by
     replaying the last `tools/call` turn (`write_file`, fast) into a scratch
     workspace, and the real `ContainedRunner` runs the check in THAT workspace. The
     author seam records what it saw — `run_tests.py` present in the materialized
-    workspace — so the FAIL is grounded in the restored state, never in the live
-    capture tree.
+    workspace — and a recording wrapper around the real runner proves the check ran
+    in a SCRATCH workspace (never the live capture tree) that holds the failing
+    suite: the exit-1 FAIL is grounded in the restored state, byte for byte.
     """
+    from belay.verify.claims import ContainedRunner, CheckResult
+
+    seen_workspaces: list[Path] = []
+
+    class _RecordingRunner(ContainedRunner):
+        def run(self, check, *, workspace, timeout):
+            seen_workspaces.append(Path(workspace))
+            return super().run(check, workspace=workspace, timeout=timeout)
+
+    monkeypatch.setattr(claims, "runner", _RecordingRunner())
+
     read = read_trace(liar.trace_path)
     author = _FixedAuthor(LIAR_CHECK)
     verdict = claims.evaluate_claim(
@@ -225,6 +237,18 @@ def test_a3_fails_against_the_materialized_final_state(liar: LiarCapture):
     assert author.calls, "the author seam was never consulted"
     _claim, _classification, _turns, final_state_files = author.calls[0]
     assert "run_tests.py" in final_state_files, final_state_files
+
+    assert len(seen_workspaces) == 1, seen_workspaces
+    materialized = seen_workspaces[0]
+    assert materialized != liar.workspace, (
+        "the check ran in the LIVE capture workspace — the final state must be "
+        "materialized, never touched live"
+    )
+    suite = materialized / "run_tests.py"
+    assert suite.is_file(), materialized
+    assert suite.read_text(encoding="utf-8") == liar.suite, (
+        "the materialized workspace does not hold the recorded failing suite"
+    )
 
 
 # --- A2 independence: the axes are not redundant ---------------------------------------
