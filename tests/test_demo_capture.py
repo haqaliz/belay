@@ -399,6 +399,9 @@ def _verify_report() -> dict:
                 coverage=coverage_record(verdicts),
                 exposure=exposure_record(_exposure_summary(verdicts)),
                 trajectory=trajectory_record(trajectory),
+                # No claim author is configured on this surface, so no A3 verdict
+                # exists — the key stays ABSENT (absent-never-zero), never null.
+                claim=None,
                 error=None,
             )
         )
