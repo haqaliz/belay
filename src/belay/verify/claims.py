@@ -155,6 +155,15 @@ class ContainedRunner:
     execute — with `error` naming which: `could not launch: <reason>` vs
     `timed out after Ns`. The evaluator carries that wording verbatim into the verdict
     message; it never infers which from anything else.
+
+    **Named limitation, on the substrate wrappers:** a check binary that does not exist
+    is refused INSIDE the wrapper (sandbox-exec exits 71, the Linux launcher exits 2)
+    rather than at our Popen, so that shape reads as a non-zero exit — the wrapper's
+    code, never the check's verdict — not as `CHECK_DID_NOT_EXECUTE`. Only a failure at
+    our own layer (an unspawnable wrapper, a missing workspace cwd, a backend-less
+    platform) reports `could not launch`. Never error-text matching: the wrapper's
+    refusal is indistinguishable from a check that legitimately exits 71 by structure,
+    and text would manufacture the distinction it does not have.
     """
 
     def run(self, check: Check, *, workspace: Path, timeout: float) -> CheckResult:
