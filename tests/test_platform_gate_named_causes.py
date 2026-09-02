@@ -81,6 +81,7 @@ SCAN_AREA: frozenset[str] = frozenset(
         "test_substrate.py",
         "test_trace_claim.py",
         "test_turn_gate.py",
+        "test_verify_claims_sandbox.py",
         "test_verify_cli_invariants.py",
         "test_verify_cli.py",
         "test_verify_dual_server.py",
