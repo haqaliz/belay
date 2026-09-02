@@ -48,8 +48,6 @@ from belay.trace import TraceWriter, append_claim_record
 from belay.verify import claims
 from belay.verify import turn as turn_module
 from belay.verify.claims import Check, CheckResult
-from belay.verify.turn import TurnVerdict
-from belay.verify.verdict import Status
 
 CAPTURED_AT = "2026-09-02T00:00:00+00:00"
 
