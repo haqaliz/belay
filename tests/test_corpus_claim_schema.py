@@ -161,7 +161,7 @@ def test_a_v4_era_case_loads_unchanged_and_is_not_a_claim_case(tmp_path: Path) -
     This is the additive-compat contract: the bump must not reject or restamp old cases,
     and a v4 trajectory case must keep reading as exactly the trajectory case it is.
     """
-    case = _claim_case(**{**_full_case().__dict__, "trajectory": {"status": "FAIL", "cause": None}})
+    case = Case(**{**_full_case().__dict__, "trajectory": {"status": "FAIL", "cause": None}})
     write_case(tmp_path, case)
 
     data = json.loads((tmp_path / "case.json").read_text(encoding="utf-8"))

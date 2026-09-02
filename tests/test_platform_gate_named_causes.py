@@ -44,6 +44,7 @@ README = ROOT / "README.md"
 SCAN_AREA: frozenset[str] = frozenset(
     {
         "test_bth1.py",
+        "test_a3_corrupt_success_fixture.py",
         "test_containment.py",
         "test_corpus_add.py",
         "test_corpus_recorded_miss.py",

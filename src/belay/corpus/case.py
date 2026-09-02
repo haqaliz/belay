@@ -83,10 +83,14 @@ _KNOWN_SUB_STATUSES = _KNOWN_STATUSES | {"NOT_COVERED"}
 #: expected verdict: a v4 case read by pre-v4 code would silently ignore the trajectory
 #: declaration and recompute the case through the per-turn path — certifying an
 #: instance-level regression as a per-turn agreement — so the bump makes that visible
-#: rather than silent. The loader never REJECTS a newer version; it reads the integer and
-#: leaves the unknown field to be ignored, which is what makes a bump loud rather than
-#: breaking.
-CASE_SCHEMA_VERSION = 4
+#: rather than silent. Version 5 adds the optional instance-level `claim` expected
+#: verdict (the A3 axis): a v5 case read by pre-v5 code would silently ignore the claim
+#: declaration and recompute the case through the per-turn path — certifying an
+#: instance-level (A3) regression as a per-turn agreement — so the bump makes that
+#: visible rather than silent. The loader never REJECTS a newer version; it reads the
+#: integer and leaves the unknown field to be ignored, which is what makes a bump loud
+#: rather than breaking.
+CASE_SCHEMA_VERSION = 5
 
 #: What an OMITTED `schema_version` reads back as. Deliberately a fixed 1 rather than
 #: `CASE_SCHEMA_VERSION`: a case with no version key was written before the key existed, so
@@ -145,7 +149,13 @@ class Case:
     is a whole-trajectory failure, not any turn's — shape `{"status": <reduced-verdict
     status>, "cause": <named cause or null>}`; `None` (the default) means the case makes
     no such claim and is a turn-shaped case, which is what every case written before v4
-    says.
+    says. `claim` DECLARES an INSTANCE-LEVEL A3 expected verdict — the case's expected
+    FAIL is an intent drift the claim axis caught, not any turn's — shape `{"status":
+    <FAIL|WARN|UNVERIFIED>, "cause": <named cause or null>, "check": {"source": str,
+    "exit_code": int or null}}`; `None` (the default) means the case makes no such claim,
+    which is what every case written before v5 says. The claim status vocabulary is the
+    A3 contract's decided set and deliberately excludes `PASS` — A3 never emits PASS, so
+    a stored claim status of PASS would be a verdict this axis could not have produced.
     """
 
     id: str
@@ -165,6 +175,7 @@ class Case:
     task_prestate: Optional[dict] = None
     recorded_miss: Optional[dict] = None
     trajectory: Optional[dict] = None
+    claim: Optional[dict] = None
 
 
 def _validate_root_cause(raw: object, path: Path) -> Optional[dict]:
@@ -249,7 +260,13 @@ def _validate_task_prestate(raw: object, path: Path) -> Optional[dict]:
     return raw
 
 
-def _validate_recorded_miss(raw: object, path: Path, reduced_status: str) -> Optional[dict]:
+def _validate_recorded_miss(
+    raw: object,
+    path: Path,
+    reduced_status: str,
+    *,
+    claim_status: Optional[str] = None,
+) -> Optional[dict]:
     """Validate an on-disk `recorded_miss`, or raise a named `ValueError`.
 
     Shape is `{"note": <non-empty str>}`. Presence IS the declaration — a case with no
@@ -259,7 +276,11 @@ def _validate_recorded_miss(raw: object, path: Path, reduced_status: str) -> Opt
     `curate.py`'s requirement that a `true-positive` label carry a `root_cause`. A
     declaration is also rejected outright when `expected.reduced_status` is already `FAIL`
     — a "miss" that was caught is a contradiction, and fail-closed beats a case that means
-    nothing.
+    nothing. The same contradiction is refused on the instance-level claim dimension:
+    `claim_status="FAIL"` (the case declares an A3 catch) beside a `recorded_miss` is a
+    "miss" that was caught, extended to the v5 field — the claim dimension's clean side is
+    the A3 non-catch (an UNVERIFIED abstention; silence has no status), so a miss case can
+    only declare an UNVERIFIED (or absent) claim status.
     """
     if raw is None:
         return None
@@ -278,6 +299,11 @@ def _validate_recorded_miss(raw: object, path: Path, reduced_status: str) -> Opt
         raise ValueError(
             f"case file {path!r} declares 'recorded_miss' but 'expected.reduced_status' "
             f"is 'FAIL'; a miss that was caught is a contradiction"
+        )
+    if claim_status == "FAIL":
+        raise ValueError(
+            f"case file {path!r} declares 'recorded_miss' but 'claim.status' is 'FAIL'; "
+            f"a miss that was caught is a contradiction"
         )
     return raw
 
@@ -321,15 +347,91 @@ def _validate_trajectory(raw: object, path: Path) -> Optional[dict]:
     return raw
 
 
+#: The statuses an instance-level `claim` expected may declare — the A3 verdict
+#: contract's decided set, deliberately WITHOUT `PASS`: A3 never emits PASS, so a stored
+#: claim status of PASS would be a verdict this axis could not have produced, and
+#: accepting it would let a case regress against a verdict Belay would never emit.
+_KNOWN_CLAIM_STATUSES = frozenset({"FAIL", "WARN", "UNVERIFIED"})
+
+
+def _validate_claim(raw: object, path: Path) -> Optional[dict]:
+    """Validate an on-disk `claim`, or raise a named `ValueError`.
+
+    Shape is `{"status": <FAIL|WARN|UNVERIFIED>, "cause": <named cause or null>,
+    "check": {"source": str, "exit_code": int or null}}` — all keys required when
+    present. Presence IS the declaration — a case with no `claim` key carries no
+    INSTANCE-LEVEL A3 expected verdict and is a turn-shaped case, byte-for-byte as
+    before, the same single silence `task_prestate`, `recorded_miss` and `trajectory`
+    are allowed. `status` must be in `_KNOWN_CLAIM_STATUSES`: a claim verdict is a
+    verdict, and a status outside the A3 contract is rejected rather than read as some
+    third thing. `cause` must be null or a string — null is a declared absence of a
+    named cause (the FAIL shape), a string names one (an UNVERIFIED abstention's
+    cause). `check` records the executable check and what it did: `source` is the check
+    as the author wrote it ("" when no check was produced — the no-author abstention has
+    no check to quote), `exit_code` the observed process exit, `null` meaning the check
+    did NOT execute (the CheckResult contract) — never a fabricated 0. Every key is
+    required: a shape this loader had to guess at is a case whose expected verdict is
+    unknown, and the recompute would be grounded on a guess.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"case file {path!r} field 'claim' must be an object with 'status', 'cause' "
+            f"and 'check', got {type(raw).__name__}"
+        )
+    if "status" not in raw:
+        raise ValueError(f"case file {path!r} field 'claim' is missing 'status'")
+    if raw["status"] not in _KNOWN_CLAIM_STATUSES:
+        known = ", ".join(sorted(_KNOWN_CLAIM_STATUSES))
+        raise ValueError(
+            f"case file {path!r} field 'claim.status' is {raw['status']!r}; "
+            f"must be one of: {known} (A3 never emits PASS, so PASS is not a claim status)"
+        )
+    if "cause" not in raw:
+        raise ValueError(f"case file {path!r} field 'claim' is missing 'cause'")
+    if raw["cause"] is not None and not isinstance(raw["cause"], str):
+        raise ValueError(
+            f"case file {path!r} field 'claim.cause' is {raw['cause']!r}; "
+            f"must be null or a string"
+        )
+    if "check" not in raw:
+        raise ValueError(f"case file {path!r} field 'claim' is missing 'check'")
+    check = raw["check"]
+    if not isinstance(check, dict):
+        raise ValueError(
+            f"case file {path!r} field 'claim.check' must be an object with 'source' "
+            f"and 'exit_code', got {type(check).__name__}"
+        )
+    if "source" not in check:
+        raise ValueError(f"case file {path!r} field 'claim.check' is missing 'source'")
+    if not isinstance(check["source"], str):
+        raise ValueError(
+            f"case file {path!r} field 'claim.check.source' is {check['source']!r}; "
+            f"must be a string"
+        )
+    if "exit_code" not in check:
+        raise ValueError(f"case file {path!r} field 'claim.check' is missing 'exit_code'")
+    exit_code = check["exit_code"]
+    if exit_code is not None and (not isinstance(exit_code, int) or isinstance(exit_code, bool)):
+        raise ValueError(
+            f"case file {path!r} field 'claim.check.exit_code' is {exit_code!r}; "
+            f"must be an integer or null"
+        )
+    return raw
+
+
 def _to_payload(case: Case) -> dict:
     """A `Case` as the JSON dict written to `case.json`.
 
-    `root_cause`, `target_tool`, `task_prestate`, `recorded_miss` and `trajectory` are
-    OMITTED when unset rather than written as `null`: a default is never a declaration, so
-    "nobody adjudicated a cause" must stay distinguishable from "a cause was recorded as
-    empty", "this case declares no task pre-state" from "a task pre-state was declared as
-    nothing", "no miss was recorded" from "a miss was declared as nothing", and "this is a
-    turn-shaped case" from "a trajectory verdict was declared as nothing".
+    `root_cause`, `target_tool`, `task_prestate`, `recorded_miss`, `trajectory` and
+    `claim` are OMITTED when unset rather than written as `null`: a default is never a
+    declaration, so "nobody adjudicated a cause" must stay distinguishable from "a cause
+    was recorded as empty", "this case declares no task pre-state" from "a task pre-state
+    was declared as nothing", "no miss was recorded" from "a miss was declared as
+    nothing", "this is a turn-shaped case" from "a trajectory verdict was declared as
+    nothing", and "this is a turn-shaped case" from "a claim verdict was declared as
+    nothing".
     """
     optional = {
         name: value
@@ -339,6 +441,7 @@ def _to_payload(case: Case) -> dict:
             ("task_prestate", case.task_prestate),
             ("recorded_miss", case.recorded_miss),
             ("trajectory", case.trajectory),
+            ("claim", case.claim),
         )
         if value is not None
     }
@@ -380,13 +483,15 @@ def load_case(case_dir: Path) -> Case:
     a sub-verdict status outside `_KNOWN_SUB_STATUSES`, a non-integer `schema_version`, or
     a `human_label` outside `_KNOWN_LABELS`, a `task_prestate` matching neither declared
     shape, a `recorded_miss` missing a non-empty note (or declared on an already-`FAIL`
-    case), or a `trajectory` lacking a known `status` or carrying a `cause` that is
-    neither null nor a string each raise a `ValueError` naming the problem — never a
+    case), a `trajectory` lacking a known `status` or carrying a `cause` that is
+    neither null nor a string, or a `claim` lacking any of `status`/`cause`/`check`,
+    carrying a `status` outside the A3 vocabulary (PASS included — A3 never emits it), or
+    with a malformed `check` each raise a `ValueError` naming the problem — never a
     silent default. Two fields
     may be omitted and defaulted: `human_label` -> `pending`, and `schema_version` -> `1`
     (a case written before the field existed IS version 1, not the current version).
-    `root_cause`, `target_tool`, `task_prestate`, `recorded_miss` and `trajectory` are
-    omitted-means-undeclared and read back as `None`. Round-trips:
+    `root_cause`, `target_tool`, `task_prestate`, `recorded_miss`, `trajectory` and
+    `claim` are omitted-means-undeclared and read back as `None`. Round-trips:
     `load_case(write_case(dir, c))` equals `c`.
     """
     path = Path(case_dir) / CASE_FILENAME
@@ -459,8 +564,18 @@ def load_case(case_dir: Path) -> Case:
 
     root_cause = _validate_root_cause(raw.get("root_cause"), path)
     task_prestate = _validate_task_prestate(raw.get("task_prestate"), path)
-    recorded_miss = _validate_recorded_miss(raw.get("recorded_miss"), path, reduced_status)
+    recorded_miss = _validate_recorded_miss(
+        raw.get("recorded_miss"),
+        path,
+        reduced_status,
+        claim_status=(
+            raw["claim"]["status"]
+            if isinstance(raw.get("claim"), dict) and isinstance(raw["claim"].get("status"), str)
+            else None
+        ),
+    )
     trajectory = _validate_trajectory(raw.get("trajectory"), path)
+    claim = _validate_claim(raw.get("claim"), path)
 
     target_tool = raw.get("target_tool")
     if target_tool is not None and not isinstance(target_tool, str):
@@ -494,6 +609,7 @@ def load_case(case_dir: Path) -> Case:
         task_prestate=task_prestate,
         recorded_miss=recorded_miss,
         trajectory=trajectory,
+        claim=claim,
     )
 
 

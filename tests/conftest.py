@@ -43,9 +43,16 @@ CLIENT_LINES = [
 
 
 def run_over_pipes(
-    cmd: list[str], timeout: float = 5.0, env: dict[str, str] | None = None
+    cmd: list[str],
+    timeout: float = 5.0,
+    env: dict[str, str] | None = None,
+    lines: list[bytes] = CLIENT_LINES,
 ) -> list[bytes]:
-    """Spawn `cmd` over real stdio pipes, feed it CLIENT_LINES, return stdout lines as bytes."""
+    """Spawn `cmd` over real stdio pipes, feed it `lines`, return stdout lines as bytes.
+
+    `lines` defaults to `CLIENT_LINES` so every existing caller is byte-identical; a
+    fixture with its OWN scripted client (the claim-liar capture) passes its own.
+    """
     proc = subprocess.Popen(
         cmd,
         stdin=subprocess.PIPE,
@@ -53,7 +60,7 @@ def run_over_pipes(
         stderr=subprocess.PIPE,
         env=env,
     )
-    payload = b"\n".join(CLIENT_LINES) + b"\n"
+    payload = b"\n".join(lines) + b"\n"
     stdout, stderr = proc.communicate(payload, timeout=timeout)
     returncode = proc.wait(timeout=timeout)
     if returncode != 0:

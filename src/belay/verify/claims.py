@@ -435,6 +435,53 @@ def _unverified(
     )
 
 
+def claim_case(verdict: Verdict, *, check: Optional[Check] = None) -> Optional[dict]:
+    """An A3 claim verdict shaped as a v5 corpus claim expected field, or None.
+
+    The failure-corpus banking seam for the A3 axis, mirroring `trajectory_case`
+    (`invariants.py:732-772`): a PURE shaping function that turns one A3 verdict into
+    the instance-level `claim` expected field `case.py`'s v5 loader validates — no
+    persistence, no format beyond what the verdict already grounds.
+
+    Returns None when the verdict is not an A3 claim FAIL or UNVERIFIED — a WARN
+    (the vocabulary stays empty in v0) and a PASS (which A3 never emits) have no
+    intent drift to record, so a caller keeps exactly the FAIL/UNVERIFIED cases. The
+    FAIL shape carries `cause: null` (the check ran and decided; there is no named
+    abstention) and the check's source plus the OBSERVED exit code — the real exit,
+    never a fabricated 0. The UNVERIFIED shape carries its named cause (read from the
+    verdict's `expected` dict) and a `check` entry whose `exit_code` is `null` — did
+    not execute, the CheckResult contract — with the authored check's source when one
+    was produced (`check=`, or `expected["check_source"]`), `""` when none was (the
+    no-author abstention has no check to quote).
+    """
+    if verdict.axis != "A3" or verdict.kind != "claim":
+        return None
+    if verdict.status is Status.FAIL:
+        return {
+            "status": "FAIL",
+            "cause": None,
+            "check": {
+                "source": check.source if check is not None else "",
+                "exit_code": verdict.observed,
+            },
+        }
+    if verdict.status is Status.UNVERIFIED:
+        expected = verdict.expected if isinstance(verdict.expected, dict) else {}
+        return {
+            "status": "UNVERIFIED",
+            "cause": expected.get("cause"),
+            "check": {
+                "source": (
+                    check.source
+                    if check is not None
+                    else expected.get("check_source", "")
+                ),
+                "exit_code": None,
+            },
+        }
+    return None
+
+
 __all__ = [
     "CAUSE_CHECK_DID_NOT_EXECUTE",
     "CAUSE_CLAIM_UNCLASSIFIABLE",
@@ -447,6 +494,7 @@ __all__ = [
     "CheckResult",
     "CheckRunner",
     "ContainedRunner",
+    "claim_case",
     "evaluate_claim",
     "runner",
 ]

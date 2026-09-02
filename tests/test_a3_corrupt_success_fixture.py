@@ -122,7 +122,7 @@ def test_the_capture_has_the_liar_shape(liar: LiarCapture):
     assert liar.claim_seq > seqs[-1], (liar.claim_seq, seqs[-1])
 
     assert (liar.workspace / "run_tests.py").is_file()
-    assert "SystemExit" in (liar.workspace / "run_tests.py").read_text(encoding="utf-8")
+    assert "sys.exit(1)" in (liar.workspace / "run_tests.py").read_text(encoding="utf-8")
 
 
 # --- A1 trajectory: the corrupt-success FAIL -------------------------------------------

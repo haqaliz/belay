@@ -215,16 +215,19 @@ def test_malformed_trajectory_raises_a_named_value_error(tmp_path: Path, bad: ob
 # --- the version bump and its rationale ----------------------------------------------
 
 
-def test_schema_version_is_four_and_the_rationale_docstring_names_v4() -> None:
-    """The version reads 4, and the version-rationale comment states what v4 adds.
+def test_schema_version_is_five_and_the_rationale_docstring_names_v5() -> None:
+    """The version reads 5, and the version-rationale comment states what v5 adds.
 
     The rationale is a `#:` comment on the constant (not reachable via
     `__doc__` -- that would be `int.__doc__`), so it is pinned on the module
-    SOURCE: the block preceding the assignment must name the v4 addition.
+    SOURCE: the block preceding the assignment must name the v5 addition (and
+    still name the v4 one -- the rationale documents every version).
     """
-    assert CASE_SCHEMA_VERSION == 4
+    assert CASE_SCHEMA_VERSION == 5
 
     source = inspect.getsource(case_module)
     rationale = source.split("CASE_SCHEMA_VERSION = ", 1)[0]
+    assert "Version 5" in rationale, rationale
+    assert "claim" in rationale, rationale
     assert "Version 4" in rationale, rationale
     assert "trajectory" in rationale, rationale

@@ -120,7 +120,11 @@ _TASK_MANIFEST_FILENAME = "task_manifest.json"
 
 
 def _safe_case_id(
-    source_trace_id: str, target_turn_index: int, *, trajectory: bool = False
+    source_trace_id: str,
+    target_turn_index: int,
+    *,
+    trajectory: bool = False,
+    claim: bool = False,
 ) -> str:
     """A deterministic, filesystem-safe case dir name from the trace id and turn index.
 
@@ -131,12 +135,16 @@ def _safe_case_id(
 
     A `trajectory` case is INSTANCE-level — it targets the final turn, but the FAIL is the
     whole trajectory — so its id lives in a namespace disjoint from per-turn `-turnN` (turn
-    indices are integers, so `trajectory` can never collide with one). Same derivation, same
-    sanitization.
+    indices are integers, so `trajectory` can never collide with one). A `claim` case is
+    likewise INSTANCE-level — the A3 intent-drift verdict is the whole trace's, not any
+    turn's — and lives in its own disjoint `-claim` namespace, for the same reason. Same
+    derivation, same sanitization.
     """
     base = (
         f"{source_trace_id}-trajectory"
         if trajectory
+        else f"{source_trace_id}-claim"
+        if claim
         else f"{source_trace_id}-turn{target_turn_index}"
     )
     return "".join(c if (c.isalnum() or c in "-_.") else "_" for c in base)
@@ -284,6 +292,7 @@ def add_case(
     source_trace_id: str,
     captured_at: str,
     trajectory: Optional[dict] = None,
+    claim: Optional[dict] = None,
 ) -> Path:
     """Compose `corpus_dir/<case-id>/` from one turn of a run; return the created case dir.
 
@@ -304,6 +313,16 @@ def add_case(
     is `case.py`'s fail-closed `_validate_trajectory` at LOAD time, never a silent drop
     here.
 
+    `claim` is the OPTIONAL schema-v5 INSTANCE-LEVEL A3 expected verdict — `{"status":
+    <FAIL|WARN|UNVERIFIED>, "cause": <named cause or null>, "check": {"source": str,
+    "exit_code": int or null}}`, the shape `claims.claim_case` produces — passed through
+    verbatim and validated by `case.py`'s fail-closed `_validate_claim` at load time.
+    Absent (the default) means the case makes no claim declaration; present declares the
+    case's expected FAIL is an intent drift the A3 axis caught (`claim re-derivation`),
+    not any turn's, and routes the case's recompute through `evaluate_claim` (the
+    instance path). `trajectory` and `claim` are the two instance-level declarations and
+    cannot both be set — one case declares one instance-level contract, never two.
+
     Raises a named `ValueError` when the target turn has no restorable pre-state (an
     `absent`/non-`present` handle) or no persisted manifest is found for its handle — a case
     with no pre-state cannot be a replayable corpus case. And `CaseExistsError` (a
@@ -311,6 +330,11 @@ def add_case(
     so it is never overwritten, and the check runs before ANY write so a refused re-add
     leaves the stored case byte-identical.
     """
+    if trajectory is not None and claim is not None:
+        raise ValueError(
+            "a case cannot declare both a 'trajectory' and a 'claim' instance-level "
+            "expected verdict; one case declares one instance-level contract"
+        )
     handle = _target_state_handle(records, target_turn_index)
     if handle.get("status") != "present":
         raise ValueError(
@@ -325,7 +349,10 @@ def add_case(
         )
 
     case_id = _safe_case_id(
-        source_trace_id, target_turn_index, trajectory=trajectory is not None
+        source_trace_id,
+        target_turn_index,
+        trajectory=trajectory is not None,
+        claim=claim is not None,
     )
     case_dir = Path(corpus_dir) / case_id
     # Collision is decided BEFORE the first write. `trace.jsonl` opens in `"w"` mode below,
@@ -389,6 +416,7 @@ def add_case(
         target_tool=_target_tool_name(records, target_turn_index),
         task_prestate=task_prestate,
         trajectory=trajectory,
+        claim=claim,
     )
     write_case(case_dir, case)
     return case_dir
