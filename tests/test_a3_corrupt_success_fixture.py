@@ -208,7 +208,7 @@ def test_a3_fails_against_the_materialized_final_state(liar: LiarCapture, monkey
     in a SCRATCH workspace (never the live capture tree) that holds the failing
     suite: the exit-1 FAIL is grounded in the restored state, byte for byte.
     """
-    from belay.verify.claims import ContainedRunner, CheckResult
+    from belay.verify.claims import ContainedRunner
 
     seen_workspaces: list[Path] = []
 
