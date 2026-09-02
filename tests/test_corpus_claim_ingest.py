@@ -27,7 +27,6 @@ Seatbelt sandbox); the plain add_case tests need no sandbox and run everywhere.
 
 from __future__ import annotations
 
-import dataclasses
 import json
 import sys
 from pathlib import Path
@@ -35,7 +34,7 @@ from pathlib import Path
 import pytest
 
 from belay.corpus.add import add_case
-from belay.corpus.case import Case, load_case
+from belay.corpus.case import load_case
 from belay.phase0.runner import default_manifest_dir_for
 from belay.replay.reader import read_trace
 from belay.trace import TraceWriter, append_claim_record
@@ -43,7 +42,6 @@ from belay.verify import claims
 from belay.verify.claims import (
     CAUSE_NO_CLAIM_RECORDED,
     Check,
-    CheckResult,
     claim_case,
 )
 from belay.verify.turn import TurnVerdict
