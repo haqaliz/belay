@@ -1614,6 +1614,11 @@ def _cmd_corpus_show(args: argparse.Namespace) -> int:
     REGRESSION / STILL_MISSED / MISS_CLOSED, or SKIP with its reason on this box — as a
     block distinct from the per-turn expected above it. The recompute re-invokes the
     server exactly as `corpus run` does; a box with no sandbox backend renders SKIP.
+
+    A schema-v5 CLAIM case (the case carries the instance-level `claim` expected) renders
+    the same shape on the A3 dimension: the DECLARED claim expected (status + cause, the
+    check source and its recorded exit code — the artifacts A3 surfaces) beside the
+    RECOMPUTED outcome `corpus run` reaches on the claim dimension.
     """
     from belay.corpus.case import load_case
 
@@ -1678,6 +1683,38 @@ def _cmd_corpus_show(args: argparse.Namespace) -> int:
             _emit(f"belay: {exc}")
             return 2
         _emit(f"  trajectory recomputed {result.outcome}")
+        if result.outcome in (REGRESSION, MISS_CLOSED):
+            for div in result.divergences:
+                where = div.kind if not div.axis else f"{div.axis} {div.kind}"
+                _emit(f"      {where:<24}{div.expected_status} -> {div.got_status}")
+        elif result.outcome == SKIP:
+            _emit(f"      {result.skip_reason}")
+    if case.claim is not None:
+        # A schema-v5 INSTANCE-LEVEL case: the expected verdict is the A3 claim
+        # re-derivation's, and the per-turn block above is only the final turn's proxy
+        # record. Render the DECLARED instance-level claim expected (status + cause,
+        # the check source and its recorded exit code — the artifacts A3 surfaces) beside
+        # the RECOMPUTED outcome of the same instance path `corpus run` uses, so the
+        # declared-vs-recomputed distinction the run surface draws is readable on the
+        # case itself. Recomputation failures are fail-closed, exactly as load failures
+        # above: never an empty success.
+        from belay.corpus.run import MISS_CLOSED, REGRESSION, SKIP, run_case
+
+        status = case.claim["status"]
+        cause = case.claim.get("cause")
+        check = case.claim["check"]
+        exit_code = check["exit_code"]
+        _emit(f"  claim expected        {status}  (cause: {cause or 'none'})")
+        _emit(
+            f"      check: {check['source']}"
+            f"  (exit {exit_code if exit_code is not None else 'n/a'})"
+        )
+        try:
+            result = run_case(case_dir)
+        except ValueError as exc:
+            _emit(f"belay: {exc}")
+            return 2
+        _emit(f"  claim recomputed      {result.outcome}")
         if result.outcome in (REGRESSION, MISS_CLOSED):
             for div in result.divergences:
                 where = div.kind if not div.axis else f"{div.axis} {div.kind}"
