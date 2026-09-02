@@ -612,6 +612,12 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     computation, two renderers — and the exit code is unchanged. An internal failure
     emits an `{"error": ...}` document with the same non-zero exit, never a truncated
     one.
+
+    The A3 claim axis evaluates the trace's closing claim at trace close, WHOLE-TRACE
+    only (with `--turn N` the facts seam is partial, so no A3 verdict exists — the
+    same rule as the trajectory seam): the author (`--claim-author CMD`, or
+    `BELAY_CLAIM_AUTHOR`) writes an executable check, EXECUTION decides, and A3 never
+    PASSes. `--no-claim-axis` disables the axis entirely and wins over both.
     """
     from belay.index import derive_correlation, tool_calls
     from belay.replay.reader import TraceCorrupt, read_trace
@@ -1908,6 +1914,12 @@ def _cmd_phase0_run(args: argparse.Namespace) -> int:
 
     The ledger records the A1 rules that were in force, so a stored result can be dated: a
     ledger with no detector recorded reports `unrecorded` and is never read as current.
+
+    The A3 claim axis runs per trace at trace close when `BELAY_CLAIM_AUTHOR` names a
+    local author command: the check it writes runs in the materialized final state and
+    its exit code decides (A3 never PASSes). An A3 FAIL flags the instance
+    `VERIFIED_FLAGGED` and banks a `{trace}-claim` intent-drift case; `--no-claim-axis`
+    disables the axis for the whole batch and wins over the env.
 
     `--no-ingest` makes the run a pure measurement: no corpus case is written at all, while
     every verdict, count and rate stays exactly what it would have been. It suppresses
