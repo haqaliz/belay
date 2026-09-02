@@ -5,6 +5,83 @@ All notable changes to Belay are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0 — until then,
 `0.x` minor bumps may include changes that would be breaking under strict semver.
 
+## [0.27.0] - 2026-09-02
+
+The **A3 claim axis ships — the last engine capability (C8)**. A model writes an executable
+check for the agent's claim; **execution decides**: the check runs contained in the sandbox
+against the recorded final state, and its **exit code** is the verdict — not the model's
+opinion. A3 may emit only WARN / FAIL / UNVERIFIED, **never PASS**; a check that exits 0 is
+**silence** (the claim re-derives; silence is not PASS), and a check that will not execute is
+`UNVERIFIED` with a named cause, never a guess. This is the axis that catches **intent
+drift** — faithful trace, in-policy actions, wrong meaning — and the one the Phase 1→2 gate
+requires: *no shipped PASS is ever produced by A3, verified by test*.
+
+### Added
+
+- **The A3 evaluator** (`src/belay/verify/claims.py`) — instance-level, beside the
+  trajectory rule: reads the trace's `claim` record, reuses the closed deterministic
+  classifier as the trigger gate, materializes the recorded final state (replay of the
+  final turn), runs the synthesized check under `contained` (network deny-all, bounded
+  timeout), and emits at most one `A3/claim` verdict. Closed cause vocabulary:
+  `NO_CLAIM_RECORDED`, `CLAIM_UNCLASSIFIABLE`, `NO_CHECK_AUTHOR`,
+  `CHECK_DID_NOT_EXECUTE`, `FINAL_STATE_UNOBSERVABLE`. Every A3 verdict surfaces the
+  check's **source** and **real exit code**.
+- **The out-of-process BYOK check author** (`src/belay/verify/author.py`) —
+  `BELAY_CLAIM_AUTHOR` (or `--claim-author` on `belay verify`) names a **local** command;
+  the wheel gains no dependency and nothing leaves the box. No author configured → the
+  axis is **absent**, named on the coverage line — never UNVERIFIED, never PASS. The
+  live-model path is a `manual`-marked gate, never CI.
+- **`--no-claim-axis`** on `belay verify`, `belay phase0 run` and `belay corpus run` —
+  and **the refutation test**: the corpus re-runs with and without the flag and every
+  PASS and every FAIL verdict is **identical** (the claim case SKIPs with
+  `CLAIM_AXIS_DISABLED`, never REGRESSES). The test's docstring: *"this test is the
+  company's positioning encoded as CI — it must never be weakened."*
+- **Instance-level A3 on every surface** — the text A3 line beside the trajectory line,
+  the JSON `claim_record` (absent key when absent — the pinned `--json` fixture is
+  byte-unchanged), `A3/...` labels in `canonical_cause`, phase0 disposition
+  (A3 FAIL → `VERIFIED_FLAGGED`, banks an **intent-drift** case; UNVERIFIED never flags),
+  ledger/report **absent-never-zero**.
+- **Corpus case schema v5** — the instance-level `claim` expected field
+  (`{"status", "cause", "check": {"source", "exit_code"}}`), `{trace}-claim` id
+  namespace, recompute on the A3 dimension, and the zero-LLM import guard's escape-hatch
+  note amended deliberately (the author is out-of-process by construction).
+- **The acceptance-4 re-scope, as tests** — the launch demo (the negative control) stays
+  all-green **with A3 present** (the check re-derives the true claim → silence), and a
+  synthetic corrupt-success fixture yields **A3 FAIL corroborating A1 trajectory FAIL on
+  the same fixture, from an independent axis**, with A2 never FAILing on it (the axes
+  stay non-redundant — asserted, not assumed).
+
+### Unchanged, and pinned
+
+- **`verdict.reduce` is untouched** — axis-agnostic by construction; A3's
+  downgrade-only property falls out for free. A1 and A2 verdicts, `NOT_COVERED`
+  semantics, and every per-turn surface are byte-identical.
+- **The refutation guarantee is a test, not a doc line** — every PASS/FAIL verdict
+  survives `--no-claim-axis`, enforced on the corpus and on the demo capture.
+- **Absent-never-zero everywhere** — no author / no claim / silence renders as absence or
+  named cause, never a fabricated clean and never a fabricated UNVERIFIED.
+
+### Honesty notes — read before quoting anything
+
+- **A3 is dark by default.** No author configured → the axis is absent. The coverage line
+  names it, and the README carries the one-line configuration — but no stranger's run
+  exercises A3 until they configure an author.
+- **No real intent-drift case exists yet.** The corrupt-success fixture is synthetic; the
+  mint's next run is where the A3 column gets its first real measurement. The value is
+  **forward-looking**, stated plainly — the same discipline as the trajectory corpus.
+- **Reclassification discipline holds.** `11/60 = 18.3%`, the 11 hand-audited TPs,
+  `precision 0.00`, `1/15` and `4/16` stand unedited. No Phase-0 number, verdict axis or
+  status moves.
+- **Suite 2062 → 2091 tests passing** (25 named-cause skips, 10 deselected; the docker
+  in-image and compose modules verified on re-run).
+
+### Not built, and named
+
+The A3 WARN vocabulary stays empty (v0 emits FAIL / UNVERIFIED / silence only); a
+caller-supplied final-workspace short-circuit for the evaluator's second replay is a
+follow-on, not v0; C9 export-back and GHCR publish remain deferred by name; the A3
+check grammar is an executable artifact with a declared argv — no structured check DSL.
+
 ## [0.26.0] - 2026-09-01
 
 The failure corpus can now hold the trajectory axis — the axis that earned the Phase-0

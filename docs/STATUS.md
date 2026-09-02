@@ -10,6 +10,40 @@ carries the current state and the rules that still bind.
 
 ---
 
+**THE A3 CLAIM AXIS SHIPS — THE LAST ENGINE CAPABILITY (C8) IS BUILT** (2026-09-02,
+`claim-re-derivation-a3`, v0.27.0). A model writes an executable check for the agent's
+claim; **execution decides**: the check runs contained in the sandbox against the recorded
+final state (replay of the final turn), and its **exit code** is the verdict — never the
+model's opinion. A3 emits only WARN / FAIL / UNVERIFIED — **never PASS**; a check that
+exits 0 is **silence** (D3: the claim re-derives; silence is not PASS); a check that will
+not execute is `UNVERIFIED` with a named cause from a closed vocabulary
+(`NO_CLAIM_RECORDED`, `CLAIM_UNCLASSIFIABLE`, `NO_CHECK_AUTHOR`, `CHECK_DID_NOT_EXECUTE`,
+`FINAL_STATE_UNOBSERVABLE`). The author is **out-of-process BYOK**
+(`BELAY_CLAIM_AUTHOR` / `--claim-author`): a local command, JSON-in/JSON-out, zero new
+dependencies, nothing leaves the box — and **A3 is dark by default**: no author configured
+means the axis is **absent**, named on the coverage line, never UNVERIFIED and never PASS.
+**The refutation ships as a test, not a doc line**: `belay corpus run` with and without
+`--no-claim-axis` (on verify / phase0 run / corpus run) yields **identical PASS/FAIL
+everywhere** — the claim case SKIPs `CLAIM_AXIS_DISABLED`, never REGRESSES — and the
+test's docstring says *"this test is the company's positioning encoded as CI — it must
+never be weakened."* Corpus case schema **v5** carries the instance-level `claim` expected
+field (`{trace}-claim` namespace, recompute on the A3 dimension, intent-drift cases bank
+from A3 FAIL → `VERIFIED_FLAGGED`, absent-never-zero on every surface). **Acceptance 4
+was re-scoped with the owner (D1, 2026-09-02)** because the launch demo shipped as the
+negative control: the demo capture stays all-green **with A3 present** (the check
+re-derives the true claim → silence), and a synthetic corrupt-success fixture — command
+tool offered, zero command turns, "all tests pass" claim, failing suite — yields **A3 FAIL
+corroborating A1 trajectory FAIL from an independent axis**, with A2 never FAILing on it.
+**Honesty notes:** no real intent-drift case exists yet — the fixture is synthetic and the
+value is forward-looking (the mint's next run fills the A3 column); `11/60 = 18.3%`, the
+11 hand-audited TPs, `precision 0.00`, `1/15`, `4/16` stand unedited; `verdict.reduce`
+and every A1/A2 surface are byte-identical. Suite 2062 → **2091** tests passing (25
+named-cause skips; docker in-image + compose modules verified). **Not built, by name:**
+the A3 WARN vocabulary (empty in v0), the evaluator's caller-supplied-workspace
+short-circuit (follow-on), C9 export-back, GHCR publish. The zero-LLM import guard was
+updated as the deliberate, visible decision its escape hatch pre-registered. See
+`docs/planning/claim-re-derivation-a3/` and `CHECKLIST.md` → L8.
+
 **THE FAILURE CORPUS CAN NOW HOLD THE TRAJECTORY AXIS — the case-id namespace is
 DISJOINT** (2026-09-01, `corpus-trajectory-banking`, v0.26.0). Trajectory FAILs bank as
 corpus cases minted `f"{source_trace_id}-trajectory"` — an **instance-level** namespace,
