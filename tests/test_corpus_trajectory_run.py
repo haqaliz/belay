@@ -784,7 +784,9 @@ def test_a_case_written_in_the_pre_change_format_still_loads_and_recomputes(
         "capture_platform",
         "capture_capabilities",
     }, sorted(stored)
-    assert stored["schema_version"] == 4
+    # The literal tracks CASE_SCHEMA_VERSION (v5 since claim-re-derivation); the
+    # assertion that matters is the KEY SET above — no shell-command field appeared.
+    assert stored["schema_version"] == 5
     assert stored["server_command"] == ["fs-server"]
 
     assert run_case(case_dir).outcome == MATCH

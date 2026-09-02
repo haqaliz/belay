@@ -150,6 +150,7 @@ from belay.phase0.runner import _verify_one_trace
 from belay.replay.reader import read_trace
 from belay.replay.report import REPLAY_DID_NOT_ANSWER, canonical_cause
 from belay.snapshot.substrate import UnrestorableCause
+from belay.verify.claims import Check, evaluate_claim
 from belay.verify.invariants import Invariant
 from belay.verify.turn import TurnVerdict, verify_turn
 from belay.verify.verdict import Status
@@ -194,6 +195,13 @@ _SKIP_CAUSES = frozenset(
         UnrestorableCause.UNRESTORABLE_CAPABILITY_MISMATCH.value,
     }
 )
+
+#: The named cause a claim-bearing case SKIPs with under `disable_claim_axis=True`
+#: (the `--no-claim-axis` refutation). Decided BEFORE any replay or re-execution, so a
+#: disabled axis can never REGRESS a case — and it is NOT in `_SKIP_CAUSES`, because
+#: that set is the environment/substrate gap space: this cause is the OPERATOR'S
+#: declared choice, and `run_case` files it directly on the claim path.
+CLAIM_AXIS_DISABLED = "CLAIM_AXIS_DISABLED"
 
 
 @dataclass(frozen=True)
@@ -543,8 +551,158 @@ def _recompute_trajectory_case(
     )
 
 
+#: The (axis, kind) of a CLAIM-level divergence. A claim verdict is not a per-turn
+#: sub-verdict: `_divergences`'s `(axis, kind)` dict keying matches recomputed
+#: sub-verdicts against the stored `expected`, and an instance-level mismatch must be
+#: reported by name on its own dimension — never collapsed into (or hidden among) the
+#: turn-shaped keys. Same convention as `_TRAJECTORY_DIVERGENCE`, on the claim axis.
+_CLAIM_DIVERGENCE = ("claim", "status")
+
+
+def _claim_divergence(expected_status: Optional[str], got_status: Optional[str]) -> Divergence:
+    """One instance-level mismatch, named on the claim dimension.
+
+    `expected_status` / `got_status` are the stored vs recomputed claim STATUS; either
+    is `None` when one side carried no verdict at all (a stored FAIL recomputing to
+    SILENCE — `evaluate_claim` returned None, exit 0 — has `got_status=None`, and a
+    declaration with no rule to recompute it has `expected_status=None`).
+    """
+    return Divergence(_CLAIM_DIVERGENCE[0], _CLAIM_DIVERGENCE[1],
+                      expected_status, got_status)
+
+
+def _classify_claim_case(
+    expected: dict,
+    recomputed_status: Optional[str],
+    *,
+    case_id: str,
+    recorded_miss: Optional[dict],
+) -> CaseResult:
+    """Classify an instance-level recompute against a claim case's expected verdict.
+
+    A claim case's contract is the INSTANCE-LEVEL claim status (`case.claim.status`),
+    not any turn's `expected` set — the per-turn shape on the case is the final turn's
+    proxy record, and `corpus run` re-derives the A3 verdict or nothing. Status
+    equality is therefore the MATCH condition, decided on that one dimension:
+
+    - equal -> MATCH, or **STILL_MISSED** when the case declares a recorded miss (equal
+      there means the engine is still blind on the claim dimension, which is not
+      agreement — the same inversion `classify_case` applies to turn-shaped cases).
+    - otherwise -> REGRESSION, named on the claim dimension.
+
+    **Declared-miss semantics, decided with a test (plan §2).** The claim dimension's
+    non-catch is SILENCE (A3 never emits PASS — `evaluate_claim` returns None on an
+    exit-0 check), so the turn-level PASS->FAIL close has no analogue to store:
+    `_validate_recorded_miss` refuses a stored claim FAIL beside a declaration (a miss
+    that was caught is a contradiction), and a declared-miss claim case records the
+    engine's non-catch (an UNVERIFIED abstention; silence has no status). Its recompute
+    therefore reads:
+
+    - silence (None) -> **STILL_MISSED** — the drift is still open: a check that
+      still exits 0 caught nothing, which is not the close and not agreement;
+    - FAIL -> **MISS_CLOSED** — the ONE exempted claim-dimension transition: a
+      sharpened check now FAILs the banked drift, and a closed miss must not break
+      the build;
+    - anything else (an UNVERIFIED abstention that is not the stored status) ->
+      REGRESSION.
+
+    There is NO PASS close: A3 never emits PASS, so no branch for it exists in this
+    classifier — a recomputed status of PASS is outside the axis's vocabulary by
+    construction (`_validate_claim` rejects it on the stored side; `evaluate_claim`
+    can never produce it on the recompute side).
+
+    `recorded_miss` is the DECLARATION, passed in by `run_case` from the loaded case;
+    `None` is an undeclared case. Pure: no replay, no server, no model.
+    """
+    expected_status = expected["status"]
+    declared = recorded_miss is not None
+
+    if recomputed_status == expected_status:
+        return CaseResult(case_id=case_id, outcome=STILL_MISSED if declared else MATCH)
+
+    divergence = [_claim_divergence(expected_status, recomputed_status)]
+    if declared and recomputed_status is None:
+        return CaseResult(case_id=case_id, outcome=STILL_MISSED, divergences=[])
+    if declared and recomputed_status == "FAIL":
+        return CaseResult(case_id=case_id, outcome=MISS_CLOSED, divergences=divergence)
+    return CaseResult(case_id=case_id, outcome=REGRESSION, divergences=divergence)
+
+
+class _StoredCheckAuthor:
+    """The recompute's author: re-issues the case's stored check, verbatim.
+
+    The A3 re-derivation on a banked case is the stored check re-executed against the
+    re-materialized final state — the check the model wrote at capture time is what
+    the regression suite holds, and re-running it is the deterministic re-derivation
+    (the model seam stays out of `corpus run`; the check is the model's artifact). The
+    re-execution convention is `sh -c <source>`: the v5 payload records the check's
+    source only (the thing a reader quotes), so the stored source IS the command line,
+    re-run through `sh` in the materialized workspace — documented, deterministic, and
+    what the E2E liar roundtrip exercises with the real runner.
+    """
+
+    def __init__(self, source: str):
+        self._source = source
+
+    def author_check(self, claim_text, *, classification, turns, final_state_files):
+        return Check(source=self._source, argv=("sh", "-c", self._source))
+
+
+def _recompute_claim_case(
+    case_dir: Path,
+    case: Case,
+    expected: dict,
+    *,
+    disable_claim_axis: bool = False,
+) -> CaseResult:
+    """Recompute an INSTANCE-LEVEL claim case, and classify it.
+
+    A claim case's expected verdict is the A3 claim re-derivation's, so no single
+    `verify_turn` can re-derive it — `_recompute_trajectory_case`'s instance path
+    re-verifies the whole trace per turn, which A3 is not: `evaluate_claim` judges one
+    claim for the whole instance. So this function routes DIRECTLY into
+    `evaluate_claim` (no per-turn loop): the stored trace's records + claim skips, the
+    case's own `manifest_dir` (the engine resolves the turns' recorded handles to the
+    bundled manifests exactly as the per-turn path does), the stored `server_command`
+    and `timeout`, and a deterministic author that re-issues the stored check. The
+    final state is materialized inside `evaluate_claim` by replaying the stored trace's
+    LAST `tools/call` turn into a scratch workspace (shell routing honored exactly as
+    `verify_turn` honors it) — the case is self-contained, so the recompute is real.
+
+    **`disable_claim_axis=True` SKIPs before anything else** — before the trace is
+    even read: the operator declared the A3 axis off, so the case is not evaluated on
+    this dimension here, with the named cause `CLAIM_AXIS_DISABLED`. Never a
+    REGRESSION (the refutation's load-bearing rule: `belay --no-claim-axis` must leave
+    every PASS/FAIL verdict unchanged and the claim case SKIPs, never REGRESSES), and
+    never a MATCH (a case not evaluated is not agreed).
+    """
+    if disable_claim_axis:
+        return CaseResult(case_id=case.id, outcome=SKIP, skip_reason=CLAIM_AXIS_DISABLED)
+
+    read = read_trace(Path(case_dir) / "trace.jsonl")
+    recomputed = evaluate_claim(
+        records=list(read.records),
+        skips=read.skips,
+        verdicts={},
+        author=_StoredCheckAuthor(expected["check"]["source"]),
+        manifest_dir=case_dir,
+        server_command=case.server_command,
+        timeout=case.timeout,
+    )
+    recomputed_status = recomputed.status.value if recomputed is not None else None
+    return _classify_claim_case(
+        expected,
+        recomputed_status,
+        case_id=case.id,
+        recorded_miss=case.recorded_miss,
+    )
+
+
 def run_case(
-    case_dir: Path, *, shell_server_command: Optional[Sequence[str]] = None
+    case_dir: Path,
+    *,
+    shell_server_command: Optional[Sequence[str]] = None,
+    disable_claim_axis: bool = False,
 ) -> CaseResult:
     """Load a case, recompute its target turn by REAL re-verification, and classify it.
 
@@ -598,6 +756,16 @@ def run_case(
             shell_server_command=shell_server_command,
         )
 
+    # A claim case (schema v5) is INSTANCE-LEVEL on the A3 dimension: its expected
+    # verdict is the claim re-derivation's, which no single `verify_turn` can express,
+    # so it is recomputed through `evaluate_claim` directly (see
+    # `_recompute_claim_case`). Under `disable_claim_axis` it SKIPs with the named
+    # cause — decided there, before any replay, never a REGRESSION.
+    if case.claim is not None:
+        return _recompute_claim_case(
+            case_dir, case, case.claim, disable_claim_axis=disable_claim_axis
+        )
+
     records = read_trace(Path(case_dir) / "trace.jsonl").records
     invariants = [
         Invariant(scope=os.fsencode(d["scope"]), rule=d["rule"]) for d in case.invariants
@@ -617,7 +785,10 @@ def run_case(
 
 
 def run_corpus(
-    corpus_dir: Path, *, shell_server_command: Optional[Sequence[str]] = None
+    corpus_dir: Path,
+    *,
+    shell_server_command: Optional[Sequence[str]] = None,
+    disable_claim_axis: bool = False,
 ) -> CorpusRun:
     """Re-verify every case directory under `corpus_dir` and aggregate the outcomes.
 
@@ -627,17 +798,24 @@ def run_corpus(
     regress against fewer cases than it holds — the exact false-completeness the corpus refuses.
 
     `shell_server_command` is threaded to every case unchanged; see `run_case` for which
-    half of the corpus it reaches and why.
+    half of the corpus it reaches and why. `disable_claim_axis` is threaded to every
+    case unchanged too; it reaches the claim half only (a per-turn or trajectory case is
+    byte-identical under it — the refutation).
     """
     corpus_dir = Path(corpus_dir)
     results = [
-        run_case(d, shell_server_command=shell_server_command)
+        run_case(
+            d,
+            shell_server_command=shell_server_command,
+            disable_claim_axis=disable_claim_axis,
+        )
         for d in sorted(p for p in corpus_dir.iterdir() if p.is_dir())
     ]
     return CorpusRun(results=results)
 
 
 __all__ = [
+    "CLAIM_AXIS_DISABLED",
     "MATCH",
     "MISS_CLOSED",
     "REGRESSION",
