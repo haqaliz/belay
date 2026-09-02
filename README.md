@@ -112,6 +112,19 @@ For each recorded `tools/call`, Belay restores its pre-state, re-invokes the ser
 
 Both are decided by **re-execution and diffing. No model is consulted** — enforced by an AST test that bans any inference import from the verdict path.
 
+**A3 — the claim axis — is the ONE place a model may sit, and only by your choice.** It is **dark by default**: with no author configured, no A3 verdict exists — never PASS, never a fabricated UNVERIFIED. To turn it on, name a **local** command that writes an executable check for the trace's claim (nothing leaves the box — no vendor key, nothing proxied):
+
+```bash
+# an author command answers on stdout with {"source": ..., "argv": [...]} — the check
+# EXECUTION will run against the materialized final state. Point BELAY_CLAIM_AUTHOR
+# at a local model CLI, or at any command of your own:
+export BELAY_CLAIM_AUTHOR="python3 -c 'import json,sys;json.dump({\"source\": \"python3 run_tests.py\", \"argv\": [\"python3\", \"run_tests.py\"]},sys.stdout)'"
+belay verify ./traces/<run>.jsonl --manifest-dir ./traces.manifests --server my-mcp-server
+# or, one run at a time:  belay verify ... --claim-author "your-command ..."
+```
+
+The command receives the claim plus the observed facts on stdin and answers with an executable check; Belay runs that check **contained** against the materialized final state, and the **exit code is the verdict** — a model writes the check, execution decides (A3 never PASSes: an exit 0 is silence). Disable the axis with `--no-claim-axis` (on `verify`, `phase0 run` and `corpus run`); the refutation — every PASS/FAIL verdict identical with the axis off — is enforced by `tests/test_refutation_no_claim_axis.py`.
+
 ### 3 · Grow the corpus
 
 ```bash
@@ -172,7 +185,7 @@ The engine is built in capability layers (see [the roadmap](docs/technical/CAPAB
 |------|-----------|----------|---------|--------|
 | **A1 · Invariant** | A task-scoped policy, violated during replay | PASS / WARN / FAIL / UNVERIFIED | **Corrupt success** (the 27–78%) | ✅ built (C5) |
 | **A2 · Replay** | Re-execution + state diff | PASS / WARN / FAIL / UNVERIFIED **· NOT_COVERED** (sub-verdict only) | **Trace infidelity** (fabricated / tampered results) | ✅ built (C4) |
-| **A3 · Claim re-derivation** | A model *writes* a check; **execution** decides | WARN / FAIL / UNVERIFIED — **never PASS** | **Intent drift** | ⏳ planned (C8), cuttable |
+| **A3 · Claim re-derivation** | A model *writes* a check; **execution** decides | WARN / FAIL / UNVERIFIED — **never PASS** | **Intent drift** | ✅ built (C8) |
 
 `NOT_COVERED` is a **sub-verdict-only** status, and it is deliberately not one of the four a turn can reduce to. It marks a dimension Belay has **no instrument for at all** — as opposed to `UNVERIFIED`, which means Belay tried and could not. The reduction **drops it before ranking**, so it never lowers a turn and never lifts one; if nothing scoreable remains the turn is `UNVERIFIED`, never `NOT_COVERED` and never `PASS`. The trade is stated plainly in [Coverage & limits](#a-pass-excludes-the-network-dimension): a `PASS` is a pass *on the dimensions Belay checks*, and every surface that prints a status also prints what fell outside them.
 

@@ -292,11 +292,20 @@ green on both in CI); no Docker image yet (L3), not published to PyPI (L4).
 
 ## Block D — Optional, only after A–C are done
 
-### ☐ L8 · C8 claim re-derivation (A3) — **cuttable, do not start early**
+### ✅ L8 · C8 claim re-derivation (A3) — **cuttable, do not start early**
 
 - **DONE =** C8 ships with A3 subordinated, `--no-claim-axis` refutation enforced by
   test, and every PASS/FAIL surviving unchanged. If the calendar slips, this is what
   slips — never Block A or B.
+- **Marked DONE 2026-09-02** — C8 shipped: A3 is subordinated (downgrade-only; a
+  WARN/FAIL/UNVERIFIED axis gated behind `--no-claim-axis` on `verify`, `phase0 run`
+  and `corpus run`, absent-never-zero on every surface), and the refutation is
+  enforced by `tests/test_refutation_no_claim_axis.py` ("this test is the company's
+  positioning encoded as CI — it must never be weakened"): a corpus holding per-turn,
+  trajectory and a banked claim case runs with and without the flag — every PASS and
+  every FAIL verdict identical, the claim case SKIPs `CLAIM_AXIS_DISABLED` (never
+  REGRESSION) — and the committed demo capture verifies to the same document with
+  the axis live (D3 silence) and off.
 
 ---
 
@@ -323,7 +332,9 @@ green on both in CI); no Docker image yet (L3), not published to PyPI (L4).
       whether to record a second gif of a run that FAILs, from the mint's banked —
       and therefore not reader-reproducible — captures). Box stays ☐ until those are
       answered.
-- [ ] **L8** — optional; absence of A3 is not a blocker, by design.
+- [x] **L8** — C8 ships (2026-09-02): A3 subordinated, `--no-claim-axis` refutation
+      enforced by `tests/test_refutation_no_claim_axis.py`, every PASS/FAIL surviving
+      unchanged.
 
 **If any item is still ☐, the launch date is not set — the item list is.** The last
 check is "the gate is true," which is checkable, not a feeling.
