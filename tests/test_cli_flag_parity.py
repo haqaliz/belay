@@ -36,22 +36,35 @@ from belay import cli
 
 #: The surfaces that restore a pre-state and re-invoke an MCP server. `sandbox check`,
 #: `corpus label/list/show/score`, `phase0 report/combine` are excluded because they
-#: replay nothing — a `--server` on them would be meaningless.
-REPLAY_BEARING = ("replay", "verify", "corpus add", "phase0 run", "interop correlate")
+#: replay nothing — a `--server` on them would be meaningless. `corpus run` is IN scope:
+#: it re-verifies every stored case by re-execution (it was omitted from the original
+#: list because it carried no flags at all; it carries the claim-axis flag now).
+REPLAY_BEARING = (
+    "replay",
+    "verify",
+    "corpus add",
+    "corpus run",
+    "phase0 run",
+    "interop correlate",
+)
 
 _ALL = frozenset(REPLAY_BEARING)
 
 #: flag -> the replay-bearing surfaces that MUST carry it.
 EXPECTED: dict[str, frozenset[str]] = {
-    # The replay boundary itself. Every surface that re-invokes needs one.
-    "--server": _ALL,
+    # The replay boundary itself. Every surface that re-invokes needs one, EXCEPT
+    # `corpus run`: each stored case carries its own resolved server command
+    # (`add_case` records it), so the batch never takes one.
+    "--server": _ALL - {"corpus run"},
     # The determinism gate's re-invoke count: shared by every surface that can reach a
-    # DIVERGED reply, which is all of them.
-    "--replays": _ALL,
+    # DIVERGED reply, which is all of them — except `corpus run`, whose per-case
+    # replays count is recorded on the case at ingest.
+    "--replays": _ALL - {"corpus run"},
     # The per-replay wall. `replay` is excluded: it is the raw re-invoke surface with no
     # verdict of its own, and its timeout has never been operator-settable. If it ever
-    # grows one, this row is the place that says so.
-    "--timeout": _ALL - {"replay"},
+    # grows one, this row is the place that says so. `corpus run` is excluded the same
+    # way: a case's timeout is recorded on the case, never operator-settable.
+    "--timeout": _ALL - {"replay", "corpus run"},
     # Per-tool routing: a recorded `run_process` turn replays against this instead.
     # `replay` re-invokes one named turn, so the operator already chooses the server;
     # `corpus add` and `interop correlate` are DELIBERATELY out of scope for the unit that
@@ -60,7 +73,9 @@ EXPECTED: dict[str, frozenset[str]] = {
     "--shell-server": frozenset({"verify", "phase0 run"}),
     # Where the gate persisted the run's snapshot manifests. `phase0 run` is excluded: it
     # takes a whole trace DIRECTORY and resolves each trace's `.manifests` sibling itself.
-    "--manifest-dir": _ALL - {"phase0 run"},
+    # `corpus run` is excluded the same way, one level further: a case is self-contained
+    # — its manifests are bundled IN the case dir, so the batch never points at a sibling.
+    "--manifest-dir": _ALL - {"phase0 run", "corpus run"},
     # Single-turn narrowing. The batch surfaces (`phase0 run`) and the span-driven one
     # (`interop correlate`) have no single-turn meaning.
     "--turn": frozenset({"replay", "verify", "corpus add"}),
@@ -72,6 +87,14 @@ EXPECTED: dict[str, frozenset[str]] = {
     "--json": frozenset({"verify", "interop correlate"}),
     # Where corpus cases are read/written.
     "--corpus-dir": frozenset({"corpus add", "phase0 run"}),
+    # The A3 claim axis (C8). Shared by every surface that can evaluate a claim at
+    # the instance level; `replay` and `corpus add` evaluate no instance-level
+    # verdict, and `interop correlate` attaches existing verdicts only.
+    "--no-claim-axis": frozenset({"verify", "phase0 run", "corpus run"}),
+    # The INTERACTIVE A3 author surface: `belay verify` takes the author command as a
+    # flag; the batch surfaces are env-only (`BELAY_CLAIM_AUTHOR`) by design (plan
+    # open question, decided at plan time).
+    "--claim-author": frozenset({"verify"}),
 }
 
 
