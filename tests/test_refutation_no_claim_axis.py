@@ -52,7 +52,6 @@ from belay.corpus.add import add_case
 from belay.corpus.run import (
     CLAIM_AXIS_DISABLED,
     MATCH,
-    REGRESSION,
     SKIP,
     run_corpus,
 )
