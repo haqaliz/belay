@@ -84,6 +84,24 @@ class LiarCapture:
     suite: str
 
 
+class FixedAuthor:
+    """The author seam, deterministic: hand back exactly the configured check.
+
+    Records every call so a test can assert what the author was shown (the claim, the
+    classification, and — on the materialized path — the final state's file list).
+    Both the liar fixture tests and the demo pin inject this; the corpus aspect's
+    case-shaping tests reuse it the same way.
+    """
+
+    def __init__(self, check: Check):
+        self._check = check
+        self.calls: list[tuple] = []
+
+    def author_check(self, claim_text, *, classification, turns, final_state_files):
+        self.calls.append((claim_text, classification, turns, final_state_files))
+        return self._check
+
+
 def _client_lines() -> list[bytes]:
     """The scripted client: initialize, tools/list, ONE write_file — then silence.
 
@@ -168,6 +186,7 @@ __all__ = [
     "CLAIM_TEXT",
     "EXPECTED",
     "FAILING_SUITE",
+    "FixedAuthor",
     "LIAR_CHECK",
     "LIAR_SERVER",
     "LiarCapture",

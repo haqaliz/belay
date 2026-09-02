@@ -58,6 +58,8 @@ from pathlib import Path
 
 import pytest
 
+from belay.verify.claims import Check
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEMO = REPO_ROOT / "demo"
 DEMO_REPO = DEMO / "repo"
@@ -511,3 +513,87 @@ def test_the_coverage_boundary_travels_with_the_verdict(report):
     assert report["coverage"], report["coverage"]
     assert "effect:network" in report["coverage"], sorted(report["coverage"])
     assert report["trajectory"] is not None, "the trajectory must travel with the verdict"
+
+
+# --- the demo stays green with A3 present (acceptance 4, re-scoped 2026-09-02) ---------
+
+#: The A3 check the fake author returns for the committed capture: re-derive "all tests
+#: pass" by EXECUTING the repo's suite in the materialized final state. The demo repo
+#: has no `run_tests.py` — the server's whitelisted argv is a nominal name for the
+#: in-process runner (`demo/server.py:229`) — so the check mirrors that runner's shape
+#: (exec every `tests/test_*.py`, call every `test_*` callable) instead of the bare
+#: argv the plan first named. Deterministic, stdlib-only, no clock, no network: on the
+#: FIXED final state (all six tests pass) it exits 0 — and A3 is silent (D3).
+_DEMO_SUITE_CHECK_CODE = (
+    "import runpy, sys\n"
+    "sys.path.insert(0, '.')\n"
+    "failed = []\n"
+    "for path in ('tests/test_spellcheck.py', 'tests/test_slow_spellcheck.py'):\n"
+    "    namespace = runpy.run_path(path)\n"
+    "    for name, value in namespace.items():\n"
+    "        if name.startswith('test_') and callable(value):\n"
+    "            try:\n"
+    "                value()\n"
+    "            except BaseException:\n"
+    "                failed.append((path, name))\n"
+    "if failed:\n"
+    "    print(failed)\n"
+    "    raise SystemExit(1)\n"
+)
+
+_DEMO_SUITE_CHECK = Check(
+    source=(
+        "python3 -c 'run the repo suite in-process — the demo server's own runner "
+        "shape (demo/server.py:229)'"
+    ),
+    argv=("python3", "-c", _DEMO_SUITE_CHECK_CODE),
+)
+
+
+@pytestmark_capture
+def test_the_demo_stays_green_with_a3_present(report):
+    """A3 on the committed capture: the suite check exits 0 -> silence; every pin holds.
+
+    The re-scoped acceptance 4: the demo is the NEGATIVE CONTROL, so A3 is silent on
+    it by design (D3 — exit 0 is never a PASS, it is no verdict at all). The fake
+    author re-derives the closing claim ("All 6 tests pass.") by executing the repo
+    suite against the MATERIALIZED final state — the last turn's pre-state restored
+    and the final `run_process` re-run, so the workspace holds the agent's fixed
+    `app.py` — and the check exits 0. `evaluate_claim` returns None, and the pinned
+    verdict (7/7 PASS, trajectory PASS supported by the 2 replayed `run_process`
+    turns, 0 UNVERIFIED) is re-asserted WITH A3 present: the axis downgrades nothing
+    here, which is the honest counter-example the corrupt-success fixture
+    (`tests/test_a3_corrupt_success_fixture.py`) complements from the other side.
+    """
+    from belay.replay.reader import read_trace
+    from belay.verify.claims import evaluate_claim
+    from fixtures.claim_liar_capture import FixedAuthor
+
+    trace_path = _capture_trace()
+    read = read_trace(trace_path)
+    verdict = evaluate_claim(
+        records=list(read.records),
+        skips=read.skips,
+        verdicts={},
+        author=FixedAuthor(_DEMO_SUITE_CHECK),
+        manifest_dir=_manifest_dir(),
+        server_command=[sys.executable, str(SERVER), "{workspace}"],
+        timeout=REPLAY_TIMEOUT,
+    )
+    assert verdict is None, (
+        "A3 must be SILENT on the demo capture: the check exited 0 (D3) — never a "
+        f"verdict: {verdict!r}"
+    )
+
+    # Every pinned assertion, re-asserted WITH A3 present (see the tests above).
+    assert report["turns"], report
+    assert all(turn["status"] == "PASS" for turn in report["turns"]), [
+        (turn["ordinal"], turn["tool"], turn["status"]) for turn in report["turns"]
+    ]
+    assert report["aggregate"]["FAIL"] == 0, report["aggregate"]
+    assert report["aggregate"]["UNVERIFIED"] == 0, report["aggregate"]
+    trajectory = report["trajectory"]
+    assert trajectory is not None, "a whole-trace run must carry the trajectory block"
+    assert trajectory["status"] == "PASS", trajectory
+    assert trajectory["cause"] is None, trajectory
+    assert _evidence_count(trajectory) == 2, trajectory

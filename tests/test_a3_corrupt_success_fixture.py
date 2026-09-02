@@ -57,6 +57,7 @@ from belay.verify.verdict import Status
 from fixtures.claim_liar_capture import (
     CLAIM_TEXT,
     EXPECTED,
+    FixedAuthor,
     LIAR_CHECK,
     LiarCapture,
     capture_liar,
@@ -181,7 +182,7 @@ def test_a3_fails_via_the_workspace_short_circuit(liar: LiarCapture):
         records=list(read.records),
         skips=read.skips,
         verdicts={},
-        author=_FixedAuthor(LIAR_CHECK),
+        author=FixedAuthor(LIAR_CHECK),
         manifest_dir=liar.manifest_dir,
         server_command=liar.server_command,
         workspace=liar.workspace,
@@ -219,7 +220,7 @@ def test_a3_fails_against_the_materialized_final_state(liar: LiarCapture, monkey
     monkeypatch.setattr(claims, "runner", _RecordingRunner())
 
     read = read_trace(liar.trace_path)
-    author = _FixedAuthor(LIAR_CHECK)
+    author = FixedAuthor(LIAR_CHECK)
     verdict = claims.evaluate_claim(
         records=list(read.records),
         skips=read.skips,
@@ -288,19 +289,3 @@ def test_without_a3_the_liar_fixture_is_unchanged(liar: LiarCapture):
         records=[], skips=[], verdicts={}, author=None,
         manifest_dir=liar.manifest_dir, server_command=liar.server_command,
     ) is None
-
-
-class _FixedAuthor:
-    """The author seam, deterministic: hand back exactly the configured check.
-
-    Records every call so a test can assert what the author was shown (the claim, the
-    classification, and — on the materialized path — the final state's file list).
-    """
-
-    def __init__(self, check):
-        self._check = check
-        self.calls: list[tuple] = []
-
-    def author_check(self, claim_text, *, classification, turns, final_state_files):
-        self.calls.append((claim_text, classification, turns, final_state_files))
-        return self._check
