@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -395,3 +396,70 @@ def test_ac7_no_span_exported_bare(tmp_path):
     for span in parse_otlp(json.dumps(exported)):
         status = span.attributes.get(f"{VERDICT_ATTRIBUTE_PREFIX}.status")
         assert status in {"PASS", "WARN", "FAIL", "UNVERIFIED"}, status
+
+
+# --- AC6: the byte-stable fixture — contract drift shows as a diff ------------------
+
+EXPORTED_OK = FIXTURES / "exported_ok.json"
+
+#: The canonical matched verdict for the fixture: FAIL on the result axis plus a
+#: NOT_COVERED network dimension, with a NON-string `observed` so the event's
+#: JSON-stringification is pinned in the byte-stable fixture too.
+_CANONICAL_VERDICT = TurnVerdict(
+    turn_index=0,
+    tool_name="echo",
+    status=Status.FAIL,
+    sub_verdicts=[
+        Verdict(
+            "A2", "result", Status.FAIL,
+            observed=["recorded: ok", "replayed: boom"],
+            expected="recorded reply",
+            message="the replayed reply diverged from the recorded reply",
+        ),
+        Verdict(
+            "A2", "effect:network", Status.NOT_COVERED,
+            observed=None, expected=None,
+            message="the tool declares openWorldHint: false and Belay has no "
+                    "network instrument",
+        ),
+    ],
+    cause=None,
+)
+
+
+def _canonical_export(tmp_path) -> dict:
+    """The canonical export: `spans_ok.json` + the canonical traceparent trace
+    (one `tools/call` turn), verdicts built through the `verify=` stub seam — the
+    exact document `exported_ok.json` pins byte-for-byte."""
+    records = trace_of(tmp_path, [("c2s", TRACE_CONTEXT_META)])
+    spans = parse_otlp(json.dumps(SPANS_OK))
+    results = correlate_and_attach(
+        records, spans,
+        server_command=UNUSED_SERVER, manifest_dir=UNUSED_MANIFEST_DIR,
+        verify=lambda *a, **k: _CANONICAL_VERDICT,
+    )
+    return build_enriched_document(SPANS_OK, spans, results)
+
+
+def test_ac6_exported_document_is_byte_identical_to_the_pinned_fixture(tmp_path):
+    """AC6: a fresh export of the canonical fixture is byte-for-byte the committed
+    `exported_ok.json` — any deliberate contract change shows as a fixture diff,
+    never a silent test edit (mirrors `verify --json`'s pinned machine contract)."""
+    assert dumps(_canonical_export(tmp_path)) == EXPORTED_OK.read_text(encoding="utf-8")
+
+
+@pytest.mark.manual
+@pytest.mark.skipif(
+    os.environ.get("REGENERATE_INTEROP_EXPORT") != "1",
+    reason=(
+        "regenerate-exported-ok: set REGENERATE_INTEROP_EXPORT=1 and select with "
+        "-m manual to rewrite the pinned export fixture from a fresh canonical export"
+    ),
+)
+def test_regenerate_exported_ok_fixture(tmp_path):
+    """Only by explicit intent: rewrite the pinned fixture. `manual`-marked so the
+    default selection (host AND the docker in-image suite) never collects it — a
+    regeneration gate must not introduce a skip the closed skip-cause rule cannot
+    account for. The output must be committed verbatim — never hand-edited; the diff
+    is the review."""
+    EXPORTED_OK.write_text(dumps(_canonical_export(tmp_path)), encoding="utf-8")
