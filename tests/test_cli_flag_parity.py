@@ -46,6 +46,7 @@ REPLAY_BEARING = (
     "corpus run",
     "phase0 run",
     "interop correlate",
+    "interop export",
 )
 
 _ALL = frozenset(REPLAY_BEARING)
@@ -84,7 +85,7 @@ EXPECTED: dict[str, frozenset[str]] = {
     "--invariants": frozenset({"verify", "corpus add", "phase0 run"}),
     "--no-default-invariants": frozenset({"verify", "corpus add", "phase0 run"}),
     # The machine surface. `replay` and `corpus add` render human text only.
-    "--json": frozenset({"verify", "interop correlate"}),
+    "--json": frozenset({"verify", "interop correlate", "interop export"}),
     # Where corpus cases are read/written.
     "--corpus-dir": frozenset({"corpus add", "phase0 run"}),
     # The A3 claim axis (C8). Shared by every surface that can evaluate a claim at

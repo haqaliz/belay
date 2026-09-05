@@ -2,6 +2,15 @@
 
 This file orients a coding agent working in this repository. Read it first.
 
+> **`belay interop export` SHIPS — C9's second aspect is built** (2026-09-05,
+> `observability-export-back`, v0.28.0): `belay interop export <otlp> <trace> [--server -- CMD…]
+> [--out FILE] [--json]` exports verdicts back into the OTLP document as span
+> attributes/events — a fixture-collector round-trip (a file, or stdout), with the coverage
+> line and UNVERIFIED-never-PASS in-band. No live OTLP exporter, no Langfuse integration
+> (still not built), no multi-trace-directory aggregation. The stale `NOT_COVERED` deferral
+> item is corrected (`interop-merge-repair` shipped it). See
+> `docs/planning/observability-export-back/` and `docs/STATUS.md`.
+>
 > **`belay verify` NO LONGER FAILS A TURN IT NEVER VERIFIED** (2026-08-29,
 > `verify-tool-not-offered`, v0.25.0). A replay server that does not offer the recorded tool
 > answers **readably** — `no such tool`, or a JSON-RPC error — and answers identically every

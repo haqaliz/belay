@@ -856,9 +856,14 @@ turns is `ambiguous-correlation`, never a guess. A span with no matching turn, n
 given (so nothing was replayed), or an unrestorable pre-state is reported `UNVERIFIED` with a
 named cause (`no-matching-mcp-turn` / `ambiguous-correlation` / `not-replayed-no-server` /
 `unrestorable-pre-state`) — **never PASS**. The command's own eval data is the correlation rate
-`matched/total`, printed with its denominator (the R6 number). **Deferred to a second aspect:**
-exporting verdicts back into a collector, multi-trace-directory aggregation (single trace file
-only for now), and the `NOT_COVERED` reclassification.
+`matched/total`, printed with its denominator (the R6 number). **Export-back shipped as a
+second aspect** (`belay interop export <otlp> <trace> [--out FILE] [--json]`,
+`src/belay/interop/export.py`): verdicts → OTLP/JSON span attributes/events → a
+fixture-collector round-trip (a file, or stdout), with the coverage line and
+UNVERIFIED-never-PASS in-band. A **live OTLP exporter** and **multi-trace-directory
+aggregation** remain deferred. (The `NOT_COVERED` reclassification item is dropped — it
+shipped via `interop-merge-repair`, `docs/STATUS.md`'s v0.24.0-era entry: a correction,
+not a reclassification.)
 
 ---
 
@@ -897,4 +902,4 @@ built.
 | C6 | Failure corpus | Wk 5 | 1 | No — moat #2 |
 | C7 | Live console | Wk 5–6 | 1 | No — the launch surface |
 | C8 | Claim re-derivation (A3) | Wk 7 | 1 | **Yes — cut first** |
-| C9 | Observability interop | Wk 8 | 1 | 🟡 **FIRST SLICE SHIPPED** (ingest+correlate+attach; export-back deferred) |
+| C9 | Observability interop | Wk 8 | 1 | ✅ **SHIPPED** (ingest+correlate+attach + export-back fixture-collector round-trip; live-collector export deferred) |

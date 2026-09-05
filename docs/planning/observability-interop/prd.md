@@ -35,7 +35,8 @@ phase0 ledger, and there is no general machine-readable verdict surface at all
 ## Goals & Success Metrics
 
 The deliverable is a **shipped, tested ingest+correlate+attach slice** plus the R6 metric it
-produces. Export-verdicts-back-to-OTLP is explicitly a **second aspect** (out of scope here).
+produces. Export-verdicts-back-to-OTLP is explicitly a **second aspect** (out of scope here —
+shipped as `docs/planning/observability-export-back/`).
 
 | Metric | Target | Source |
 |---|---|---|
@@ -181,16 +182,18 @@ code.
    `feat/verdict-coverage-status` branch, so this slice uses `UNVERIFIED` per master spec
    (`CAPABILITY_ROADMAP.md:481`) and files the reclassification as a follow-up for when that branch
    merges. Confirmed 2026-07-24.
-2. **Export aspect (deferred).** Exporting verdicts back as OTLP span attributes/events into a
-   fixture collector (`CAPABILITY_ROADMAP.md:472-473,482`) is a **separate second aspect**, planned
-   after this slice lands.
+2. **Export aspect (deferred — now shipped).** Exporting verdicts back as OTLP span
+   attributes/events into a fixture collector (`CAPABILITY_ROADMAP.md:472-473,482`) was a
+   **separate second aspect**, planned after this slice lands; it shipped as
+   `docs/planning/observability-export-back/` (`belay interop export`, fixture-collector
+   round-trip — a live OTLP exporter is not built).
 
 ---
 
 ## Out of Scope
 
 - **Exporting verdicts back to OTLP** (span attributes/events / fixture collector round-trip) — the
-  deferred second aspect.
+  deferred second aspect, shipped as `docs/planning/observability-export-back/`; out of scope here.
 - **A live OTLP exporter or collector connection** — "no network" (`CAPABILITY_ROADMAP.md:483`);
   ingest and any future export are file/in-memory only.
 - **The OpenTelemetry SDK** as a dependency — rejected for zero-dep.

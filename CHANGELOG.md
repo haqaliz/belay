@@ -5,6 +5,60 @@ All notable changes to Belay are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0 — until then,
 `0.x` minor bumps may include changes that would be breaking under strict semver.
 
+## [0.28.0] - 2026-09-05
+
+**Observability export-back ships — C9's second aspect is built** (`belay interop export`).
+Verdicts travel back into the OTLP document a collector reads: `belay interop export
+<otlp> <trace> [--server -- CMD…] [--out FILE] [--json]` correlates each ingested span to
+its MCP turn (the same deterministic `(traceId, spanId)` join as `correlate`), attaches
+the existing replayed verdict verbatim, and enriches the document with the verdict as
+span attributes plus one `belay.verdict` event — completing the locked Phase-1 interop
+deliverable whose export-back half was a named deferral since v0.5.0.
+
+### Added
+
+- **The export engine** (`src/belay/interop/export.py`) — one pure function,
+  `build_enriched_document`: deep-copies the parsed OTLP document (inputs never mutated,
+  asserted), pairs `results[i]` with `spans[i]` positionally in document order (a loud
+  length assertion, never a silent partial zip), and enriches every ingested span.
+  Attribute contract, pinned byte-for-byte by a committed fixture:
+  `belay.verdict.status` / `.axis` (absent when the verdict has no sub-verdicts) /
+  `.cause` (absent when `None`, never `""`) / `.turn_index` (matched spans only) /
+  `.coverage` (JSON string array of `NOT_COVERED` kinds, absent when none) /
+  `.sub_verdicts` (JSON string array of `{"axis","kind","status","message"}`); the
+  `belay.verdict` span event carries the worst sub-verdict's message and its
+  observed/expected where present. Stdlib only — no OTel SDK, no network, no clock.
+- **`belay interop export` CLI** — the document travels to `--out` or stdout; the summary
+  (human or `--json`) always goes to stderr, so stdout carries exactly one artifact.
+  Exit semantics: rc 0 on a successful export **regardless of verdict contents** (the
+  export is not a gate — an all-UNVERIFIED export is still a successful export); rc 2 on
+  the fail-closed preflight errors; rc 1 on a write failure, a distinct code.
+- **The flag-parity guard now covers `interop export`** — the `--timeout` defect class
+  that had already happened twice cannot reach a replay-bearing surface undeclared.
+
+### Honesty notes — read before quoting anything
+
+- **The coverage line travels with every status.** A PASS exported without it is the
+  named failure mode of this surface; an unmatched/ambiguous span exports `UNVERIFIED`
+  with its named cause, never PASS, never a bare span.
+- **The deferral lines retired are exactly as wide as the slice.** The "no Langfuse
+  integration" honesty lines survive verbatim — an OTLP/JSON fixture-collector export is
+  not a Langfuse integration, and a live OTLP exporter and multi-trace-directory
+  aggregation remain deferred. The stale `NOT_COVERED` deferral item in
+  `CAPABILITY_ROADMAP.md`'s C9 block is corrected (`interop-merge-repair` shipped it) —
+  a correction, not a reclassification.
+- **No published number moves.** `11/60 = 18.3%`, the 11 hand-audited TPs,
+  `precision 0.00`, `1/15` and `4/16` stand unedited. No verdict axis, status, reduction
+  or corpus change of any kind — the export re-emits existing verdicts verbatim.
+- **Suite 2091 → 2114 tests passing** (25 named-cause skips, 11 deselected).
+
+### Not built, and named
+
+No live OTLP exporter or collector connection (the collector is a fixture — a file, or
+stdout); no Langfuse integration; no multi-trace-directory aggregation; no console-side
+OTel export (a different surface). Launch assets are untouched — the `launch-demo/`
+"export-back is deferred" claims are owner territory, as is the L7 checklist box.
+
 ## [0.27.0] - 2026-09-02
 
 The **A3 claim axis ships — the last engine capability (C8)**. A model writes an executable

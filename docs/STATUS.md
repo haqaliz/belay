@@ -10,6 +10,45 @@ carries the current state and the rules that still bind.
 
 ---
 
+**`belay interop export` SHIPS — C9'S SECOND ASPECT IS BUILT** (2026-09-05,
+`observability-export-back`, v0.28.0). Verdicts now travel back into the OTLP document a
+collector reads: `belay interop export <otlp> <trace> [--server -- CMD…] [--manifest-dir]
+[--replays] [--timeout] [--out FILE] [--json]` correlates each ingested span to its MCP
+turn (the same deterministic `(traceId, spanId)` join as `correlate`), attaches the
+existing replayed verdict verbatim, and writes **the verdict back inside the OTLP
+document** — span attributes `belay.verdict.status` / `.axis` / `.cause` (absent when
+None, never `""`) / `.turn_index` (matched spans only) / `.coverage` (JSON string array of
+`NOT_COVERED` kinds; absent when none) / `.sub_verdicts` (JSON string array), plus ONE
+`belay.verdict` span event carrying the worst sub-verdict's message and its
+observed/expected where present. The document travels to `--out` or stdout; the summary
+(human or `--json`) **always** goes to stderr, so stdout carries exactly one artifact.
+**Exit semantics (settled, deliberately diverging from correlate's `_worst` gate):** rc 0
+on a successful export REGARDLESS of verdict contents — an all-UNVERIFIED export (e.g. no
+`--server`) is still a successful export, because the export is not a gate; rc 2 on the
+operational fail-closed preflight errors; rc 1 on a write failure, so the three states are
+distinguishable. **Pairing decision:** the enriched document pairs `results[i]` with
+`spans[i]` **positionally, in document order** (one `CorrelatedSpan` per input span — the
+`correlate_and_attach` invariant, guarded by a loud length assertion rather than a silent
+partial zip), keying over the original parsed spans list; the attach boundary
+(`CorrelatedSpan` carrying only `span_id`) is untouched. **The flag-parity guard now
+covers `interop export`** — the `--timeout` defect class that had already happened twice
+cannot reach a replay-bearing surface undeclared. The stale `NOT_COVERED` deferral item in
+`CAPABILITY_ROADMAP.md`'s C9 block is corrected — it shipped via `interop-merge-repair`
+(this is a correction, not a reclassification). **Honesty notes:** the coverage line
+travels with every status (a PASS exported without it is the named failure mode of this
+surface); an unmatched/ambiguous span exports `UNVERIFIED` with its named cause, never
+PASS, never a bare span; determinism is pinned byte-for-byte by a committed fixture;
+`11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16` stand unedited; no verdict axis,
+status, reduction, corpus or published number changes. **What this does NOT do:** no live
+OTLP exporter or collector connection (the collector is a fixture — a file, or stdout),
+no Langfuse integration (the standing "no Langfuse integration" lines survive by design —
+the slice is not one), no multi-trace-directory aggregation, no console-side OTel export
+(a different surface), and no launch-asset edits (the `launch-demo/` "export-back is
+deferred" claims are owner territory — the L7 box and "READY TO PUBLISH" gate are
+untouched). Suite 2091 (v0.27.0, last published) → **2114** tests passing at this
+branch's head (25 named-cause skips, 11 deselected); the docs unit itself adds zero
+tests. See `docs/planning/observability-export-back/` and `CHECKLIST.md` → C9.
+
 **THE A3 CLAIM AXIS SHIPS — THE LAST ENGINE CAPABILITY (C8) IS BUILT** (2026-09-02,
 `claim-re-derivation-a3`, v0.27.0). A model writes an executable check for the agent's
 claim; **execution decides**: the check runs contained in the sandbox against the recorded
