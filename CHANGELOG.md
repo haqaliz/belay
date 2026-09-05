@@ -5,6 +5,60 @@ All notable changes to Belay are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0 — until then,
 `0.x` minor bumps may include changes that would be breaking under strict semver.
 
+## [0.30.0] - 2026-09-05
+
+**The container channel gets a publish job** — `release.yml` can now push the image to
+`ghcr.io/<owner>/belay`, closing the GHCR deferral L3 (v0.21.0) named. The image itself is
+unchanged; what is new is a place to get it without cloning and building.
+
+### Added
+
+- **`ghcr` job in `.github/workflows/release.yml`.** On a `v*` tag it builds the image from
+  the tagged checkout, **measures that exact image** with the same in-image acceptance the
+  `docker` CI job runs, proves the measured and pushed image IDs are equal, and only then
+  pushes `:vX.Y.Z` and `:latest`. `permissions: packages: write` and nothing wider; no
+  `needs`, so the channels stay independent as the others already are.
+- **`tests/test_release_workflow.py`** — a structural (YAML-parsed, no Docker, no network)
+  guard over the release pipeline. It fails if the push is reachable without the build and
+  the measurement ahead of it *in the same job*, if the measurement stops adopting the tag
+  the build produced, if the ID check disappears, if the permissions widen, if either
+  published reference stops being pushed, if the version stops coming from
+  `github.ref_name`, if the job grows a `needs`, or if the workflow starts publishing on
+  anything but a `v*` tag.
+- **`BELAY_TEST_IMAGE` adoption** in `tests/conftest.py`'s `built_image` fixture: set, it
+  adopts an existing tag and neither builds nor removes. It exists for exactly one caller —
+  without it the publish job would measure an image the fixture then deletes, and push an
+  unmeasured one. Unset, every local run and every other CI job behaves byte-identically.
+- **OCI labels** (`org.opencontainers.image.source` / `.description` / `.licenses`) so the
+  published package links back to this repository.
+
+### Fixed
+
+- **`test_docker_inimage.py` derives its dev dependencies from `pyproject.toml`** instead of
+  the hand-written `("pytest", "mcp==1.28.1")`, minus a named exclusion (`ruff`, `mypy` —
+  tools the in-image run never invokes). The transcribed list meant **any** new dev
+  dependency broke the in-image suite with a collection error and nothing connected the two
+  lists to say so; adding `pyyaml` did exactly that. Found by running the measurement, not by
+  reading it.
+
+### Honesty notes — read before quoting anything
+
+- **A job is not a live channel.** Nothing here proves `docker pull` works: the login, the
+  push and the package's visibility are unobserved until a tag runs the job, and a first
+  push can land the package **private**, which pulls fine for the owner and fails for
+  everyone else. Every doc that says a reader can pull stays unwritten until an
+  **anonymous** pull has succeeded. `README.md`'s quickstart is deliberately untouched here.
+- **What WAS verified, locally, before the job existed:** `docker build` → the same three
+  acceptance modules against that image under `BELAY_TEST_IMAGE` → **20 passed** → the image
+  still present with the same id. That is the job's sequence minus the push.
+- **`linux/amd64` only, by name.** `ubuntu-24.04` is the substrate the in-image acceptance
+  measures; an arm64 image would ship a substrate nothing ran on. Apple Silicon readers keep
+  building locally, which works today.
+- **No engine change.** No verdict axis, invariant, coverage line, trace field or published
+  number moves — `11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16` stand unedited. This is
+  distribution only.
+- **Suite 2137 → 2147 tests passing** (25 named-cause skips, 11 deselected).
+
 ## [0.29.0] - 2026-09-05
 
 **The trace-ordering race is closed in the recorder — a response is never written before
@@ -1451,7 +1505,8 @@ The first public release: the full **record → sandbox → replay → verdict**
 - **The A3 claim-re-derivation axis** (C8) is not built; the live console (C7) and observability interop
   (C9) are ahead on the roadmap.
 
-[Unreleased]: https://github.com/haqaliz/belay/compare/v0.29.0...HEAD
+[Unreleased]: https://github.com/haqaliz/belay/compare/v0.30.0...HEAD
+[0.30.0]: https://github.com/haqaliz/belay/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/haqaliz/belay/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/haqaliz/belay/compare/v0.27.0...v0.28.0
 [0.24.0]: https://github.com/haqaliz/belay/compare/v0.23.0...v0.24.0

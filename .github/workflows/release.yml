@@ -53,6 +53,91 @@ jobs:
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
 
+  # The container CHANNEL. L3 (v0.21.0) shipped the IMAGE — `docker build -t belay .`
+  # from any checkout, re-measured inside the container by the `docker` CI job on every
+  # PR — and deferred publishing by name. This is that slice.
+  #
+  # THE RULE THIS JOB EXISTS TO OBEY, pre-registered in RELEASING.md before it was
+  # written: push the image that was validated, never a rebuild nobody measured. So the
+  # three things happen HERE, in one job, in this order — build, measure, push — and the
+  # ID check between them makes "the same image" a fact rather than a layout.
+  #
+  # Why not reuse the artifact the `docker` job already built: that job runs on the PR
+  # head, and after the merge the tagged tree is a different commit. There was never an
+  # image from an earlier run that was the right one to push.
+  #
+  # linux/amd64 only, deliberately: `ubuntu-24.04` is the substrate the in-image
+  # acceptance measures, and publishing an arm64 image would ship a substrate nothing
+  # ran on. An Apple Silicon reader builds locally, which works today.
+  ghcr:
+    name: publish the container image (ghcr.io)
+    # PINNED, and the same pin as the `docker` CI job: the image's substrate claims are
+    # ubuntu-24.04-shaped and `ubuntu-latest` is a moving target.
+    runs-on: ubuntu-24.04
+    # No `needs`. Each channel in this workflow stands alone, so a PyPI hiccup cannot
+    # withhold the image and a registry outage cannot withhold the wheel.
+    permissions:
+      packages: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/belay
+      # The tag the suite measures. Byte-identical to tests/conftest.py's
+      # DOCKER_IMAGE_TAG, because docker-compose.yml pins that tag and the compose
+      # assertions are part of the measurement.
+      LOCAL_TAG: belay:test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Sync (dev deps)
+        run: uv sync
+
+      # The whole build, from this checkout and nothing else — no `uv build` ran before
+      # it, so the multi-stage Dockerfile builds its own wheel exactly as a stranger's
+      # `docker build -t belay .` does.
+      - name: Build the image that will be published
+        run: docker build -f Dockerfile -t "$LOCAL_TAG" .
+
+      # BELAY_TEST_IMAGE makes the session fixture ADOPT the image above instead of
+      # building its own copy and deleting it afterwards. Without it this step would
+      # measure an artifact that no longer exists by the time the push runs.
+      - name: Measure that image (the same acceptance the `docker` CI job runs)
+        env:
+          BELAY_TEST_IMAGE: belay:test
+        run: >-
+          uv run pytest tests/test_docker_image.py tests/test_docker_inimage.py
+          tests/test_docker_compose.py -q
+
+      - name: Tag the MEASURED image, and prove it is the measured one
+        run: |
+          docker tag "$LOCAL_TAG" "$IMAGE:${{ github.ref_name }}"
+          docker tag "$LOCAL_TAG" "$IMAGE:latest"
+          MEASURED="$(docker image inspect --format '{{.Id}}' "$LOCAL_TAG")"
+          for ref in "$IMAGE:${{ github.ref_name }}" "$IMAGE:latest"; do
+            PUBLISHING="$(docker image inspect --format '{{.Id}}' "$ref")"
+            if [ "$MEASURED" != "$PUBLISHING" ]; then
+              echo "::error::$ref is $PUBLISHING but the measured image is $MEASURED"
+              exit 1
+            fi
+          done
+          echo "publishing $MEASURED"
+
+      - name: Log in to ghcr.io
+        run: >-
+          echo "${{ github.token }}" |
+          docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Push
+        run: |
+          docker push "$IMAGE:${{ github.ref_name }}"
+          docker push "$IMAGE:latest"
+
   github-release:
     name: create GitHub Release
     needs: build

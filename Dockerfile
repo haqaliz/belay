@@ -13,6 +13,13 @@ COPY src ./src
 RUN pip install --no-cache-dir build && python -m build --wheel --outdir /dist
 
 FROM python:3.12-slim
+# Links the published GHCR package to this repository, so the image a reader pulls
+# names the source it was built from instead of floating unattributed. Read by GitHub
+# to attach the package to the repo; read by humans as the answer to "where is this
+# from". It is metadata only — nothing in the image depends on it.
+LABEL org.opencontainers.image.source="https://github.com/haqaliz/belay"
+LABEL org.opencontainers.image.description="Belay — the agent harness: sandbox, record, replay, and verify each tool call by re-execution."
+LABEL org.opencontainers.image.licenses="Apache-2.0"
 # The wheel has zero runtime dependencies — stdlib only — so this installs exactly
 # one thing and pulls nothing else in. That contract is load-bearing here: it is
 # why the runtime stage carries no build toolchain and no package index access.
