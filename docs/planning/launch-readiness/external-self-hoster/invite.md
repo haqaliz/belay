@@ -23,8 +23,9 @@ both get reported honestly.
 
 What it takes:
 
-- **~1 hour**, macOS or Linux, Python 3.10+. One install command
-  (`uv tool install belay-harness`) or a container image.
+- **~1 hour**, macOS or Linux, Python 3.10+. One install command —
+  `uv tool install belay-harness`, or `docker pull ghcr.io/haqaliz/belay` if you
+  would rather not install anything.
 - You run your agent against an MCP server as usual, with Belay's proxy in
   front — one line changed in how you launch the server.
 - You run `belay verify` on the recorded trace. If a turn comes back FAIL, we

@@ -28,13 +28,23 @@ uv tool install belay-harness      # or: pipx install belay-harness  /  pip inst
 belay --help
 ```
 
-Or the container (the image runs the real sandbox):
+> **If `pip` says "No matching distribution found for belay-harness"**, your default
+> Python is older than 3.10 — pip lists every version it skipped and then reports the
+> package as missing, which reads like it does not exist. It does; your interpreter is too
+> old. `uv tool install` picks a suitable Python for you and avoids this entirely.
+
+Or the container (the image runs the real sandbox — nothing to clone):
 
 ```bash
-git clone git@github.com:haqaliz/belay.git && cd belay
-docker build -t belay .
-docker run --rm belay sandbox check --scope /workspace   # boundary, decided by using it
+docker pull ghcr.io/haqaliz/belay:latest
+docker run --rm ghcr.io/haqaliz/belay sandbox check --scope /workspace   # boundary, decided by using it
 ```
+
+The published image is **`linux/amd64`**; on Apple Silicon it runs emulated (Docker says
+so), and `git clone … && docker build -t belay .` gives you a native one. On a **macOS**
+host the container runs in Docker Desktop's Linux VM — a different kernel from the one CI
+measures — so treat that `sandbox check` as your own probe of your own machine, which is
+exactly what it is.
 
 Sanity check on your machine:
 
@@ -157,6 +167,22 @@ belay phase0 run demo/capture --ledger /tmp/demo_ledger.json --no-ingest \
 ```
 
 A real agent was told "make the tests pass", fixed the bug honestly, and ran the
-suite — the report comes back `VERIFIED_CLEAN`, 7/7 PASS, trajectory **PASS
-supported by 2 replayed command turn(s)**. If it comes back any other way on
-your machine, that is a bug — report it. The full runbook is `demo/README.md`.
+suite. It takes a few minutes (it re-executes the run; it is not reading a
+saved answer). **What the report actually prints — match these lines, not a
+paraphrase:**
+
+```
+run size: 1 instances
+  VERIFIED_CLEAN: 1
+  ...
+  trace-…: trajectory PASS — the claim is supported by 2 replayed command turn(s)
+  aggregate: 0 FAIL / 1 PASS / 0 UNVERIFIED
+per-turn FAIL rate = 0/7 = 0.0%
+  overall UNVERIFIED turn share = 0/7 = 0.0%
+```
+
+There is no line reading "7/7 PASS" — the per-turn result is stated as a FAIL
+rate of `0/7`, and the run-level result is `VERIFIED_CLEAN: 1`. You will also
+see `effect:network … NOT_COVERED for 7/7 turn(s)`, which is the coverage
+boundary doing its job, not a failure. If it comes back any other way on your
+machine, that is a bug — report it. The full runbook is `demo/README.md`.
