@@ -10,6 +10,32 @@ carries the current state and the rules that still bind.
 
 ---
 
+**THE LAUNCH GATE IS DOWN TO ONE OPEN ITEM — L7 SIGNED OFF, PH ASSETS FINALIZED, THE
+EXTERNAL SELF-HOSTER PACKAGE BUILT** (2026-09-05, launch-readiness pass; docs only, no
+version bump). Three owner decisions recorded in the repo, each with its evidence:
+(1) **L7 ticked on the owner's recorded sign-off of the amended DONE meaning** — the
+demo is the negative control (18 drives, zero corrupt successes, nothing synthetic), and
+M2‴ pre-registered that only the owner may mark the box; the owner reviewed DRIVES.md,
+the committed capture with provenance, and the pinned all-green verdict and signed
+2026-09-05. (2) **PH listing assets finalized** — the three open questions answered:
+tagline §1 line 1 (*"Your agent said the tests pass. Belay re-ran them."*), number-first
+then gif, no second FAIL gif (the only real failing captures are the mint's banked and
+not reader-reproducible; skipped deliberately). (3) **External self-hoster package
+built** — `docs/planning/launch-readiness/external-self-hoster/` (one-page invite,
+stranger runbook: install → proxy in front of THEIR MCP server → verify → adjudicate →
+`belay corpus add --label true-positive` → report) plus
+`.github/ISSUE_TEMPLATE/external-self-hoster-report.md` (environment, verdict + coverage
+line, corpus case id, adjudication, consent). **The gate's only remaining ☐ is a real
+external report with a banked corpus case id** (roadmap Phase-1 target ≥3; gate minimum
+≥1) — the checklist rule stands: *"If any item is still ☐, the launch date is not set —
+the item list is."* Also cleaned up: two stale remote branches (`feat/launch-demo/aliz`,
+`feat/phase0-remint/aliz`) whose content had long since landed in master via squash.
+**Honesty notes:** no verdict axis, corpus, published number, or engine line moves —
+`11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16` stand unedited; no test count change;
+the PH submission itself remains the operator's act at the gate.
+
+---
+
 **`belay interop export` SHIPS — C9'S SECOND ASPECT IS BUILT** (2026-09-05,
 `observability-export-back`, v0.28.0). Verdicts now travel back into the OTLP document a
 collector reads: `belay interop export <otlp> <trace> [--server -- CMD…] [--manifest-dir]

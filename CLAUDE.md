@@ -106,10 +106,16 @@ This file orients a coding agent working in this repository. Read it first.
 > **What this does NOT do:** no verdict axis, invariant, status or Phase-0 number moves; A3
 > is still not built; the Langfuse integration is still **not built** (C9 export-back
 > deferred) and must never be implied by a staged screenshot; GHCR publish is still
-> deferred. **L7 is BUILT but its checklist box is deliberately NOT ticked** — M2‴
-> pre-registered that a changed DONE meaning is re-opened with the owner, and the meaning
-> changed. `docs/planning/launch-demo/ph-assets.md` drafts the PH listing and leaves three
-> questions open for the owner. See `docs/planning/launch-demo/` and
+> deferred. **L7 IS TICKED (2026-09-05)** — the owner reviewed the amended DONE meaning
+> (the negative control) against DRIVES.md, the committed capture, and the pinned verdict,
+> and signed off; the box is ticked on the owner's recorded decision, not the
+> implementer's. **The launch gate is down to ONE open item:** ≥1 external self-hoster's
+> report with a banked corpus case — the invite + stranger runbook + GitHub issue report
+> template are ready under `docs/planning/launch-readiness/external-self-hoster/` and
+> await a real external user (roadmap target ≥3). PH listing assets are finalized:
+> tagline *"Your agent said the tests pass. Belay re-ran them."* ships; the listing leads
+> with the number (11/60 = 18.3%), then the gif; no second FAIL gif (skipped for
+> non-reproducibility). See `docs/planning/launch-demo/` and
 > `docs/planning/launch-readiness/CHECKLIST.md` → L7.
 >
 > **BELAY NOW SHIPS AS A CONTAINER THAT RUNS THE REAL SANDBOX — launch checklist L3 is
