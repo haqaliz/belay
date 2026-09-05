@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/haqaliz/belay/master/assets/belay-logo.png" alt="Belay" width="104" />
+<img src="https://raw.githubusercontent.com/haqaliz/belay/master/assets/belay-mark-square.png" alt="Belay" width="120" />
 
 # Belay
 
