@@ -130,6 +130,17 @@ every later capability reads what C1 writes.
 - An append-only, self-describing trace format on disk. It is the interchange format for the
   whole engine, so it gets a versioned schema on day 1.
 - Capture is **lossless and opinion-free**. C1 makes no judgements — it records.
+  > **Added as built — the one ordering guarantee the recorder makes** (v0.29.0,
+  > `trace-ordering-fix`). "Ordering" above meant only *capture order*: the pump forwards a
+  > chunk and observes it afterwards, so both directions ran ahead of the trace and a **fast
+  > local server** could have its `tools/list` RESPONSE recorded before its own REQUEST. An
+  > inverted pair does not correlate, so no annotation snapshot was taken and C4's
+  > effect-conformance abstained for the whole run — honest, and a real coverage loss. The
+  > recorder now defers a response's record until its request's record is on disk, **bounded
+  > and fail-open**: past the deadline it records anyway, out of order, and the readers name
+  > it exactly as before. This adds **no field and no record kind**, and C1 still makes no
+  > judgements. **Not closed, and not closeable here: snapshot-before-next-call** — only the
+  > client decides when its next request crosses. See `docs/planning/trace-ordering-fix/`.
 
 **Acceptance (test-first):**
 - A fake MCP server + a scripted client round-trip through the proxy; the client observes
