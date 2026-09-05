@@ -19,33 +19,30 @@
   <circle cx="24" cy="22" r="6" fill="#f85149"/>
   <circle cx="44" cy="22" r="6" fill="#d29922"/>
   <circle cx="64" cy="22" r="6" fill="#3fb950"/>
-  <text x="454" y="27" text-anchor="middle" class="b mut">belay — A2 reproduces the trace, A1 catches the cheat</text>
+  <text x="454" y="27" text-anchor="middle" class="b mut">belay — a PASS that says exactly what it covers, and what it does not</text>
 
   <g class="b">
-    <!-- command -->
-    <text y="80"><tspan x="28" class="cor">$ </tspan><tspan class="txt">belay verify demo.jsonl --manifest-dir ./sn.manifests</tspan></text>
+    <text y="76"><tspan x="28" class="cor">$ </tspan><tspan class="txt">belay verify ./traces/run.jsonl --manifest-dir ./snapshots.manifests \</tspan></text>
+    <text y="96"><tspan x="44" class="txt">--server node .../server-filesystem ./workspace</tspan></text>
 
-    <!-- turn 0: honest read -> PASS -->
-    <text y="118"><tspan x="28" class="grn bold">turn 0</tspan><tspan x="96" class="txt">fs.read_file</tspan><tspan x="264" class="grn bold">PASS</tspan></text>
-    <text y="142"><tspan x="60" class="cyn">A2</tspan><tspan x="92" class="lbl">result</tspan><tspan x="196" class="grn">PASS</tspan><tspan x="268" class="txt">replayed reply reproduced the recording</tspan></text>
-    <text y="164"><tspan x="60" class="cyn">A2</tspan><tspan x="92" class="lbl">effect</tspan><tspan x="196" class="grn">PASS</tspan><tspan x="268" class="txt">readOnlyHint honored — no mutation observed</tspan></text>
-    <text y="186"><tspan x="60" class="yel">A1</tspan><tspan x="92" class="lbl">invariant</tspan><tspan x="196" class="grn">PASS</tspan><tspan x="268" class="txt">tests/ read-only — no mutation under scope</tspan></text>
+    <text y="132"><tspan x="28" class="mut">1 tool-call turn(s); verifying 1 by re-execution.</tspan></text>
 
-    <!-- turn 1: the cheat -> A2 PASS, A1 FAIL, reduced FAIL -->
-    <text y="224"><tspan x="28" class="red bold">turn 1</tspan><tspan x="96" class="txt">fs.write_file</tspan><tspan x="264" class="red bold">FAIL</tspan></text>
-    <text y="248"><tspan x="60" class="cyn">A2</tspan><tspan x="92" class="lbl">result</tspan><tspan x="196" class="grn">PASS</tspan><tspan x="268" class="txt">replayed reply reproduced the recording</tspan></text>
-    <text y="270"><tspan x="60" class="yel">A1</tspan><tspan x="92" class="lbl">invariant</tspan><tspan x="196" class="red bold">FAIL</tspan><tspan x="268" class="txt">tests/ read-only — mutation at </tspan><tspan class="cor">tests/test_auth.py</tspan></text>
+    <text y="170"><tspan x="28" class="grn bold">turn 0</tspan><tspan x="96" class="txt">write_file</tspan><tspan x="264" class="grn bold">PASS</tspan></text>
 
-    <!-- aggregate -->
-    <text y="316"><tspan x="28" class="mut">aggregate</tspan></text>
-    <text y="340"><tspan x="60" class="grn">PASS 1</tspan><tspan x="150" class="mut">·</tspan><tspan x="172" class="lbl">WARN 0</tspan><tspan x="262" class="red bold">FAIL 1</tspan><tspan x="352" class="lbl">·</tspan><tspan x="374" class="lbl">UNVERIFIED 0</tspan></text>
+    <text y="196"><tspan x="60" class="cyn">A2</tspan><tspan x="92" class="lbl">replay</tspan><tspan x="196" class="grn">PASS</tspan><tspan x="268" class="txt">replayed reply reproduced the recorded reply</tspan></text>
+    <text y="220"><tspan x="60" class="cyn">A2</tspan><tspan x="92" class="lbl">effect</tspan><tspan x="196" class="grn">PASS</tspan><tspan x="268" class="txt">declared readOnlyHint: false — the observed effect conforms</tspan></text>
 
-    <!-- verdict badge + one-line grounding -->
-    <rect x="28" y="366" width="64" height="26" rx="6" fill="#f85149"/>
-    <text x="60" y="384" text-anchor="middle" class="b bold" fill="#0d1117">FAIL</text>
-    <text y="384"><tspan x="108" class="txt">turn 1 wrote under read-only </tspan><tspan class="cor">tests/</tspan><tspan class="txt"> — </tspan><tspan class="txt bold">corrupt success</tspan><tspan class="txt">, caught</tspan></text>
+    <text y="248"><tspan x="60" class="cyn">A2</tspan><tspan x="92" class="lbl">effect:network</tspan><tspan x="228" class="yel bold">NOT_COVERED</tspan></text>
+    <text y="268"><tspan x="268" class="mut">openWorldHint declared false — a promise this run did NOT check.</tspan></text>
+    <text y="288"><tspan x="268" class="mut">Belay observes no network egress: never a PASS, never a fabricated FAIL.</tspan></text>
 
-    <!-- the point -->
-    <text y="430"><tspan x="28" class="mut"># A2 reproduced the trace faithfully. Only the declared invariant caught the cheat.</tspan></text>
+    <text y="316"><tspan x="60" class="cyn">A1</tspan><tspan x="92" class="lbl">invariant</tspan><tspan x="196" class="grn">PASS</tspan><tspan x="268" class="txt">no-assertion-weakening on 'tests' / 'testing'</tspan></text>
+    <text y="336"><tspan x="268" class="mut">exposure: 0 file(s) in scope — this carries NO information about the rule.</tspan></text>
+
+    <text y="374"><tspan x="28" class="mut">aggregate</tspan><tspan x="220" class="txt">1 turn verified</tspan><tspan x="380" class="grn">PASS 1</tspan><tspan x="470" class="txt">WARN 0</tspan><tspan x="560" class="txt">FAIL 0</tspan><tspan x="650" class="txt">UNVERIFIED 0</tspan></text>
+
+    <text y="412"><tspan x="28" class="red bold">A `PASS` covers the dimensions Belay checks — the coverage line travels with it.</tspan></text>
+    <text y="434"><tspan x="28" class="mut">A1 and A2 consult no model. The verdict is re-execution and a state diff — no LLM.</tspan></text>
+    <text y="456"><tspan x="28" class="mut"># real output, run against an off-the-shelf MCP server (@modelcontextprotocol/server-filesystem).</tspan></text>
   </g>
 </svg>

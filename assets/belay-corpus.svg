@@ -19,25 +19,27 @@
   <circle cx="24" cy="22" r="6" fill="#f85149"/>
   <circle cx="44" cy="22" r="6" fill="#d29922"/>
   <circle cx="64" cy="22" r="6" fill="#3fb950"/>
-  <text x="454" y="27" text-anchor="middle" class="b mut">belay — the failure corpus scores its own detection against HUMAN labels</text>
+  <text x="454" y="27" text-anchor="middle" class="b mut">belay — the corpus scores detection against HUMAN labels, and refuses to flatter itself</text>
 
   <g class="b">
     <text y="80"><tspan x="28" class="cor">$ </tspan><tspan class="txt">belay corpus score corpus/local</tspan></text>
-    <text y="116"><tspan x="28" class="lbl">13 case(s) scored against HUMAN labels (no replay — stored verdicts only).</tspan></text>
+    <text y="116"><tspan x="28" class="lbl">7 case(s) scored against HUMAN labels (no replay — stored verdicts only).</tspan></text>
 
     <text y="154"><tspan x="28" class="mut">confusion matrix</tspan><tspan x="220" class="mut">(positive = engine FAIL)</tspan></text>
-    <text y="178"><tspan x="60" class="lbl">TP</tspan><tspan x="110" class="grn bold">7</tspan><tspan x="200" class="lbl">FP</tspan><tspan x="250" class="txt">0</tspan></text>
-    <text y="200"><tspan x="60" class="lbl">FN</tspan><tspan x="110" class="yel">1</tspan><tspan x="200" class="lbl">TN</tspan><tspan x="250" class="txt">5</tspan></text>
+    <text y="178"><tspan x="60" class="lbl">TP</tspan><tspan x="110" class="txt">0</tspan><tspan x="200" class="lbl">FP</tspan><tspan x="250" class="txt">0</tspan></text>
+    <text y="200"><tspan x="60" class="lbl">FN</tspan><tspan x="110" class="yel">1</tspan><tspan x="200" class="mut">hand-adjudicated, n=1</tspan></text>
 
     <text y="240"><tspan x="28" class="mut">metrics</tspan></text>
-    <text y="264"><tspan x="60" class="txt bold">precision</tspan><tspan x="220" class="grn bold">1.00</tspan><tspan x="320" class="mut">TP/(TP+FP)</tspan></text>
-    <text y="286"><tspan x="60" class="txt bold">recall</tspan><tspan x="220" class="grn bold">0.88</tspan><tspan x="320" class="mut">TP/(TP+FN)</tspan></text>
-    <text y="308"><tspan x="60" class="txt bold">coverage</tspan><tspan x="220" class="cor bold">0.92</tspan><tspan x="320" class="mut">decided / adjudicable</tspan></text>
+    <text y="264"><tspan x="60" class="txt bold">precision</tspan><tspan x="220" class="yel bold">n/a</tspan><tspan x="320" class="mut">0 TP / 0 FP — a ZERO DENOMINATOR</tspan></text>
+    <text y="286"><tspan x="60" class="txt bold">recall</tspan><tspan x="220" class="yel bold">0.00</tspan><tspan x="320" class="mut">0/1, n=1 — not a base rate</tspan></text>
 
-    <text y="348"><tspan x="28" class="mut">excluded (never folded in as PASS)</tspan></text>
-    <text y="372"><tspan x="60" class="lbl">UNVERIFIED verdict</tspan><tspan x="320" class="yel">1</tspan><tspan x="352" class="mut">engine could not decide; lowers coverage</tspan></text>
-    <text y="394"><tspan x="60" class="lbl">pending label</tspan><tspan x="320" class="txt">0</tspan><tspan x="352" class="mut">not yet adjudicated by a human</tspan></text>
+    <text y="326"><tspan x="28" class="red bold">an `n/a` is a zero denominator, NOT a 1.00.</tspan></text>
+    <text y="348"><tspan x="28" class="mut">The engine never labels its own cases — every label here is a human's.</tspan></text>
 
-    <text y="440"><tspan x="28" class="mut"># precision/recall only make sense beside coverage; excluded cases are never counted as a PASS.</tspan></text>
+    <text y="388"><tspan x="28" class="mut">what the corpus actually holds</tspan></text>
+    <text y="412"><tspan x="60" class="lbl">true positives banked</tspan><tspan x="320" class="txt">0</tspan><tspan x="352" class="mut">the honest count, published as such</tspan></text>
+    <text y="434"><tspan x="60" class="lbl">negative fixtures</tspan><tspan x="320" class="txt">7</tspan><tspan x="352" class="mut">turns a human adjudicated FALSE POSITIVE</tspan></text>
+
+    <text y="462"><tspan x="28" class="mut"># a detector that reported 1.00 here would be reporting its own zero denominator as perfection.</tspan></text>
   </g>
 </svg>
