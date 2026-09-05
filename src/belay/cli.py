@@ -2172,6 +2172,29 @@ _INTEROP_CORRELATE_DESCRIPTION = (
 )
 
 
+_INTEROP_EXPORT_DESCRIPTION = (
+    "Run the C9 export pipeline: correlate OTLP/JSON spans (Task 1's parser) to Belay's "
+    "own recorded MCP tools/call turns (the W3C traceparent join, exactly as `correlate` "
+    "does), attach whatever verdict a real replay of each matched turn produces, and "
+    "write the verdicts back INSIDE the OTLP/JSON document a collector reads -- "
+    "belay.verdict.* span attributes plus one belay.verdict event.\n\n"
+    "The document goes to --out FILE, or to stdout when --out is absent; the summary "
+    "(human or --json) ALWAYS goes to stderr, so stdout carries exactly one artifact "
+    "and `belay interop export ... > verified.otlp` is always safe.\n\n"
+    "WITHOUT --server, correlation still runs and the export still succeeds (exit 0), "
+    "but no turn is replayed: every matched span exports UNVERIFIED "
+    "(not-replayed-no-server). Spans that cannot be replayed export as UNVERIFIED, "
+    "never PASS -- the export is not a gate, and it never guesses a verdict.\n\n"
+    "Single trace file only: the positional trace argument must be one .jsonl file. A "
+    "directory is rejected with a clear error -- multi-trace aggregation is a separate, "
+    "out-of-scope follow-up, not something this silently skips.\n\n"
+    "Manifests: a turn's snapshot manifest is written by the gate to a SIBLING of the "
+    "snapshot dir, e.g. BELAY_SNAPSHOT_DIR=./sn -> ./sn.manifests/. --manifest-dir "
+    "defaults to that convention for the given trace file; a present turn whose manifest "
+    "is not found exports an honest UNVERIFIED, never a fabricated PASS."
+)
+
+
 def _correlate_without_server(records: list[dict], spans) -> list:
     """Build every span's `CorrelatedSpan` WITHOUT replaying anything.
 
@@ -2282,6 +2305,114 @@ def _cmd_interop_correlate(args: argparse.Namespace) -> int:
 
     worst = _worst(results, Status)
     return 0 if worst is Status.PASS else 1
+
+
+def _cmd_interop_export(args: argparse.Namespace) -> int:
+    """`belay interop export <otlp> <trace>` — correlate, attach, and export verdicts.
+
+    Reads the OTLP/JSON spans and the (single) trace file, joins each span to a
+    `tools/call` turn by W3C traceparent, replays matched turns (if `--server` was
+    given) and attaches the resulting verdict, then writes the verdicts back INSIDE
+    the OTLP/JSON document via the engine's `build_enriched_document` + shared `dumps`
+    serializer — to `--out` or stdout. The summary (human or `--json`) ALWAYS goes to
+    stderr, so stdout carries exactly one artifact.
+
+    Exit semantics (settled, deliberately diverging from correlate's `_worst` gate):
+    rc 0 on a successful export REGARDLESS of verdict contents — an all-UNVERIFIED
+    export (e.g. no `--server`) is still a successful export, because the export is
+    not a gate; rc 2 on the operational fail-closed preflight errors (mirroring
+    correlate); rc 1 on a write failure, a distinct code so the three states are
+    distinguishable.
+    """
+    from belay.interop import report as interop_report
+    from belay.interop.attach import correlate_and_attach
+    from belay.interop.export import build_enriched_document, dumps
+    from belay.interop.otlp import OtlpParseError, parse_otlp
+    from belay.phase0.runner import default_manifest_dir_for
+    from belay.replay.reader import TraceCorrupt, read_trace
+
+    trace_path = Path(args.trace)
+    otlp_path = Path(args.otlp)
+
+    if trace_path.is_dir():
+        print(
+            f"belay: {trace_path} is a directory; pass a single trace file -- "
+            "directory aggregation is not yet supported",
+            file=sys.stderr,
+        )
+        return 2
+    if not trace_path.exists():
+        print(f"belay: trace not found: {trace_path}", file=sys.stderr)
+        return 2
+    if not otlp_path.exists():
+        print(f"belay: OTLP spans file not found: {otlp_path}", file=sys.stderr)
+        return 2
+
+    try:
+        read = read_trace(trace_path)
+    except TraceCorrupt as exc:
+        print(f"belay: {exc}", file=sys.stderr)
+        return 2
+
+    # The SAME bytes `parse_otlp` reads feed `build_enriched_document`, so the parsed
+    # spans and the document being enriched can never disagree about span count.
+    otlp_text = otlp_path.read_text(encoding="utf-8")
+    try:
+        spans = parse_otlp(otlp_text)
+    except OtlpParseError as exc:
+        print(f"belay: {exc}", file=sys.stderr)
+        return 2
+
+    records = list(read.records)
+    manifest_dir = (
+        Path(args.manifest_dir) if args.manifest_dir is not None else default_manifest_dir_for(trace_path)
+    )
+
+    if args.server:
+        results = correlate_and_attach(
+            records, spans,
+            server_command=args.server, manifest_dir=manifest_dir,
+            replays=args.replays, timeout=args.timeout,
+        )
+    else:
+        results = _correlate_without_server(records, spans)
+
+    enriched = build_enriched_document(json.loads(otlp_text), spans, results)
+    serialized = dumps(enriched)
+
+    out_path = Path(args.out) if args.out is not None else None
+    export_path = str(out_path) if out_path is not None else "-"
+    if out_path is not None:
+        try:
+            out_path.write_text(serialized, encoding="utf-8")
+        except OSError as exc:
+            print(f"belay: cannot write export to {out_path}: {exc}", file=sys.stderr)
+            return 1
+    else:
+        sys.stdout.write(serialized)
+
+    if args.json:
+        payload = {
+            "export": export_path,
+            "correlation": interop_report.correlation_summary(results),
+        }
+        print(json.dumps(payload), file=sys.stderr)
+    else:
+        lines = [
+            f"belay interop export {trace_path}",
+            f"  otlp spans            {otlp_path}",
+            f"  manifest-dir          {manifest_dir}",
+            f"  export path           {export_path}",
+        ]
+        if not args.server:
+            lines.append("")
+            lines.append("  no --server given: correlation ran, but no turn was replayed --")
+            lines.append("  every matched span reports UNVERIFIED, never a guessed PASS.")
+        lines.append("")
+        lines.append(interop_report.render(results))
+        print("\n".join(lines), file=sys.stderr)
+
+    return 0
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -2934,6 +3065,60 @@ def _parser() -> argparse.ArgumentParser:
         help="emit the machine-readable result (trace/correlation/spans) to stdout instead of the human report",
     )
     interop_correlate.set_defaults(func=_cmd_interop_correlate)
+
+    interop_export = interop.add_parser(
+        "export",
+        help="correlate OTLP/JSON spans, attach verdicts, and export them back into the OTLP document",
+        description=_INTEROP_EXPORT_DESCRIPTION,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    interop_export.add_argument("otlp", help="the OTLP/JSON spans document to export verdicts into")
+    interop_export.add_argument(
+        "trace", help="the trace file (.jsonl) to correlate against -- a single file, not a directory"
+    )
+    interop_export.add_argument(
+        "--out",
+        default=None,
+        help="write the OTLP/JSON document to this file instead of stdout",
+    )
+    interop_export.add_argument(
+        "--manifest-dir",
+        default=None,
+        help=(
+            "where the gate persisted this run's snapshot manifests; default: the "
+            "trace's <stem>.manifests sibling (the mint convention C2/C3 already use)"
+        ),
+    )
+    interop_export.add_argument(
+        "--replays",
+        type=_verify_replays,
+        default=3,
+        help="on a DIVERGED reply, re-invoke this many times to classify determinism (default: 3, minimum: 3)",
+    )
+    interop_export.add_argument(
+        "--timeout",
+        type=float,
+        default=DEFAULT_TIMEOUT,
+        help=f"per-replay timeout in seconds (default: {DEFAULT_TIMEOUT:g})",
+    )
+    interop_export.add_argument(
+        "--server",
+        nargs=argparse.REMAINDER,
+        default=[],
+        metavar="cmd ...",
+        help=(
+            "the MCP server to REPLAY matched turns against; everything after --server "
+            "is its command. Without --server, correlation still runs and the export "
+            "still succeeds, but nothing is replayed and every matched span exports "
+            "UNVERIFIED (not-replayed-no-server)"
+        ),
+    )
+    interop_export.add_argument(
+        "--json",
+        action="store_true",
+        help="emit the machine-readable summary (export path + correlation rate) to stderr",
+    )
+    interop_export.set_defaults(func=_cmd_interop_export)
 
     return parser
 
