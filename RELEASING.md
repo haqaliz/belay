@@ -8,14 +8,21 @@ repository, not by whatever account the local `gh` CLI happens to be logged into
 The PyPI distribution is **`belay-harness`** (the name `belay` is already taken on PyPI); the
 import package and the `belay` command are unchanged.
 
-> **The image is built; the container CHANNEL is still deferred.** L3 shipped the
-> `Dockerfile` and `docker-compose.yml`, and the `docker` CI job builds the image from every PR
-> and re-runs the whole measurement inside it. What is *not* here is publishing: no GHCR push
-> job, so there is no `docker pull ghcr.io/haqaliz/belay` — a reader builds it from the checkout
-> (`docker build -t belay .`, which needs nothing else). Publishing is its own slice, deliberately
-> separate from packaging: when it lands, add a `ghcr` job here and to `release.yml`, and it
-> should push the SAME image the `docker` job already validates rather than rebuilding an
-> unvalidated one.
+> **The container channel now has a job; whether it is LIVE is a separate question.** L3
+> shipped the `Dockerfile` and `docker-compose.yml`, and the `docker` CI job builds the image
+> from every PR and re-runs the whole measurement inside it. Publishing was deferred by name
+> and is now built: `release.yml`'s **`ghcr`** job builds the image from the tagged checkout,
+> **measures that exact image** with the same in-image acceptance, proves the measured and
+> pushed image IDs are equal, and only then pushes `ghcr.io/<owner>/belay:vX.Y.Z` and
+> `:latest`. The pre-registered rule — *push the image that was validated, never a rebuild
+> nobody measured* — is enforced by `tests/test_release_workflow.py`, which fails if the push
+> ever moves ahead of the measurement or leaves its job.
+>
+> **Until a tag has actually run it and an anonymous `docker pull` has succeeded, the channel
+> is UNVERIFIED, not live** — a first push can land the package private, which is an owner
+> click to fix and must never be papered over. `linux/amd64` only: that is the substrate
+> `ubuntu-24.04` measures, and an arm64 image would be one nothing ran on. Apple Silicon
+> readers keep building locally, which works.
 
 ## Versioning
 
@@ -42,10 +49,19 @@ breaking under strict semver. The tag **must** match the `version` in `pyproject
 4. The `release` workflow (`.github/workflows/release.yml`) then, in parallel jobs:
    - builds the wheel and sdist and **publishes to PyPI** (via trusted publishing — see below),
    - **creates the GitHub Release** from the matching `CHANGELOG.md` section and attaches the
-     wheel + sdist.
+     wheel + sdist,
+   - **builds, measures and pushes the container image** to `ghcr.io/<owner>/belay` (the
+     `ghcr` job; see the callout above for what "measures" buys and what it does not).
 
    Each channel is an independent job, so one failing does not block the others. Watch it with
    `gh run watch` or the Actions tab.
+
+5. **Verify each channel before calling the release done** — the honesty rule the product
+   enforces, applied to its own release. PyPI: check the **`/simple/`** index, not the JSON
+   API, which is CDN-stale for minutes after a publish (measured on v0.25.0, where even the
+   per-version endpoint 404'd). GitHub Release: `gh release view vX.Y.Z`. Container:
+   `docker pull ghcr.io/<owner>/belay:vX.Y.Z` **from a shell with no credentials** — a push
+   that succeeded into a private package pulls fine for you and fails for everyone else.
 
 ## One-time setup per channel
 

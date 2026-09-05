@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -54,14 +55,39 @@ pytestmark = pytest.mark.skipif(
     ),
 )
 
-#: Everything the suite needs beyond the stdlib and the installed wheel, MEASURED
-#: by running `python -m pytest` in the container and extending the list until it
-#: imported (2026-08-20, python:3.12-slim): `pytest` for the runner itself, and
-#: `mcp` for the `sdk`-marked tests that drive the real MCP SDK client. Pinned to
-#: the same version `pyproject.toml`'s dev group pins, so the in-image run and the
-#: host run are the same suite. Installed into the THROWAWAY dev container only —
-#: never into the runtime image, whose zero-dependency contract is the point.
-_DEV_DEPS = ("pytest", "mcp==1.28.1")
+#: Tools in the dev group the in-image suite never invokes: they lint and type-check
+#: the source, which the `test`/`test-linux` jobs already do on the host, and installing
+#: them here would only slow the container down. Named, so that the derivation below
+#: subtracts a reviewed list rather than a guess.
+_NOT_NEEDED_IN_IMAGE = frozenset({"ruff", "mypy"})
+
+
+def _dev_deps() -> tuple[str, ...]:
+    """The dev group from `pyproject.toml`, minus the tools this run never calls.
+
+    **Derived, not transcribed, and that is the fix for a defect this test HAD.** The
+    list used to be a hand-written `("pytest", "mcp==1.28.1")`, measured once by running
+    the suite in the container and extending it until imports stopped failing — so
+    adding any new dev dependency broke the in-image run with a collection error, and
+    nothing connected the two lists to say so. Adding `pyyaml` (for the release-workflow
+    guard) did exactly that, found by running this rather than by reading it.
+
+    Specifiers travel whole, so the container installs the same pins the host does and
+    the in-image run stays the same suite. Installed into the THROWAWAY dev container
+    only — never into the runtime image, whose zero-dependency contract is the point.
+    """
+    text = (_REPO_ROOT / "pyproject.toml").read_bytes()
+    group = tomllib.loads(text.decode("utf-8"))["dependency-groups"]["dev"]
+    kept = tuple(
+        spec
+        for spec in group
+        if re.split(r"[<>=!~\[ ]", spec, maxsplit=1)[0].strip() not in _NOT_NEEDED_IN_IMAGE
+    )
+    assert kept, "every dev dependency was excluded — the container would install nothing"
+    return kept
+
+
+_DEV_DEPS = _dev_deps()
 
 #: Every named cause the in-container suite is allowed to skip under. Two families:
 #: the macOS-only causes (Seatbelt, clonefile, BSD file flags, the darwin ACL and

@@ -129,6 +129,15 @@ def docker_available() -> bool:
     return probe.returncode == 0
 
 
+#: Set to a tag that already exists to make `built_image` ADOPT it: no build, and no
+#: removal afterwards. There is exactly one caller, and it is the reason the knob
+#: exists — `release.yml`'s `ghcr` job builds the image it is about to publish, has the
+#: suite measure THAT image, and then pushes it. Left to build its own copy, the fixture
+#: would measure an image it then deletes, and the job would publish an unmeasured one.
+#: Unset (every local run, every CI job but that one) the behaviour below is unchanged.
+_ADOPT_IMAGE_ENV = "BELAY_TEST_IMAGE"
+
+
 @pytest.fixture(scope="session")
 def built_image() -> Iterator[str]:
     """Build the image from a CLEAN checkout — no pre-built wheel — and clean up after.
@@ -139,7 +148,20 @@ def built_image() -> Iterator[str]:
     lying around would let a broken multi-stage build pass here and fail for them.
     A stale wheel would also stamp the wrong version, which the version test would
     catch — but by then the quickstart is already wrong.
+
+    **Adoption mode (`BELAY_TEST_IMAGE`) neither builds nor removes.** The sweep is
+    skipped with it, and deliberately: a sweep run *after* somebody else's build proves
+    nothing about that build. The property it protects is preserved at the only call
+    site instead — the publish job's `docker build` is the whole build, run from a fresh
+    checkout that never executed `uv build`, so `dist/` is empty there by construction
+    and `test_the_build_needs_nothing_but_the_checkout_and_docker` still means what it
+    says.
     """
+    adopted = os.environ.get(_ADOPT_IMAGE_ENV)
+    if adopted:
+        yield adopted
+        return
+
     for stale in (_REPO_ROOT / "dist").glob("belay_harness-*.whl"):
         stale.unlink()
     try:
