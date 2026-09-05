@@ -345,12 +345,33 @@ green on both in CI); no Docker image yet (L3), not published to PyPI (L4).
 - [x] **L6 ✅ + L7 ✅** — the console and the locked demo are the launch demo; the
       README demo assets are current. L7 ticked on the owner's recorded sign-off
       2026-09-05 (amended DONE meaning — the negative control).
-- [ ] **≥1 external self-hoster** before launch day (roadmap Phase-1 target: ≥3) —
-      someone who is not you installed it and caught a real failure on **their**
-      agent; their report is a corpus case. **The package is ready** (invite +
-      runbook + report template, drafted 2026-09-05 under
-      `docs/planning/launch-readiness/external-self-hoster/`); the item stays ☐
-      until a real external report lands with a banked corpus case id.
+- [x] **≥1 external self-hoster — WAIVED AS A LAUNCH PRECONDITION by the owner,
+      2026-09-06, and the requirement is MOVED, not dropped.** It still stands, in
+      full and unweakened, at the **Phase-1 → Phase-2 gate** (`docs/ROADMAP.md`):
+      *≥3 external parties self-host and catch a real failure on their own agent.*
+      **Why it moved:** as a launch PRECONDITION it is circular for a solo
+      maintainer — publishing is how you find self-hosters, so requiring one first
+      demands the outcome before the mechanism. It is not circular after launch,
+      which is where it now lives.
+      **What the waiver does NOT do, checked rather than asserted:** no listing or
+      README copy claims external validation, users, or adoption (grepped
+      2026-09-06), so nothing published becomes untrue. The honest cost is stated
+      plainly: **nobody outside has run this on a machine that is not the
+      maintainer's, against an agent that is not his.** Launch traffic is the first
+      external test, in public.
+      **Substitute evidence banked in place of it** (2026-09-06, not a replacement
+      for a real external report and never to be described as one): the whole
+      stranger path was executed against **third-party software** — `belay-harness`
+      0.30.0 from **live PyPI** into a throwaway venv, driving
+      `@modelcontextprotocol/server-filesystem` installed from **npm** — capture →
+      `verify` → `corpus add` → `corpus run`. Result: `turn 0 write_file PASS`,
+      A2 replay PASS, A2 effect PASS, `effect:network NOT_COVERED` with its
+      coverage line, A1 PASS with an honest zero-exposure note, and
+      `corpus run` → no regressions. **It found three runbook defects that would
+      each have stopped a real self-hoster cold** — see the progress log.
+      The invite, runbook and report template stay ready under
+      `external-self-hoster/`, and `.github/ISSUE_TEMPLATE/` is live, so the first
+      real report is now a launch OUTCOME feeding the Phase-1 target.
 - [x] **PH listing assets drafted:** tagline, the number, the demo gif, the honest
       coverage line ("macOS+Linux sandbox; sees what crosses the MCP boundary; a
       PASS excludes the network dimension").
@@ -373,6 +394,7 @@ check is "the gate is true," which is checkable, not a feeling.
 
 | Date | belay-next pick | L-item | Outcome / commit |
 |------|-----------------|--------|------------------|
+| 2026-09-06 | — (owner waiver + stranger-path validation) | Gate | ✅ **The gate is TRUE.** The last ☐ — ≥1 external self-hoster — is **waived as a launch precondition by the owner** and **moved, unweakened, to the Phase-1 → Phase-2 gate** (≥3 external parties), because as a precondition it is circular for a solo maintainer: publishing is how you find self-hosters. Verified before waiving that **no public copy claims external validation**, so nothing shipped becomes untrue; the honest cost — nobody outside has run it on a machine that is not the maintainer's — is recorded at the gate. **Substitute evidence, run not asserted:** the entire stranger path driven against third-party software (belay-harness 0.30.0 from live PyPI + `@modelcontextprotocol/server-filesystem` from npm) — capture → verify → corpus add → corpus run, ending `turn 0 write_file PASS` with `effect:network NOT_COVERED` and `corpus run` clean. **It found three runbook defects, each a hard stop for a real self-hoster:** (1) step 2 omitted `BELAY_SNAPSHOT_DIR`, so the proxy refused to start (exit 2) at the first real step; (2) `--manifest-dir ./traces.manifests` is not where manifests go (`<BELAY_SNAPSHOT_DIR>.manifests` is), so every turn came back UNVERIFIED `manifest not found` — reads as "the tool is broken"; (3) `corpus add` put the trace AFTER `--server`, which is nargs=REMAINDER and swallowed it (`error: the following arguments are required: trace`) — the same REMAINDER defect class that bit `verify --timeout` in L7. All three fixed with the verified commands. No engine change, no number moves. |
 | 2026-09-05 | `ghcr-publish` | Block 0 (L2–L5 clause) | ✅ DONE. The container CHANNEL ships — `docker pull ghcr.io/haqaliz/belay` is live, closing the GHCR deferral L3 named in v0.21.0. Merged as PR #32 (`0f3cd40`); v0.30.0 released. `release.yml`'s `ghcr` job builds the image from the tagged checkout, **measures that exact image** with the same in-image acceptance the `docker` CI job runs, proves the measured and pushed image IDs are equal, and only then pushes `:vX.Y.Z` and `:latest` — the rule RELEASING.md pre-registered, now enforced by `tests/test_release_workflow.py` (YAML-parsed: a regex would pass on reordered steps). `BELAY_TEST_IMAGE` adoption in the `built_image` fixture is what makes measuring the pushed artifact possible at all. **Verified live, not assumed:** anonymous `docker pull` of both references from a logged-out shell, and the pulled image ran `belay verify --help`; the package landed public. Incidental fix: `test_docker_inimage.py`'s dev-dep list is derived from pyproject now — it was transcribed, so adding `pyyaml` broke the in-image suite and nothing linked the two lists. **NOT built, by name:** multi-arch (`linux/amd64` only — the substrate the acceptance measures), signing/provenance, a Docker Hub mirror. No verdict axis, invariant or published number moves. 2137 → 2147 tests. |
 | 2026-09-05 | — (docs sync after `trace-ordering-fix`, no version bump) | Gate | ✅ Two gate boxes ticked as **bookkeeping, not new decisions** — L1 and L2–L5 had read DONE in their own sections since 2026-08-12 and 2026-08-24 while their gate checkboxes stayed ☐, which tripped the gate's own rule against items that were already finished. Both are ticked with their qualifiers stated in-line: quote `11/60 = 18.3%` never the raw 71.2%, and the docker half means `docker build` from the checkout — **the GHCR publish job is still deferred by name**, so "docker pull works" must never be said. `CAPABILITY_ROADMAP.md` C1 gains the one ordering guarantee the recorder now makes (v0.29.0), including what it does NOT close (snapshot-before-next-call). **The gate's only remaining ☐ is unchanged: one real external self-hoster report with a banked corpus case id.** No number, axis, or test count moves. |
 | 2026-09-05 | `trace-ordering-fix` | Block 0 | ✅ DONE. C1 capture-fidelity fix, not a checklist item: the L3 follow-up (v0.21.0) is CLOSED. `_pump` forwards before it records, so a fast local server could have its `tools/list` RESPONSE recorded before its own REQUEST — an inverted pair does not correlate, no annotation snapshot is taken, and effect-conformance abstains for the whole run: honest, and a real coverage-loss path. Fixed in `src/belay/trace.py` **and nowhere else** — request ids are indexed under the writer's lock after the line is on disk; an s2c response parks on a `Condition` over that same lock until its key appears; bounded (2.0 s) and fail-open, so the readers still name an out-of-order pair exactly as before. No new record kind, no new field, no schema bump; `proxy.py`/`index.py`/`annotations.py`/`effect.py` untouched. **Measured** (stochastic, so quoted as observations): before, 20-run stresses of the committed fast-server fixture gave 15/20 and 12/20 runs with ≥1 broken correlation (46 and 60 broken records); after, 20/20 and 20/20 clean, 0 broken. The deterministic RED is in the unit tests, not the stress. **Honesty notes:** a COVERAGE gain, not a reclassification — `11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16` stand unedited and nothing was recomputed; the residue is named (the pump calls the recorder synchronously, so a parked deferral delays the NEXT chunk on that direction — zero in the causal case, at most the deadline per orphan); snapshot-before-next-call is NOT fixed and cannot be by a recorder. 2114 → 2137 tests. |

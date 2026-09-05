@@ -284,6 +284,12 @@ The verdict is deterministic and re-executable: `tests/test_demo_capture.py` rep
 
 ### 🚦 Phase 1 → Phase 2 Gate
 
+> **This gate now also carries the launch checklist's external-self-hoster item**, waived
+> as a launch *precondition* by the owner on 2026-09-06 and moved here unweakened. As a
+> precondition it was circular for a solo maintainer — publishing is how you find
+> self-hosters. Here it is not: you have launched, so the requirement is what it should
+> always have been, a test of whether real users catch real things.
+
 - ≥3 external parties self-host **and** catch a real failure on their own agent, **and**
 - The deterministic spine holds: no shipped PASS is ever produced by A3, verified by test, **and**
 - ≥2 users explicitly ask for a shared/CI surface (demand-pull, not our guess).

@@ -67,9 +67,10 @@ my-mcp-server --flag
 run:
 
 ```bash
-mkdir -p traces
+mkdir -p traces snapshots workspace
 BELAY_TRACE_DIR=./traces \
-BELAY_SANDBOX_SCOPE=./workspace \
+BELAY_SANDBOX_SCOPE="$PWD/workspace" \
+BELAY_SNAPSHOT_DIR="$PWD/snapshots" \
   python -m belay.proxy my-mcp-server --flag
 ```
 
@@ -78,7 +79,23 @@ BELAY_SANDBOX_SCOPE=./workspace \
   the scope is refused by the kernel and recorded as a `denial`; **network is
   denied by default**.
 - Point `BELAY_SANDBOX_SCOPE` at the directory your agent's work should be
-  confined to.
+  confined to. Use **absolute paths** for the scope and the snapshot dir.
+- **All three variables are required together.** Set the scope without
+  `BELAY_SNAPSHOT_DIR` and the proxy refuses to start — *"BELAY_SANDBOX_SCOPE is
+  set but BELAY_SNAPSHOT_DIR is not; refusing to start rather than run a sandbox
+  that snapshots nowhere"*, exit 2. That refusal is deliberate: a sandbox that
+  snapshots nowhere would leave every turn unverifiable.
+
+**Where the two output directories go, because step 3 needs the second one:**
+
+| what | where |
+|---|---|
+| the trace | `./traces/trace-<stamp>-<id>.jsonl` |
+| snapshot **trees** | `./snapshots/turn-0000/`, `turn-0001`, … (this is `BELAY_SNAPSHOT_DIR`) |
+| snapshot **manifests** | **`./snapshots.manifests/<handle>.json`** — a SIBLING of the snapshot dir, named after it |
+
+The manifests are what `--manifest-dir` wants below. They are **not** in the
+snapshot dir and **not** next to the trace.
 
 Now use your agent normally on a real task. Don't script the agent to fail —
 drive it the way you actually would.
@@ -86,11 +103,29 @@ drive it the way you actually would.
 ## 3 · Verify the run by re-execution
 
 ```bash
-belay verify ./traces/<run>.jsonl --manifest-dir ./traces.manifests \
-  --server my-mcp-server --flag
+belay verify ./traces/<run>.jsonl --manifest-dir ./snapshots.manifests \
+  --timeout 300 --server my-mcp-server --flag
 ```
 
-(If your server takes longer than 10s per replay, add `--timeout 300`.)
+`--manifest-dir` is the **`.manifests` sibling of your snapshot dir**, not the
+snapshot dir itself. Point it at the wrong one and every turn comes back
+`UNVERIFIED` with `cause: manifest not found` — which reads like the tool is
+broken and is really just the wrong path.
+
+`--server` takes **everything after it** (it is `nargs=REMAINDER`), so it must be
+the LAST flag on the line and the trace has to come before it.
+
+A healthy turn looks like this — note that the coverage boundary is part of a
+PASS, not a failure:
+
+```
+turn 0   write_file        PASS
+    A2 replay    PASS        replayed reply reproduced the recorded reply
+    A2 effect    PASS        effect-conformance PASS: … readOnlyHint: false …
+    A2 effect:network NOT_COVERED  openWorldHint conformance NOT_COVERED …
+    A1 invariant PASS        no-assertion-weakening … (0 file(s) compared)
+        exposure: 0 file(s) in scope — this carries no information about the rule
+```
 
 Per turn you get the two deterministic axes:
 
@@ -125,10 +160,14 @@ If you adjudicated a FAIL as real (a true positive), make it a self-contained,
 replayable case:
 
 ```bash
-belay corpus add --turn <N> --manifest-dir ./traces.manifests \
-  --label true-positive --server my-mcp-server --flag ./traces/<run>.jsonl
+belay corpus add ./traces/<run>.jsonl --turn <N> --manifest-dir ./snapshots.manifests \
+  --label true-positive --server my-mcp-server --flag
 belay corpus run        # re-replays every case; yours should read MATCH
 ```
+
+**The trace goes BEFORE `--server`.** `--server` swallows everything after it,
+so a trace placed at the end disappears into the server command and argparse
+answers `error: the following arguments are required: trace`.
 
 The `--label` is **your** human judgment — the engine never labels itself. The
 case id it prints is what your report carries.
