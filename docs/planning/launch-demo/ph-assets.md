@@ -120,12 +120,28 @@ axis and every PASS/FAIL verdict must survive unchanged — enforced by a test.*
 
 ## Claims that must NOT appear
 
-- Any Langfuse (or Phoenix/LangSmith/Braintrust) **integration**. C9's first slice ingests
-  and correlates OTLP spans; **export-back is deferred**. A side-by-side screenshot that
-  implies an integration is a staged claim.
+- Any Langfuse (or Phoenix/LangSmith/Braintrust) **integration**. A side-by-side
+  screenshot that implies one is a staged claim. **Corrected 2026-09-05:** the reason
+  clause used to read *"export-back is deferred"*, which is no longer true — `belay
+  interop export` shipped in **v0.28.0** and writes verdicts back into an OTLP document.
+  **The prohibition is unchanged and the correction does not weaken it:** an OTLP/JSON
+  round trip through a *fixture* collector is not a Langfuse integration, and no live
+  collector connection exists.
 - A **flag turn** in the committed capture. There isn't one — it is all green.
-- **A3 / claim re-derivation.** Not built.
-- **GHCR image pulls.** The image builds from the checkout; the publish job is deferred.
+- **Any A3 / claim re-derivation RESULT.** **Corrected 2026-09-05:** this used to read
+  *"Not built"*, which stopped being true when **C8 shipped (2026-09-02, v0.27.0)**. What
+  must not appear is unchanged in substance and is now stated exactly: A3 is **dark by
+  default** (no `BELAY_CLAIM_AUTHOR` configured ⇒ absent, named on the coverage line), it
+  **can never emit PASS** (property-tested), and **no real intent-drift case exists yet** —
+  the only corrupt-success fixture is synthetic. So: no A3 catch may be shown or implied,
+  and A3 must never be described as part of what a default install decides.
+- ~~**GHCR image pulls.**~~ **Retired 2026-09-05 — this claim is now TRUE and may ship**
+  (v0.30.0): `docker pull ghcr.io/haqaliz/belay` works, verified by an anonymous pull from
+  a logged-out shell against the live package. Two limits travel with it: **`linux/amd64`
+  only** (Apple Silicon runs it emulated, or builds natively from the checkout), and the
+  image's sandbox claims are the **Linux-host** ones — on a macOS host it runs in Docker
+  Desktop's VM kernel, which CI cannot reach, so that path stays a documented manual
+  re-probe. Never say "runs natively everywhere".
 - Any recall/precision claim for the A1 rule. `corpus score` reads `precision n/a`
   (0 TP / 0 FP) and `recall 0.00 (0/1, n=1)`. **An `n/a` is a zero denominator, not a
   1.00.**
