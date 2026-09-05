@@ -185,7 +185,11 @@ green on both in CI); no Docker image yet (L3), not published to PyPI (L4).
   construction.]**
 - **Deferred, deliberately, and named:** (1) the GHCR **publish** job — L3 ships
   packaging + validation; publishing is its own slice, and when it lands it should
-  push the SAME image the `docker` job already validated (`RELEASING.md`). (2) A
+  push the SAME image the `docker` job already validated (`RELEASING.md`).
+  **[SHIPPED 2026-09-05, `ghcr-publish`, v0.30.0 — and it kept the rule: the `ghcr` job
+  builds, MEASURES that exact image, proves the measured and pushed IDs are equal, and
+  only then pushes. `tests/test_release_workflow.py` fails if the push ever moves ahead
+  of the measurement. Verified live by an anonymous pull.]** (2) A
   Docker `HEALTHCHECK` / entrypoint preflight (PRD should-have 9) — the *capability*
   ships (the probe runs in-container on every PR, and README gives the re-probe
   command), but neither directive fits a one-shot CLI image: a `HEALTHCHECK` is
@@ -331,12 +335,13 @@ green on both in CI); no Docker image yet (L3), not published to PyPI (L4).
 - [x] **L2–L5 ✅** — a stranger can install and run Belay on macOS **and** Linux in
       under 15 minutes, with `docker` and `pip install` both real paths. **Box ticked
       2026-09-05 as bookkeeping** — L2 (2026-08-15), L3 (2026-08-20), L4 and L5
-      (2026-08-24) have all read DONE in their own sections since. **Read the docker
-      half exactly:** the image is real and CI-validated on every PR, and the reader
-      gets it with `docker build -t belay .` from the checkout — **the GHCR publish job
-      is still deferred by name**, so there is no `docker pull ghcr.io/haqaliz/belay`.
+      (2026-08-24) have all read DONE in their own sections since. **The docker half is
+      now literally true** (2026-09-05, v0.30.0): `docker pull ghcr.io/haqaliz/belay` works
+      — verified anonymously, from a logged-out shell, against the live package, and the
+      pulled image runs. `linux/amd64` only, which is the substrate the in-image acceptance
+      measures; Apple Silicon runs it emulated or builds natively from the checkout.
       Time-to-first-verdict was owner-measured at **4 s** (n=1, degraded case, live
-      PyPI). Do not restate this clause as "docker pull works".
+      PyPI) — that figure predates the container channel and was not re-measured for it.
 - [x] **L6 ✅ + L7 ✅** — the console and the locked demo are the launch demo; the
       README demo assets are current. L7 ticked on the owner's recorded sign-off
       2026-09-05 (amended DONE meaning — the negative control).
@@ -368,6 +373,7 @@ check is "the gate is true," which is checkable, not a feeling.
 
 | Date | belay-next pick | L-item | Outcome / commit |
 |------|-----------------|--------|------------------|
+| 2026-09-05 | `ghcr-publish` | Block 0 (L2–L5 clause) | ✅ DONE. The container CHANNEL ships — `docker pull ghcr.io/haqaliz/belay` is live, closing the GHCR deferral L3 named in v0.21.0. Merged as PR #32 (`0f3cd40`); v0.30.0 released. `release.yml`'s `ghcr` job builds the image from the tagged checkout, **measures that exact image** with the same in-image acceptance the `docker` CI job runs, proves the measured and pushed image IDs are equal, and only then pushes `:vX.Y.Z` and `:latest` — the rule RELEASING.md pre-registered, now enforced by `tests/test_release_workflow.py` (YAML-parsed: a regex would pass on reordered steps). `BELAY_TEST_IMAGE` adoption in the `built_image` fixture is what makes measuring the pushed artifact possible at all. **Verified live, not assumed:** anonymous `docker pull` of both references from a logged-out shell, and the pulled image ran `belay verify --help`; the package landed public. Incidental fix: `test_docker_inimage.py`'s dev-dep list is derived from pyproject now — it was transcribed, so adding `pyyaml` broke the in-image suite and nothing linked the two lists. **NOT built, by name:** multi-arch (`linux/amd64` only — the substrate the acceptance measures), signing/provenance, a Docker Hub mirror. No verdict axis, invariant or published number moves. 2137 → 2147 tests. |
 | 2026-09-05 | — (docs sync after `trace-ordering-fix`, no version bump) | Gate | ✅ Two gate boxes ticked as **bookkeeping, not new decisions** — L1 and L2–L5 had read DONE in their own sections since 2026-08-12 and 2026-08-24 while their gate checkboxes stayed ☐, which tripped the gate's own rule against items that were already finished. Both are ticked with their qualifiers stated in-line: quote `11/60 = 18.3%` never the raw 71.2%, and the docker half means `docker build` from the checkout — **the GHCR publish job is still deferred by name**, so "docker pull works" must never be said. `CAPABILITY_ROADMAP.md` C1 gains the one ordering guarantee the recorder now makes (v0.29.0), including what it does NOT close (snapshot-before-next-call). **The gate's only remaining ☐ is unchanged: one real external self-hoster report with a banked corpus case id.** No number, axis, or test count moves. |
 | 2026-09-05 | `trace-ordering-fix` | Block 0 | ✅ DONE. C1 capture-fidelity fix, not a checklist item: the L3 follow-up (v0.21.0) is CLOSED. `_pump` forwards before it records, so a fast local server could have its `tools/list` RESPONSE recorded before its own REQUEST — an inverted pair does not correlate, no annotation snapshot is taken, and effect-conformance abstains for the whole run: honest, and a real coverage-loss path. Fixed in `src/belay/trace.py` **and nowhere else** — request ids are indexed under the writer's lock after the line is on disk; an s2c response parks on a `Condition` over that same lock until its key appears; bounded (2.0 s) and fail-open, so the readers still name an out-of-order pair exactly as before. No new record kind, no new field, no schema bump; `proxy.py`/`index.py`/`annotations.py`/`effect.py` untouched. **Measured** (stochastic, so quoted as observations): before, 20-run stresses of the committed fast-server fixture gave 15/20 and 12/20 runs with ≥1 broken correlation (46 and 60 broken records); after, 20/20 and 20/20 clean, 0 broken. The deterministic RED is in the unit tests, not the stress. **Honesty notes:** a COVERAGE gain, not a reclassification — `11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16` stand unedited and nothing was recomputed; the residue is named (the pump calls the recorder synchronously, so a parked deferral delays the NEXT chunk on that direction — zero in the causal case, at most the deadline per orphan); snapshot-before-next-call is NOT fixed and cannot be by a recorder. 2114 → 2137 tests. |
 | 2026-09-05 | — (launch-readiness pass, not a belay-next pick) | Gate | ✅ **The gate is down to ONE open item.** L7 ticked on the owner's recorded sign-off (amended DONE meaning — the negative control — reviewed against DRIVES.md, the committed capture, and the pinned verdict; the owner signs, not the implementer). PH listing assets finalized: the three owner questions answered (tagline §1 line 1; number-first then gif; no second FAIL gif — skipped for non-reproducibility). External self-hoster package drafted: invite + runbook + GitHub issue report template under `docs/planning/launch-readiness/external-self-hoster/` (gate target ≥1, roadmap ≥3). **Remaining: one real external self-hoster's report with a banked corpus case.** The gate's own rule is unchanged: *"If any item is still ☐, the launch date is not set — the item list is."* |

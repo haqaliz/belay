@@ -10,6 +10,43 @@ carries the current state and the rules that still bind.
 
 ---
 
+**THE CONTAINER CHANNEL IS LIVE — `docker pull ghcr.io/haqaliz/belay` WORKS, AND THE IMAGE
+IT SERVES WAS MEASURED BEFORE IT WAS PUSHED** (2026-09-05, `ghcr-publish`, v0.30.0). L3
+(v0.21.0) shipped the IMAGE and deferred the CHANNEL by name; this closes it. The naive
+version of this job is `docker build` then `docker push` with **nothing in between** —
+shipping a stranger an image no test ever ran inside — and `RELEASING.md` pre-registered the
+rule against it before the job existed: *push the image that was validated, never a rebuild
+nobody measured.* So `release.yml`'s **`ghcr`** job does build → **measure** → push, in ONE
+job, in that order, and **proves** it: `docker image inspect --format '{{.Id}}'` on the
+measured tag and on each pushed reference, mismatch fails the job. `permissions: packages:
+write` and nothing wider; no `needs`, so the channels stay independent.
+**`BELAY_TEST_IMAGE`** makes the `built_image` fixture ADOPT an existing tag instead of
+building its own copy and deleting it on the way out — without it the job would measure an
+artifact that no longer exists when the push runs. Unset, every other run is byte-identical.
+**`tests/test_release_workflow.py` is the guard**, and it parses the workflow as YAML rather
+than scanning text: a regex passes on a workflow whose steps were reordered, which is the
+defect worth catching. It fails if the push is reachable without the build and the
+measurement ahead of it in the same job, if the measurement stops adopting the built tag, if
+the ID check disappears, if permissions widen, if either reference stops being pushed, or if
+the workflow starts publishing on anything but a `v*` tag.
+**VERIFIED LIVE, not assumed:** the release run's `ghcr` job succeeded and `docker pull
+ghcr.io/haqaliz/belay:v0.30.0` and `:latest` both succeeded **from a logged-out shell**, with
+the pulled image running `belay verify --help`. The package landed **public**; no owner click
+was needed. A push can succeed into a *private* package — which pulls fine for the owner and
+fails for everyone else — so that check stays mandatory on every release.
+**A finding, from running the measurement rather than reading it:**
+`test_docker_inimage.py` hard-coded its dev deps, so adding `pyyaml` broke the in-image suite
+with a collection error and **nothing connected the two lists to say so**. The list derives
+from `pyproject.toml` now, minus a named exclusion (`ruff`, `mypy`).
+**NOT built, by name: multi-arch.** `linux/amd64` only — `ubuntu-24.04` is the substrate the
+in-image acceptance measures, and an arm64 image would ship a substrate nothing ran on, which
+is this job's own rule in a new hat. Apple Silicon runs it emulated or builds natively.
+No signing/provenance, no Docker Hub mirror. **No engine change:** no verdict axis, invariant,
+coverage line, trace field or published number moves — `11/60 = 18.3%`, `precision 0.00`,
+`1/15`, `4/16` stand unedited. Suite 2137 → 2147. See `docs/planning/ghcr-publish/`.
+
+---
+
 **THE TRACE-ORDERING RACE IS CLOSED IN THE RECORDER — A RESPONSE IS NEVER WRITTEN
 BEFORE THE REQUEST IT ANSWERS** (2026-09-05, `trace-ordering-fix`, v0.29.0). `_pump`
 forwards a chunk and observes it afterwards — *"forwarding must never wait on the
@@ -325,8 +362,10 @@ call* property they still carry — that one is client-side by construction and 
 can close it. The rest of this block stands.]**
 **What this does NOT do:** no verdict axis, invariant, or verdict surface changed; no
 Phase-0 number moves; **GHCR publish is deferred by name** (packaging + validation shipped;
-when the push job lands it should push the SAME image the `docker` job validated). See
-`docs/planning/docker-selfhost/` and `CHECKLIST.md` → L3 ☑.
+when the push job lands it should push the SAME image the `docker` job validated).
+**[SHIPPED 2026-09-05, `ghcr-publish`, v0.30.0 — and it kept that rule: build, measure,
+prove the IDs equal, then push. `docker pull ghcr.io/haqaliz/belay` is live, verified
+anonymously.]** See `docs/planning/docker-selfhost/` and `CHECKLIST.md` → L3 ☑.
 
 **THE PHASE-0 GATE PROCEEDED — THE FIRST GATE RUN TO CLEAR ITS OWN PRE-REGISTERED
 CRITERIA** (2026-08-12, `mint-shell-toolset-run`). The shell-toolset mint ran

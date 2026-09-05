@@ -18,9 +18,12 @@ import package and the `belay` command are unchanged.
 > nobody measured* — is enforced by `tests/test_release_workflow.py`, which fails if the push
 > ever moves ahead of the measurement or leaves its job.
 >
-> **Until a tag has actually run it and an anonymous `docker pull` has succeeded, the channel
-> is UNVERIFIED, not live** — a first push can land the package private, which is an owner
-> click to fix and must never be papered over. `linux/amd64` only: that is the substrate
+> **VERIFIED LIVE 2026-09-05, on v0.30.0's own release run** — the `ghcr` job succeeded and
+> `docker pull ghcr.io/haqaliz/belay:v0.30.0` and `:latest` both succeeded **from a shell with
+> no credentials** (`docker logout ghcr.io` first), and the pulled image ran `belay verify
+> --help`. The package landed **public**; no owner click was needed. That check is not
+> optional on future releases: a push can succeed into a private package, which pulls fine
+> for the owner and fails for everyone else. `linux/amd64` only: that is the substrate
 > `ubuntu-24.04` measures, and an arm64 image would be one nothing ran on. Apple Silicon
 > readers keep building locally, which works.
 

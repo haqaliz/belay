@@ -66,20 +66,26 @@ belay --help
 **Or run it as a container.** The image is the whole engine, not a demo shell — it runs the real Landlock + seccomp sandbox and the real snapshot backend:
 
 ```bash
-docker build -t belay .            # or: docker compose build — needs nothing but this checkout
-docker run --rm belay --help
+docker pull ghcr.io/haqaliz/belay:latest   # published on every release; or pin :v0.30.0
+docker run --rm ghcr.io/haqaliz/belay --help
 # the boundary, decided by USING it — not read off a kernel version:
-docker run --rm belay sandbox check --scope /workspace
+docker run --rm ghcr.io/haqaliz/belay sandbox check --scope /workspace
 #   landlock      kernel ABI 8 (ok)
 #   containment   ok (a write outside the scope was refused)
 #   seccomp       ok (an AF_INET socket was refused)
 
 # mount the tree you want verified and drive the engine over it:
-docker run --rm -v "$PWD:/workspace" belay verify /workspace/traces/<trace>.jsonl \
+docker run --rm -v "$PWD:/workspace" ghcr.io/haqaliz/belay verify /workspace/traces/<trace>.jsonl \
   --manifest-dir /workspace/snapshots.manifests --server <your-mcp-server-cmd>
 ```
 
-`docker compose run --rm belay <subcommand>` is the same thing through compose. The second service is the live console (C7): `docker compose up console` builds it from this checkout and serves the SPA at `http://127.0.0.1:8080` (loopback only), with a healthcheck on its `/health` endpoint and the engine bundled in the image — verify/replay from inside the console container run this checkout's engine, and the service shares the engine's `/workspace` state mount, so traces and snapshots live in one place.
+**`linux/amd64` only** — that is the substrate the in-image acceptance measures, and an
+image for an architecture nothing ran on is not one we will publish. On Apple Silicon the
+published image runs under emulation (Docker says so), and `docker build -t belay .` from
+this checkout builds a native one, which needs nothing but the checkout.
+
+`docker compose run --rm belay <subcommand>` is the same thing through compose (it builds
+from this checkout rather than pulling). The second service is the live console (C7): `docker compose up console` builds it from this checkout and serves the SPA at `http://127.0.0.1:8080` (loopback only), with a healthcheck on its `/health` endpoint and the engine bundled in the image — verify/replay from inside the console container run this checkout's engine, and the service shares the engine's `/workspace` state mount, so traces and snapshots live in one place.
 
 > **What the container does and does not do.** It runs as a **non-root** `belay` user (uid 1000; `--user root` is the opt-in), and it carries **no containment of its own that Belay relies on** — the boundary is the *host kernel's* Landlock, which is not namespaced and which no image can supply. On a host below kernel 5.13, or with the LSM off, the launcher **refuses** (exit 2, named cause) instead of running unsandboxed: loud, never silent. The image's overlayfs layer has no reflink, so snapshots take the **copy path** with the named `reflink-unavailable` cause — and a corpus case banked on macOS APFS is **SKIP** with `UNRESTORABLE_CAPABILITY_MISMATCH` inside the container, never a guessed restore.
 >
