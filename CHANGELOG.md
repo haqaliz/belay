@@ -1390,7 +1390,8 @@ The first public release: the full **record → sandbox → replay → verdict**
 - **The A3 claim-re-derivation axis** (C8) is not built; the live console (C7) and observability interop
   (C9) are ahead on the roadmap.
 
-[Unreleased]: https://github.com/haqaliz/belay/compare/v0.24.0...HEAD
+[Unreleased]: https://github.com/haqaliz/belay/compare/v0.27.0...HEAD
+[0.28.0]: https://github.com/haqaliz/belay/compare/v0.27.0...v0.28.0
 [0.24.0]: https://github.com/haqaliz/belay/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/haqaliz/belay/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/haqaliz/belay/compare/v0.21.1...v0.22.0
