@@ -59,3 +59,8 @@ node_modules/
 
 # demo drive scratch: a drive is disposable; only a PROMOTED run belongs in the repo
 demo/.capture-runs/
+
+# graphify's generated knowledge graph (`graphify-out/graph.json` + dated runs).
+# Derived entirely from the checkout, rebuilt by `/graphify`, and machine-local:
+# committing it would put a stale index of the tree in the tree.
+/graphify-out/
