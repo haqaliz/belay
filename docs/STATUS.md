@@ -10,6 +10,50 @@ carries the current state and the rules that still bind.
 
 ---
 
+**THE TRACE-ORDERING RACE IS CLOSED IN THE RECORDER — A RESPONSE IS NEVER WRITTEN
+BEFORE THE REQUEST IT ANSWERS** (2026-09-05, `trace-ordering-fix`, v0.29.0). `_pump`
+forwards a chunk and observes it afterwards — *"forwarding must never wait on the
+recorder"* — so both directions ran ahead of the trace and a **fast local server** could
+have its `tools/list` RESPONSE recorded before its own REQUEST. An inverted pair does not
+correlate, `derive_annotations` then took no snapshot, and effect-conformance abstained
+for the whole run. Honest (UNVERIFIED, never a false PASS) and a real **coverage-loss**
+path — logged as a follow-up at L3 (v0.21.0) and closed here, in `src/belay/trace.py`
+**and nowhere else**: `proxy.py`, `index.py`, `annotations.py` and `effect.py` are
+untouched, because the fix removes the CAUSE rather than teaching the readers to tolerate
+an inverted trace (teaching them would make a *merged* trace pair a response with a
+request it never answered).
+**How:** every c2s frame's request ids enter an in-writer index **under the writer's own
+lock, after the line is on disk** — so a waiter that sees a key knows the record exists —
+and an s2c response parks on a `Condition` over that same lock (the wait releases it, so
+the direction it waits for is never blocked) until its key appears. **Bounded and
+fail-open:** past `REQUEST_WAIT_TIMEOUT` (2.0 s) it records anyway, out of order, and the
+readers name it exactly as before (`response-without-request` + `unanswered`) — **no new
+record kind, no new field, no schema bump.** The deadline is not optional: a parked
+response stops its direction being read, so an *orphan* response could otherwise enter a
+pipe cycle with a flooding server and wedge the proxy. **Exact, never heuristic** —
+classification is structural and identical to `index.classify` (`result`/`error` first),
+re-implemented in the recorder because it must not depend on a derivation that reads what
+it wrote, and **pinned to it by a test**; truncated, unparseable, batch, notification,
+server-originated and container-id frames never wait and are never indexed.
+**MEASURED, and quoted as observations because the race is stochastic** — before, on this
+machine, 20-run stresses of the committed fixture and driver (22 pairs per run):
+**15/20 and 12/20 runs held at least one broken correlation** (46 and 60 broken
+correlation records). **After: 20/20 and 20/20 clean, 0 broken records.** The deterministic
+RED is in the unit tests, not the stress.
+**THE HONESTY LINES:** this is a **COVERAGE gain, not a reclassification** — effect-
+conformance now decides where it abstained — and **no published number moves**
+(`11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16` stand unedited; nothing was
+recomputed). The transparency contract survives where it is load-bearing (the frame being
+recorded has already been forwarded, so no frame waits for its own record) and **the
+residue is named**: the pump calls the recorder synchronously, so while a deferral is
+parked the NEXT chunk on that direction is not read — zero in the causal case, at most the
+deadline once per orphan. **NOT fixed, by name: snapshot-before-next-call** — only the
+client decides when its next request crosses, so no recorder can close it; the in-image
+roundtrip fixtures still guard it and are re-scoped to say so. See
+`docs/planning/trace-ordering-fix/`.
+
+---
+
 **THE LAUNCH GATE IS DOWN TO ONE OPEN ITEM — L7 SIGNED OFF, PH ASSETS FINALIZED, THE
 EXTERNAL SELF-HOSTER PACKAGE BUILT** (2026-09-05, launch-readiness pass; docs only, no
 version bump). Three owner decisions recorded in the repo, each with its evidence:
@@ -273,6 +317,12 @@ RESPONSE recorded before its own REQUEST; an inverted pair does not correlate,
 is honest (UNVERIFIED, never a false PASS) and the engine is UNCHANGED** — the fixtures
 close the window by waiting on the trace itself, no sleep (40/40 stress, from 18/20). **It
 is logged as a follow-up: a real coverage-loss path for any fast local server.**
+**[Corrected 2026-09-05 — the follow-up is CLOSED and "the engine is UNCHANGED" no longer
+describes the shipped code.** `trace-ordering-fix` removed the cause in the recorder: an
+s2c response defers its own record until its request's record is on disk, bounded and
+fail-open. The fixture guards above stay, and are re-scoped to the *snapshot-before-next-
+call* property they still carry — that one is client-side by construction and no recorder
+can close it. The rest of this block stands.]**
 **What this does NOT do:** no verdict axis, invariant, or verdict surface changed; no
 Phase-0 number moves; **GHCR publish is deferred by name** (packaging + validation shipped;
 when the push job lands it should push the SAME image the `docker` job validated). See

@@ -36,10 +36,12 @@ import json
 import os
 import sys
 import threading
+import time
 import uuid
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 from belay.hashing import CANONICAL_FORM, canonical_hash, hash_bytes
 
@@ -69,8 +71,110 @@ _STATE_HANDLE_STATUSES = frozenset({"absent", "present", "unrestorable"})
 # pinned to a frame on. Named here rather than imported from `belay.sandbox.gate`:
 # the writer must not depend on the snapshot backend it is meant to outlive.
 _CLIENT_TO_SERVER = "c2s"
+_SERVER_TO_CLIENT = "s2c"
+
+#: How long a response's record waits for its request's record before recording
+#: anyway, out of order. The window it covers is one base64, two hashes and one
+#: `write` — microseconds, and ~100 ms for a MAX_FRAME frame — so this is four
+#: orders of magnitude of headroom. It is not a latency budget: in the causal case
+#: the wait is zero, and only a response whose request never crosses (a
+#: non-conforming server) ever reaches the deadline. Kept small for that reason —
+#: every extra second here is paid by the pathological case alone.
+REQUEST_WAIT_TIMEOUT = 2.0
+
+#: The request index is monotone (see `_note_requests_locked`), so it is capped
+#: rather than drained. Large enough that no real session evicts a key whose reply
+#: is still in flight; small enough that a long-lived proxy cannot grow without
+#: bound.
+_REQUEST_INDEX_MAX = 4096
 
 Observer = Callable[[bytes, bool], None]
+
+
+def _classify(message: Any) -> str:
+    """`request` | `response` | `notification` | `unknown`, from structure alone.
+
+    **Identical to `belay.index.classify`, and pinned to it by a test.** It is
+    re-implemented here rather than imported because the recorder must not depend on
+    a derivation that reads what the recorder wrote — but it must agree with it
+    exactly, or the writer would defer on a key the reader never builds and the
+    deferral would protect nothing.
+
+    Order matters: `result`/`error` is checked first, so a response is still a
+    response when a non-conforming server also stamps `method` on it. One such
+    server exists in this repo's own fixtures.
+    """
+    if not isinstance(message, dict):
+        return "unknown"
+    if "result" in message or "error" in message:
+        return "response"
+    if "method" in message:
+        return "request" if "id" in message else "notification"
+    return "unknown"
+
+
+def _key(identifier: Any) -> Optional[tuple]:
+    """The id's index key, with its type in it — or None if it cannot be one.
+
+    The type is in the key for the reason `belay.index._id_key` gives: Python
+    conflates ids JSON-RPC keeps apart (`1 == True`, `1 == 1.0`, and `"1"` is not
+    `1` on the wire). A container id is illegal JSON-RPC and unhashable besides,
+    so it gets no key at all and nothing waits on it.
+    """
+    if isinstance(identifier, (list, dict)):
+        return None
+    return (type(identifier).__name__, identifier)
+
+
+def _messages(frame: bytes) -> tuple:
+    """Every message in `frame`: one object, or the members of a JSON-RPC batch.
+
+    A frame that cannot be parsed yields nothing. Nothing here is a judgement about
+    the frame — an unreadable frame is carried verbatim and named by the readers,
+    exactly as before; it simply contributes no key and waits for nothing.
+    """
+    try:
+        message = json.loads(frame)
+    except (ValueError, RecursionError):
+        return ()
+    return tuple(message) if isinstance(message, list) else (message,)
+
+
+def _request_keys(frame: bytes) -> list[tuple]:
+    """The index keys of every client request in `frame`.
+
+    Batches are unpacked for the same reason `belay.sandbox.gate` unpacks them: the
+    2025-03-26 revision permitted them, so a client on that revision can legally put
+    a request inside an array. Indexing one costs nothing and can only ever release
+    a waiter that was going to wait for exactly that id.
+    """
+    keys = []
+    for message in _messages(frame):
+        if _classify(message) != "request":
+            continue
+        key = _key(message.get("id"))
+        if key is not None:
+            keys.append(key)
+    return keys
+
+
+def _awaited_key(frame: bytes) -> Optional[tuple]:
+    """The key of the request `frame` answers, or None if it answers nothing.
+
+    Deliberately narrow, and every narrowing is a case the reader also refuses to
+    pair: a batch (the reader names the shape rather than pairing it), a
+    server-originated request, a notification, an unparseable frame, a container id.
+    Waiting on any of those would be a guess, and a guess here buys a stall.
+    """
+    try:
+        message = json.loads(frame)
+    except (ValueError, RecursionError):
+        return None
+    # A top-level object, never a batch array — a one-member array is still an
+    # array, and the reader names its shape rather than pairing it.
+    if not isinstance(message, dict) or _classify(message) != "response":
+        return None
+    return _key(message.get("id"))
 
 
 class TraceClosed(Exception):
@@ -125,12 +229,29 @@ class TraceWriter:
 
     `seq` is allocated under the same lock as the append, so it is a total order
     over both directions in capture order — not two interleaved sequences a
-    reader would have to reconcile. The two streams are independent, so the
-    ordering *between* directions is only ever "when the proxy saw it", which is
-    what `observation_point` already says out loud.
+    reader would have to reconcile.
+
+    **The ordering between directions is "when the proxy saw it", with exactly one
+    guarantee laid over it: a response is never recorded before the request it
+    answers.** That sentence used to have no exception, and the exception is the
+    fix. The pump forwards a chunk and observes it afterwards — *"forwarding must
+    never wait on the recorder"* — so both directions run ahead of the trace, and a
+    server fast enough could have its RESPONSE recorded before its own REQUEST. An
+    inverted pair does not correlate (`derive_correlation` pairs a request with a
+    *later* response), so `derive_annotations` took no `tools/list` snapshot and
+    effect-conformance abstained for the whole run: honest, and a real coverage-loss
+    path for any fast local server.
+
+    So an s2c response defers its own record until its request's record is on disk —
+    **bounded and fail-open**: past `REQUEST_WAIT_TIMEOUT` it records anyway, out of
+    order, and the readers name what they see exactly as they did before. The wait
+    releases the lock (it is a `Condition` over it), so the other direction — the one
+    it is waiting for — is never blocked by it. Nothing else moves: the frame being
+    recorded has already been forwarded, `observation_point` still says `proxy`, and
+    no field or record kind is added.
     """
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, request_wait: float = REQUEST_WAIT_TIMEOUT) -> None:
         self._path = path
         # O_EXCL: never adopt a file someone else made, so the 0o600 below is a
         # property of a file we created rather than a hope about one we found.
@@ -138,6 +259,17 @@ class TraceWriter:
         # no window in which the trace exists and is world-readable.
         self._fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         self._lock = threading.Lock()
+        # Over the SAME lock, deliberately: the index must be updated atomically
+        # with the append it describes (a waiter that sees a key must know the
+        # record is on disk), and a waiter must release that lock while parked or
+        # the very record it waits for could never be written.
+        self._ready = threading.Condition(self._lock)
+        self._request_wait = request_wait
+        # Insertion-ordered, and MONOTONE: a key stays once written. Draining it on
+        # the answering response would make a `duplicate-response` — a real,
+        # reader-named thing a non-conforming server does — wait out the whole
+        # deadline for a request recorded long ago. Bounded by eviction instead.
+        self._recorded_requests: dict[tuple, None] = {}
         self._seq = 0
         self._closed = False
         # The slot's default, and the only value C1 could ever write. C2 sets
@@ -155,11 +287,16 @@ class TraceWriter:
         self._append({"kind": "connection_window", "phase": "open"})
 
     @classmethod
-    def in_directory(cls, directory: str | Path) -> "TraceWriter":
+    def in_directory(
+        cls, directory: str | Path, request_wait: float = REQUEST_WAIT_TIMEOUT
+    ) -> "TraceWriter":
         directory = Path(directory)
         os.makedirs(directory, mode=0o700, exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        return cls(directory / f"trace-{stamp}-{uuid.uuid4().hex[:8]}.jsonl")
+        return cls(
+            directory / f"trace-{stamp}-{uuid.uuid4().hex[:8]}.jsonl",
+            request_wait=request_wait,
+        )
 
     @property
     def path(self) -> Path:
@@ -246,7 +383,21 @@ class TraceWriter:
         raw = base64.b64encode(frame).decode("ascii")
         digest = hash_bytes(frame)
         canonical = canonical_hash(frame)
+        # A truncated frame is a fragment, and `belay.frames` already refuses to
+        # read one: half a message parsed as if it were the message would index or
+        # wait on an id that may not be the one on the wire.
+        readable = not truncated
+        requests = (
+            _request_keys(frame)
+            if readable and direction == _CLIENT_TO_SERVER
+            else []
+        )
+        # BEFORE the wait, so a deferred record carries the handle that was current
+        # when the frame was SEEN. The deferral must not move any other field's
+        # meaning, and the sticky slot changes as the other direction proceeds.
         handle = self._handle_for(direction, digest)
+        if readable and direction == _SERVER_TO_CLIENT:
+            self._await_request(_awaited_key(frame))
         self._append(
             {
                 "kind": "frame",
@@ -269,8 +420,62 @@ class TraceWriter:
                 # attempted": a frame from a run without snapshots must not
                 # start claiming anything else.
                 "state_handle": handle,
-            }
+            },
+            requests=requests,
         )
+
+    def _await_request(self, key: Optional[tuple]) -> None:
+        """Block until `key`'s request record exists — bounded, and fail-open.
+
+        Three ways out, and all three are honest. The key arrives (the ordinary
+        one, and typically instant: the request was forwarded before the server
+        could answer, so its record is a hash and a write away). The writer closes,
+        which the append after this reports as `TraceClosed` — the existing
+        contract, unchanged. Or the deadline expires, and the record lands out of
+        order: no new record kind, no invented cause, and the readers name the pair
+        exactly as they do today (`response-without-request` + `unanswered`). What
+        must never happen is a wait with no end, which would turn a
+        non-conforming server into a hung recorder.
+
+        No lock deadlock: the record this waits for is written by the *other*
+        direction, which never waits, and `Condition.wait` releases the lock while
+        parked.
+
+        **The PIPE cycle is why the deadline is not optional.** The pump calls this
+        synchronously, so a parked response stops that direction being read. A server
+        that then floods its stdout fills the pipe and blocks, stops reading its
+        stdin, and blocks the other pump mid-write — so the record being waited for
+        cannot arrive. A legitimate pair cannot enter that cycle (a reply proves the
+        request was forwarded, and the c2s record follows its forward with only a
+        hash in between, before the pump can block on anything else), but an ORPHAN
+        response can. The deadline is what makes that a bounded pause instead of a
+        wedged proxy.
+        """
+        if key is None:
+            return
+        deadline = time.monotonic() + self._request_wait
+        with self._ready:
+            while key not in self._recorded_requests and not self._closed:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return
+                self._ready.wait(remaining)
+
+    def _note_requests_locked(self, keys: Sequence[tuple]) -> None:
+        """Index `keys`, then wake every waiter. `self._lock` is already held.
+
+        Called only after the line is on disk, which is what makes "a waiter that
+        sees the key knows the record exists" true rather than nearly true.
+
+        The oldest key goes when the index is full, never the newest: the newest is
+        the one a reply is most likely still in flight for, and evicting it would
+        reintroduce exactly the stall this index exists to prevent.
+        """
+        for key in keys:
+            self._recorded_requests[key] = None
+        while len(self._recorded_requests) > _REQUEST_INDEX_MAX:
+            del self._recorded_requests[next(iter(self._recorded_requests))]
+        self._ready.notify_all()
 
     def record(self, kind: str, **fields: Any) -> None:
         """Append one record of `kind`. The extension point the format was built for.
@@ -311,7 +516,7 @@ class TraceWriter:
                 file=sys.stderr,
             )
 
-    def _append(self, record: dict[str, Any]) -> None:
+    def _append(self, record: dict[str, Any], requests: Sequence[tuple] = ()) -> None:
         with self._lock:
             if self._closed:
                 raise TraceClosed(
@@ -319,6 +524,12 @@ class TraceWriter:
                     f"outside the period this trace claims to have seen"
                 )
             self._append_locked(record)
+            if requests:
+                # After the write, inside the same lock. A key published before the
+                # line landed would release a waiter into recording ahead of the
+                # record it was waiting for — the defect, reintroduced one line
+                # further down.
+                self._note_requests_locked(requests)
 
     def _append_locked(self, record: dict[str, Any]) -> None:
         """Allocate `seq` and write, with `self._lock` already held.
@@ -384,6 +595,10 @@ class TraceWriter:
             self._closed = True
             os.close(self._fd)
             self._fd = -1
+            # Nothing more will ever be recorded, so a parked response is waiting
+            # for a record that cannot come. Wake it here rather than let it sit on
+            # its deadline holding up a shutdown it can no longer contribute to.
+            self._ready.notify_all()
 
 
 def append_claim_record(path: Path, *, text: str | None = None) -> int:

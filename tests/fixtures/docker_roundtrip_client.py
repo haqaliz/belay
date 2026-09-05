@@ -17,8 +17,10 @@ the first draft did.
 establish that the reply was RECORDED — see `docker_roundtrip_trace.py`, which
 carries the measurement and the reasoning. So before sending the call, this client
 waits until the `tools/list` reply is in the trace: the annotation snapshot must
-precede the call's own frame, or effect-conformance abstains. The server holds up
-its half of the same ordering.
+precede the call's own frame, or effect-conformance abstains. **This half is still
+load-bearing after `trace-ordering-fix` (2026-09-05):** the recorder now guarantees
+a response never precedes its request, but only the CLIENT decides when its next
+request crosses, so snapshot-before-next-call cannot be closed anywhere but here.
 
 Usage: `docker_roundtrip_client.py <server-script> <write-target>`.
 """

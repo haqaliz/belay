@@ -83,14 +83,32 @@ cannot know. A field that silently meant "server time" would be a small lie, and
 project does not ship small lies.
 
 **`truncated` describes the copy, never the wire.** The observed copy is bounded at
-`MAX_FRAME` (16 MiB); the forwarded bytes are never bounded, truncated, or delayed. So
+`MAX_FRAME` (16 MiB); the forwarded bytes are never bounded or truncated, and a frame never
+waits for its own record. (Since v0.29.0 there is one bounded exception on *later* frames,
+stated here rather than left to be discovered: the pump calls the recorder synchronously,
+so while a response's record is deferred — see the `seq` note below — the next chunk on
+that direction is not read. Zero in the ordinary case; at most the deadline for a response
+whose request never crossed.) So
 `truncated: true` means *we* recorded less than crossed the wire, and the frame's `raw` is
 therefore incomplete — a fact a reader must not mistake for the client having received less.
 
 **`seq` is one sequence across both directions.** Allocated under the same lock as the
 append, so it is a total order in capture order — not two interleaved sequences a reader
-must reconcile. The two streams are independent, so ordering *between* directions means only
-"when the proxy saw it", which is exactly what `observation_point` already says out loud.
+must reconcile. The two streams are independent, so ordering *between* directions means
+"when the proxy saw it", which is exactly what `observation_point` already says out loud —
+**with exactly one guarantee laid over it since v0.29.0: a response is never recorded
+before the request it answers.**
+
+That sentence used to have no exception. The pump forwards a chunk and observes it
+afterwards, so both directions run ahead of the trace, and a fast local server could have
+its `tools/list` RESPONSE recorded before its own REQUEST — an inverted pair, which does
+not correlate, so no annotation snapshot was taken and effect-conformance abstained for the
+whole run. The recorder now defers a response's record until its request's record is on
+disk. It is **bounded and fail-open**: past a deadline the response records anyway, out of
+order, and a reader sees exactly what it saw before — `response-without-request` plus
+`unanswered`. **No field and no record kind was added, and no reader changed.** A reader
+must therefore still handle an out-of-order pair; what changed is that it is now the rare,
+pathological case rather than a routine one.
 
 ### `state_handle` is three-state, and C2 fills it
 

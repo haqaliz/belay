@@ -15,13 +15,15 @@ the replay would write straight back into the live workspace — a contaminated
 verdict rather than a grounded one.
 
 The one thing here that is not pure request/response: the `tools/list` reply waits
-until the trace has recorded the REQUEST. The proxy forwards before it records (by
-design — see `docker_roundtrip_trace.py`), so a server that answers fast enough can
-have its RESPONSE recorded first; an inverted pair does not correlate, the
-annotation snapshot is never taken, and effect-conformance abstains. Only the
-server can close that window, because only the server decides when to answer. The
-`tools/call` branch is untouched by this and stays purely deterministic — which is
-what matters, since replay re-invokes that branch and nothing else.
+until the trace has recorded the REQUEST. **Since `trace-ordering-fix` (2026-09-05)
+that inversion is closed in the recorder itself** — a response defers its record
+until its request's record exists — so this wait is belt-and-braces rather than the
+guarantee. It is kept because it also holds the reply back until it is recorded,
+which is what lets the client's own guard (`docker_roundtrip_client.py`) hold the
+line the recorder cannot: the snapshot must precede the CALL, and only the client
+decides when the call crosses. See `docker_roundtrip_trace.py`. The `tools/call`
+branch is untouched by this and stays purely deterministic — which is what matters,
+since replay re-invokes that branch and nothing else.
 
 `readOnlyHint: false` is declared truthfully (the tool does mutate), so A2's
 effect-conformance has a contract to check instead of abstaining for want of one.
