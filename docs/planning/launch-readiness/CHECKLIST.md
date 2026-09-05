@@ -250,7 +250,7 @@ green on both in CI); no Docker image yet (L3), not published to PyPI (L4).
   (the L3 deferral item C7 resolves) with the engine bundled in-image. L7 (the
   launch demo) is the remaining launch-surface item and uses this console.
 
-### ☐ L7 · Launch demo — **built; the DONE meaning is AMENDED and awaits owner sign-off**
+### ☑ L7 · Launch demo — DONE 2026-09-05 (owner sign-off on the amended meaning)
 
 - **The locked spec, as written:** one repo, one failing test, an agent told *"make the
   tests pass"* — it weakens the test and reports success. Belay flags the exact turn (A1
@@ -283,10 +283,14 @@ green on both in CI); no Docker image yet (L3), not published to PyPI (L4).
 - **DONE =** the demo is a self-contained repo + runbook any stranger can reproduce, a
   fresh demo gif replaces the current one in the README, and the verdict is deterministic.
   **All three now hold** — under the amended meaning above.
-- **☐ NOT ticked, deliberately.** M2‴ pre-registered that *"L7's DONE is re-opened with
-  the owner before any redefinition — the checklist's L7 row is never marked DONE on an
-  unreviewed meaning."* The meaning changed (a green demo, not a caught cheat). **The
-  owner ticks this box, not the implementer.**
+- **☑ Ticked 2026-09-05 — OWNER SIGN-OFF, recorded.** M2‴ pre-registered that *"L7's
+  DONE is re-opened with the owner before any redefinition — the checklist's L7 row is
+  never marked DONE on an unreviewed meaning."* The meaning changed (a green demo, not a
+  caught cheat). **The owner (aliz) reviewed the amended meaning and its evidence —
+  `DRIVES.md` (18 observed drives, zero corrupt successes, the negative control), the
+  committed capture with its provenance, the pinned all-green verdict, and the 11/60 =
+  18.3% companion number — and signed off on 2026-09-05.** The box is now ticked on the
+  owner's explicit recorded decision, not the implementer's.
 
 ---
 
@@ -318,20 +322,24 @@ green on both in CI); no Docker image yet (L3), not published to PyPI (L4).
       via `belay phase0 report`.
 - [ ] **L2–L5 ✅** — a stranger can install and run Belay on macOS **and** Linux in
       under 15 minutes, with `docker run` and `pip install` both real paths.
-- [ ] **L6 ✅ + L7 ✅** — the console and the locked demo are the launch demo; the
-      README demo assets are current.
+- [x] **L6 ✅ + L7 ✅** — the console and the locked demo are the launch demo; the
+      README demo assets are current. L7 ticked on the owner's recorded sign-off
+      2026-09-05 (amended DONE meaning — the negative control).
 - [ ] **≥1 external self-hoster** before launch day (roadmap Phase-1 target: ≥3) —
       someone who is not you installed it and caught a real failure on **their**
-      agent; their report is a corpus case.
-- [ ] **PH listing assets drafted:** tagline, the number, the demo gif, the honest
+      agent; their report is a corpus case. **The package is ready** (invite +
+      runbook + report template, drafted 2026-09-05 under
+      `docs/planning/launch-readiness/external-self-hoster/`); the item stays ☐
+      until a real external report lands with a banked corpus case id.
+- [x] **PH listing assets drafted:** tagline, the number, the demo gif, the honest
       coverage line ("macOS+Linux sandbox; sees what crosses the MCP boundary; a
       PASS excludes the network dimension").
       **Drafted 2026-08-28** — `docs/planning/launch-demo/ph-assets.md`, all five
-      elements plus a "claims that must NOT appear" list. Three questions are left
-      open for the owner there (which tagline ships; gif-first or number-first; and
-      whether to record a second gif of a run that FAILs, from the mint's banked —
-      and therefore not reader-reproducible — captures). Box stays ☐ until those are
-      answered.
+      elements plus a "claims that must NOT appear" list. **All three open
+      questions answered by the owner 2026-09-05:** tagline §1's first line ships
+      ("Your agent said the tests pass. Belay re-ran them."); the listing leads
+      with the number, then the gif; no second FAIL gif (non-reproducible footage
+      skipped deliberately). Box checked.
 - [x] **L8** — C8 ships (2026-09-02): A3 subordinated, `--no-claim-axis` refutation
       enforced by `tests/test_refutation_no_claim_axis.py`, every PASS/FAIL surviving
       unchanged.
@@ -345,6 +353,7 @@ check is "the gate is true," which is checkable, not a feeling.
 
 | Date | belay-next pick | L-item | Outcome / commit |
 |------|-----------------|--------|------------------|
+| 2026-09-05 | — (launch-readiness pass, not a belay-next pick) | Gate | ✅ **The gate is down to ONE open item.** L7 ticked on the owner's recorded sign-off (amended DONE meaning — the negative control — reviewed against DRIVES.md, the committed capture, and the pinned verdict; the owner signs, not the implementer). PH listing assets finalized: the three owner questions answered (tagline §1 line 1; number-first then gif; no second FAIL gif — skipped for non-reproducibility). External self-hoster package drafted: invite + runbook + GitHub issue report template under `docs/planning/launch-readiness/external-self-hoster/` (gate target ≥1, roadmap ≥3). **Remaining: one real external self-hoster's report with a banked corpus case.** The gate's own rule is unchanged: *"If any item is still ☐, the launch date is not set — the item list is."* |
 | 2026-09-05 | `observability-export-back` | Block 0 | ✅ DONE. C9's second aspect, not a checklist item: the export-back half of the locked Phase-1 interop deliverable (deferred by name since v0.5.0) ships as `belay interop export <otlp> <trace> [--server -- CMD…] [--out FILE] [--json]` — verdicts back into the OTLP document as span attributes plus one `belay.verdict` event, the fixture-collector round-trip (`CAPABILITY_ROADMAP.md:839`), with the coverage line and UNVERIFIED-never-PASS in-band. Merged as PR #30 (`13e2509`); v0.28.0 released. Aspects `export-engine` (one pure `build_enriched_document`; positional document-order pairing, never a silent zip; the attribute contract `belay.verdict.status/axis/cause/turn_index/coverage/sub_verdicts`; absent-never-zero; uncovered spans export UNVERIFIED + named cause; byte-stable pinned fixture), `export-cli` (document → `--out`/stdout, summary → stderr always; rc 0 on a successful export regardless of verdict contents — deliberately diverges from correlate's `_worst` gate; rc 2 preflight, rc 1 write failure; seatbelt-gated real-replay e2e), `export-docs` (deferral lines retired exactly as wide as the slice; the "Do not stage a Langfuse screenshot" prohibition survives verbatim; the stale `NOT_COVERED` deferral item corrected; launch assets untouched — owner territory). Guards: the flag-parity guard now covers `interop export` (the `--timeout` defect class, re-armed) and the platform-gate SCAN_AREA. **Honesty notes:** no verdict axis, corpus or published number moves (`11/60`, `precision 0.00`, `1/15`, `4/16` stand unedited); no live OTLP exporter, no Langfuse integration (still not built), no multi-trace aggregation (separate deferral); launch assets untouched. 2091 → 2114 tests. |
 | 2026-09-02 | `claim-re-derivation-a3` | L8 | ✅ DONE. C8 — the last C-capability — ships on `feat/claim-re-derivation-a3/aliz`, merged as PR #28 (`8509d62`); v0.27.0. Aspects `evaluator` (the A3 engine: claim record → closed classifier gate → final state via final-turn replay → check under `contained`, network deny-all; exit code decides; exit 0 is silence D3; closed causes `NO_CLAIM_RECORDED`/`CLAIM_UNCLASSIFIABLE`/`NO_CHECK_AUTHOR`/`CHECK_DID_NOT_EXECUTE`/`FINAL_STATE_UNOBSERVABLE`; property test — A3 can never emit PASS), `author` (out-of-process BYOK: `BELAY_CLAIM_AUTHOR` / `--claim-author`, JSON-in/JSON-out, zero new deps, nothing leaves the box; live path is a manual gate), `demo-acceptance` (acceptance-4 re-scope D1: the demo capture stays all-green WITH A3 present — silence; a synthetic corrupt-success fixture FAILs on A3 and A1-trajectory from independent axes, A2 never FAILs on it), `corpus` (case schema v5 `claim` expected field, `{trace}-claim` namespace, recompute on the A3 dimension, `CLAIM_AXIS_DISABLED` SKIP never REGRESSION), `surfaces` (`--no-claim-axis` on verify/phase0/corpus + parity guard; text A3 line + JSON `claim_record` absent-key; `A3/...` canonical causes; phase0 A3 FAIL → `VERIFIED_FLAGGED` + banks intent-drift cases; ledger/report absent-never-zero; zero-LLM guard amended deliberately; **the refutation test** — corpus PASS/FAIL identical with and without the flag, "must never be weakened"). **Honesty notes:** A3 is dark by default (no author → absent, named on the coverage line); no real intent-drift case exists yet — the fixture is synthetic, the mint's next run fills the A3 column; `11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16` stand unedited; `verdict.reduce` untouched. 2062 → 2091 tests. |
 | 2026-09-01 | `corpus-trajectory-banking` | Block 0 | ✅ DONE. C6 follow-on, not a checklist item: the recorded mint defect — `phase0 run`'s trajectory ingest minted the same `trace-<instance>-turnN` id as the final turn's per-turn case, the guard refused (correctly), and zero of the shell-toolset mint's 23 trajectory FAILs (incl. all 11 hand-audited TPs) banked, so `corpus score` read `n/a` on the axis that earned the 18.3%. Merged as PR #27 (`6540942`); v0.26.0 released. Shipped as aspects `case-id-namespace` (trajectory cases mint `trace-<instance>-trajectory` — instance-level namespace, disjoint from `-turnN` by construction; one minting site in `add.py`, per-turn ids byte-identical, no schema change; RED-first: the defect shape — final-turn FAIL + trajectory FAIL — now banks both cases and recomputes MATCH), `score-denominator-proof` (labeled trajectory cases score with real denominators, `score()` unchanged; unrestorable pre-state stays unbankable fail-closed), `record-corrections` (corpus-trajectory spec corrected, AUDIT follow-up closed, STATUS.md entry, PHASE0_RESULTS pointer per its own policy). **Reclassification discipline:** `11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16` stand unedited; nothing backfilled (s6 captures gone) — the value is forward-looking: the next mint's trajectory FAILs bank. 1957 → 1961 tests. |

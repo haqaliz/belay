@@ -1,8 +1,13 @@
-# PH listing assets — draft
+# PH listing assets — final (decisions recorded 2026-09-05)
 
 Launch-readiness checklist item S1 (`docs/planning/launch-readiness/CHECKLIST.md`).
 **A draft, not a submission.** Every number here is re-derivable from a repo artifact;
 if a claim below cannot be traced to one, it does not ship.
+
+**Owner decisions, 2026-09-05** (the checklist gate's three open questions — all
+answered; see the Decisions section at the bottom): the tagline ships as §1's first
+line; the listing leads with the number (§2), then the gif (§3); no second FAIL gif is
+recorded.
 
 **Standing rule:** nothing on this page may claim more than the engine checks. The
 coverage line travels with every verdict claim — a `PASS` quoted without it is the exact
@@ -13,6 +18,8 @@ failure mode the `NOT_COVERED` status exists to prevent.
 ## 1 · Tagline
 
 > **Your agent said the tests pass. Belay re-ran them.**
+
+**DECIDED 2026-09-05 (owner): this is the tagline that ships.**
 
 The *"Your agent lied. Your dashboard didn't notice. Mine did."* line is **retired for the
 demo's headline** (owner decision 2026-08-27, PRD M2‴): it is factually wrong about the
@@ -67,6 +74,11 @@ PASS 7 / WARN 0 / FAIL 0 / UNVERIFIED 0 with the trajectory line *"PASS — the 
 supported by 2 replayed command turn(s)"* → the end of the run → one turn opened onto its
 sub-verdicts, including `effect:network NOT_COVERED`.
 
+**Listing order (decided 2026-09-05): the number leads, then the gif.** The gif is the
+negative control — it shows no catch — so the measured claim (18.3%) is the hook and the
+gif is its honest companion: the same engine that FAILs zero-execution claims passes a
+real agent's real work.
+
 **What the gif is, said plainly wherever it appears:** the **negative control**. A real
 agent (`claude -p`, told only *"make the tests pass"*) fixed the bug honestly, ran the
 suite, and said so — and Belay agrees, showing exactly what that agreement covers. We
@@ -118,12 +130,17 @@ axis and every PASS/FAIL verdict must survive unchanged — enforced by a test.*
   (0 TP / 0 FP) and `recall 0.00 (0/1, n=1)`. **An `n/a` is a zero denominator, not a
   1.00.**
 
-## Open, for the owner
+## Decisions (owner, 2026-09-05) — the three open questions, answered
 
-- Which tagline ships (the recommendation is §1's first line).
-- Whether the listing leads with the gif (the negative control) or with the number
-  (11/60), given that the gif no longer shows a catch.
-- Whether a second gif — the console rendering a run that *does* FAIL — is worth
-  recording from the mint's banked captures. It would show the catch, but those captures
-  are not committed to this repo, so it would not be reproducible by a reader the way the
-  demo capture is. **Not done, deliberately; the decision is the owner's.**
+1. **Which tagline ships:** §1's first line — *"Your agent said the tests pass. Belay
+   re-ran them."* The alternates are recorded, not shipped.
+2. **Gif-first or number-first:** **number first, gif second.** The gif no longer shows a
+   catch, so the measured claim leads and the negative control follows as the proof the
+   instrument does not cry wolf.
+3. **A second FAIL gif:** **skipped, deliberately.** The only real failing captures are
+   the mint's banked ones, which are not committed to this repo, so a reader could not
+   re-execute them the way the demo capture is re-executed. Non-reproducible FAIL footage
+   undercuts the posture the product is built on. The catch is carried by the number
+   (11/60 = 18.3%, with its decomposition) and by the synthetic A3 fixture
+   (`tests/test_a3_corrupt_success_fixture.py`), which FAILs on two independent axes —
+   and which is a test, never a listing claim.
