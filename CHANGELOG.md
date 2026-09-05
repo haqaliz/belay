@@ -5,6 +5,67 @@ All notable changes to Belay are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0 — until then,
 `0.x` minor bumps may include changes that would be breaking under strict semver.
 
+## [0.29.0] - 2026-09-05
+
+**The trace-ordering race is closed in the recorder — a response is never written before
+the request it answers.** `belay.proxy._pump` forwards a chunk and observes it afterwards
+("forwarding must never wait on the recorder"), so both directions ran ahead of the trace
+and a fast local server could have its `tools/list` RESPONSE recorded before its own
+REQUEST. An inverted pair does not correlate, `derive_annotations` then took no snapshot,
+and effect-conformance abstained for the whole run — honest (UNVERIFIED, never a false
+PASS) and a real **coverage-loss** path, logged as a follow-up when it was found during
+`docker-selfhost` (v0.21.0) and closed here.
+
+### Fixed
+
+- **`belay.trace.TraceWriter` defers a response's record until its request's record is on
+  disk.** Every c2s frame's request ids enter an in-writer index **under the writer's own
+  lock, after the line is written** — so a waiter that sees a key knows the record exists.
+  An s2c response parks on a `threading.Condition` over that same lock (the wait releases
+  it, so the direction it waits for is never blocked) until its key appears.
+- **Bounded and fail-open.** Past `REQUEST_WAIT_TIMEOUT` (2.0 s) the response records
+  anyway, out of order, and the readers name it exactly as they did before
+  (`response-without-request` + `unanswered`). **No new record kind, no new field, no
+  schema bump.** The deadline is not optional: a parked response stops its direction being
+  read, so an *orphan* response could otherwise enter a pipe cycle with a flooding server
+  and wedge the proxy. Bounded, it is a pause.
+- **Exact, never heuristic.** Classification is structural and identical to
+  `belay.index.classify` (`result`/`error` first, so a non-conforming response that also
+  carries `method` is still a response) — re-implemented in the recorder rather than
+  imported, because the recorder must not depend on a derivation that reads what it wrote,
+  and **pinned to it by a test**. Truncated frames, unparseable frames, batch arrays,
+  notifications, server-originated requests and container-valued ids never wait and are
+  never indexed.
+
+### Added
+
+- `tests/test_trace_ordering.py` — the deterministic unit RED (the deferral, the
+  fail-open, the closed-abort, seven never-wait shapes, the monotone index, the
+  classification-parity guard) plus a stress guard through the real proxy.
+- `tests/fixtures/fast_server.py` — a server that answers instantly and waits on nothing,
+  the opposite of the in-image roundtrip fixtures by design.
+
+### Honesty notes — read before quoting anything
+
+- **Measured, and quoted as observations rather than a rate** (it is a stochastic race).
+  Before the fix, on this machine, 20-run stresses of the committed fixture and driver
+  (22 request/response pairs per run): **15/20 and 12/20 runs held at least one broken
+  correlation** — 46 and 60 broken correlation records. After: **20/20 and 20/20 clean, 0
+  broken records.**
+- **This is a COVERAGE gain, not a reclassification, and it moves no published number.**
+  Effect-conformance will now decide rather than abstain on fast-server traces. `11/60 =
+  18.3%`, the 11 hand-audited TPs, `precision 0.00`, `1/15` and `4/16` stand unedited; no
+  historical capture was recomputed.
+- **The transparency contract survives where it is load-bearing, and the residue is
+  named.** `proxy.py` is untouched, and the frame being recorded has already been
+  forwarded — no frame ever waits for its own record. But the pump calls the recorder
+  synchronously, so while a deferral is parked the **next** chunk on that direction is not
+  read: zero in the causal case, at most the deadline once per orphan. Stated, not hidden.
+- **What this does NOT fix: snapshot-before-next-call.** Only the client decides when its
+  next request crosses, so no recorder can close that window; the in-image roundtrip
+  fixtures still guard it and are re-scoped to say so.
+- **Suite 2114 → 2137 tests passing** (25 named-cause skips, 11 deselected).
+
 ## [0.28.0] - 2026-09-05
 
 **Observability export-back ships — C9's second aspect is built** (`belay interop export`).
@@ -1390,7 +1451,8 @@ The first public release: the full **record → sandbox → replay → verdict**
 - **The A3 claim-re-derivation axis** (C8) is not built; the live console (C7) and observability interop
   (C9) are ahead on the roadmap.
 
-[Unreleased]: https://github.com/haqaliz/belay/compare/v0.27.0...HEAD
+[Unreleased]: https://github.com/haqaliz/belay/compare/v0.29.0...HEAD
+[0.29.0]: https://github.com/haqaliz/belay/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/haqaliz/belay/compare/v0.27.0...v0.28.0
 [0.24.0]: https://github.com/haqaliz/belay/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/haqaliz/belay/compare/v0.22.0...v0.23.0

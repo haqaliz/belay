@@ -1,25 +1,32 @@
 """Wait on the TRACE, never on a clock — shared by the in-image roundtrip fixtures.
 
-`belay.proxy._pump` forwards each chunk and observes it afterwards, under the
-comment "forwarding must never wait on the recorder": transparency is the proxy's
-whole contract, so both directions run ahead of the trace. The consequence is a
-real ordering race that a fast client and a fast server can lose — measured, on a
-GitHub `ubuntu-24.04` runner and reproduced 2 times in 20 locally:
+**Re-scoped 2026-09-05 (`trace-ordering-fix`). Read this first: the guard below no
+longer carries the property it was written for, and it is kept because it carries a
+second one that no recorder can close.**
+
+What it was written for. `belay.proxy._pump` forwards each chunk and observes it
+afterwards, under the comment "forwarding must never wait on the recorder", so both
+directions ran ahead of the trace and a fast server could have its RESPONSE recorded
+before its own REQUEST — measured on a GitHub `ubuntu-24.04` runner and reproduced 2
+times in 20 locally:
 
     seq 5  frame s2c  (reply to id 2)      <-- the tools/list RESPONSE
     seq 6  frame c2s  tools/list  id 2     <-- its own REQUEST, recorded after
 
-`derive_correlation` pairs a request with a LATER response, so an inverted pair
-does not correlate; `derive_annotations` then has no `tools/list` snapshot, and the
-turn's effect-conformance abstains with "no tools/list response was captured before
-this call". A truthful abstention about a trace that really is out of order — the
-engine is not wrong here, the trace is.
+**That is now closed in the recorder** (`belay.trace.TraceWriter`): a response defers
+its own record until its request's record exists, bounded and fail-open. So the
+server-side wait here is belt-and-braces, not the guarantee.
 
-Real clients do not hit this: a model turn sits between the reply and the next
-request. A test harness firing microseconds apart does. So the fixtures synchronise
-on the observable — the trace file is opened `O_APPEND` and written with raw
-`os.write`, so a record is visible the instant it is made — instead of sleeping a
-guessed interval that would be tuned to one machine and go quiet on a faster one.
+What it still carries, and what nothing else can. The *client-side* ordering:
+`derive_annotations` snapshots a tool's contract from the `tools/list` RESPONSE
+recorded BEFORE the call, and only the CLIENT decides when its next request crosses.
+A client that fires the call microseconds after reading the reply can still get in
+ahead of the reply's record — and the recorder cannot fix that without making the
+client's data path wait, which is the one thing it must not do. Real clients do not
+hit it (a model turn sits between the reply and the next request); a test harness
+does. So the wait stays, and stays on the observable — the trace file is opened
+`O_APPEND` and written with raw `os.write`, so a record is visible the instant it is
+made — instead of sleeping a guessed interval tuned to one machine.
 
 A timeout here RAISES. A wait that gives up quietly would put the flake back.
 """
