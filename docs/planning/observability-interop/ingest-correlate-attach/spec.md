@@ -2,7 +2,8 @@
 
 **Parent PRD:** `docs/planning/observability-interop/prd.md` (C9, first slice)
 **One-line boundary:** read OTLP/JSON spans → correlate each to its MCP turn by captured W3C
-trace context → attach the existing verdict → report the correlation rate. **No export-back.**
+trace context → attach the existing verdict → report the correlation rate. **No live-collector export.**
+(Export itself shipped as the second aspect — `docs/planning/observability-export-back/`.)
 
 ---
 
@@ -48,7 +49,8 @@ activity Belay could verify at all (the R6 number).
 
 ## Out-of-scope boundaries
 
-- Export verdicts back to OTLP (span attributes/events / fixture-collector round-trip) — 2nd aspect.
+- Export verdicts back to OTLP (span attributes/events / fixture-collector round-trip) — 2nd aspect,
+  shipped (`docs/planning/observability-export-back/`).
 - OTel SDK dependency; live OTLP exporter/collector; time-window correlation; `NOT_COVERED`.
 - Any change to `proxy/sandbox/snapshot/replay/verify` beyond the `GUARDED_ROOTS` addition.
 
