@@ -5,6 +5,29 @@ All notable changes to Belay are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0 — until then,
 `0.x` minor bumps may include changes that would be breaking under strict semver.
 
+## [0.30.1] - 2026-09-10
+
+**Docs correction** — the roadmap, README, and CLAUDE.md still read "A3 (claim
+re-derivation) is not built", which stopped being true when C8 shipped in v0.27.0
+(PR #28). Corrected in the repo's bracketed-correction style, each surface quoting
+what it replaces. No code, verdict axis, invariant or published number moves.
+
+### Changed
+
+- **`docs/ROADMAP.md`** — "A3 is not built and does not appear in the demo" corrected:
+  A3 is built (v0.27.0) and present in the demo **silently** (exit 0 → silence, never
+  PASS); the corrupt-success FAIL path is carried by the synthetic fixture. C8's
+  roadmap row marked shipped.
+- **`README.md`** — the "live console (C7) and A3 (C8) are ahead" status corrected:
+  every C1–C9 capability has shipped except the named deferred slices.
+- **`CLAUDE.md`** — the L7 block's "A3 is still not built / GHCR publish is still
+  deferred" bracketed as predating the v0.27.0 and v0.30.0 ships.
+- **`docs/technical/CAPABILITY_ROADMAP.md`** — C8 gains an "As built" note mirroring
+  C9's, its sequencing-table row is marked SHIPPED, and the 2026-08-15 "remaining
+  unshipped capabilities" note is superseded.
+- **`docs/planning/launch-demo/demo-capture/spec.md`** — the out-of-scope line no
+  longer lists the (now built) A3 claim axis.
+
 ## [0.30.0] - 2026-09-05
 
 **The container channel gets a publish job** — `release.yml` can now push the image to
@@ -1505,7 +1528,8 @@ The first public release: the full **record → sandbox → replay → verdict**
 - **The A3 claim-re-derivation axis** (C8) is not built; the live console (C7) and observability interop
   (C9) are ahead on the roadmap.
 
-[Unreleased]: https://github.com/haqaliz/belay/compare/v0.30.0...HEAD
+[Unreleased]: https://github.com/haqaliz/belay/compare/v0.30.1...HEAD
+[0.30.1]: https://github.com/haqaliz/belay/compare/v0.30.0...v0.30.1
 [0.30.0]: https://github.com/haqaliz/belay/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/haqaliz/belay/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/haqaliz/belay/compare/v0.27.0...v0.28.0
