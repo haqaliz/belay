@@ -183,7 +183,12 @@ This file orients a coding agent working in this repository. Read it first.
 > **What this does NOT do:** no verdict axis, invariant, status or Phase-0 number moves; A3
 > is still not built; the Langfuse integration is still **not built** (C9 export-back
 > deferred) and must never be implied by a staged screenshot; GHCR publish is still
-> deferred. **L7 IS TICKED (2026-09-05)** — the owner reviewed the amended DONE meaning
+> deferred. **[Corrected 2026-09-10 — this L7 block predates the ships; read the newest
+> blocks at the top of this file for the current state.** "A3 is still not built" stopped
+> being true on 2026-09-02 (C8, the A3 claim axis, shipped in v0.27.0, PR #28) and "GHCR
+> publish is still deferred" stopped being true on 2026-09-05 (the `ghcr` channel shipped
+> in v0.30.0, verified by an anonymous pull). What still stands: the Langfuse integration
+> is NOT built and must never be implied by a staged screenshot.]** **L7 IS TICKED (2026-09-05)** — the owner reviewed the amended DONE meaning
 > (the negative control) against DRIVES.md, the committed capture, and the pinned verdict,
 > and signed off; the box is ticked on the owner's recorded decision, not the
 > implementer's. **The launch gate is down to ONE open item:** ≥1 external self-hoster's

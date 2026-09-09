@@ -221,7 +221,7 @@ claimed for this repo).
 
 ## Out of scope
 
-- The gif (A3), the console container API fix (A2), Langfuse (deferred), A3 claim axis.
+- The gif (A3), the console container API fix (A2), Langfuse (deferred). ~~A3 claim axis~~ — **[Corrected 2026-09-10:** this spec predates the ship; the C8 claim axis is built (2026-09-02, v0.27.0) and appears in the demo **silently** — the re-scope note above states exactly how. The FAIL path is carried by the synthetic fixture, not the demo capture.**]**
 
 ## Acceptance criteria (test-first)
 
