@@ -575,6 +575,11 @@ value cases in the corpus, and the ones the Phase-0 number is made of.
 > `docs/planning/mint-shell-toolset-run/audit-and-publish/`. The C1–C9 build order is
 > now: C7 live console and C8 (A3) are the remaining unshipped capabilities, both
 > Phase-1 launch items; C9's export-back slice remains deferred.
+> **[Superseded 2026-09-10 — the sentence above stopped being true 2026-08-25 (C7,
+> `live-console`), 2026-09-02 (C8, v0.27.0, PR #28) and 2026-09-05 (C9's export-back,
+> v0.28.0). Every C1–C9 capability has shipped; only the named deferred slices remain (a
+> live OTLP exporter, multi-trace-directory aggregation). See the "As built" notes under
+> C7, C8 and C9.]**
 
 > **Superseded, kept for the record —** **Decision: build `invariant-test-mutation-shape` next; do NOT mint the remaining ~34 instances
 > under a 0.00-precision detector.** Its rule must be *"modification that removes or weakens an
@@ -825,6 +830,29 @@ direct measurement of the "better models make us better" thesis.
 
 **Dependencies:** C1–C6. (C7 for the demo rendering.)
 
+**As built (`feat/claim-re-derivation-a3`, PR #28, v0.27.0):** all five acceptances
+met. `src/belay/verify/claims.py` is the A3 evaluator, sitting beside
+`evaluate_trajectory_rules` at trace close on `belay verify` / `phase0 run` / `corpus
+run`. The author is **out-of-process BYOK** (`BELAY_CLAIM_AUTHOR` / `--claim-author`: a
+local command, JSON-in/JSON-out, zero new runtime dependencies, nothing leaves the box)
+and **dark by default** — no author configured means the axis is **absent**, named on the
+coverage line, never UNVERIFIED and never PASS. A3 emits only WARN / FAIL / UNVERIFIED
+from a closed cause vocabulary (`NO_CLAIM_RECORDED`, `CLAIM_UNCLASSIFIABLE`,
+`NO_CHECK_AUTHOR`, `CHECK_DID_NOT_EXECUTE`, `FINAL_STATE_UNOBSERVABLE`); a check that
+exits 0 is **silence** (D3 — a re-derived claim is not a certification). **The refutation
+ships as a test, not a doc line:** `tests/test_refutation_no_claim_axis.py` runs the
+corpus with and without `--no-claim-axis` and asserts identical PASS/FAIL everywhere (the
+claim case SKIPs `CLAIM_AXIS_DISABLED`, never REGRESSES). Corpus case schema **v5**
+carries the instance-level `claim` expected field; intent-drift cases bank in the disjoint
+`{trace}-claim` namespace. **Acceptance 4 was re-scoped with the owner (D1, 2026-09-02):**
+the negative-control demo stays all-green **with A3 present** (the check re-derives the
+true claim → silence), and the synthetic `tests/test_a3_corrupt_success_fixture.py`
+yields **A3 FAIL corroborating the A1 trajectory FAIL** on the same fixture from an
+independent axis. **State plainly:** no real intent-drift case exists yet — the fixture is
+synthetic and the value is forward-looking (the mint's next run fills the A3 column).
+**Not built, by name:** the A3 WARN vocabulary (empty in v0) and the evaluator's
+caller-supplied-workspace short-circuit (follow-on). See `docs/planning/claim-re-derivation-a3/`.
+
 ---
 
 ## C9. Observability interop  ·  week 8
@@ -912,5 +940,5 @@ built.
 | — | **Phase 0 gate: the number** | Wk 4 | 0 | ✅ **CLEARED — PROCEED, 2026-08-12** (11/60 = 18.3%, v0.19.0) |
 | C6 | Failure corpus | Wk 5 | 1 | No — moat #2 |
 | C7 | Live console | Wk 5–6 | 1 | No — the launch surface |
-| C8 | Claim re-derivation (A3) | Wk 7 | 1 | **Yes — cut first** |
+| C8 | Claim re-derivation (A3) | Wk 7 | 1 | **Yes — cut first** · ✅ **SHIPPED** (PR #28, v0.27.0; the A3 WARN vocabulary is empty in v0 and the evaluator's caller-supplied-workspace short-circuit is a follow-on) |
 | C9 | Observability interop | Wk 8 | 1 | ✅ **SHIPPED** (ingest+correlate+attach + export-back fixture-collector round-trip; live-collector export deferred) |

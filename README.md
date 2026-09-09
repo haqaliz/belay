@@ -342,7 +342,7 @@ The engine is strictly test-first, and its honesty properties are guarded by tes
 
 ## Status & roadmap
 
-**Alpha.** The full record → sandbox → replay → verdict spine plus the failure corpus (C1–C6) is built and merged; observability interop (C9) — `belay interop correlate` (ingest + correlate + attach over a single trace) and `belay interop export` (verdicts back into a fixture collector as OTLP span attributes/events; a live OTLP exporter is not built) — is also built. The live console (C7) and the A3 claim-re-derivation axis (C8, cuttable) are ahead. The [roadmap](docs/ROADMAP.md) and [capability backlog](docs/technical/CAPABILITY_ROADMAP.md) are authoritative on sequencing; [VISION.md](VISION.md) is the thesis.
+**Alpha.** The full record → sandbox → replay → verdict spine plus the failure corpus (C1–C6) is built and merged; observability interop (C9) — `belay interop correlate` (ingest + correlate + attach over a single trace) and `belay interop export` (verdicts back into a fixture collector as OTLP span attributes/events; a live OTLP exporter is not built) — is also built. The live console (C7, 2026-08-25) and the A3 claim-re-derivation axis (C8, 2026-09-02, v0.27.0) are built and merged too — every capability in the C1–C9 build order has shipped except the named deferred slices (a live OTLP exporter, multi-trace-directory aggregation). The [roadmap](docs/ROADMAP.md) and [capability backlog](docs/technical/CAPABILITY_ROADMAP.md) are authoritative on sequencing; [VISION.md](VISION.md) is the thesis.
 
 ## License
 
