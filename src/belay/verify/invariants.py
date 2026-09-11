@@ -25,10 +25,10 @@ everywhere else in `src/belay`.
 **Fail-closed.** A malformed file, the wrong shape, or a rule Belay does not understand is
 a named `ValueError`, never a silent empty list. An operator who declared a policy Belay
 then swallowed would be reporting the run against *no* policy — the exact false PASS this
-axis exists to refuse. `read-only`, `no-assertion-weakening` and
-`suite-before-success-claim` are the rules v0 implements; `no-create`/`no-delete` are
-reserved names, deliberately NOT accepted yet, so an unimplemented rule cannot pass for
-an enforced one.
+axis exists to refuse. `read-only`, `no-assertion-weakening`,
+`suite-before-success-claim`, `no-create` and `no-delete` are the rules v0 implements;
+any other name is reserved, deliberately NOT accepted, so an unimplemented rule cannot
+pass for an enforced one.
 
 **Scope interpretation is RULE-DEPENDENT, and that is derived rather than chosen.**
 `read-only` keeps its raw byte-PREFIX match, unchanged and untouchable: every
@@ -65,6 +65,13 @@ if TYPE_CHECKING:
 RULE_NO_ASSERTION_WEAKENING = "no-assertion-weakening"
 #: The original rule, unchanged in meaning and in scope semantics (D1).
 RULE_READ_ONLY = "read-only"
+#: The delta-only presence rules: nothing may APPEAR under the scope (`no-create`) and
+#: nothing under the scope may DISAPPEAR (`no-delete`). Decided from the BTH-1
+#: `FieldDiff` side markers alone — created is `field is None and left is None`, deleted
+#: is `field is None and right is None` — so no content trees are needed. Scope semantics:
+#: raw byte-prefix, exactly like `read-only` (the prefix/segment asymmetry is preserved).
+RULE_NO_CREATE = "no-create"
+RULE_NO_DELETE = "no-delete"
 #: The trajectory rule: "the suite must be executed before a success claim", evaluated
 #: ONCE per instance against observed replay effects, never per turn (see
 #: `INSTANCE_LEVEL_RULES`). Triggered by a `claim` record whose text classifies as a
@@ -75,7 +82,13 @@ RULE_SUITE_BEFORE_SUCCESS_CLAIM = "suite-before-success-claim"
 #: unimplemented rule must be REJECTED, not quietly accepted as if it were enforced, so the
 #: set of accepted rules is exactly the set that works.
 _KNOWN_RULES = frozenset(
-    {RULE_READ_ONLY, RULE_NO_ASSERTION_WEAKENING, RULE_SUITE_BEFORE_SUCCESS_CLAIM}
+    {
+        RULE_READ_ONLY,
+        RULE_NO_ASSERTION_WEAKENING,
+        RULE_SUITE_BEFORE_SUCCESS_CLAIM,
+        RULE_NO_CREATE,
+        RULE_NO_DELETE,
+    }
 )
 
 #: The rules that cannot be decided from the delta alone: they need the two content trees.
@@ -220,14 +233,16 @@ def _parse_invariant(item: object, *, index: int, source: Path) -> Invariant:
     return Invariant(scope=os.fsencode(scope), rule=rule)
 
 
-#: The rules A1 can GROUND in a filesystem delta. `read-only` is the only one: a BTH-1 tree
-#: diff is exactly the observation that confirms or refutes "this subtree was not written".
-#: Any other rule — a future `no-egress` needs to observe network egress, which Belay does
-#: NOT capture (the same EPERM gap C4 hit on `openWorldHint`: an egress denial and a
-#: filesystem-write denial are the identical "Operation not permitted") — is UNVERIFIED, not
-#: a fabricated PASS or FAIL. The loader only emits `read-only` today, but the evaluator
-#: fail-closes on anything else so a future rule cannot be silently reported as satisfied.
-_DELTA_GROUNDED_RULES = frozenset({"read-only"})
+#: The rules A1 can GROUND in a filesystem delta. `read-only`, `no-create` and `no-delete`
+#: are the three: a BTH-1 tree diff is exactly the observation that confirms or refutes
+#: "this subtree was not written" — or that nothing APPEARED in it, or that nothing in it
+#: DISAPPEARED. Any other rule — a future `no-egress` needs to observe network egress,
+#: which Belay does NOT capture (the same EPERM gap C4 hit on `openWorldHint`: an egress
+#: denial and a filesystem-write denial are the identical "Operation not permitted") — is
+#: UNVERIFIED, not a fabricated PASS or FAIL. The loader only emits these three today, but
+#: the evaluator fail-closes on anything else so a future rule cannot be silently reported
+#: as satisfied.
+_DELTA_GROUNDED_RULES = frozenset({RULE_READ_ONLY, RULE_NO_CREATE, RULE_NO_DELETE})
 
 
 def evaluate_invariant(
@@ -786,6 +801,8 @@ __all__ = [
     "NO_TASK_PRESTATE_TREE",
     "POST_STATE_NOT_OBSERVED",
     "RULE_NO_ASSERTION_WEAKENING",
+    "RULE_NO_CREATE",
+    "RULE_NO_DELETE",
     "RULE_READ_ONLY",
     "RULE_SUITE_BEFORE_SUCCESS_CLAIM",
     "UNDECIDABLE_WEAKENING",
