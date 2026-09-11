@@ -265,11 +265,15 @@ def evaluate_invariant(
     annotation to decide its verdict, and the only way to guarantee that is for the
     annotation to be unreachable from this signature.
 
-    For `read-only`, a path is "under scope" by a RAW BYTE-PREFIX match against `inv.scope`.
-    The operator's scope carries its own trailing slash (`b"tests/"`), which makes it a
-    directory prefix: `b"tests/"` covers `b"tests/test_auth.py"` but NOT `b"testsuite/x"`.
-    Matching on `str` (or stripping the slash) would reintroduce the exact traps BTH-1
-    avoids — so the match runs on the same raw path bytes BTH-1 and `effect._paths` use.
+    For the delta-grounded rules (`read-only`, `no-create`, `no-delete`), a path is "under
+    scope" by a RAW BYTE-PREFIX match against `inv.scope`. The operator's scope carries its
+    own trailing slash (`b"tests/"`), which makes it a directory prefix: `b"tests/"` covers
+    `b"tests/test_auth.py"` but NOT `b"testsuite/x"`. Matching on `str` (or stripping the
+    slash) would reintroduce the exact traps BTH-1 avoids — so the match runs on the same
+    raw path bytes BTH-1 and `effect._paths` use. `read-only` flags ANY in-scope mutation;
+    `no-create` flags only paths that APPEARED (`field is None and left is None`) and
+    `no-delete` only paths that DISAPPEARED (`field is None and right is None`) — both
+    decided from the `FieldDiff` structure, never a string heuristic.
 
     Two honesty rules, mirroring C4's effect check:
 
@@ -302,29 +306,40 @@ def evaluate_invariant(
             ),
         )
 
-    # read-only: an unobserved post-state cannot satisfy the invariant -> UNVERIFIED.
+    # A delta-grounded rule with no observed post-state cannot satisfy the invariant ->
+    # UNVERIFIED.
     if delta is None:
         return Verdict(
             "A1", "invariant", Status.UNVERIFIED,
             observed=None, expected=expected,
             message=(
-                f"read-only invariant on {scope_str!r} is UNVERIFIED for turn {turn_index}: "
+                f"{inv.rule} invariant on {scope_str!r} is UNVERIFIED for turn {turn_index}: "
                 f"replay observed no filesystem post-state, and an unobserved effect cannot "
                 f"be shown to respect the scope — never PASS"
             ),
         )
 
     # Raw byte-prefix match: the scope's own trailing slash makes it a directory prefix, so
-    # `b"tests/"` matches `b"tests/test_auth.py"` but not `b"testsuite/x"`.
-    violating = [fd for fd in delta if fd.path.startswith(inv.scope)]
+    # `b"tests/"` matches `b"tests/test_auth.py"` but not `b"testsuite/x"`. Then the rule's
+    # predicate decides which in-scope diffs violate it: `read-only` flags ANY mutation;
+    # `no-create` only paths that APPEARED (`field is None and left is None`); `no-delete`
+    # only paths that DISAPPEARED (`field is None and right is None`).
+    in_scope = [fd for fd in delta if fd.path.startswith(inv.scope)]
+    if inv.rule == RULE_READ_ONLY:
+        violating = in_scope
+    elif inv.rule == RULE_NO_CREATE:
+        violating = [fd for fd in in_scope if fd.field is None and fd.left is None]
+    else:  # RULE_NO_DELETE — the only remaining member of _DELTA_GROUNDED_RULES
+        violating = [fd for fd in in_scope if fd.field is None and fd.right is None]
+
     if violating:
         paths = _paths(violating)  # reuse effect's decode; do not reimplement it
         return Verdict(
             "A1", "invariant", Status.FAIL,
             observed=paths, expected=expected,
             message=(
-                f"read-only invariant on {scope_str!r} FAILED at turn {turn_index}: replay "
-                f"observed a filesystem mutation under the read-only scope at {paths}"
+                f"{inv.rule} invariant on {scope_str!r} FAILED at turn {turn_index}: replay "
+                f"observed a filesystem mutation under the {inv.rule} scope at {paths}"
             ),
         )
 
@@ -334,8 +349,8 @@ def evaluate_invariant(
         "A1", "invariant", Status.PASS,
         observed=_paths(delta), expected=expected,
         message=(
-            f"read-only invariant on {scope_str!r} PASSED at turn {turn_index}: replay "
-            f"observed no mutation under the read-only scope"
+            f"{inv.rule} invariant on {scope_str!r} PASSED at turn {turn_index}: replay "
+            f"observed no mutation under the {inv.rule} scope"
         ),
     )
 

@@ -40,6 +40,7 @@ from belay.verify.invariants import (
     _DELTA_GROUNDED_RULES,
     _KNOWN_RULES,
     Invariant,
+    evaluate_invariant,
     load_invariants,
 )
 from belay.verify.verdict import Status
@@ -121,3 +122,113 @@ def test_unknown_rule_is_still_rejected_by_name(tmp_path: Path) -> None:
         load_invariants(path)
 
     assert "no-rename" in str(excinfo.value)
+
+
+# --- Phase 1.2: evaluation from the BTH-1 delta (byte-prefix, rule-generic) ------------
+
+
+def test_no_create_created_path_under_scope_fails(tmp_path: Path) -> None:
+    """`no-create` scope `b"scratch/"` + a file CREATED under it -> FAIL naming rule+path.
+
+    Created is the BTH-1 side marker `field is None and left is None` — the path exists
+    only on the post side. The verdict keeps the A1 invariant sub-verdict shape, and the
+    message names the rule and the violating path.
+    """
+    inv = Invariant(scope=b"scratch/", rule=RULE_NO_CREATE)
+    delta = _delta(tmp_path, {}, {"scratch/x.txt": b"created"})
+
+    verdict = evaluate_invariant(inv, delta, turn_index=3)
+
+    assert verdict.axis == "A1"
+    assert verdict.kind == "invariant"
+    assert verdict.status is Status.FAIL
+    assert "no-create" in verdict.message
+    assert "scratch/x.txt" in verdict.message
+
+
+def test_no_delete_deleted_path_under_scope_fails(tmp_path: Path) -> None:
+    """`no-delete` scope `b"scratch/"` + a file DELETED under it -> FAIL naming rule+path.
+
+    Deleted is the BTH-1 side marker `field is None and right is None` — the path exists
+    only on the pre side.
+    """
+    inv = Invariant(scope=b"scratch/", rule=RULE_NO_DELETE)
+    delta = _delta(tmp_path, {"scratch/x.txt": b"gone"}, {})
+
+    verdict = evaluate_invariant(inv, delta, turn_index=3)
+
+    assert verdict.axis == "A1"
+    assert verdict.kind == "invariant"
+    assert verdict.status is Status.FAIL
+    assert "no-delete" in verdict.message
+    assert "scratch/x.txt" in verdict.message
+
+
+def test_clean_delta_content_change_passes_both_rules(tmp_path: Path) -> None:
+    """The two rules judge PRESENCE, not content: a content-only change under scope -> PASS.
+
+    A modified file is neither created nor deleted, so both rules hold even though the
+    file lives under the scope.
+    """
+    delta = _delta(tmp_path, {"scratch/x.txt": b"old"}, {"scratch/x.txt": b"new"})
+
+    for rule in (RULE_NO_CREATE, RULE_NO_DELETE):
+        inv = Invariant(scope=b"scratch/", rule=rule)
+        verdict = evaluate_invariant(inv, delta, turn_index=0)
+        assert verdict.status is Status.PASS, verdict.message
+
+
+def test_creation_and_deletion_outside_scope_pass(tmp_path: Path) -> None:
+    """Byte-prefix scope: a created/deleted path OUTSIDE `scratch/` -> PASS."""
+    no_create = Invariant(scope=b"scratch/", rule=RULE_NO_CREATE)
+    created_outside = _delta(tmp_path, {}, {"other/x.txt": b"created"}, name="created-outside")
+    assert evaluate_invariant(no_create, created_outside, 0).status is Status.PASS
+
+    no_delete = Invariant(scope=b"scratch/", rule=RULE_NO_DELETE)
+    deleted_outside = _delta(tmp_path, {"other/x.txt": b"gone"}, {}, name="deleted-outside")
+    assert evaluate_invariant(no_delete, deleted_outside, 0).status is Status.PASS
+
+
+def test_near_miss_prefix_does_not_fire(tmp_path: Path) -> None:
+    """`b"tests/"` must NOT match `b"testsuite/x"` — a directory prefix, not a substring.
+
+    The read-only near-miss pin (`tests/test_invariant_weakening_rule.py:222-251`)
+    reproduced for the new rules: a created/deleted file under `testsuite/` passes both.
+    """
+    no_create = Invariant(scope=b"tests/", rule=RULE_NO_CREATE)
+    created = _delta(tmp_path, {}, {"testsuite/x.txt": b"created"}, name="near-miss-create")
+    assert evaluate_invariant(no_create, created, 0).status is Status.PASS
+
+    no_delete = Invariant(scope=b"tests/", rule=RULE_NO_DELETE)
+    deleted = _delta(tmp_path, {"testsuite/x.txt": b"gone"}, {}, name="near-miss-delete")
+    assert evaluate_invariant(no_delete, deleted, 0).status is Status.PASS
+
+
+def test_empty_scope_is_whole_tree(tmp_path: Path) -> None:
+    """Empty scope `b""` -> whole-tree semantics: ANY created/deleted path fires.
+
+    Mirrors `read-only`'s empty-prefix behaviour — every path starts with the empty
+    prefix, so a creation deep in the tree FAILs `no-create` and a deletion there FAILs
+    `no-delete`.
+    """
+    no_create = Invariant(scope=b"", rule=RULE_NO_CREATE)
+    created = _delta(tmp_path, {}, {"a/b/x.txt": b"created"}, name="whole-tree-create")
+    assert evaluate_invariant(no_create, created, 0).status is Status.FAIL
+
+    no_delete = Invariant(scope=b"", rule=RULE_NO_DELETE)
+    deleted = _delta(tmp_path, {"a/b/x.txt": b"gone"}, {}, name="whole-tree-delete")
+    assert evaluate_invariant(no_delete, deleted, 0).status is Status.FAIL
+
+
+def test_delta_none_is_unverified_never_pass(tmp_path: Path) -> None:
+    """`delta is None` -> UNVERIFIED with the rule named, never PASS.
+
+    Mirrors the delta-None pin (`tests/test_invariant_eval.py:95-107`) for the new rules:
+    an unobserved effect cannot satisfy an invariant.
+    """
+    for rule in (RULE_NO_CREATE, RULE_NO_DELETE):
+        inv = Invariant(scope=b"scratch/", rule=rule)
+        verdict = evaluate_invariant(inv, None, turn_index=2)
+        assert verdict.status is Status.UNVERIFIED
+        assert verdict.status is not Status.PASS
+        assert rule in verdict.message
