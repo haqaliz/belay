@@ -58,8 +58,11 @@ def test_no_invariant_is_ever_sourced_from_a_trace(tmp_path: Path) -> None:
     A trace record that happens to look like an invariant is agent-produced EVIDENCE, not
     operator POLICY. This module must expose no way to turn such a record into an
     Invariant. The assertion is structural so a future "read invariants from the trace
-    records" loader breaks it: the only public loader is `load_invariants`, and it takes a
-    filesystem path, not records.
+    records" loader breaks it: the only loaders are `load_invariants`, which takes a
+    filesystem path, not records; `default_invariants`, which takes nothing at all; and
+    `resolve_library_entry`, which consults only the module-level LIBRARY table (the
+    deliberate third producer, admitted here by name per PRD M2 / the library-surface
+    plan).
     """
     # An invariant-shaped record riding inside a trace. If any code path honoured this, a
     # run could grant itself a permissive policy and A1 would be defeated by construction.
@@ -83,16 +86,25 @@ def test_no_invariant_is_ever_sourced_from_a_trace(tmp_path: Path) -> None:
         for name, obj in public.items()
         if "Invariant" in str(inspect.signature(obj).return_annotation)
     }
-    # Exactly two producers, and BOTH are provenance-safe by construction: `load_invariants`
-    # reads an OPERATOR FILE (a path the operator controls, asserted below to take only a
-    # path), and `default_invariants` reads NOTHING — it returns a hardcoded constant and
-    # takes no arguments at all, so it cannot source policy from a trace. Neither is a
-    # trace->policy path. A THIRD producer, or one of these growing a records/trace
-    # parameter, still trips this.
-    assert producers == {"load_invariants", "default_invariants"}, (
+    # Exactly three producers, and ALL THREE are provenance-safe by construction:
+    # `load_invariants` reads an OPERATOR FILE (a path the operator controls, asserted
+    # below to take only a path), `default_invariants` reads NOTHING — it returns a
+    # hardcoded constant and takes no arguments at all, so it cannot source policy from a
+    # trace — and `resolve_library_entry` (the DELIBERATE, review-approved third producer,
+    # PRD M2 / library-surface) consults ONLY the module-level LIBRARY table, asserted
+    # below to take only the entry name and to perform no file I/O. None is a trace->policy
+    # path. A FOURTH producer, or one of these growing a records/trace parameter, still
+    # trips this.
+    assert producers == {
+        "load_invariants",
+        "default_invariants",
+        "resolve_library_entry",
+    }, (
         "an unexpected invariant-producing callable appeared: "
-        f"{producers - {'load_invariants', 'default_invariants'}}. Policy must be sourced "
-        "only from load_invariants(operator_file) or the argument-free default_invariants()."
+        f"{producers - {'load_invariants', 'default_invariants', 'resolve_library_entry'}}."
+        " Policy must be sourced only from load_invariants(operator_file), the "
+        "argument-free default_invariants(), or the LIBRARY table via "
+        "resolve_library_entry(name)."
     )
     # The default reads nothing: its provenance safety is that it takes no input at all, so
     # there is no argument through which a trace could ever reach it.
@@ -108,6 +120,42 @@ def test_no_invariant_is_ever_sourced_from_a_trace(tmp_path: Path) -> None:
         f"load_invariants parameters are {params}; it must take only a file path. "
         "A records/trace parameter would open a trace-to-policy path."
     )
+
+    # The library resolver (the deliberate third producer) takes ONLY the entry name.
+    # There is no second argument — no path, no records — through which a trace could
+    # ever reach the table.
+    resolver_params = list(inspect.signature(invariants.resolve_library_entry).parameters)
+    assert resolver_params == ["name"], (
+        f"resolve_library_entry parameters are {resolver_params}; it must take only the "
+        "entry name. A records/trace parameter would open a trace-to-policy path."
+    )
+
+    # The resolver performs NO file I/O: policy comes from the module-level LIBRARY
+    # table, never from a file path that could be pointed at trace records. Asserted on
+    # the bytecode's referenced names, so a future `Path(...)`/`open(...)` addition
+    # breaks the build rather than silently widening the surface.
+    resolver_names = set(invariants.resolve_library_entry.__code__.co_names)
+    file_io_names = {
+        "open", "Path", "read_text", "read_bytes", "write_text",
+        "json", "load", "iterdir", "glob", "scandir",
+    }
+    assert not (resolver_names & file_io_names), (
+        f"resolve_library_entry references {sorted(resolver_names & file_io_names)}, "
+        "which are file-I/O names; the resolver must consult ONLY the module table."
+    )
+
+    # No callable in this module — public OR private — with "trace"/"record" in its name
+    # may CALL the resolver. A trace-shaped reader that reached into the library table
+    # would be exactly the trace->policy path the boundary forbids, in private clothing.
+    for name, obj in vars(invariants).items():
+        if not callable(obj) or getattr(obj, "__module__", None) != invariants.__name__:
+            continue
+        lowered = name.lower()
+        if "trace" in lowered or "record" in lowered:
+            assert "resolve_library_entry" not in set(obj.__code__.co_names), (
+                f"{name!r} calls resolve_library_entry — library selection must never "
+                "come from a trace/records-named path."
+            )
 
     # No public callable is named for reading a trace/records into policy.
     for name in public:
