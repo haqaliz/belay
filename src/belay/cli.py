@@ -624,7 +624,11 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     from belay.replay.reader import TraceCorrupt, read_trace
     from belay.verify.author import SubprocessAuthor, author_from_env
     from belay.verify.claims import RecordingAuthor, evaluate_claim
-    from belay.verify.invariants import default_invariants, load_invariants
+    from belay.verify.invariants import (
+        default_invariants,
+        load_invariants,
+        resolve_library_entry,
+    )
     from belay.verify.trajectory import evaluate_trajectory_rules
     from belay.verify.turn import verify_turn
     from belay.verify.verdict import Status
@@ -719,6 +723,20 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     if args.invariants is not None:
         try:
             invariants = invariants + load_invariants(Path(args.invariants))
+        except ValueError as exc:
+            message = f"belay: {exc}"
+            if json_mode:
+                _emit(render_json(error_report(args.trace, message)))
+            else:
+                _emit(message)
+            return 2
+    # The library presets: resolved by name into the SAME policy stream as the operator
+    # file, in the SAME fail-closed shape — an unknown name is exit 2 (never a silent
+    # no-policy run), and it happens BEFORE any trace is read or replay runs.
+    if args.invariant_library is not None:
+        try:
+            for name in args.invariant_library:
+                invariants.extend(resolve_library_entry(name))
         except ValueError as exc:
             message = f"belay: {exc}"
             if json_mode:
@@ -1323,7 +1341,11 @@ def _cmd_corpus_add(args: argparse.Namespace) -> int:
     from belay.corpus.add import add_case
     from belay.index import derive_correlation, tool_calls
     from belay.replay.reader import TraceCorrupt, read_trace
-    from belay.verify.invariants import default_invariants, load_invariants
+    from belay.verify.invariants import (
+        default_invariants,
+        load_invariants,
+        resolve_library_entry,
+    )
     from belay.verify.turn import verify_turn
 
     if not args.server:
@@ -1341,6 +1363,15 @@ def _cmd_corpus_add(args: argparse.Namespace) -> int:
     if args.invariants is not None:
         try:
             invariants = invariants + load_invariants(Path(args.invariants))
+        except ValueError as exc:
+            _emit(f"belay: {exc}")
+            return 2
+    # The library presets, resolved by name into the same policy stream — an unknown
+    # name is exit 2 before any trace is read, never a silent no-policy run.
+    if args.invariant_library is not None:
+        try:
+            for name in args.invariant_library:
+                invariants.extend(resolve_library_entry(name))
         except ValueError as exc:
             _emit(f"belay: {exc}")
             return 2
@@ -1938,7 +1969,11 @@ def _cmd_phase0_run(args: argparse.Namespace) -> int:
     from belay.phase0.ledger import DetectorIdentity, to_json
     from belay.phase0.report import render_report
     from belay.verify.author import author_from_env
-    from belay.verify.invariants import default_invariants, load_invariants
+    from belay.verify.invariants import (
+        default_invariants,
+        load_invariants,
+        resolve_library_entry,
+    )
 
     trace_dir = Path(args.trace_dir)
     if not trace_dir.is_dir():
@@ -1951,6 +1986,17 @@ def _cmd_phase0_run(args: argparse.Namespace) -> int:
     if args.invariants is not None:
         try:
             invariants = invariants + load_invariants(Path(args.invariants))
+        except ValueError as exc:
+            _emit(f"belay: {exc}")
+            return 2
+    # The library presets, resolved by name into the same policy stream `--invariants`
+    # feeds — so the ledger records them EXACTLY as it records file-declared rules (the
+    # detector identity is built from this very list) — and fail-closed the same way: an
+    # unknown name is exit 2 before `run_batch` is ever reached.
+    if args.invariant_library is not None:
+        try:
+            for name in args.invariant_library:
+                invariants.extend(resolve_library_entry(name))
         except ValueError as exc:
             _emit(f"belay: {exc}")
             return 2
@@ -2529,6 +2575,18 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     verify.add_argument(
+        "--invariant-library",
+        action="append",
+        default=None,
+        metavar="name",
+        help=(
+            "apply a named entry from Belay's invariant library as A1 (no JSON), on top "
+            "of the defaults; repeatable, e.g. --invariant-library source-read-only "
+            "--invariant-library no-delete. Entries: see `belay invariant-library list`. "
+            "An unknown name is a fail-closed error, never a silent skip"
+        ),
+    )
+    verify.add_argument(
         "--no-default-invariants",
         action="store_true",
         help=(
@@ -2655,6 +2713,17 @@ def _parser() -> argparse.ArgumentParser:
         help=(
             "an operator-declared invariant file (JSON) to enforce as A1 when recomputing "
             "the verdict, on top of the defaults; a malformed file is a fail-closed error"
+        ),
+    )
+    corpus_add.add_argument(
+        "--invariant-library",
+        action="append",
+        default=None,
+        metavar="name",
+        help=(
+            "apply a named entry from Belay's invariant library as A1 when recomputing "
+            "the verdict (no JSON), on top of the defaults; repeatable. Entries: see "
+            "`belay invariant-library list`. An unknown name is a fail-closed error"
         ),
     )
     corpus_add.add_argument(
@@ -2899,6 +2968,17 @@ def _parser() -> argparse.ArgumentParser:
         help=(
             "an operator-declared invariant file (JSON) to enforce as A1, on top of the "
             "defaults; a malformed file is a fail-closed error, never a silent skip"
+        ),
+    )
+    phase0_run.add_argument(
+        "--invariant-library",
+        action="append",
+        default=None,
+        metavar="name",
+        help=(
+            "apply a named entry from Belay's invariant library as A1 (no JSON), on top "
+            "of the defaults; repeatable. Entries: see `belay invariant-library list`. "
+            "An unknown name is a fail-closed error, never a silent skip"
         ),
     )
     phase0_run.add_argument(
