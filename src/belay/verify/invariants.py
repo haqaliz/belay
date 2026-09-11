@@ -295,13 +295,14 @@ def evaluate_invariant(
 
     # A rule A1 cannot ground in a filesystem delta is UNVERIFIED — never PASS, never FAIL.
     if inv.rule not in _DELTA_GROUNDED_RULES:
+        grounded = ", ".join(sorted(_DELTA_GROUNDED_RULES))
         return Verdict(
             "A1", "invariant", Status.UNVERIFIED,
             observed=None, expected=expected,
             message=(
                 f"invariant {inv.rule!r} scoped to {scope_str!r} is UNVERIFIED for turn "
                 f"{turn_index}: A1 cannot ground it in the observed filesystem delta "
-                f"(only read-only rules are grounded by a BTH-1 tree diff; a network rule "
+                f"(only {grounded} rules are grounded by a BTH-1 tree diff; a network rule "
                 f"would require observing egress, which Belay does not capture) — never PASS"
             ),
         )

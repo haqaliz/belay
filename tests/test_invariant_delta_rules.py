@@ -232,3 +232,46 @@ def test_delta_none_is_unverified_never_pass(tmp_path: Path) -> None:
         assert verdict.status is Status.UNVERIFIED
         assert verdict.status is not Status.PASS
         assert rule in verdict.message
+
+
+# --- Phase 1.3: scoped operator file end-to-end, truthful catch-all --------------------
+
+
+def test_scoped_operator_file_no_create_end_to_end(tmp_path: Path) -> None:
+    """S2: `{"scope":"scratch/","rule":"no-create"}` in an operator file WORKS.
+
+    The file is the subject, not the invariant: the loader must hand the evaluator the
+    byte scope, a creation under `scratch/` must FAIL, and one outside it must PASS.
+    """
+    operator = tmp_path / "invariants.json"
+    operator.write_text(json.dumps([{"scope": "scratch/", "rule": "no-create"}]))
+
+    [inv] = load_invariants(operator)
+    assert inv.scope == b"scratch/"
+    assert inv.rule == RULE_NO_CREATE
+
+    in_scope = _delta(tmp_path, {}, {"scratch/x.txt": b"created"}, name="op-in")
+    assert evaluate_invariant(inv, in_scope, 0).status is Status.FAIL
+
+    outside = _delta(tmp_path, {}, {"other/x.txt": b"created"}, name="op-out")
+    assert evaluate_invariant(inv, outside, 0).status is Status.PASS
+
+
+def test_catch_all_names_the_delta_grounded_set_never_only_read_only(tmp_path: Path) -> None:
+    """The catch-all stays truthful: it names the WHOLE delta-grounded set, never "only
+    read-only rules are grounded".
+
+    A rule A1 cannot ground in a filesystem delta (the `no-egress` example, constructed
+    directly — operator files still reject it by name) is UNVERIFIED, never PASS, and the
+    message must not claim the new rules are ungrounded.
+    """
+    inv = Invariant(scope=b"scratch/", rule="no-egress")
+    delta = _delta(tmp_path, {"scratch/x.txt": b"old"}, {"scratch/x.txt": b"new"})
+
+    verdict = evaluate_invariant(inv, delta, turn_index=4)
+
+    assert verdict.status is Status.UNVERIFIED
+    assert verdict.status is not Status.PASS
+    assert "no-create" in verdict.message
+    assert "no-delete" in verdict.message
+    assert "only read-only rules are grounded" not in verdict.message
