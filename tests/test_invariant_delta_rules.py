@@ -31,7 +31,7 @@ from pathlib import Path
 
 import pytest
 
-from belay.snapshot.bth1 import FieldDiff, diff_records, scan_tree
+from belay.snapshot.bth1 import diff_records, scan_tree
 from belay.verify.invariants import (
     CONTENT_GROUNDED_RULES,
     INSTANCE_LEVEL_RULES,
