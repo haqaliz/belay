@@ -417,4 +417,44 @@ def test_phase0_run_no_defaults_with_library_records_only_the_library(
 
 
 # --- (4) discovery: `belay invariant-library list` + truthful help ---------------------
-# (Phase 2.3 RED tests live here; added in the phase-2.3 commit.)
+
+
+def test_invariant_library_list_renders_all_five_entries(capsys) -> None:
+    """`belay invariant-library list` prints every entry: rules, scope semantics, grounding.
+
+    The scope-semantics column must not overclaim: every library entry uses the raw
+    byte-PREFIX semantics (the segment semantics belong to `no-assertion-weakening`),
+    and the egress row carries the honesty note — unobservable, no egress instrument.
+    """
+    rc = cli.main(["invariant-library", "list"])
+    out = capsys.readouterr().out
+
+    assert rc == 0, out
+    for name in (
+        "no-create", "no-delete", "tests-read-only", "source-read-only", "network-egress",
+    ):
+        assert name in out, out
+    assert "read-only" in out, out
+    assert "byte-prefix" in out, out
+    assert "segment" not in out, "the list must not claim segment semantics for delta rules"
+    assert "delta" in out, out
+    assert "ungrounded" in out, out
+    assert "unobservable" in out, out
+    assert "no egress instrument" in out, out
+
+
+def test_verify_help_mentions_invariant_library(capsys) -> None:
+    """`belay verify --help` carries `--invariant-library` with a truthful description.
+
+    The help text is hard-wrapped, so a phrase can straddle a line break ("invariant-"
+    then "library"); the assertions are wrap-insensitive.
+    """
+    with pytest.raises(SystemExit):
+        cli.main(["verify", "--help"])
+    out = capsys.readouterr().out
+    flat = re.sub(r"-\s+", "-", re.sub(r"\s+", " ", out))
+    flat_lower = flat.lower()
+
+    assert "--invariant-library" in out, out
+    assert "belay invariant-library list" in flat, out
+    assert "an unknown name is a fail-closed error" in flat_lower, out

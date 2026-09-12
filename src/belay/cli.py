@@ -516,6 +516,40 @@ def _emit_turn(turn) -> None:
             _emit(f"      {turn.raw_cause}")
 
 
+# --- belay invariant-library list: the named preset discovery surface (PRD M5) ---------
+
+
+def _cmd_invariant_library_list(args: argparse.Namespace) -> int:
+    """`belay invariant-library list` — render the named invariant preset table.
+
+    The discovery surface: every entry a stranger can apply with
+    `--invariant-library <name>` — zero JSON authoring (the R3 mitigation seam). Each row
+    shows the rule(s)+scope, the scope SEMANTICS (raw byte-prefix; the segment semantics
+    of `no-assertion-weakening` are NOT claimed for any entry here), the grounding
+    marker, and the honesty note for the ungrounded `network-egress` entry — a reader
+    sees, BEFORE selecting, that it can never be grounded. No verdicts are computed: this
+    is plain data rendered from the module table, deterministically (sorted entry order).
+    """
+    from belay.verify.invariants import LIBRARY
+
+    _emit("invariant library — apply by name with --invariant-library <name>, no JSON")
+    _emit("  (per-repo policies remain --invariants policy.json)")
+    _emit(f"  {'name':<18}{'rule(s) + scope':<30}{'semantics':<12}grounding")
+    for name in sorted(LIBRARY):
+        entry = LIBRARY[name]
+        decls = "; ".join(
+            f"{decl['rule']}@{decl['scope'] or '<whole-tree>'}"
+            for decl in entry.declarations
+        )
+        note = (
+            "  [unobservable: no egress instrument — never PASS]"
+            if entry.grounding == "ungrounded"
+            else ""
+        )
+        _emit(f"  {name:<18}{decls:<30}{'byte-prefix':<12}{entry.grounding:<16}{note}")
+    return 0
+
+
 # --- belay verify: the whole-trace verdict (A2 replay + A1 invariants) ----------------
 
 #: The honest coverage statement, in the user's words. It appears BOTH here (printed
@@ -533,7 +567,8 @@ _VERIFY_COVERAGE = (
     "  A2 was handed. That corrupt success is caught by a declared invariant (A1). The\n"
     "  default composed into every turn is no-assertion-weakening on the path segments\n"
     "  tests and testing (disable with --no-default-invariants, or add your own with\n"
-    "  --invariants FILE), and an A1 FAIL drives the turn to FAIL even when A2 PASSes.\n"
+    "  --invariants FILE or a named --invariant-library entry — see `belay invariant-\n"
+    "  library list`), and an A1 FAIL drives the turn to FAIL even when A2 PASSes.\n"
     "  It FAILs a turn whose replay REMOVED or LOOSENED an assertion the TASK pre-state\n"
     "  (turn 0) held — deleting the test file counts — and PASSes one that only added or\n"
     "  strengthened tests. What it does NOT judge: changing an expected VALUE\n"
@@ -569,7 +604,7 @@ _VERIFY_DESCRIPTION = (
     "filesystem effect match the declared readOnlyHint?) — plus the A1 axis, the "
     "task-scoped invariants this run enforces (default: no-assertion-weakening under "
     "tests and testing, on unless --no-default-invariants; add more with --invariants "
-    "FILE). All sub-verdicts are "
+    "FILE or a named --invariant-library entry). All sub-verdicts are "
     "reduced worst-status-wins to one PASS/FAIL/UNVERIFIED per turn, each shown so a "
     "FAIL is explainable. The A3 claim axis evaluates the trace's closing claim when "
     "an author is configured (BELAY_CLAIM_AUTHOR, or --claim-author CMD): a model "
@@ -3199,6 +3234,26 @@ def _parser() -> argparse.ArgumentParser:
         help="emit the machine-readable summary (export path + correlation rate) to stderr",
     )
     interop_export.set_defaults(func=_cmd_interop_export)
+
+    invariant_library = subcommands.add_parser(
+        "invariant-library",
+        help="the named invariant library: apply presets by name, list the entries",
+    ).add_subparsers(dest="action", required=True)
+
+    invariant_library_list = invariant_library.add_parser(
+        "list",
+        help="list every library entry: rule(s)+scope, scope semantics, grounding",
+        description=(
+            "Render the invariant library table: every named preset a stranger can apply "
+            "with --invariant-library <name> — zero JSON authoring. Each row shows the "
+            "rule(s)+scope, the scope SEMANTICS (raw byte-prefix; the segment semantics "
+            "of no-assertion-weakening are NOT claimed for any entry here), the grounding "
+            "marker, and the honesty note for the ungrounded network-egress entry. No "
+            "verdicts are computed."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    invariant_library_list.set_defaults(func=_cmd_invariant_library_list)
 
     return parser
 

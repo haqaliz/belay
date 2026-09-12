@@ -118,6 +118,22 @@ For each recorded `tools/call`, Belay restores its pre-state, re-invokes the ser
 
 Both are decided by **re-execution and diffing. No model is consulted** — enforced by an AST test that bans any inference import from the verdict path.
 
+#### The invariant library: named presets, no JSON
+
+Do not want to hand-author JSON? Belay ships a library of named presets, applied by name — `--invariant-library <name>` on `belay verify`, `belay corpus add` and `belay phase0 run` (repeatable; an unknown name is a fail-closed error). `belay invariant-library list` shows every entry with its grounding:
+
+| name | rule(s) + scope | scope semantics | grounding |
+|---|---|---|---|
+| `no-create` | `no-create` @ whole-tree | byte-prefix | delta |
+| `no-delete` | `no-delete` @ whole-tree | byte-prefix | delta |
+| `tests-read-only` | `read-only` @ `tests/` | byte-prefix | delta(read-only) |
+| `source-read-only` | `read-only` @ `src/` | byte-prefix | delta(read-only) |
+| `network-egress` | `network-egress` @ whole-tree | byte-prefix | **ungrounded** |
+
+Scope semantics: every library entry uses the raw **byte-prefix** rule (the scope's own trailing slash makes it a directory prefix — `tests/` covers `tests/test_auth.py` but not `testsuite/x`). The **segment** semantics belong to the default `no-assertion-weakening` rule and are deliberately not claimed for any preset here.
+
+**The egress entry is honest.** `network-egress` is unobservable: Belay has **no egress instrument** (it observes no outbound bytes) and the sandbox denies egress by construction (seccomp deny-all), so the entry evaluates **UNVERIFIED with a named cause on every turn — never PASS, never FAIL**. It is curated-only: an operator *file* declaring `network-egress` is still rejected (exit 2), and the listing says it is ungrounded *before* you select it. Per-repo policies remain `--invariants policy.json`.
+
 **A3 — the claim axis — is the ONE place a model may sit, and only by your choice.** It is **dark by default**: with no author configured, no A3 verdict exists — never PASS, never a fabricated UNVERIFIED. To turn it on, name a **local** command that writes an executable check for the trace's claim (nothing leaves the box — no vendor key, nothing proxied):
 
 ```bash
