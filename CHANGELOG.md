@@ -5,6 +5,25 @@ All notable changes to Belay are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0 — until then,
 `0.x` minor bumps may include changes that would be breaking under strict semver.
 
+## [0.31.0] - 2026-09-12
+
+**Invariant library** — R3's "library of common invariants" mitigation ships
+(PR #34): named, pre-authored, user-selectable A1 policy presets with zero JSON
+authoring. `--invariant-library <name>` (repeatable) on `verify` / `corpus add` /
+`phase0 run`, plus `belay invariant-library list` for discovery. Two new
+delta-grounded A1 rules — `no-create` and `no-delete` (decided from the BTH-1
+`FieldDiff` alone, byte-prefix scope like `read-only`) — join the existing
+`read-only` / `no-assertion-weakening` / `suite-before-success-claim`. v1 entries:
+`no-create`, `no-delete`, `tests-read-only`, `source-read-only`, and
+`network-egress` as an honest unobservable declaration (UNVERIFIED-with-cause on
+every turn, never PASS; operator files still cannot declare it). Two deliberate
+guard amendments (the provenance producer set; the platform-gate scan area), both
+pinned. Every grounded entry carries a fixture corrupt-success case that banks and
+recomputes MATCH through `corpus run`. No published number moves; defaults and
+`read-only` / `no-assertion-weakening` semantics byte-unchanged.
+
+### Added
+
 ## [0.30.1] - 2026-09-10
 
 **Docs correction** — the roadmap, README, and CLAUDE.md still read "A3 (claim
@@ -1528,7 +1547,7 @@ The first public release: the full **record → sandbox → replay → verdict**
 - **The A3 claim-re-derivation axis** (C8) is not built; the live console (C7) and observability interop
   (C9) are ahead on the roadmap.
 
-[Unreleased]: https://github.com/haqaliz/belay/compare/v0.30.1...HEAD
+[Unreleased]: https://github.com/haqaliz/belay/compare/v0.31.0...HEAD
 [0.30.1]: https://github.com/haqaliz/belay/compare/v0.30.0...v0.30.1
 [0.30.0]: https://github.com/haqaliz/belay/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/haqaliz/belay/compare/v0.28.0...v0.29.0
