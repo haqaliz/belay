@@ -37,6 +37,7 @@ Darwin-gated: every replay re-invokes inside the macOS Seatbelt sandbox.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import subprocess
 import sys
@@ -356,3 +357,144 @@ def test_library_entry_fails_at_the_exact_turn_with_a2_pass(
     assert violating_path in a1["message"], a1
     for kind in ("replay", "effect"):
         assert by_key[("A2", kind)]["status"] == "PASS", by_key[("A2", kind)]
+
+
+# --- layer 3: banked round trips + the egress honesty fixture ---------------------------
+#
+# Every grounded entry's fixture case banks via the real `add_case` path (the CLI `corpus
+# add`) and recomputes MATCH through `corpus run` (house pattern
+# `tests/test_corpus_trajectory_run.py`: real `add_case`, no fakes — the recompute is real
+# re-execution). The PRD gap-1 pin lives here: the banked case carries the RESOLVED
+# `{scope, rule}` declarations — never the library name — and `corpus run` recomputes with
+# the case's OWN stored invariants (`src/belay/corpus/run.py:770-772` rebuilds `Invariant`
+# from `case.invariants`), so a later change to an entry's declarations can never silently
+# re-judge a banked case. The regression-sim proves the direction: emptying the stored
+# invariants REGRESSES the case — if recompute re-resolved the library name, the tamper
+# would change nothing and the case would still MATCH.
+
+
+def _bank_entry_case(
+    tmp_path: Path, capsys, *, entry, cmd, tool, seed, reply_text
+) -> tuple[Path, Path]:
+    """Bank the violating turn via the REAL CLI `corpus add` path; return (case_dir, corpus_dir)."""
+    trace_path, manifest_dir = _entry_trace(
+        tmp_path, cmd=cmd, tool=tool, seed=seed, reply_text=reply_text
+    )
+    corpus_dir = tmp_path / "corpus"
+    rc = cli.main(
+        ["corpus", "add", str(trace_path), "--turn", "0",
+         "--manifest-dir", str(manifest_dir), "--corpus-dir", str(corpus_dir),
+         "--no-default-invariants", "--invariant-library", entry,
+         "--server", *cmd]
+    )
+    assert rc == 0, capsys.readouterr().out
+    case_dirs = list(corpus_dir.iterdir())
+    assert len(case_dirs) == 1, case_dirs
+    return case_dirs[0], corpus_dir
+
+
+@pytest.mark.parametrize(
+    "entry,cmd,tool,seed,reply_text,expected_rule,violating_path",
+    ENTRIES,
+    ids=[e[0] for e in ENTRIES],
+)
+def test_library_entry_banks_and_recomputes_match(
+    tmp_path,
+    capsys,
+    entry,
+    cmd,
+    tool,
+    seed,
+    reply_text,
+    expected_rule,
+    violating_path,
+) -> None:
+    """The corrupt-success case banks and `corpus run` recomputes MATCH (regression suite).
+
+    The case is composed through the real `add_case` path and re-verified by real
+    re-execution — drift on this entry's rule flips the set and CI goes red. The stored
+    policy is the RESOLVED entry declaration, never the name (PRD gap 1).
+    """
+    case_dir, corpus_dir = _bank_entry_case(
+        tmp_path, capsys, entry=entry, cmd=cmd, tool=tool, seed=seed, reply_text=reply_text
+    )
+
+    # The gap-1 structural pin: the case carries the RESOLVED Invariant objects. A library
+    # NAME is never stored — recompute (corpus/run.py:770-772) rebuilds `Invariant` objects
+    # from these dicts, so an entry's declarations changing later cannot re-judge the case.
+    stored = json.loads((case_dir / "case.json").read_text(encoding="utf-8"))
+    declared = [{"scope": d["scope"], "rule": d["rule"]} for d in LIBRARY[entry].declarations]
+    assert stored["invariants"] == declared, stored["invariants"]
+    assert all(set(inv) == {"scope", "rule"} for inv in stored["invariants"]), (
+        "a banked case must store resolved {scope, rule} invariants, never a library name — "
+        "a name could be re-resolved against a changed LIBRARY and silently re-judge the case"
+    )
+
+    rc = cli.main(["corpus", "run", str(corpus_dir)])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "MATCH" in out, out
+    # The exit contract pins the regression property: non-zero IFF at least one case
+    # REGRESSED (cli.py:1555-1561). The aggregate block always prints a REGRESSION column
+    # header with its count, so the word alone proves nothing — the exit code is the pin.
+
+
+def test_emptied_stored_invariants_regress_the_banked_case(tmp_path, capsys) -> None:
+    """A deliberately broken rule reads REGRESSION — and proves recompute uses STORED policy.
+
+    Spec AC-2's regression sim, pointed at the gap-1 direction: the banked case's stored
+    invariants are emptied (the sim of "the rule stopped being in force"), and `corpus run`
+    recomputes with exactly that stored policy — no A1 sub-verdict, PASS where the case
+    recorded FAIL — so the case REGRESSES and the run exits non-zero. If recompute
+    re-resolved the library name instead of reading `case.invariants`, the tamper would
+    change nothing and this case would still MATCH: the REGRESSION is the pin.
+    """
+    case_dir, corpus_dir = _bank_entry_case(
+        tmp_path, capsys, entry="no-create", cmd=CREATE_CMD, tool="create_file",
+        seed=lambda work: None, reply_text=CREATE_REPLY,
+    )
+    case = dataclasses.replace(load_case(case_dir), invariants=[])
+    write_case(case_dir, case)
+
+    rc = cli.main(["corpus", "run", str(corpus_dir)])
+    out = capsys.readouterr().out
+    assert rc == 1, out
+    assert "REGRESSION" in out, out
+
+
+def test_network_egress_is_unverified_with_named_cause_never_pass(tmp_path, capsys) -> None:
+    """`--invariant-library network-egress` is the honesty fixture: never PASS, never FAIL.
+
+    Belay has no egress instrument, so the curated entry abstains on every turn with the
+    named cause `network-egress-unobservable`. The A1 sub-verdict is UNVERIFIED — never PASS
+    — and the turn reduces to UNVERIFIED, so the aggregate's PASS count stays 0.
+
+    NOTE (engine contract): the run exits 1, not 0. `belay verify` exits non-zero whenever
+    the worst turn is not PASS (`src/belay/cli.py:898-899`; docstring at 634-635: "a run
+    Belay could not fully stand behind must not read as success to a shell") — an
+    all-UNVERIFIED run is precisely that. The plan's "exit 0" for this fixture does not
+    hold against the shipped CLI; the honesty assertions are the load-bearing ones.
+    """
+    trace_path, manifest_dir = _entry_trace(
+        tmp_path, cmd=CREATE_CMD, tool="create_file",
+        seed=lambda work: None, reply_text=CREATE_REPLY,
+    )
+
+    rc = cli.main(
+        ["verify", str(trace_path), "--manifest-dir", str(manifest_dir),
+         "--no-default-invariants", "--invariant-library", "network-egress",
+         "--json", "--server", *CREATE_CMD]
+    )
+    doc = json.loads(capsys.readouterr().out)
+
+    assert rc == 1, doc
+    assert doc["aggregate"]["PASS"] == 0, doc["aggregate"]
+    assert doc["aggregate"]["UNVERIFIED"] == 1, doc["aggregate"]
+    turn = doc["turns"][0]
+    assert turn["status"] == "UNVERIFIED", turn
+    a1 = next(
+        s for s in turn["sub_verdicts"] if (s["axis"], s["kind"]) == ("A1", "invariant")
+    )
+    assert a1["status"] == "UNVERIFIED", a1
+    assert EGRESS_UNOBSERVABLE in a1["message"], a1
+    assert "never PASS" in a1["message"], a1
