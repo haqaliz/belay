@@ -45,6 +45,7 @@ SCAN_AREA: frozenset[str] = frozenset(
     {
         "test_bth1.py",
         "test_a3_corrupt_success_fixture.py",
+        "test_cli_invariant_library.py",
         "test_containment.py",
         "test_corpus_add.py",
         "test_corpus_claim_ingest.py",
@@ -61,6 +62,7 @@ SCAN_AREA: frozenset[str] = frozenset(
         "test_docker_image.py",
         "test_docker_compose.py",
         "test_docker_inimage.py",
+        "test_invariant_library_e2e.py",
         "test_interop_attach.py",
         "test_interop_cli.py",
         "test_interop_export_cli.py",

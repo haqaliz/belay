@@ -10,6 +10,43 @@ carries the current state and the rules that still bind.
 
 ---
 
+**THE COMMON-INVARIANT LIBRARY SHIPS — R3'S LIBRARY MITIGATION IS BUILT, AND A1
+GAINS ITS FIRST TWO NEW RULES SINCE C5** (2026-09-12, `invariant-library`,
+v0.31.0). R3 ("nobody authors the invariant — A1 works but only if someone declares
+the policy", High/High, `docs/ROADMAP.md`) has three named mitigations:
+annotation-inferred (**shipped in C5**), a library of common invariants (**this
+unit**), and an explicit Phase-2 authoring experiment (**later unit**). A stranger
+now applies a named policy with zero JSON: repeatable `--invariant-library <name>`
+on `verify` / `corpus add` / `phase0 run`, plus `belay invariant-library list` for
+discovery. Five v1 entries: `no-create` and `no-delete` — the first new A1 rules
+since C5, **delta-grounded** (decided from the BTH-1 `FieldDiff` side markers
+alone, byte-prefix scope exactly like `read-only`, the prefix/segment asymmetry
+untouched) — plus `tests-read-only`, `source-read-only` (existing `read-only` rule
+as named presets), and `network-egress` as an **honest unobservable declaration**:
+Belay has no egress instrument (the M4 prior decision), so it evaluates
+UNVERIFIED-with-named-cause on every turn, never PASS, and its rule name stays
+OUT of `_KNOWN_RULES` — an operator *file* declaring it is still rejected (exit 2),
+the curated entry is the only path. **Two deliberate guard amendments, both
+review-approved:** the provenance producer set
+(`test_no_invariant_is_ever_sourced_from_a_trace`) grows by the resolver
+`resolve_library_entry` (takes only a name, no file I/O, unreachable from any
+trace — pinned structurally), and the platform-gate SCAN_AREA admits the new
+replay-bearing test file (the registry's prescribed mechanism). **The corpus
+compounds:** each grounded entry carries a fixture corrupt-success case — real
+replay, FAIL at the exact turn naming invariant and diff, A2 PASS on the same turn
+(axes non-redundant), banked via real `add_case` and recomputing MATCH through
+`corpus run`, with the PRD gap-1 pin: recompute uses the case's **stored**
+invariants, never re-resolves the name (tamper → REGRESSION). New fixture servers
+`create_server.py` / `delete_server.py` with cheat guards. **Honesty lines:** no
+published number moves (`11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16`, `recall
+0.00` stand unedited); defaults and `read-only` / `no-assertion-weakening`
+semantics byte-unchanged; `--invariants <file>` behavior byte-unchanged; the
+egress entry's run exits 1 (UNVERIFIED above PASS — the engine's documented
+contract, never a silent success). Suite 2147 → 2188 (11 manual-deselected, 25
+named-cause skips). See `docs/planning/invariant-library/`.
+
+---
+
 **THE CONTAINER CHANNEL IS LIVE — `docker pull ghcr.io/haqaliz/belay` WORKS, AND THE IMAGE
 IT SERVES WAS MEASURED BEFORE IT WAS PUSHED** (2026-09-05, `ghcr-publish`, v0.30.0). L3
 (v0.21.0) shipped the IMAGE and deferred the CHANNEL by name; this closes it. The naive

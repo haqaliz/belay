@@ -83,6 +83,9 @@ EXPECTED: dict[str, frozenset[str]] = {
     # The A1 policy. `replay` computes no verdict; `interop correlate` attaches an
     # existing one and computes none of its own.
     "--invariants": frozenset({"verify", "corpus add", "phase0 run"}),
+    # The named library presets (aspect 2 of invariant-library): same three surfaces as
+    # the operator file, applied by name with zero JSON authoring.
+    "--invariant-library": frozenset({"verify", "corpus add", "phase0 run"}),
     "--no-default-invariants": frozenset({"verify", "corpus add", "phase0 run"}),
     # The machine surface. `replay` and `corpus add` render human text only.
     "--json": frozenset({"verify", "interop correlate", "interop export"}),
