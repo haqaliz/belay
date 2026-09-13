@@ -535,6 +535,7 @@ def main(argv: list[str]) -> int:
     trace_dir = os.environ.get("BELAY_TRACE_DIR")
     scope = os.environ.get("BELAY_SANDBOX_SCOPE")
     snapshot_dir = os.environ.get("BELAY_SNAPSHOT_DIR")
+    run_id = os.environ.get("BELAY_RUN_ID")
 
     if not trace_dir and not scope:
         # Nothing to record and nothing to gate: C1's byte pump, reached by the
@@ -553,6 +554,23 @@ def main(argv: list[str]) -> int:
         )
         return 2
 
+    if trace_dir and run_id is not None:
+        # Loud, and at startup rather than mid-turn, mirroring the refusal
+        # above: an unusable id would silently produce an anonymous capture the
+        # baseline bank cannot key on. Set-but-empty is unusable, never "unset".
+        from belay.identity import validate_run_id
+
+        try:
+            validate_run_id(run_id)
+        except ValueError as exc:
+            print(
+                "belay: BELAY_RUN_ID is set but unusable "
+                f"({exc}); refusing to start rather than record an identity "
+                "a later baseline cannot key on",
+                file=sys.stderr,
+            )
+            return 2
+
     # Imported here, not at module scope, so that everything above stays unable
     # to reach a serialiser even by accident: the forwarding path has no name
     # for `json` in scope. main() is the composition root and the only place that
@@ -564,6 +582,10 @@ def main(argv: list[str]) -> int:
         from belay.trace import TraceWriter
 
         writer = TraceWriter.in_directory(trace_dir)
+        if run_id is not None:
+            # A fact recorded before the child runs: the identity the operator
+            # assigned to this run. Unset means absent — never a placeholder.
+            writer.record("run_identity", run_id=run_id)
 
     try:
         if not scope:

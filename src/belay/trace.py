@@ -60,6 +60,9 @@ KINDS = (
     # reported — neither is verdict-shaped. C2 does not decide replayability.
     "denial",
     "network_policy",
+    # The ci-regression-gate's run identity: recorded once at proxy start when
+    # `BELAY_RUN_ID` is set, as a first-class kind the reader returns in records.
+    "run_identity",
 )
 
 # The three states the `state_handle` slot may hold, and the reason it is three

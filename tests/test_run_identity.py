@@ -135,7 +135,7 @@ def test_derive_ignores_other_records(tmp_path) -> None:
         "a/../b",
         "/x",
         "x/",
-        "x\u0000y",
+        "x\u0001y",
     ],
 )
 def test_unusable_run_ids_are_rejected_at_capture(tmp_path, run_id) -> None:
@@ -147,6 +147,41 @@ def test_unusable_run_ids_are_rejected_at_capture(tmp_path, run_id) -> None:
     assert code == 2
     assert RUN_ID_ENV in stderr
     assert not list(trace_dir.rglob("*.jsonl"))
+
+
+@pytest.mark.parametrize(
+    "run_id",
+    [
+        "",
+        "   ",
+        "a b",
+        "a\tb",
+        "..",
+        "a/../b",
+        "/x",
+        "x/",
+        "x\u0000y",
+        "x\x7fy",
+    ],
+)
+def test_validate_run_id_rejects_every_unusable_shape(run_id) -> None:
+    """The validation contract, at the unit level.
+
+    `\x00` cannot travel through a process env (`execve` refuses a NUL), so the
+    control-char rule is pinned here too — the capture-level rejection above can
+    only carry a control char the OS will actually deliver.
+    """
+    from belay.identity import validate_run_id
+
+    with pytest.raises(ValueError):
+        validate_run_id(run_id)
+
+
+@pytest.mark.parametrize("run_id", ["pytest-7432", "task/agent-vN", "a/b/c"])
+def test_validate_run_id_accepts_the_documented_shapes(run_id) -> None:
+    from belay.identity import validate_run_id
+
+    assert validate_run_id(run_id) is None
 
 
 @pytest.mark.parametrize(
