@@ -1458,6 +1458,134 @@ def _cmd_corpus_add(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_gate_baseline(args: argparse.Namespace) -> int:
+    """`belay gate baseline <trace>` — verify a capture and store its baseline.
+
+    Verifies the capture by REAL re-execution (the same `verify_turn` / trajectory /
+    claim composition `belay verify` runs, with the same effective A1 policy) and
+    stores the result as a SELF-CONTAINED baseline: the expected verdict set, the
+    resolved server command and policy, provenance, and a copy of the trace,
+    manifests and snapshot trees — keyed by the run's identity (`BELAY_RUN_ID`, or
+    `--run-id` for pre-record captures), under `baselines/local/<run-id>/`. A later
+    `gate check` re-verifies against the STORED policy and diffs, so the bank must
+    store what it verified, never what it was told. A baseline of a FAILing
+    capture is allowed: the mechanism does not require all-PASS.
+
+    Preflight is fail-closed and writes nothing: no server, no trace, no manifest
+    dir (explicit, or the `<stem>.manifests` sibling default only when it exists),
+    no run identity (`NO_RUN_IDENTITY`), an existing baseline without `--force` —
+    each exits 2 with the named cause. `--json` prints the stored baseline
+    document instead of the human summary.
+    """
+    from belay.gate.baseline import bank_baseline
+    from belay.verify.author import SubprocessAuthor, author_from_env
+    from belay.verify.invariants import (
+        default_invariants,
+        load_invariants,
+        resolve_library_entry,
+    )
+
+    if not args.server:
+        _emit("belay: a server command is required, after --server. Nothing to replay against.")
+        return 2
+
+    trace_path = Path(args.trace)
+    if not trace_path.exists():
+        _emit(f"belay: trace not found: {trace_path}")
+        return 2
+
+    # The manifest dir: explicit, or the trace's `<stem>.manifests` sibling ONLY
+    # when it exists (the mint convention); absent either, the flag is required —
+    # never a guessed manifest location.
+    manifest_dir = None
+    if args.manifest_dir is not None:
+        manifest_dir = Path(args.manifest_dir)
+    else:
+        sibling = trace_path.parent / (trace_path.stem + ".manifests")
+        if sibling.is_dir():
+            manifest_dir = sibling
+    if manifest_dir is None:
+        _emit(
+            "belay: --manifest-dir is required: no <stem>.manifests sibling exists "
+            "beside the trace, so the run's snapshot manifests cannot be found"
+        )
+        return 2
+    if not manifest_dir.is_dir():
+        _emit(f"belay: --manifest-dir is not a directory: {manifest_dir}")
+        return 2
+
+    # The SHELL boundary, the same single-string shape `belay verify --shell-server`
+    # carries; fail-closed on a string shlex cannot tokenize.
+    shell_server_command = None
+    if args.shell_server is not None:
+        try:
+            shell_server_command = shlex.split(args.shell_server)
+        except ValueError as exc:
+            _emit(
+                f"belay: --shell-server could not be parsed as a shell command "
+                f"({exc}): {args.shell_server!r}"
+            )
+            return 2
+
+    # The A3 author, resolved exactly as `belay verify` resolves it.
+    claim_author = None
+    if not args.no_claim_axis:
+        if args.claim_author is not None:
+            try:
+                claim_author = SubprocessAuthor(tuple(shlex.split(args.claim_author)))
+            except ValueError as exc:
+                _emit(
+                    f"belay: --claim-author could not be parsed as a shell command "
+                    f"({exc}): {args.claim_author!r}"
+                )
+                return 2
+        else:
+            claim_author = author_from_env()
+
+    # The A1 policy this run enforces, resolved exactly as `belay verify` resolves
+    # it — a file that will not parse is fail-closed, never a silent drop.
+    invariants = [] if args.no_default_invariants else default_invariants()
+    if args.invariants is not None:
+        try:
+            invariants = invariants + load_invariants(Path(args.invariants))
+        except ValueError as exc:
+            _emit(f"belay: {exc}")
+            return 2
+    if args.invariant_library is not None:
+        try:
+            for name in args.invariant_library:
+                invariants.extend(resolve_library_entry(name))
+        except ValueError as exc:
+            _emit(f"belay: {exc}")
+            return 2
+
+    try:
+        baseline_dir = bank_baseline(
+            trace_path,
+            root_dir=Path("baselines") / "local",
+            manifest_dir=manifest_dir,
+            server_command=list(args.server),
+            shell_server_command=shell_server_command,
+            run_id_override=args.run_id,
+            force=args.force,
+            replays=args.replays,
+            timeout=args.timeout,
+            invariants=invariants,
+            claim_author=claim_author,
+        )
+    except ValueError as exc:
+        _emit(f"belay: {exc}")
+        return 2
+
+    if args.json:
+        _emit((baseline_dir / "baseline.json").read_text(encoding="utf-8"))
+    else:
+        _emit(f"belay gate baseline: banked baseline at {baseline_dir}")
+        _emit("  the stored expected set is what `belay verify --json` of this trace renders;")
+        _emit("  `gate check` will re-verify against the stored policy and diff the verdicts.")
+    return 0
+
+
 def _cmd_corpus_run(args: argparse.Namespace) -> int:
     """`belay corpus run [corpus_dir]` — re-verify every case; exit non-zero IFF a REGRESSION.
 
@@ -3234,6 +3362,147 @@ def _parser() -> argparse.ArgumentParser:
         help="emit the machine-readable summary (export path + correlation rate) to stderr",
     )
     interop_export.set_defaults(func=_cmd_interop_export)
+
+    gate = subcommands.add_parser(
+        "gate", help="the ci-regression-gate: bank a run's expected verdicts, then diff re-runs against them"
+    ).add_subparsers(dest="action", required=True)
+
+    gate_baseline = gate.add_parser(
+        "baseline",
+        help="verify a capture and store its expected verdicts as a self-contained, identity-keyed baseline",
+        description=(
+            "Verify a capture by RE-EXECUTION (the same verify_turn / trajectory / claim "
+            "composition `belay verify` runs, with the same effective A1 policy) and store "
+            "its baseline: the expected verdict set — per-turn statuses with their ordered "
+            "sub-verdict sets, the trajectory disposition, the claim when declared — the "
+            "resolved server command and A1 policy, provenance, and a SELF-CONTAINED copy "
+            "of the trace, its manifests and its snapshot trees, keyed by the run's "
+            "identity (BELAY_RUN_ID at capture, or --run-id for pre-record captures) under "
+            "baselines/local/<run-id>/. A later `gate check` re-verifies against the STORED "
+            "policy and diffs the verdicts, so the stored expected set is exactly what "
+            "`belay verify --json` of this trace renders. Re-banking an existing run id "
+            "requires --force; a baseline of a FAILing capture is allowed, because the gate "
+            "compares whatever the bank stored.\n\n"
+            "Manifests: point --manifest-dir at the gate's .manifests sibling, as with "
+            "verify; absent it, the trace's <stem>.manifests sibling is used when it exists "
+            "(the mint convention), else --manifest-dir is required.\n\n"
+            "Servers: --server names the ONE boundary every turn replays against, unless "
+            "--shell-server also names a shell command, in which case a recorded run_process "
+            "turn replays against that one instead. WRITE --shell-server BEFORE --server: "
+            "--server is a remainder and swallows every token after it."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    gate_baseline.add_argument("trace", help="the trace file (.jsonl) to bank")
+    gate_baseline.add_argument(
+        "--manifest-dir",
+        default=None,
+        help=(
+            "where the gate persisted this run's snapshot manifests; default: the trace's "
+            "<stem>.manifests sibling when it exists (the mint convention), else required"
+        ),
+    )
+    gate_baseline.add_argument(
+        "--replays",
+        type=_verify_replays,
+        default=3,
+        help="on a DIVERGED reply, re-invoke this many times to classify determinism (default: 3, minimum: 3)",
+    )
+    gate_baseline.add_argument(
+        "--timeout",
+        type=float,
+        default=DEFAULT_TIMEOUT,
+        help=f"per-replay timeout in seconds (default: {DEFAULT_TIMEOUT:g})",
+    )
+    gate_baseline.add_argument(
+        "--invariants",
+        default=None,
+        metavar="path",
+        help=(
+            "an operator-declared invariant file (JSON) to enforce as A1, on top of the "
+            "defaults; a malformed file is a fail-closed error, never a silent skip"
+        ),
+    )
+    gate_baseline.add_argument(
+        "--invariant-library",
+        action="append",
+        default=None,
+        metavar="name",
+        help=(
+            "apply a named entry from Belay's invariant library as A1 (no JSON), on top "
+            "of the defaults; repeatable. Entries: see `belay invariant-library list`. "
+            "An unknown name is a fail-closed error, never a silent skip"
+        ),
+    )
+    gate_baseline.add_argument(
+        "--no-default-invariants",
+        action="store_true",
+        help=(
+            "do not apply the built-in default invariants (no-assertion-weakening "
+            "under the tests and testing path segments)"
+        ),
+    )
+    gate_baseline.add_argument(
+        "--json",
+        action="store_true",
+        help="print the stored baseline document (baseline.json) to stdout instead of the human summary",
+    )
+    gate_baseline.add_argument(
+        "--shell-server",
+        default=None,
+        metavar="CMD",
+        help=(
+            "the SHELL server command, as ONE quoted string; a recorded run_process turn "
+            "replays against it instead of --server, while every other turn still replays "
+            "against --server. WRITE THIS BEFORE --server (--server is a remainder and "
+            "swallows everything after it). The string is shlex-split at use; an "
+            "un-lexable string is a hard error. Absent -> every turn replays against "
+            "--server, exactly as before"
+        ),
+    )
+    gate_baseline.add_argument(
+        "--no-claim-axis",
+        action="store_true",
+        help=(
+            "disable the A3 claim axis ENTIRELY: no claim re-derivation runs and no A3 "
+            "verdict is stored — never PASS, never a fabricated UNVERIFIED. Wins over "
+            "--claim-author and BELAY_CLAIM_AUTHOR"
+        ),
+    )
+    gate_baseline.add_argument(
+        "--claim-author",
+        default=None,
+        metavar="CMD",
+        help=(
+            "the claim-author command, as ONE quoted string (shlex-split at use): "
+            "BELAY_CLAIM_AUTHOR as a flag. The command receives the claim plus the "
+            "observed facts on stdin and answers with an executable check; EXECUTION "
+            "decides (A3 never PASSes). An un-lexable string is a hard error. Absent "
+            "-> BELAY_CLAIM_AUTHOR decides; no author configured -> the axis is ABSENT"
+        ),
+    )
+    gate_baseline.add_argument(
+        "--run-id",
+        default=None,
+        help=(
+            "bank under this run id instead of the trace's recorded run_identity "
+            "(BELAY_RUN_ID); the fallback for pre-record captures. An id with empty or "
+            "'..' path segments, whitespace or control characters is refused"
+        ),
+    )
+    gate_baseline.add_argument(
+        "--force",
+        action="store_true",
+        help="replace an existing baseline for the same run id (the default is a fail-closed refusal)",
+    )
+    gate_baseline.add_argument(
+        "--server",
+        nargs=argparse.REMAINDER,
+        default=[],
+        metavar="cmd ...",
+        help="the MCP server to replay against; everything after --server is its command",
+    )
+    gate_baseline.set_defaults(func=_cmd_gate_baseline)
 
     invariant_library = subcommands.add_parser(
         "invariant-library",

@@ -47,6 +47,7 @@ REPLAY_BEARING = (
     "phase0 run",
     "interop correlate",
     "interop export",
+    "gate baseline",
 )
 
 _ALL = frozenset(REPLAY_BEARING)
@@ -69,36 +70,43 @@ EXPECTED: dict[str, frozenset[str]] = {
     # Per-tool routing: a recorded `run_process` turn replays against this instead.
     # `replay` re-invokes one named turn, so the operator already chooses the server;
     # `corpus add` and `interop correlate` are DELIBERATELY out of scope for the unit that
-    # added this (PRD open question 3 — proposed `verify` only). Widening it is a
-    # decision, and it belongs here.
-    "--shell-server": frozenset({"verify", "phase0 run"}),
+    # added this (PRD open question 3 — proposed `verify` only). `gate baseline` widens
+    # it by decision (M8): the bank composes the verdict set exactly as verify does, so
+    # it must be able to ask for the same boundary. Widening is a decision, and it
+    # belongs here.
+    "--shell-server": frozenset({"verify", "phase0 run", "gate baseline"}),
     # Where the gate persisted the run's snapshot manifests. `phase0 run` is excluded: it
     # takes a whole trace DIRECTORY and resolves each trace's `.manifests` sibling itself.
     # `corpus run` is excluded the same way, one level further: a case is self-contained
     # — its manifests are bundled IN the case dir, so the batch never points at a sibling.
     "--manifest-dir": _ALL - {"phase0 run", "corpus run"},
     # Single-turn narrowing. The batch surfaces (`phase0 run`) and the span-driven one
-    # (`interop correlate`) have no single-turn meaning.
+    # (`interop correlate`) have no single-turn meaning; `gate baseline` banks the WHOLE
+    # trace (its expected set is the run's, and a partial bank would be a partial record).
     "--turn": frozenset({"replay", "verify", "corpus add"}),
     # The A1 policy. `replay` computes no verdict; `interop correlate` attaches an
-    # existing one and computes none of its own.
-    "--invariants": frozenset({"verify", "corpus add", "phase0 run"}),
-    # The named library presets (aspect 2 of invariant-library): same three surfaces as
+    # existing one and computes none of its own. `gate baseline` STORES the resolved
+    # policy, so it must be able to resolve the same policy verify composes with.
+    "--invariants": frozenset({"verify", "corpus add", "phase0 run", "gate baseline"}),
+    # The named library presets (aspect 2 of invariant-library): same surfaces as
     # the operator file, applied by name with zero JSON authoring.
-    "--invariant-library": frozenset({"verify", "corpus add", "phase0 run"}),
-    "--no-default-invariants": frozenset({"verify", "corpus add", "phase0 run"}),
+    "--invariant-library": frozenset({"verify", "corpus add", "phase0 run", "gate baseline"}),
+    "--no-default-invariants": frozenset({"verify", "corpus add", "phase0 run", "gate baseline"}),
     # The machine surface. `replay` and `corpus add` render human text only.
-    "--json": frozenset({"verify", "interop correlate", "interop export"}),
+    # `gate baseline --json` prints the stored baseline document.
+    "--json": frozenset({"verify", "interop correlate", "interop export", "gate baseline"}),
     # Where corpus cases are read/written.
     "--corpus-dir": frozenset({"corpus add", "phase0 run"}),
     # The A3 claim axis (C8). Shared by every surface that can evaluate a claim at
     # the instance level; `replay` and `corpus add` evaluate no instance-level
-    # verdict, and `interop correlate` attaches existing verdicts only.
-    "--no-claim-axis": frozenset({"verify", "phase0 run", "corpus run"}),
+    # verdict, and `interop correlate` attaches existing verdicts only. `gate
+    # baseline` evaluates the claim at bank time, so it can disable the axis.
+    "--no-claim-axis": frozenset({"verify", "phase0 run", "corpus run", "gate baseline"}),
     # The INTERACTIVE A3 author surface: `belay verify` takes the author command as a
     # flag; the batch surfaces are env-only (`BELAY_CLAIM_AUTHOR`) by design (plan
-    # open question, decided at plan time).
-    "--claim-author": frozenset({"verify"}),
+    # open question, decided at plan time). `gate baseline` mirrors verify: a bank
+    # whose expected set includes a claim needs the author surface.
+    "--claim-author": frozenset({"verify", "gate baseline"}),
 }
 
 

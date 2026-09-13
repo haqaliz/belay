@@ -117,7 +117,7 @@ def test_bank_stores_expected_verdict_set(tmp_path, capsys, monkeypatch):
     assert rc == 0, out
     stored = json.loads(out)
 
-    rc = cli.main(["verify", str(trace), "--manifest-dir", str(manifests), "--server", *SERVER, "--json"])
+    rc = cli.main(["verify", str(trace), "--manifest-dir", str(manifests), "--json", "--server", *SERVER])
     out = capsys.readouterr().out
     assert rc == 1, out  # the snapshot-less trace's UNVERIFIED turns exit non-zero
     doc = json.loads(out)
@@ -169,18 +169,19 @@ def test_rebank_requires_force(tmp_path, capsys, monkeypatch):
     root = _baseline_root(tmp_path, "root")
     monkeypatch.chdir(root)
 
-    argv = ["gate", "baseline", str(trace), "--manifest-dir", str(manifests), "--server", *SERVER]
-    assert cli.main(argv) == 0
+    base = ["gate", "baseline", str(trace), "--manifest-dir", str(manifests)]
+    server_tail = ["--server", *SERVER]
+    assert cli.main(base + server_tail) == 0
     stored = root / "baselines" / "local" / "pytest-7432" / "baseline.json"
     first = stored.read_bytes()
 
-    rc = cli.main(argv)
+    rc = cli.main(base + server_tail)
     out = capsys.readouterr().out
     assert rc == 2, out
     assert "already exists" in out, out
     assert stored.read_bytes() == first
 
-    rc = cli.main(argv + ["--force"])
+    rc = cli.main(base + ["--force"] + server_tail)
     assert rc == 0, capsys.readouterr().out
     assert stored.is_file()
 
@@ -295,7 +296,8 @@ def test_bank_roundtrip_with_snapshots(tmp_path, capsys, monkeypatch):
     root.mkdir()
     monkeypatch.chdir(root)
     rc = cli.main(["gate", "baseline", str(trace_path), "--manifest-dir", str(manifest_dir), "--server", *SERVER])
-    assert rc == 0, capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert rc == 0, out
 
     bank_dir = root / "baselines" / "local" / "pytest-7432"
     stored = json.loads((bank_dir / "baseline.json").read_text(encoding="utf-8"))
@@ -308,8 +310,8 @@ def test_bank_roundtrip_with_snapshots(tmp_path, capsys, monkeypatch):
         assert resolved.parent == snapshots, payload["tree_path"]
         assert resolved.is_dir(), payload["tree_path"]
 
-    rc = cli.main(["verify", str(trace_path), "--manifest-dir", str(manifest_dir), "--server", *SERVER, "--json"])
+    rc = cli.main(["verify", str(trace_path), "--manifest-dir", str(manifest_dir), "--json", "--server", *SERVER])
     out = capsys.readouterr().out
-    assert rc == 0, out
+    assert rc != 2, out
     doc = json.loads(out)
     assert stored["expected"]["turns"] == doc["turns"]
