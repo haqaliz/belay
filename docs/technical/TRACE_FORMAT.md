@@ -256,6 +256,40 @@ Mid-stream, an incomplete buffer is not a loss — the rest of the frame is stil
 nothing is recorded until a newline arrives. Only at EOF does the same silence become data
 loss, which is why only EOF names it.
 
+## The `run_identity` record
+
+```jsonc
+{
+  "v": 1,
+  "kind": "run_identity",
+  "seq": 1,                        // written at proxy start: after connection_window open, before any frame
+  "run_id": "task/agent-vN",       // the operator's `BELAY_RUN_ID`, recorded VERBATIM
+  "t_in": "...",
+  "observation_point": "proxy"
+}
+```
+
+The **run identity** the ci-regression-gate keys its baseline bank on. A trace's filename
+stem is not identity (`trace-<stamp>-<uuid8>`), and `trace_id` is explicitly not unique
+across stages — so two captures of "the same run" need an in-band key. The operator sets
+**`BELAY_RUN_ID`** when capturing; the proxy records it here, exactly once, at startup.
+
+**Unset ⇒ absent-never-zero.** No env var means no record: no placeholder, no guessed id,
+and `derive_run_identity` (`src/belay/identity.py`) returns `None` — a reader must not read
+the absence as "the id was lost". The recommended shape is `<task>/<agent-version>`; slashes
+are legal and are what make the id readable as a baseline directory key downstream.
+
+**Validated at capture, fail-closed.** An id that is empty, contains control characters or
+whitespace, or — split on `/` — contains an empty or `..` segment is refused at proxy start
+with a named error and exit 2 (the env var is named in the message), so a malformed id can
+never silently produce an anonymous capture. Validation runs only when `BELAY_TRACE_DIR` is
+set: env set without a trace to record into is an inert no-op.
+
+**Compatibility: a new kind, not a schema bump.** `run_identity` is a first-class kind in
+the writer's `KINDS` registry, so the current reader returns it in `records`. Old readers —
+schema-v1 readers without knowledge of the kind — survive it per the unknown-kind rule
+below: skipped, and the skip recorded. `SCHEMA_VERSION` is unchanged.
+
 ## The `claim` record
 
 ```jsonc
