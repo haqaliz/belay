@@ -87,16 +87,17 @@ def bank_baseline(
         raise ValueError(f"the trace could not be read: {exc}") from exc
 
     records = list(read.records)
-    if run_id_override is not None:
-        validate_run_id(run_id_override)
-        run_id = run_id_override
-    else:
+    run_id: Optional[str] = run_id_override
+    if run_id is None:
         run_id = derive_run_identity(records)
     if run_id is None:
         raise ValueError(
             "the trace records no run identity (BELAY_RUN_ID was unset at capture) and "
             "no --run-id was given: NO_RUN_IDENTITY"
         )
+    # Whatever the id's source, it must be usable as a baseline directory key —
+    # fail-closed on an unusable value, never a weird path.
+    validate_run_id(run_id)
 
     baseline_dir = Path(root_dir) / run_id
     # Collision is decided BEFORE the first write, so a refused re-bank leaves the
