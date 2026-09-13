@@ -103,8 +103,16 @@ EXPECTED: dict[str, frozenset[str]] = {
     # `gate baseline --json` prints the stored baseline document; `gate check
     # --json` prints the gate report (gate.json schema 1).
     "--json": frozenset({"verify", "interop correlate", "interop export", "gate baseline", "gate check"}),
-    # Where corpus cases are read/written.
-    "--corpus-dir": frozenset({"corpus add", "phase0 run"}),
+    # Where corpus cases are read/written. `gate check` banks regression turns
+    # into it by default (aspect 4 — divergence banking); `phase0 run` ingests
+    # flagged turns into it.
+    "--corpus-dir": frozenset({"corpus add", "phase0 run", "gate check"}),
+    # Measure-without-writing: suppress the corpus WRITE, not the detection.
+    # `phase0 run` ingests flagged turns into the corpus; `gate check` banks
+    # regression turns into it. Both default-on, both with the same opt-out, so
+    # the two surfaces cannot drift apart on the one flag that decides whether
+    # a run touches the corpus at all.
+    "--no-ingest": frozenset({"phase0 run", "gate check"}),
     # The A3 claim axis (C8). Shared by every surface that can evaluate a claim at
     # the instance level; `replay` and `corpus add` evaluate no instance-level
     # verdict, and `interop correlate` attaches existing verdicts only. `gate

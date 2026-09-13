@@ -1606,7 +1606,17 @@ def _cmd_gate_check(args: argparse.Namespace) -> int:
     `belay verify` resolves it. `--json` renders the SAME report as one JSON
     document (gate.json schema 1) — one computation, two renderers — and the
     exit codes are unchanged.
+
+    Divergence banking (default-on): each regression TURN of the new capture
+    banks as a corpus case under `--corpus-dir` (default `./corpus/local`, the
+    corpus convention), labeled `pending`; `--no-ingest` measures without
+    writing. Banking happens AFTER the verdict is decided and never changes the
+    exit code; a refused re-add (a case-id collision) is reported by name in the
+    report's `ingest` section, never a failure of the gate. A clean check banks
+    nothing and the `--json` document carries NO `ingest` key.
     """
+    from datetime import datetime, timezone
+
     from belay.gate.check import (
         GatePreflight,
         check_gate,
@@ -1691,6 +1701,9 @@ def _cmd_gate_check(args: argparse.Namespace) -> int:
         else:
             claim_author = author_from_env()
 
+    # The CLI boundary reads the clock (this module never does) and passes the
+    # check time through to the banking step, mirroring `corpus add`'s injection.
+    captured_at = datetime.now(timezone.utc).isoformat()
     try:
         result = check_gate(
             trace_path,
@@ -1700,6 +1713,9 @@ def _cmd_gate_check(args: argparse.Namespace) -> int:
             shell_server_override=shell_server_command,
             run_id_override=args.run_id,
             claim_author=claim_author,
+            corpus_dir=Path(args.corpus_dir),
+            ingest=not args.no_ingest,
+            captured_at=captured_at,
         )
     except GatePreflight as exc:
         if json_mode:
@@ -3664,7 +3680,15 @@ def _parser() -> argparse.ArgumentParser:
             "convention), else --manifest-dir is required. --run-id is the identity "
             "fallback for pre-record captures. --json renders the SAME report as one "
             "JSON document (gate.json schema 1) — one computation, two renderers — and "
-            "UNVERIFIED never renders as PASS on either."
+            "UNVERIFIED never renders as PASS on either.\n\n"
+            "DIVERGENCE BANKING (default-on): each regression TURN of the new capture "
+            "banks as a corpus case under --corpus-dir (default ./corpus/local), "
+            "labeled 'pending' — the engine never labels its own cases — carrying the "
+            "STORED policy (the baseline's invariants, server command(s), replays and "
+            "timeout), so `belay corpus run` recomputes it MATCH. --no-ingest measures "
+            "without writing; banking never changes the verdict or the exit code, and "
+            "a refused re-add (a case-id collision) is reported by name in the "
+            "report's ingest section, never a failure of the gate."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -3714,6 +3738,25 @@ def _parser() -> argparse.ArgumentParser:
             "claim re-derivation runs, and a stored claim that is not re-derived is "
             "reported as a named abstention, never a fail. Wins over --claim-author "
             "and BELAY_CLAIM_AUTHOR"
+        ),
+    )
+    gate_check.add_argument(
+        "--corpus-dir",
+        default="corpus/local",
+        help=(
+            "the corpus directory divergent turns are ingested into as 'pending' "
+            "cases (default: ./corpus/local, which is gitignored so cases never "
+            "get committed)"
+        ),
+    )
+    gate_check.add_argument(
+        "--no-ingest",
+        action="store_true",
+        help=(
+            "measure without writing: suppress the corpus WRITE of regression "
+            "turns, not the comparison. The verdict, the divergences and the "
+            "exit code are unchanged — the report carries NO ingest section, so "
+            "a disabled banking never reads as 'nothing could be banked'"
         ),
     )
     gate_check.add_argument(

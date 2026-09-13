@@ -20,12 +20,23 @@ baseline under the run id, and then:
    (`belay.gate.compare`): a dimension the baseline held PASS/WARN on that now
    FAILs is a grounded REGRESSION (exit 1); named abstentions, shape changes and
    drift are reported and exit 0; a comparison that could not run at all exits 2.
+4. **Banks the regression turns** (default-on, `--no-ingest` off): each divergent
+   TURN of the new capture that regressed composes as a corpus case through the
+   existing `add_case` — the new capture's records, the recomputed `TurnVerdict`
+   (status FAIL), the STORED policy's server command resolved per turn, the
+   baseline's stored invariants/replays/timeout, a `pending` label (the engine
+   never labels its own cases) and the new trace's stem as the case namespace.
+   Ingest runs ONLY when a regression row exists, never changes the verdict or
+   the exit code, and is per-turn error-contained: a `ValueError` (a case-id
+   collision on a re-run) is reported by name in the report's `ingest` section,
+   never a failure of the gate.
 
 Text and `--json` are ONE computation: `report_dict` builds the machine document
 (the gate.json schema-1 contract) and the text renderer walks the SAME document,
 so the two surfaces cannot drift. UNVERIFIED is never rendered as PASS: a
 preflight or skipped comparison carries `outcome: UNVERIFIED` with its named
-cause on every surface.
+cause on every surface. The `ingest` section is ABSENT-never-zero: no regression
+turns (or `--no-ingest`) means no section at all, never an empty one.
 """
 
 from __future__ import annotations
@@ -36,6 +47,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Sequence
 
+from belay.corpus.add import add_case
 from belay.gate.bank import load_baseline
 from belay.gate.baseline import compose_verdict_set
 from belay.gate.compare import (
@@ -45,6 +57,7 @@ from belay.gate.compare import (
     compare,
 )
 from belay.identity import derive_run_identity, validate_run_id
+from belay.phase0.runner import _resolve_server_command
 from belay.replay.reader import TraceCorrupt, read_trace
 from belay.verify.claims import CheckAuthor
 from belay.verify.invariants import Invariant
@@ -79,7 +92,11 @@ class GateCheckResult:
     `comparison` is the pure decision table's answer; `capture` is the capture
     side's verdict records (the verify builders' shape); `coverage` the coverage
     block over the capture verdicts — both travel with the report so an
-    abstention is never rendered as a clean pass.
+    abstention is never rendered as a clean pass. `ingest` is the banking
+    outcome, ABSENT-never-zero: `None` when no regression turn was banked (no
+    regression, or `--no-ingest`), else `{"banked": [case-id, ...],
+    "failures": [{"turn", "cause"}, ...]}` — the report omits the section when it
+    is `None`, so a disabled ingest never reads as "nothing could be added".
     """
 
     run_id: str
@@ -88,6 +105,26 @@ class GateCheckResult:
     comparison: GateComparison
     capture: dict
     coverage: dict
+    ingest: Optional[dict] = None
+
+
+def _turn_ordinal(dimension: str) -> Optional[int]:
+    """The turn ordinal in a divergence dimension like `turn 3 (echo)`, or `None`.
+
+    The decision table names turn divergences `turn <n> (<tool>)`; only those
+    dimensions are bankable (trajectory/claim regressions are instance-level and
+    have no per-turn `TurnVerdict` to compose). Parsed structurally — never a
+    guessed ordinal.
+    """
+    if not dimension.startswith("turn "):
+        return None
+    digits = []
+    for ch in dimension[len("turn "):]:
+        if ch.isdigit():
+            digits.append(ch)
+        else:
+            break
+    return int("".join(digits)) if digits else None
 
 
 def check_gate(
@@ -99,6 +136,9 @@ def check_gate(
     shell_server_override: Optional[Sequence[str]] = None,
     run_id_override: Optional[str] = None,
     claim_author: Optional[CheckAuthor] = None,
+    corpus_dir: Optional[Path] = None,
+    ingest: bool = True,
+    captured_at: Optional[str] = None,
 ) -> GateCheckResult:
     """Run one gate check: identity -> baseline -> both verdict sets -> comparison.
 
@@ -109,6 +149,16 @@ def check_gate(
     unreadable stored trace, or a stored policy that cannot be applied. The
     comparison itself decides the exit: `clean` / `regression` / `preflight`
     (`BASELINE_UNRESTORABLE` / `BASELINE_CAPABILITY_MISMATCH`).
+
+    `corpus_dir` / `ingest` / `captured_at` are the divergence-banking seam:
+    default-on (`ingest=True`), each regression TURN of the new capture banks as
+    a corpus case via `add_case` after the comparison is decided — the exit code
+    is computed from the comparison alone and ingest never changes it. Per-turn
+    `ValueError` containment mirrors `phase0.runner._verify_one_trace`: a refused
+    re-add (a case-id collision) is reported in the result's `ingest.failures`,
+    never a failure of the gate. `captured_at` is read by the CLI boundary (the
+    clock is not this module's); banking requires it, so `ingest=True` with
+    `captured_at=None` banks nothing.
     """
     try:
         read = read_trace(trace_path)
@@ -221,6 +271,53 @@ def check_gate(
         recomputed,
         baseline_recomputed=baseline_recomputed,
     )
+
+    # The divergence-banking step, AFTER the comparison is decided: the verdict
+    # and the exit code are computed before and independently of ingest, so
+    # banking never changes them. Each regression TURN of the new capture — a
+    # turn dimension the baseline held PASS/WARN on that now FAILs, plus a new
+    # turn that FAILs — composes a corpus case via the existing `add_case`,
+    # carrying the STORED policy (per-turn server command resolved by the phase0
+    # rule, the baseline's invariants, replays and timeout) and a `pending`
+    # label. `captured_at` is injected by the caller (the CLI reads the clock);
+    # absent it, banking does not run — never a fabricated timestamp.
+    ingest_report: Optional[dict] = None
+    if ingest and corpus_dir is not None and captured_at is not None:
+        capture_verdicts_by_index = {v.turn_index: v for v in capture_verdicts}
+        banked: list[str] = []
+        failures: list[dict] = []
+        for row in comparison.divergences:
+            if not row.regression:
+                continue
+            ordinal = _turn_ordinal(row.dimension)
+            if ordinal is None:
+                continue
+            verdict = capture_verdicts_by_index.get(ordinal)
+            if verdict is None:
+                continue
+            try:
+                case_dir = add_case(
+                    Path(corpus_dir),
+                    records=records,
+                    target_turn_index=ordinal,
+                    verdict=verdict,
+                    manifest_dir=manifest_dir,
+                    server_command=_resolve_server_command(
+                        verdict.tool_name, server_command, shell_server_command
+                    ),
+                    invariants=invariants,
+                    human_label="pending",
+                    replays=replays,
+                    timeout=timeout,
+                    source_trace_id=Path(trace_path).stem,
+                    captured_at=captured_at,
+                )
+                banked.append(case_dir.name)
+            except ValueError as exc:
+                failures.append({"turn": ordinal, "cause": str(exc)})
+        if banked or failures:
+            ingest_report = {"banked": banked, "failures": failures}
+
     return GateCheckResult(
         run_id=run_id,
         trace=str(trace_path),
@@ -228,6 +325,7 @@ def check_gate(
         comparison=comparison,
         capture=recomputed,
         coverage=coverage_record(capture_verdicts),
+        ingest=ingest_report,
     )
 
 
@@ -287,7 +385,7 @@ def report_dict(result: GateCheckResult) -> dict:
     `skip_reason`, and the capture verdicts travel with the report.
     """
     comparison = result.comparison
-    return {
+    payload = {
         "schema": GATE_SCHEMA,
         "run_id": result.run_id,
         "trace": result.trace,
@@ -300,6 +398,12 @@ def report_dict(result: GateCheckResult) -> dict:
         "capture": result.capture,
         "coverage": result.coverage,
     }
+    # ABSENT-never-zero: no regression turn banked (a clean check, or
+    # `--no-ingest`) means the key is OMITTED entirely — an omitted section
+    # reads as "nothing to bank / banking disabled", never as an empty tally.
+    if result.ingest is not None:
+        payload["ingest"] = result.ingest
+    return payload
 
 
 def render_json(result: GateCheckResult) -> str:
@@ -369,6 +473,13 @@ def report_lines(doc: dict) -> list[str]:
         for turn in doc["capture"]["turns"]:
             tool = turn["tool"] or "?"
             lines.append(f"    turn {turn['ordinal']:<3} {tool:<18}{turn['status']}")
+    if doc.get("ingest"):
+        lines.append("")
+        lines.append("  ingest")
+        for case_id in doc["ingest"]["banked"]:
+            lines.append(f"    banked {case_id}")
+        for failure in doc["ingest"]["failures"]:
+            lines.append(f"    turn {failure['turn']} not banked: {failure['cause']}")
     lines.append("")
     lines.append(f"  {_coverage_line(doc['coverage'])}")
     return lines

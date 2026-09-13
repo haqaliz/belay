@@ -301,7 +301,7 @@ def _snapshot_capture(
     return trace_path, manifest_dir
 
 
-def _bank_clean(monkeypatch, tmp_path: Path, name: str) -> Path:
+def _bank_clean(monkeypatch, capsys, tmp_path: Path, name: str) -> Path:
     """Bank a PASS-stubbed baseline under the shared root; return the trace path."""
     trace, manifest_dir = _synthetic_run(tmp_path, name)
     root = _root(tmp_path)
@@ -310,7 +310,8 @@ def _bank_clean(monkeypatch, tmp_path: Path, name: str) -> Path:
     rc = cli.main(
         ["gate", "baseline", str(trace), "--manifest-dir", str(manifest_dir), "--server", *SERVER]
     )
-    assert rc == 0, f"banking failed for {name!r}"
+    out = capsys.readouterr().out  # drained so the check's own output is clean
+    assert rc == 0, out
     return root
 
 
@@ -332,7 +333,7 @@ def test_regression_banks_divergent_turns(tmp_path, capsys, monkeypatch):
     STORED policy (invariants, server command, replays, timeout) and a `pending`
     label — the engine never labels its own cases.
     """
-    root = _bank_clean(monkeypatch, tmp_path, "bank")
+    root = _bank_clean(monkeypatch, capsys, tmp_path, "bank")
     trace2, manifest_dir2 = _synthetic_run(tmp_path, "cap")
     corpus = tmp_path / "corpus"
     monkeypatch.setattr("belay.gate.baseline.verify_turn", _stub(Status.FAIL))
@@ -371,7 +372,7 @@ def test_no_ingest_banks_nothing(tmp_path, capsys, monkeypatch):
     (acceptance 2): same regression, exit 1, empty corpus dir, and the report is
     the ingest run's verdict report verbatim — the `ingest` section alone absent.
     """
-    _bank_clean(monkeypatch, tmp_path, "bank")
+    _bank_clean(monkeypatch, capsys, tmp_path, "bank")
     trace2, manifest_dir2 = _synthetic_run(tmp_path, "cap")
     monkeypatch.setattr("belay.gate.baseline.verify_turn", _stub(Status.FAIL))
 
@@ -439,7 +440,7 @@ def test_ingest_failure_is_error_contained(tmp_path, capsys, monkeypatch):
     existing case id (a stored case may carry a human label), the refusal lands
     in the report's ingest section, and the first case's files are unchanged.
     """
-    _bank_clean(monkeypatch, tmp_path, "bank")
+    _bank_clean(monkeypatch, capsys, tmp_path, "bank")
     trace2, manifest_dir2 = _synthetic_run(tmp_path, "cap")
     corpus = tmp_path / "corpus"
     monkeypatch.setattr("belay.gate.baseline.verify_turn", _stub(Status.FAIL))
@@ -553,4 +554,5 @@ def test_banked_case_recomputes_match(tmp_path, capsys, monkeypatch):
     rc = cli.main(["corpus", "run", str(corpus)])
     out = capsys.readouterr().out
     assert rc == 0, out
-    assert f"{case_id} MATCH" in out, out
+    assert case_id in out, out
+    assert "MATCH" in out, out
