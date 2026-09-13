@@ -169,17 +169,18 @@ def shape_divergences(expected_turns: Sequence[dict], recomputed_turns: Sequence
     for n in sorted(set(expected_map) | set(recomputed_map)):
         expected = expected_map.get(n)
         recomputed = recomputed_map.get(n)
-        if expected is not None and recomputed is not None:
-            if expected.get("tool") != recomputed.get("tool"):
+        if expected is None:
+            if recomputed is not None and recomputed.get("status") != "FAIL":
                 rows.append(
                     ShapeRow(
-                        "tool-rename",
-                        f"turn {n}",
-                        expected.get("tool"),
-                        recomputed.get("tool"),
+                        "new-turn",
+                        _turn_dimension(None, recomputed, n),
+                        None,
+                        recomputed.get("status"),
                     )
                 )
-        elif expected is not None:
+            continue
+        if recomputed is None:
             rows.append(
                 ShapeRow(
                     "missing-turn",
@@ -188,13 +189,14 @@ def shape_divergences(expected_turns: Sequence[dict], recomputed_turns: Sequence
                     None,
                 )
             )
-        elif recomputed.get("status") != "FAIL":
+            continue
+        if expected.get("tool") != recomputed.get("tool"):
             rows.append(
                 ShapeRow(
-                    "new-turn",
-                    _turn_dimension(None, recomputed, n),
-                    None,
-                    recomputed.get("status"),
+                    "tool-rename",
+                    f"turn {n}",
+                    expected.get("tool"),
+                    recomputed.get("tool"),
                 )
             )
     return rows

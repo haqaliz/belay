@@ -63,6 +63,7 @@ SCAN_AREA: frozenset[str] = frozenset(
         "test_docker_compose.py",
         "test_docker_inimage.py",
         "test_gate_baseline.py",
+        "test_gate_check.py",
         "test_invariant_library_e2e.py",
         "test_interop_attach.py",
         "test_interop_cli.py",
