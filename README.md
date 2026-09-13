@@ -160,7 +160,58 @@ belay corpus score                                      # precision · recall ·
 
 Cases are self-contained (they bundle their own pre-state) and live under the gitignored `corpus/local/` — nothing leaves your machine. What a green `corpus run` does and does not certify is in [Coverage & limits](#a-green-belay-corpus-run-is-a-drift-check-not-a-coverage-claim).
 
-### 4 · Measure at scale — the violation rate
+### 4 · Gate your agent upgrades
+
+The CI regression gate answers the CI question — *"did the new agent version break a previously-passing trajectory?"* — by **re-execution**, never by a judge. Two halves: **bank** a baseline for the run, then **check** every later capture of the same run against it.
+
+Give the run a stable identity at capture — the gate's join key:
+
+```bash
+BELAY_RUN_ID=my-run \
+BELAY_TRACE_DIR=./traces \
+BELAY_SANDBOX_SCOPE=./workspace \
+BELAY_SNAPSHOT_DIR=./snapshots \
+  python -m belay.proxy my-mcp-server --flag
+```
+
+Bank the baseline **on the substrate the check will run on** — the CI substrate, not your laptop: a baseline banked on one substrate and checked on another is a **SKIP** with the named `UNRESTORABLE_CAPABILITY_MISMATCH` cause, never a guessed restore. The bank is self-contained and keyed by the run identity: the trace, its manifests and snapshots, the resolved server command and policy, and the expected verdict set, under the gitignored `baselines/local/<run-id>/` — as sensitive as the trace itself, never uploaded (no raw-data egress):
+
+```bash
+belay gate baseline ./traces/<run>.jsonl --manifest-dir ./snapshots.manifests --server -- my-mcp-server --flag
+```
+
+Then gate every later capture of the same run in CI:
+
+```yaml
+# .github/workflows/agent-gate.yml — one job: capture the run, then gate it
+jobs:
+  gate:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Capture the agent's run
+        run: |
+          BELAY_RUN_ID=my-run \
+          BELAY_TRACE_DIR=./traces \
+          BELAY_SANDBOX_SCOPE=./workspace \
+          BELAY_SNAPSHOT_DIR=./snapshots \
+            python -m belay.proxy my-mcp-server --flag
+      - name: Gate it against the banked baseline
+        run: belay gate check ./traces/<run>.jsonl --manifest-dir ./snapshots.manifests
+```
+
+`belay gate check` re-verifies the baseline's **own** stored trace under the **stored** policy (proving replayability — an unrestorable baseline is a named abstention, never a regression — and surfacing engine drift), verifies the new capture under that same policy, and diffs the two verdict sets. The exit code is the CI verdict:
+
+| exit | meaning |
+|------|---------|
+| **0** | **clean** — the comparison ran and nothing regressed (named abstentions, shape changes and drift may be present; each reported) |
+| **1** | **regression** — a dimension the baseline held PASS/WARN on now FAILs (per turn, trajectory, or claim); divergent turns bank as pending corpus cases |
+| **2** | **preflight** — the check could not run (missing baseline, no run identity, an unrestorable baseline); the outcome is rendered UNVERIFIED with a named cause, never a false clean |
+
+The policy is the **banked** one: there is deliberately **no `--invariants` / `--replays` / `--timeout` on `gate check`** — an operator who wants a different policy re-banks. `--server` / `--shell-server` override the stored boundary (write `--shell-server` before `--server` — `--server` is a remainder and swallows everything after it); `--run-id` is the identity fallback for pre-record captures; `--no-ingest` measures without banking regression turns; `--json` renders the same report as one document for CI parsers.
+
+**What the gate covers, exactly.** The gate compares verdicts over **what crosses the MCP boundary** — the same replay-and-diff evidence `belay verify` renders. `UNVERIFIED` is never `PASS`: a turn Belay could not verify is an abstention, and a **new** UNVERIFIED turn **never fails the gate alone** — it is named, reported, and exits 0 unless a PASS/WARN dimension also moved to FAIL. Dimensions Belay has no instrument for (the network promise behind `openWorldHint: false`) stay `NOT_COVERED` and are reported, never judged.
+
+### 5 · Measure at scale — the violation rate
 
 ```bash
 belay phase0 run ./traces --ledger runs/phase0.json --corpus-dir corpus/local --server -- my-mcp-server

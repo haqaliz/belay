@@ -597,6 +597,23 @@ _VERIFY_COVERAGE = (
     "  never a fabricated UNVERIFIED."
 )
 
+#: The gate's coverage line, shared by both `gate baseline` / `gate check` help
+#: descriptions. Mirrors `_VERIFY_COVERAGE`'s honesty contract on the gate
+#: surface: the comparison is grounded only in what crosses the MCP boundary,
+#: UNVERIFIED is never PASS, and a NEW UNVERIFIED turn never fails the gate
+#: alone. Pinned by `tests/test_gate_docs.py`; do not soften one without
+#: changing the test.
+_GATE_COVERAGE = (
+    "what this gate covers, exactly\n"
+    "  The gate compares verdicts over what crosses the MCP boundary — the same\n"
+    "  replay-and-diff evidence `belay verify` renders. Dimensions Belay has no\n"
+    "  instrument for (the network promise behind `openWorldHint: false`) stay\n"
+    "  NOT_COVERED and are reported, never judged. UNVERIFIED is never PASS: a\n"
+    "  turn Belay could not verify is an abstention, and a NEW UNVERIFIED turn\n"
+    "  never fails the gate alone — it is named, reported, and exits 0 unless a\n"
+    "  PASS/WARN dimension also moved to FAIL.\n"
+)
+
 _VERIFY_DESCRIPTION = (
     "Verify a whole trace by RE-EXECUTION. For each recorded tools/call, replay it "
     "against its restored pre-state and render its verdict: the A2 axis — "
@@ -3538,7 +3555,8 @@ def _parser() -> argparse.ArgumentParser:
             "Servers: --server names the ONE boundary every turn replays against, unless "
             "--shell-server also names a shell command, in which case a recorded run_process "
             "turn replays against that one instead. WRITE --shell-server BEFORE --server: "
-            "--server is a remainder and swallows every token after it."
+            "--server is a remainder and swallows every token after it.\n\n"
+            + _GATE_COVERAGE
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -3688,7 +3706,8 @@ def _parser() -> argparse.ArgumentParser:
             "timeout), so `belay corpus run` recomputes it MATCH. --no-ingest measures "
             "without writing; banking never changes the verdict or the exit code, and "
             "a refused re-add (a case-id collision) is reported by name in the "
-            "report's ingest section, never a failure of the gate."
+            "report's ingest section, never a failure of the gate.\n\n"
+            + _GATE_COVERAGE
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

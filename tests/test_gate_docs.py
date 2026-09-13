@@ -94,7 +94,7 @@ def test_gate_quickstart_step_exists_and_keeps_the_existing_steps() -> None:
     section = _gate_section()
     assert "BELAY_RUN_ID" in section
     assert "baselines/local" in section
-    assert "never fail the gate alone" in section
+    assert "never fails the gate alone" in section
 
 
 def test_gate_quickstart_commands_parse_through_the_cli() -> None:
@@ -117,10 +117,11 @@ def test_gate_quickstart_exit_codes_match_the_implementation() -> None:
     table: dict[int, str] = {}
     for line in _gate_section().splitlines():
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
-        if len(cells) >= 2 and cells[0].isdigit():
+        if len(cells) >= 2 and cells[0].strip("*").isdigit():
+            code = int(cells[0].strip("*"))
             reason = re.match(r"\*\*(\w+)\*\*", cells[1])
             assert reason is not None, f"exit-code row lacks a bolded reason: {line!r}"
-            table[int(cells[0])] = reason.group(1)
+            table[code] = reason.group(1)
     assert table == {0: CLEAN, 1: REGRESSION, 2: PREFLIGHT}
     mapping = re.search(
         r'\{"clean": 0, "regression": 1, "preflight": 2\}', _read("src/belay/cli.py")
@@ -134,7 +135,7 @@ def test_gate_check_help_states_the_stored_policy_and_the_coverage_line() -> Non
     assert "deliberately no --invariants" in help_text
     assert "re-banks with `belay gate baseline`" in help_text
     assert "crosses the MCP boundary" in help_text
-    assert "never fail the gate alone" in help_text
+    assert "never fails the gate alone" in help_text
 
 
 def test_gate_baseline_help_mentions_run_identity_and_the_coverage_line() -> None:
@@ -143,7 +144,7 @@ def test_gate_baseline_help_mentions_run_identity_and_the_coverage_line() -> Non
     assert "BELAY_RUN_ID" in help_text
     assert "--run-id" in help_text
     assert "crosses the MCP boundary" in help_text
-    assert "never fail the gate alone" in help_text
+    assert "never fails the gate alone" in help_text
 
 
 def test_published_numbers_stay_byte_unchanged_in_touched_files() -> None:

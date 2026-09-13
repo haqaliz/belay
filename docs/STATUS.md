@@ -10,6 +10,62 @@ carries the current state and the rules that still bind.
 
 ---
 
+**THE CI REGRESSION GATE SHIPS — `belay gate baseline` / `belay gate check` CLOSE THE
+PHASE-2 FIRST SURFACE, WITH A MACHINE-CHECKED QUICKSTART** (2026-09-13,
+`ci-regression-gate`, on `feat/ci-regression-gate/aliz`; the feature's five aspects —
+`run-identity`, `baseline-bank`, `gate-check`, `divergence-banking`, `surface-docs` —
+land together; not yet released). The first Phase-2 roadmap goal
+(`docs/ROADMAP.md`: "a past run replays in CI; a new agent version that breaks a
+previously-passing trajectory fails the build") now exists as a surface a stranger
+can wire in: capture-time `BELAY_RUN_ID` (the new additive `run_identity` trace
+record, no schema bump), `belay gate baseline <trace> --server -- CMD` banking a
+SELF-CONTAINED, identity-keyed baseline under the gitignored
+`baselines/local/<run-id>/` (trace + manifests + snapshots + resolved server command
+and policy + expected verdict set), and `belay gate check <trace>` diffing the new
+capture against it by the pure decision table (`src/belay/gate/compare.py`):
+**REGRESSION (exit 1) = a dimension the baseline held PASS/WARN on moves to FAIL** —
+per turn, the trajectory (PASS → FAIL), the claim when the baseline declared one
+(WARN → FAIL), or a NEW turn that FAILs; **named, reported, never failing (exit 0)** —
+PASS/WARN → UNVERIFIED (the R7 coverage-loss abstention), any transition INTO WARN,
+UNVERIFIED → anything (an abstention becoming a failure is a fix), FAIL → anything,
+declared-but-absent claims, plus the shape rows (turn-count shrink, tool renames, new
+non-failing turns) and the drift rows (stored expected vs the baseline's own
+re-verification — engine-change evidence); **SKIP (exit 2, rendered UNVERIFIED +
+named cause)** — a baseline that cannot be re-verified HERE (`BASELINE_UNRESTORABLE`,
+`BASELINE_CAPABILITY_MISMATCH` — the corpus precedent: bank on the CI substrate;
+cross-substrate checks never guess a restore). The stored-policy rule is
+load-bearing: `gate check` carries **no `--invariants` / `--replays` / `--timeout`**
+— the banked policy decides; an operator who wants a different policy re-banks.
+Run identity: the recorded `BELAY_RUN_ID`, or `--run-id` for pre-record captures
+(`NO_RUN_IDENTITY` is a fail-closed preflight otherwise, never a guessed id).
+Divergence banking (default-on): each regression TURN of the new capture banks as a
+pending corpus case under `--corpus-dir` (default `./corpus/local`) carrying the
+STORED policy so `belay corpus run` recomputes MATCH; `--no-ingest` measures without
+writing; banking never changes the verdict or the exit code, and a refused re-add is
+reported by name, never a failure of the gate. Both surfaces carry the honest
+coverage line (text and `--json`, gate.json schema 1): the gate compares verdicts
+over **what crosses the MCP boundary**, a NEW UNVERIFIED turn **never fails the gate
+alone**, and `NOT_COVERED` dimensions are reported, never judged. The README
+quickstart gains the gate step ("Gate your agent upgrades") — `BELAY_RUN_ID` at
+capture, the bank command, a GitHub Actions snippet (capture step + check step), the
+exit-code table, the `baselines/local/` gitignore note and the bank-on-the-CI-
+substrate recommendation — machine-checked by `tests/test_gate_docs.py` (every
+`belay gate …` command parses through the CLI's argparse, the 0/1/2 table equals the
+implementation's mapping, the `--help` texts state the stored-policy rule and the
+coverage line), and the flag-parity guard covers both surfaces (M8): `--server` /
+`--shell-server` on both, `--invariants` / `--invariant-library` /
+`--no-default-invariants` on `baseline` only, `--no-ingest` / `--corpus-dir` on
+`check` only, `--run-id` on both. **Honesty lines:** no verdict axis, invariant,
+coverage line or published number moves — `11/60 = 18.3%`, `precision 0.00`, `1/15`,
+`4/16` stand unedited and the docs-test guard pins them byte-identical in the files
+this unit touches; the only new trace field is the additive `run_identity` record.
+NOT built, by name: a GitHub Action wrapper (deferred N2 — the README snippet is the
+surface) and `--strict-shape` (deferred N1; shape rows are report-only by design).
+Suite 2188 → 2261+ (the docs tests land with this aspect). See
+`docs/planning/ci-regression-gate/`.
+
+---
+
 **THE COMMON-INVARIANT LIBRARY SHIPS — R3'S LIBRARY MITIGATION IS BUILT, AND A1
 GAINS ITS FIRST TWO NEW RULES SINCE C5** (2026-09-12, `invariant-library`,
 v0.31.0). R3 ("nobody authors the invariant — A1 works but only if someone declares
