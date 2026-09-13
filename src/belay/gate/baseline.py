@@ -50,12 +50,86 @@ from belay.verify.claims import CheckAuthor, RecordingAuthor, evaluate_claim
 from belay.verify.invariants import Invariant
 from belay.verify.json import claim_record, trajectory_record, turn_record
 from belay.verify.trajectory import evaluate_trajectory_rules
-from belay.verify.turn import verify_turn
+from belay.verify.turn import TurnVerdict, verify_turn
 
 #: The manifest convention the baseline bundles under: the relative dirname inside
 #: the baseline directory. Stored in the policy so a later gate check knows where
 #: the run's manifests live without re-deriving the convention.
 _MANIFEST_CONVENTION = "manifests"
+
+
+def compose_verdict_set(
+    read,
+    *,
+    manifest_dir: Path,
+    server_command: Sequence[str],
+    shell_server_command: Optional[Sequence[str]] = None,
+    replays: int,
+    timeout: float,
+    invariants: Sequence[Invariant],
+    claim_author: Optional[CheckAuthor] = None,
+) -> tuple[dict, list[TurnVerdict]]:
+    """The verdict-set composition BOTH gate halves share: turns, trajectory, claim.
+
+    `belay gate baseline` banks this set and `belay gate check` recomputes it on
+    BOTH sides of the comparison, so it is the ONE place the composition lives —
+    the CLI's own imports at `cli.py:658-683` were the seam, and this helper is
+    that seam extracted: `verify_turn` per `tools/call`, then the instance-level
+    trajectory and claim dispositions at trace close, rendered by the SAME
+    `belay.verify.json` builders `belay verify --json` uses. Returns the expected-
+    shaped plain dict (keys `turns`/`trajectory`, plus `claim` only when an author
+    is configured and a verdict exists) and the `TurnVerdict` objects the caller
+    may need for the coverage block.
+    """
+    records = read.records
+    calls = tool_calls(derive_correlation(records))
+    verdicts = []
+    for n in range(len(calls)):
+        verdicts.append(
+            verify_turn(
+                records,
+                n,
+                server_command=server_command,
+                shell_server_command=shell_server_command,
+                manifest_dir=manifest_dir,
+                replays=replays,
+                timeout=timeout,
+                invariants=invariants,
+            )
+        )
+    verdict_map = {v.turn_index: v for v in verdicts}
+    trajectory = evaluate_trajectory_rules(
+        invariants,
+        skips=read.skips,
+        records=records,
+        verdicts=verdict_map,
+    )
+    claim = None
+    claim_check = None
+    if claim_author is not None:
+        recorder = RecordingAuthor(claim_author)
+        claim = evaluate_claim(
+            records=records,
+            skips=read.skips,
+            verdicts=verdict_map,
+            author=recorder,
+            manifest_dir=manifest_dir,
+            server_command=server_command,
+            shell_server_command=shell_server_command,
+            timeout=timeout,
+            replays=replays,
+        )
+        claim_check = recorder.last_check
+
+    # The expected set, rendered by the SAME builders verify --json uses.
+    expected: dict = {
+        "turns": [turn_record(verdict) for verdict in verdicts],
+        "trajectory": trajectory_record(trajectory),
+    }
+    claim_rec = claim_record(claim, check=claim_check)
+    if claim_rec is not None:
+        expected["claim"] = claim_rec
+    return expected, verdicts
 
 
 def bank_baseline(
@@ -112,56 +186,20 @@ def bank_baseline(
             )
         shutil.rmtree(baseline_dir)
 
-    # The verdict set, composed exactly as `belay verify` composes it: every
-    # tools/call turn replayed, then the instance-level trajectory and claim
-    # dispositions at trace close.
-    calls = tool_calls(derive_correlation(records))
-    verdicts = []
-    for n in range(len(calls)):
-        verdicts.append(
-            verify_turn(
-                records,
-                n,
-                server_command=server_command,
-                shell_server_command=shell_server_command,
-                manifest_dir=manifest_dir,
-                replays=replays,
-                timeout=timeout,
-                invariants=invariants,
-            )
-        )
-    verdict_map = {v.turn_index: v for v in verdicts}
-    trajectory = evaluate_trajectory_rules(
-        invariants,
-        skips=read.skips,
-        records=records,
-        verdicts=verdict_map,
+    # The verdict set, composed exactly as `belay verify` composes it — the shared
+    # helper `belay gate check` recomputes on both sides of its comparison, so the
+    # bank and the gate can never drift: every tools/call turn replayed, then the
+    # instance-level trajectory and claim dispositions at trace close.
+    expected, _verdicts = compose_verdict_set(
+        read,
+        manifest_dir=manifest_dir,
+        server_command=server_command,
+        shell_server_command=shell_server_command,
+        replays=replays,
+        timeout=timeout,
+        invariants=invariants,
+        claim_author=claim_author,
     )
-    claim = None
-    claim_check = None
-    if claim_author is not None:
-        recorder = RecordingAuthor(claim_author)
-        claim = evaluate_claim(
-            records=records,
-            skips=read.skips,
-            verdicts=verdict_map,
-            author=recorder,
-            manifest_dir=manifest_dir,
-            server_command=server_command,
-            shell_server_command=shell_server_command,
-            timeout=timeout,
-            replays=replays,
-        )
-        claim_check = recorder.last_check
-
-    # The expected set, rendered by the SAME builders verify --json uses.
-    expected: dict = {
-        "turns": [turn_record(verdict) for verdict in verdicts],
-        "trajectory": trajectory_record(trajectory),
-    }
-    claim_rec = claim_record(claim, check=claim_check)
-    if claim_rec is not None:
-        expected["claim"] = claim_rec
 
     # The copy first: the artifacts are the part that can fail, and a failure here
     # removes its partial directory, so baseline.json is only ever written beside a
@@ -195,4 +233,4 @@ def bank_baseline(
     return baseline_dir
 
 
-__all__ = ["bank_baseline"]
+__all__ = ["bank_baseline", "compose_verdict_set"]

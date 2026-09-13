@@ -87,12 +87,47 @@ def _capture(
     return path
 
 
+def _await_recorded(trace_dir: Path, msg_id: int) -> None:
+    """Block until the trace holds the recorded s2c reply to `msg_id`.
+
+    Forwarding runs AHEAD of recording, deliberately, so reading a reply on the
+    proxy's stdout does NOT establish that the reply is in the trace — and the
+    annotation derivation reads the trace. Waiting on the trace itself (never a
+    sleep) is the sequencing `docker_roundtrip_client.py` established: the
+    `tools/list` snapshot must precede the call in the trace, or
+    effect-conformance abstains.
+    """
+    import base64 as b64
+    import time
+
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        for path in sorted(trace_dir.glob("*.jsonl")):
+            for line in path.read_bytes().split(b"\n"):
+                if not line:
+                    continue
+                record = json.loads(line)
+                if record.get("kind") != "frame" or record.get("dir") != "s2c":
+                    continue
+                raw = record.get("raw", "")
+                try:
+                    message = json.loads(b64.b64decode(raw))
+                except (ValueError, TypeError):
+                    continue
+                if message.get("id") == msg_id:
+                    return
+        time.sleep(0.005)
+    raise AssertionError(
+        f"the trace in {trace_dir!r} never recorded the s2c reply to id {msg_id}"
+    )
+
+
 def _snapshot_capture(
     tmp_path: Path,
     name: str,
     run_id: str,
-    server: Path = FIXTURE,
-    lines: list[bytes] = CLIENT_LINES,
+    server: Path = FAST,
+    lines: list[bytes] = PEEK_LINES,
     env_extra: dict[str, str] | None = None,
 ) -> tuple[Path, Path]:
     """A REAL snapshot-bearing capture through the gated proxy; return
@@ -100,8 +135,13 @@ def _snapshot_capture(
 
     `BELAY_SANDBOX_SCOPE` + `BELAY_SNAPSHOT_DIR` make the turn gate persist
     `present` handles and manifests, so a later check can restore the pre-state
-    and re-invoke the server inside the Seatbelt sandbox.
+    and re-invoke the server inside the Seatbelt sandbox. The client is SEQUENCED
+    — it waits for the recorded `tools/list` reply before sending the call — so
+    the annotation snapshot precedes the call and effect-conformance can decide
+    instead of abstaining (the `docker_roundtrip_client` ordering).
     """
+    import subprocess
+
     base = Path(os.path.realpath(tmp_path))
     workspace = base / f"{name}-ws"
     workspace.mkdir()
@@ -115,8 +155,40 @@ def _snapshot_capture(
     env["BELAY_TRACE_DIR"] = str(trace_dir)
     env[RUN_ID_ENV] = run_id
     if env_extra:
-        env.update(env_extra)
-    run_over_pipes(proxy_cmd(server), env=env, lines=lines)
+        # A `{workspace}` placeholder lets a fixture read/write INSIDE the sandbox
+        # write-scope (the seatbelt denies anything outside it).
+        env.update(
+            {
+                key: value.format(workspace=workspace)
+                for key, value in env_extra.items()
+            }
+        )
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "belay.proxy", sys.executable, str(server)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+    )
+
+    def send(raw: bytes, expect_reply: bool) -> None:
+        assert proc.stdin is not None and proc.stdout is not None
+        proc.stdin.write(raw + b"\n")
+        proc.stdin.flush()
+        if expect_reply:
+            reply = proc.stdout.readline()
+            assert reply, "the proxy closed without answering"
+
+    send(lines[0], True)
+    send(lines[1], False)
+    send(lines[2], True)
+    _await_recorded(trace_dir, 2)
+    send(lines[3], True)
+    assert proc.stdin is not None
+    proc.stdin.close()
+    if proc.wait(timeout=60) != 0:
+        raise RuntimeError(f"the proxy exited non-zero for capture {name!r}")
+
     (trace_path,) = sorted(trace_dir.glob("*.jsonl"))
     manifest_dir = base / f"{name}-sn.manifests"
     assert manifest_dir.is_dir() and sorted(manifest_dir.glob("*.json"))
@@ -148,7 +220,8 @@ def test_unchanged_capture_is_clean(tmp_path, capsys, monkeypatch):
     monkeypatch.chdir(root)
 
     rc = cli.main(["gate", "baseline", str(trace), "--manifest-dir", str(manifests), "--server", *SERVER])
-    assert rc == 0, capsys.readouterr().out
+    capsys.readouterr()  # drain unconditionally: the assert below only reads on failure
+    assert rc == 0
 
     trace2 = _capture(tmp_path, "t2", run_id="pytest-7432")
     manifests2 = tmp_path / "m2"
@@ -218,7 +291,8 @@ def test_toolset_change_is_shape_not_failure(tmp_path, capsys, monkeypatch):
     root = _root(tmp_path)
     monkeypatch.chdir(root)
     rc = cli.main(["gate", "baseline", str(trace), "--manifest-dir", str(manifests), "--server", *SERVER])
-    assert rc == 0, capsys.readouterr().out
+    capsys.readouterr()  # drain unconditionally: the assert below only reads on failure
+    assert rc == 0
 
     trace2 = _capture(
         tmp_path, "t2", run_id="pytest-7432", server=MUTATING, lines=CLOBBER_LINES,
@@ -256,7 +330,8 @@ def test_json_report_contract(tmp_path, capsys, monkeypatch):
     root = _root(tmp_path)
     monkeypatch.chdir(root)
     rc = cli.main(["gate", "baseline", str(trace), "--manifest-dir", str(manifests), "--server", *SERVER])
-    assert rc == 0, capsys.readouterr().out
+    capsys.readouterr()  # drain unconditionally: the assert below only reads on failure
+    assert rc == 0
 
     trace2 = _capture(tmp_path, "t2", run_id="pytest-7432")
     manifests2 = tmp_path / "m2"
@@ -314,7 +389,7 @@ def test_injected_failing_turn_regresses(tmp_path, capsys, monkeypatch):
 
     trace2, manifests2 = _snapshot_capture(
         tmp_path, "c2", "pytest-7432", server=MUTATING, lines=PEEK_LINES,
-        env_extra={"BELAY_TEST_MUTATE_PATH": str(tmp_path / "mut")},
+        env_extra={"BELAY_TEST_MUTATE_PATH": "{workspace}/mut-target"},
     )
     rc = cli.main(["gate", "check", str(trace2), "--manifest-dir", str(manifests2), "--json"])
     out = capsys.readouterr().out
@@ -344,7 +419,8 @@ def test_nondeterministic_turn_does_not_fail(tmp_path, capsys, monkeypatch):
     root = _root(tmp_path)
     monkeypatch.chdir(root)
     rc = cli.main(["gate", "baseline", str(trace), "--manifest-dir", str(manifests), "--server", *[sys.executable, str(FAST)], "--timeout", "2"])
-    assert rc == 0, capsys.readouterr().out
+    capsys.readouterr()  # drain unconditionally: the assert below only reads on failure
+    assert rc == 0
 
     trace2, manifests2 = _snapshot_capture(tmp_path, "c2", "pytest-7432", server=FAST, lines=PEEK_LINES)
     monkeypatch.setenv("BELAY_TEST_NONDET_SOURCE", "clock")
@@ -353,7 +429,11 @@ def test_nondeterministic_turn_does_not_fail(tmp_path, capsys, monkeypatch):
     assert rc == 0, out
     doc = json.loads(out)
     assert doc["exit_reason"] == "clean", doc
-    assert doc["divergences"] == [], doc
+    # The override boundary abstains on BOTH sides (a divergent reply against a
+    # boundary whose toolset cannot be probed), so the stored PASS is reported as
+    # a named coverage-loss row — and NOTHING is a regression.
+    assert doc["divergences"], doc
+    assert not any(row["regression"] for row in doc["divergences"]), doc
     (turn,) = doc["capture"]["turns"]
     assert turn["status"] == "UNVERIFIED", turn
     assert turn["cause"], turn
@@ -373,7 +453,8 @@ def test_snapshot_roundtrip_regression(tmp_path, capsys, monkeypatch):
     root = _root(tmp_path)
     monkeypatch.chdir(root)
     rc = cli.main(["gate", "baseline", str(trace), "--manifest-dir", str(manifests), "--server", *[sys.executable, str(FAST)]])
-    assert rc == 0, capsys.readouterr().out
+    capsys.readouterr()  # drain unconditionally: the assert below only reads on failure
+    assert rc == 0
 
     trace2, manifests2 = _snapshot_capture(tmp_path, "c2", "pytest-7432", server=FAST, lines=PEEK_LINES)
     rc = cli.main(["gate", "check", str(trace2), "--manifest-dir", str(manifests2)])
@@ -383,7 +464,7 @@ def test_snapshot_roundtrip_regression(tmp_path, capsys, monkeypatch):
 
     trace3, manifests3 = _snapshot_capture(
         tmp_path, "c3", "pytest-7432", server=MUTATING, lines=PEEK_LINES,
-        env_extra={"BELAY_TEST_MUTATE_PATH": str(tmp_path / "mut")},
+        env_extra={"BELAY_TEST_MUTATE_PATH": "{workspace}/mut-target"},
     )
     rc = cli.main(["gate", "check", str(trace3), "--manifest-dir", str(manifests3)])
     out = capsys.readouterr().out

@@ -48,6 +48,7 @@ REPLAY_BEARING = (
     "interop correlate",
     "interop export",
     "gate baseline",
+    "gate check",
 )
 
 _ALL = frozenset(REPLAY_BEARING)
@@ -60,21 +61,27 @@ EXPECTED: dict[str, frozenset[str]] = {
     "--server": _ALL - {"corpus run"},
     # The determinism gate's re-invoke count: shared by every surface that can reach a
     # DIVERGED reply, which is all of them — except `corpus run`, whose per-case
-    # replays count is recorded on the case at ingest.
-    "--replays": _ALL - {"corpus run"},
+    # replays count is recorded on the case at ingest, and `gate check`, which
+    # re-verifies against the BASELINE's stored policy (the banked replays count) —
+    # a deliberate narrowing: the gate's policy is the banked one by decision (M3).
+    "--replays": _ALL - {"corpus run", "gate check"},
     # The per-replay wall. `replay` is excluded: it is the raw re-invoke surface with no
     # verdict of its own, and its timeout has never been operator-settable. If it ever
     # grows one, this row is the place that says so. `corpus run` is excluded the same
-    # way: a case's timeout is recorded on the case, never operator-settable.
-    "--timeout": _ALL - {"replay", "corpus run"},
+    # way: a case's timeout is recorded on the case, never operator-settable. `gate
+    # check` is excluded by the same decision as `--replays`: the banked timeout is
+    # the policy (M3).
+    "--timeout": _ALL - {"replay", "corpus run", "gate check"},
     # Per-tool routing: a recorded `run_process` turn replays against this instead.
     # `replay` re-invokes one named turn, so the operator already chooses the server;
     # `corpus add` and `interop correlate` are DELIBERATELY out of scope for the unit that
     # added this (PRD open question 3 — proposed `verify` only). `gate baseline` widens
     # it by decision (M8): the bank composes the verdict set exactly as verify does, so
     # it must be able to ask for the same boundary. Widening is a decision, and it
-    # belongs here.
-    "--shell-server": frozenset({"verify", "phase0 run", "gate baseline"}),
+    # belongs here. `gate check` widens it the same way: `--shell-server` is an
+    # OVERRIDE of the stored boundary, so the surface that banks the boundary must also
+    # be able to override it.
+    "--shell-server": frozenset({"verify", "phase0 run", "gate baseline", "gate check"}),
     # Where the gate persisted the run's snapshot manifests. `phase0 run` is excluded: it
     # takes a whole trace DIRECTORY and resolves each trace's `.manifests` sibling itself.
     # `corpus run` is excluded the same way, one level further: a case is self-contained
@@ -93,20 +100,29 @@ EXPECTED: dict[str, frozenset[str]] = {
     "--invariant-library": frozenset({"verify", "corpus add", "phase0 run", "gate baseline"}),
     "--no-default-invariants": frozenset({"verify", "corpus add", "phase0 run", "gate baseline"}),
     # The machine surface. `replay` and `corpus add` render human text only.
-    # `gate baseline --json` prints the stored baseline document.
-    "--json": frozenset({"verify", "interop correlate", "interop export", "gate baseline"}),
+    # `gate baseline --json` prints the stored baseline document; `gate check
+    # --json` prints the gate report (gate.json schema 1).
+    "--json": frozenset({"verify", "interop correlate", "interop export", "gate baseline", "gate check"}),
     # Where corpus cases are read/written.
     "--corpus-dir": frozenset({"corpus add", "phase0 run"}),
     # The A3 claim axis (C8). Shared by every surface that can evaluate a claim at
     # the instance level; `replay` and `corpus add` evaluate no instance-level
     # verdict, and `interop correlate` attaches existing verdicts only. `gate
     # baseline` evaluates the claim at bank time, so it can disable the axis.
-    "--no-claim-axis": frozenset({"verify", "phase0 run", "corpus run", "gate baseline"}),
+    # `gate check` evaluates the claim on BOTH sides of the comparison, so it can
+    # disable it too.
+    "--no-claim-axis": frozenset({"verify", "phase0 run", "corpus run", "gate baseline", "gate check"}),
     # The INTERACTIVE A3 author surface: `belay verify` takes the author command as a
     # flag; the batch surfaces are env-only (`BELAY_CLAIM_AUTHOR`) by design (plan
     # open question, decided at plan time). `gate baseline` mirrors verify: a bank
-    # whose expected set includes a claim needs the author surface.
-    "--claim-author": frozenset({"verify", "gate baseline"}),
+    # whose expected set includes a claim needs the author surface. `gate check`
+    # mirrors it the same way: a stored claim can only be re-derived and compared
+    # when an author is supplied at check time.
+    "--claim-author": frozenset({"verify", "gate baseline", "gate check"}),
+    # The identity fallback for pre-record captures: `gate baseline` banks under
+    # the override, `gate check` resolves the same baseline by it. Two surfaces,
+    # one flag — the gate's join key.
+    "--run-id": frozenset({"gate baseline", "gate check"}),
 }
 
 

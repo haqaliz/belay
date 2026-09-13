@@ -1586,6 +1586,139 @@ def _cmd_gate_baseline(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_gate_check(args: argparse.Namespace) -> int:
+    """`belay gate check <trace>` — did the new capture regress its baseline?
+
+    Re-verifies the banked baseline's OWN trace against the STORED policy (its
+    invariants, server command(s), replays, timeout — never re-resolved, and
+    there is deliberately NO --invariants/--replays/--timeout here: the policy is
+    the banked one, and an operator who wants a different policy re-banks),
+    verifies the new capture under that SAME policy, and diffs the two verdict
+    sets by the pure decision table. Exit 0 = comparison ran and nothing
+    regressed (named abstentions/shape/drift may be present); 1 = a grounded
+    regression; 2 = preflight, outcome rendered UNVERIFIED + named cause — never
+    a false clean, never a false regression.
+
+    `--server`/`--shell-server` OVERRIDE the stored boundary (default = stored);
+    `--manifest-dir` names the capture's manifests, defaulting to the
+    `<stem>.manifests` sibling ONLY when it exists; `--run-id` is the fallback
+    identity for pre-record captures; the A3 author resolves exactly as
+    `belay verify` resolves it. `--json` renders the SAME report as one JSON
+    document (gate.json schema 1) — one computation, two renderers — and the
+    exit codes are unchanged.
+    """
+    from belay.gate.check import (
+        GatePreflight,
+        check_gate,
+        render_json,
+        render_json_preflight,
+        report_dict,
+        report_lines,
+    )
+    from belay.verify.author import SubprocessAuthor, author_from_env
+
+    json_mode = args.json
+    trace_path = Path(args.trace)
+    if not trace_path.exists():
+        message = f"belay: trace not found: {trace_path}"
+        if json_mode:
+            _emit(render_json_preflight(args.trace, None, "TRACE_NOT_FOUND"))
+        else:
+            _emit(message)
+        return 2
+
+    # The capture's manifests: explicit, or the trace's `<stem>.manifests`
+    # sibling ONLY when it exists (the mint convention); absent either, the flag
+    # is required — never a guessed manifest location.
+    manifest_dir = None
+    if args.manifest_dir is not None:
+        manifest_dir = Path(args.manifest_dir)
+    else:
+        sibling = trace_path.parent / (trace_path.stem + ".manifests")
+        if sibling.is_dir():
+            manifest_dir = sibling
+    if manifest_dir is None:
+        message = (
+            "belay: --manifest-dir is required: no <stem>.manifests sibling exists "
+            "beside the trace, so the run's snapshot manifests cannot be found"
+        )
+        if json_mode:
+            _emit(render_json_preflight(args.trace, None, "MANIFEST_DIR_REQUIRED"))
+        else:
+            _emit(message)
+        return 2
+    if not manifest_dir.is_dir():
+        message = f"belay: --manifest-dir is not a directory: {manifest_dir}"
+        if json_mode:
+            _emit(render_json_preflight(args.trace, None, "MANIFEST_DIR_MISSING"))
+        else:
+            _emit(message)
+        return 2
+
+    # The SHELL boundary override, the same single-string shape `belay verify
+    # --shell-server` carries; fail-closed on a string shlex cannot tokenize.
+    shell_server_command = None
+    if args.shell_server is not None:
+        try:
+            shell_server_command = shlex.split(args.shell_server)
+        except ValueError as exc:
+            message = (
+                f"belay: --shell-server could not be parsed as a shell command "
+                f"({exc}): {args.shell_server!r}"
+            )
+            if json_mode:
+                _emit(render_json_preflight(args.trace, None, "SHELL_SERVER_UNPARSEABLE"))
+            else:
+                _emit(message)
+            return 2
+
+    # The A3 author, resolved exactly as `belay verify` resolves it.
+    claim_author = None
+    if not args.no_claim_axis:
+        if args.claim_author is not None:
+            try:
+                claim_author = SubprocessAuthor(tuple(shlex.split(args.claim_author)))
+            except ValueError as exc:
+                message = (
+                    f"belay: --claim-author could not be parsed as a shell command "
+                    f"({exc}): {args.claim_author!r}"
+                )
+                if json_mode:
+                    _emit(render_json_preflight(args.trace, None, "CLAIM_AUTHOR_UNPARSEABLE"))
+                else:
+                    _emit(message)
+                return 2
+        else:
+            claim_author = author_from_env()
+
+    try:
+        result = check_gate(
+            trace_path,
+            root_dir=Path("baselines") / "local",
+            manifest_dir=manifest_dir,
+            server_override=args.server,
+            shell_server_override=shell_server_command,
+            run_id_override=args.run_id,
+            claim_author=claim_author,
+        )
+    except GatePreflight as exc:
+        if json_mode:
+            _emit(render_json_preflight(args.trace, exc.run_id, exc.cause))
+        else:
+            _emit(f"belay: {exc}")
+            _emit(f"  outcome: UNVERIFIED [{exc.cause}] — never PASS")
+            _emit("  nothing was compared.")
+        return 2
+
+    if json_mode:
+        _emit(render_json(result))
+    else:
+        for line in report_lines(report_dict(result)):
+            _emit(line)
+
+    return {"clean": 0, "regression": 1, "preflight": 2}[result.comparison.exit_reason]
+
+
 def _cmd_corpus_run(args: argparse.Namespace) -> int:
     """`belay corpus run [corpus_dir]` — re-verify every case; exit non-zero IFF a REGRESSION.
 
@@ -3503,6 +3636,111 @@ def _parser() -> argparse.ArgumentParser:
         help="the MCP server to replay against; everything after --server is its command",
     )
     gate_baseline.set_defaults(func=_cmd_gate_baseline)
+
+    gate_check = gate.add_parser(
+        "check",
+        help="compare a new capture against its banked baseline; fail the build on a grounded regression",
+        description=(
+            "Answer \"did the new agent version break a previously-passing trajectory?\" "
+            "in CI, grounded in re-execution: re-verify the baseline's OWN stored trace "
+            "against the STORED policy (proving replayability — an unrestorable baseline "
+            "is a named abstention, never a regression — and surfacing engine drift), "
+            "verify the new capture under that SAME policy, and diff the two verdict sets "
+            "by a pure decision table. A dimension the baseline held PASS/WARN on that now "
+            "FAILs is a REGRESSION (exit 1); named abstentions, shape changes and drift "
+            "are reported and exit 0; a missing baseline or identity is a preflight "
+            "(exit 2), outcome UNVERIFIED + named cause — never a false clean, never a "
+            "false regression.\n\n"
+            "THE POLICY IS THE BANKED ONE: there is deliberately no --invariants / "
+            "--replays / --timeout here — the baseline stores the resolved A1 list, the "
+            "replays count, the timeout and the server command it was verified under, and "
+            "both sides of this comparison re-verify against exactly that. An operator "
+            "who wants a different policy re-banks with `belay gate baseline`. "
+            "--server / --shell-server OVERRIDE the stored boundary (default: the stored "
+            "command); WRITE --shell-server BEFORE --server (--server is a remainder and "
+            "swallows everything after it).\n\n"
+            "Manifests: the capture's snapshot manifests, via --manifest-dir; absent it, "
+            "the trace's <stem>.manifests sibling is used when it exists (the mint "
+            "convention), else --manifest-dir is required. --run-id is the identity "
+            "fallback for pre-record captures. --json renders the SAME report as one "
+            "JSON document (gate.json schema 1) — one computation, two renderers — and "
+            "UNVERIFIED never renders as PASS on either."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    gate_check.add_argument("trace", help="the trace file (.jsonl) to gate")
+    gate_check.add_argument(
+        "--manifest-dir",
+        default=None,
+        help=(
+            "where the gate persisted THIS capture's snapshot manifests; default: the "
+            "trace's <stem>.manifests sibling when it exists (the mint convention), "
+            "else required"
+        ),
+    )
+    gate_check.add_argument(
+        "--run-id",
+        default=None,
+        help=(
+            "check against the baseline banked under this run id instead of the trace's "
+            "recorded run_identity (BELAY_RUN_ID); the fallback for pre-record captures. "
+            "An id with empty or '..' path segments, whitespace or control characters is "
+            "refused"
+        ),
+    )
+    gate_check.add_argument(
+        "--json",
+        action="store_true",
+        help="emit ONE JSON document (gate.json schema 1) instead of the human report; exit codes are unchanged",
+    )
+    gate_check.add_argument(
+        "--shell-server",
+        default=None,
+        metavar="CMD",
+        help=(
+            "OVERRIDE the stored shell boundary: the SHELL server command, as ONE quoted "
+            "string; a recorded run_process turn replays against it instead of the "
+            "stored command, while every other turn still replays against --server. "
+            "WRITE THIS BEFORE --server (--server is a remainder and swallows "
+            "everything after it). The string is shlex-split at use; an un-lexable "
+            "string is a hard error. Absent -> the baseline's stored command is used"
+        ),
+    )
+    gate_check.add_argument(
+        "--no-claim-axis",
+        action="store_true",
+        help=(
+            "disable the A3 claim axis ENTIRELY on both sides of this comparison: no "
+            "claim re-derivation runs, and a stored claim that is not re-derived is "
+            "reported as a named abstention, never a fail. Wins over --claim-author "
+            "and BELAY_CLAIM_AUTHOR"
+        ),
+    )
+    gate_check.add_argument(
+        "--claim-author",
+        default=None,
+        metavar="CMD",
+        help=(
+            "the claim-author command, as ONE quoted string (shlex-split at use): "
+            "BELAY_CLAIM_AUTHOR as a flag, applied to BOTH sides of the comparison. "
+            "The command receives the claim plus the observed facts on stdin and "
+            "answers with an executable check; EXECUTION decides (A3 never PASSes). "
+            "An un-lexable string is a hard error. Absent -> BELAY_CLAIM_AUTHOR "
+            "decides; no author configured -> the axis is ABSENT"
+        ),
+    )
+    gate_check.add_argument(
+        "--server",
+        nargs=argparse.REMAINDER,
+        default=[],
+        metavar="cmd ...",
+        help=(
+            "OVERRIDE the stored replay boundary: the MCP server to replay both sides "
+            "against; everything after --server is its command. Absent -> the "
+            "baseline's stored server command is used"
+        ),
+    )
+    gate_check.set_defaults(func=_cmd_gate_check)
 
     invariant_library = subcommands.add_parser(
         "invariant-library",
