@@ -303,7 +303,11 @@ def check_gate(
                     verdict=verdict,
                     manifest_dir=manifest_dir,
                     server_command=_resolve_server_command(
-                        verdict.tool_name, server_command, shell_server_command
+                        verdict.tool_name,
+                        server_command,
+                        list(shell_server_command)
+                        if shell_server_command is not None
+                        else None,
                     ),
                     invariants=invariants,
                     human_label="pending",
