@@ -40,10 +40,24 @@ from belay.approval.gate import (
     DECISION_DENY,
     Hold,
 )
+from belay.declared import DECLARED_TRUE, NOT_DECLARED, declared_state
 
 #: The directory contract's file names, stated once.
 REQUESTS_DIR = "requests"
 DECISIONS_DIR = "decisions"
+
+#: The annotations the live cache mirrors from `annotations._tool_facts`, in the
+#: same fixed order, so aspect 4's derived reader and aspect 5's report consume
+#: the same vocabulary. `_MEANINGFUL_ONLY_WHEN_MUTABLE` and `_INCOHERENCE_RULE`
+#: mirror `annotations.py`'s — the incoherence judgment is the same judgment.
+_ANNOTATIONS = ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint")
+_MEANINGFUL_ONLY_WHEN_MUTABLE = ("destructiveHint", "idempotentHint")
+_INCOHERENCE_RULE = "meaningful only when readOnlyHint == false"
+
+#: The id→method tracker is capped exactly like `trace.py`'s `_REQUEST_INDEX_MAX`:
+#: monotone, so bounded by eviction rather than drained. The oldest goes when the
+#: table is full, never the newest.
+_TRACK_MAX = 4096
 
 #: How long the poll waits between reads, and how long a hold may wait for a
 #: human before it is denied fail-closed. Both overridable at the composition
@@ -218,8 +232,134 @@ def refusal_bytes(hold: Any, cause: str) -> bytes:
     ).encode("utf-8") + b"\n"
 
 
+def _tool_facts(tool: Any) -> Optional[dict]:
+    """A tool's tri-state facts in the `annotations.py:60-81` shape.
+
+    Mirrored rather than imported: the live cache must not depend on the
+    trace-derivation module it is the live counterpart of. The shape equality is
+    pinned by a test comparing both outputs on the same tool dict.
+    """
+    if not isinstance(tool, dict) or not isinstance(tool.get("name"), str):
+        return None
+    declared = tool.get("annotations")
+    has_object = isinstance(declared, dict)
+    states = {
+        annotation: (
+            declared_state(declared.get(annotation), annotation in declared)
+            if isinstance(declared, dict)
+            else declared_state(None, False)
+        )
+        for annotation in _ANNOTATIONS
+    }
+    return {
+        "name": tool["name"],
+        # Kept separately from the per-annotation states: "carried no annotations
+        # object" and "carried an empty one" are different things a server did,
+        # and both produce four `not-declared`s.
+        "annotations_object": "present" if has_object else "absent",
+        "annotations": states,
+        "incoherence": _incoherence(states),
+    }
+
+
+def _incoherence(states: dict[str, dict]) -> list[dict]:
+    if states["readOnlyHint"]["state"] != DECLARED_TRUE:
+        return []
+    return [
+        {"annotation": annotation, "rule": _INCOHERENCE_RULE, "readOnlyHint": DECLARED_TRUE}
+        for annotation in _MEANINGFUL_ONLY_WHEN_MUTABLE
+        if states[annotation]["state"] != NOT_DECLARED
+    ]
+
+
+def _id_key(identifier: Any) -> Optional[tuple]:
+    """The tracker's key, with the id's type in it — `1` and `true` and `"1"`
+    are different ids on the wire and must stay different keys here. A container
+    id is illegal JSON-RPC and unhashable besides, so it gets no key at all.
+    """
+    if isinstance(identifier, (list, dict)):
+        return None
+    return (type(identifier).__name__, identifier)
+
+
+def _messages(frame: bytes) -> tuple:
+    """The one JSON-RPC message in `frame`, or () on any unreadable input.
+
+    Batches are deliberately not unpacked here: the gate never holds a batch,
+    and the cache has nothing to track for one.
+    """
+    try:
+        message = json.loads(frame)
+    except (ValueError, RecursionError):
+        return ()
+    return (message,) if isinstance(message, dict) else ()
+
+
+class ToolFacts:
+    """The live annotation cache: facts current at hold time, fed from the wire.
+
+    Tracks c2s request ids → method (bounded FIFO, mirroring `index.py`), and
+    repopulates the per-tool facts from a `tools/list` response whose id names a
+    tracked `tools/list` request. A response to anything else, and a response
+    whose id is untracked, never updates facts. A `notifications/tools/list_changed`
+    frame clears the facts until the next snapshot — a stale declaration must
+    not outlive the server's own notice that it changed.
+    """
+
+    def __init__(self, track_max: int = _TRACK_MAX) -> None:
+        self._requests: dict[tuple, str] = {}
+        self._track_max = track_max
+        self._facts: dict[str, dict] = {}
+
+    def observe_c2s(self, frame: bytes) -> None:
+        """Track request ids → method; a `tools/list_changed` clears the facts."""
+        for message in _messages(frame):
+            if not isinstance(message, dict):
+                continue
+            if message.get("method") == "notifications/tools/list_changed":
+                self._facts.clear()
+                continue
+            if not isinstance(message.get("method"), str):
+                continue
+            key = _id_key(message.get("id"))
+            if key is None:
+                continue
+            self._requests[key] = message["method"]
+            while len(self._requests) > self._track_max:
+                del self._requests[next(iter(self._requests))]
+
+    def observe_s2c(self, frame: bytes) -> None:
+        """Repopulate facts from a tracked `tools/list` response; clear on notice."""
+        for message in _messages(frame):
+            if not isinstance(message, dict):
+                continue
+            if message.get("method") == "notifications/tools/list_changed" and "id" not in message:
+                self._facts.clear()
+                continue
+            if "method" in message or ("result" not in message and "error" not in message):
+                continue
+            key = _id_key(message.get("id"))
+            if key is None or self._requests.get(key) != "tools/list":
+                continue
+            result = message.get("result")
+            if not isinstance(result, dict) or not isinstance(result.get("tools"), list):
+                continue
+            self._facts.clear()
+            for tool in result["tools"]:
+                facts = _tool_facts(tool)
+                if facts is not None:
+                    self._facts[facts["name"]] = facts
+
+    def facts_for(self, tool: str) -> dict:
+        """The facts the wire last declared for `tool`, or {} when none were
+        observed — and an unknown tool's absence of facts is exactly that, never
+        a declaration about it."""
+        return self._facts.get(tool, {})
+
+
 __all__ = [
     "ApprovalDirUnusable",
+    "ToolFacts",
     "await_decision",
     "read_decision",
     "refusal_bytes",

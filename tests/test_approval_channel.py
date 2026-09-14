@@ -297,3 +297,112 @@ def test_the_data_names_hold_decision_and_cause():
     assert approval["hold_id"] == "0-blast"
     assert approval["decision"] == "deny"
     assert approval["cause"] == "APPROVAL_TIMEOUT"
+
+
+# --- Phase 4: the live annotation cache from the wire ------------------------
+
+
+def tools_list_request(id_=2):
+    return {"jsonrpc": "2.0", "id": id_, "method": "tools/list"}
+
+
+def tools_list_response(id_=2, tools=None):
+    return {"jsonrpc": "2.0", "id": id_, "result": {"tools": tools or []}}
+
+
+def tool(name, annotations=None):
+    return {"name": name, "inputSchema": {"type": "object", "properties": {}}, **(
+        {"annotations": annotations} if annotations is not None else {}
+    )}
+
+
+def cache():
+    from belay.approval.channel import ToolFacts
+
+    return ToolFacts(track_max=2)
+
+
+def test_c2s_tracking_is_a_bounded_fifo_that_drops_the_oldest():
+    facts = cache()
+    facts.observe_c2s(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).encode())
+    facts.observe_c2s(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "initialize"}).encode())
+    facts.observe_c2s(json.dumps({"jsonrpc": "2.0", "id": 3, "method": "tools/list"}).encode())
+    # The cap is 2: id 1 was evicted, so its tools/list response updates nothing.
+    facts.observe_s2c(json.dumps(tools_list_response(id_=1, tools=[tool("blast", {"destructiveHint": True})])).encode())
+    assert facts.facts_for("blast") == {}
+    facts.observe_s2c(json.dumps(tools_list_response(id_=3, tools=[tool("blast", {"destructiveHint": True})])).encode())
+    assert facts.facts_for("blast")["annotations"]["destructiveHint"]["state"] == "declared-true"
+
+
+def test_a_tracked_tools_list_response_populates_facts_in_the_annotations_shape():
+    from belay.annotations import _tool_facts
+
+    facts = cache()
+    declared = {"destructiveHint": True, "readOnlyHint": False}
+    facts.observe_c2s(json.dumps(tools_list_request()).encode())
+    facts.observe_s2c(json.dumps(tools_list_response(tools=[tool("blast", declared)])).encode())
+
+    live = facts.facts_for("blast")
+    # The shape is exactly the annotations.py:60-81 shape — pinned against the
+    # derivation's own builder so aspect 4's reader and aspect 5's report can
+    # consume the same vocabulary.
+    assert live == _tool_facts(tool("blast", declared))
+    assert live["name"] == "blast"
+    assert live["annotations_object"] == "present"
+    assert live["annotations"]["destructiveHint"] == {"state": "declared-true"}
+    assert live["annotations"]["readOnlyHint"] == {"state": "declared-false"}
+    assert live["annotations"]["openWorldHint"] == {"state": "not-declared"}
+    assert live["incoherence"] == []
+
+
+def test_a_response_to_a_non_tools_list_request_never_updates_facts():
+    facts = cache()
+    facts.observe_c2s(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "initialize"}).encode())
+    facts.observe_s2c(
+        json.dumps({"jsonrpc": "2.0", "id": 2, "result": {"serverInfo": {"name": "x"}}}).encode()
+    )
+    assert facts.facts_for("anything") == {}
+
+
+def test_an_untracked_id_never_updates_facts():
+    facts = cache()
+    facts.observe_s2c(json.dumps(tools_list_response(id_=99, tools=[tool("blast")])).encode())
+    assert facts.facts_for("blast") == {}
+
+
+def test_list_changed_clears_and_the_next_snapshot_repopulates():
+    facts = cache()
+    facts.observe_c2s(json.dumps(tools_list_request(id_=2)).encode())
+    facts.observe_s2c(json.dumps(tools_list_response(id_=2, tools=[tool("blast", {"destructiveHint": True})])).encode())
+    assert facts.facts_for("blast") != {}
+    facts.observe_s2c(json.dumps({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}).encode())
+    assert facts.facts_for("blast") == {}
+    facts.observe_c2s(json.dumps(tools_list_request(id_=5)).encode())
+    facts.observe_s2c(json.dumps(tools_list_response(id_=5, tools=[tool("blast", {"destructiveHint": False})])).encode())
+    assert facts.facts_for("blast")["annotations"]["destructiveHint"]["state"] == "declared-false"
+
+
+def test_absent_and_literal_null_annotations_are_never_confused():
+    facts = cache()
+    facts.observe_c2s(json.dumps(tools_list_request(id_=1)).encode())
+    facts.observe_s2c(
+        json.dumps(
+            tools_list_response(
+                id_=1,
+                tools=[
+                    tool("plain"),  # no annotations object at all
+                    tool("nulled", {"readOnlyHint": None}),  # a real null
+                ],
+            )
+        ).encode()
+    )
+    # Absent: not-declared, and the object's absence is recorded separately.
+    plain = facts.facts_for("plain")
+    assert plain["annotations_object"] == "absent"
+    assert plain["annotations"]["destructiveHint"] == {"state": "not-declared"}
+    # Literal null IS a declaration — a value the wire really sent — and it is
+    # not a boolean, so it is declared-non-boolean, never not-declared.
+    nulled = facts.facts_for("nulled")
+    assert nulled["annotations_object"] == "present"
+    assert nulled["annotations"]["readOnlyHint"]["state"] == "declared-non-boolean"
+    assert nulled["annotations"]["readOnlyHint"]["declared_value"] is None
