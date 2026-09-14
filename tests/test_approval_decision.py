@@ -33,7 +33,6 @@ from belay.approval.gate import (
     APPROVED,
     DENIED,
     TRIGGER_ANNOTATIONS,
-    Hold,
     HoldRegistry,
     is_tools_call,
     make_hold_id,
@@ -285,7 +284,7 @@ def test_waited_seconds_come_from_the_injected_clock():
     clock = FakeClock()
     reg = registry(clock)
     approved = reg.register(1, "write_file", ("destructiveHint",), timeout=10.0)
-    timed_out = reg.register(2, "run_process", ("openWorldHint",), timeout=10.0)
+    reg.register(2, "run_process", ("openWorldHint",), timeout=10.0)
 
     clock.t = 5.0
     reg.resolve(approved.hold_id, "approve")
