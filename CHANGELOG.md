@@ -5,6 +5,20 @@ All notable changes to Belay are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0 — until then,
 `0.x` minor bumps may include changes that would be breaking under strict semver.
 
+## [0.32.0] - 2026-09-14
+
+**CI regression gate** — Phase 2's first goal ships (PR #35): a team can bank a
+known-good run and fail the build when a new agent version breaks a previously-passing
+trajectory. `belay gate baseline <trace>` verifies a capture and stores a
+self-contained, replayable baseline keyed by run identity (`BELAY_RUN_ID`, recorded
+in the trace as a new `run_identity` record); `belay gate check <trace>` re-verifies
+the baseline and the new capture under the same stored policy and fails on any
+PASS/WARN-to-FAIL transition, with every other difference (new UNVERIFIED turns,
+shape changes, baseline drift, unreplayable baselines) reported by named cause and
+never a silent pass. Regressions bank into the failure corpus by default
+(`--no-ingest` to opt out) and recompute `MATCH` through `belay corpus run`. No
+verdict axis or published number moves; UNVERIFIED is never rendered as PASS.
+
 ## [0.31.0] - 2026-09-12
 
 **Invariant library** — R3's "library of common invariants" mitigation ships
