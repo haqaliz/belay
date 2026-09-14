@@ -28,7 +28,13 @@ import json
 import pytest
 
 from belay.approval.gate import (
+    APPROVAL_SHUTDOWN,
+    APPROVAL_TIMEOUT,
+    APPROVED,
+    DENIED,
     TRIGGER_ANNOTATIONS,
+    Hold,
+    HoldRegistry,
     is_tools_call,
     request_id,
     tool_name,
@@ -172,3 +178,153 @@ def test_triggers_for_malformed_entries_yield_no_triggers():
     """A bare string state or a non-dict facts value is doubt, not a declaration."""
     assert triggers_for({"destructiveHint": DECLARED_TRUE}) == []
     assert triggers_for(["destructiveHint"]) == []
+
+
+class FakeClock:
+    """A monotonic clock the test can wind; `time.monotonic`-shaped."""
+
+    def __init__(self, t: float = 0.0) -> None:
+        self.t = t
+
+    def __call__(self) -> float:
+        return self.t
+
+
+def registry(clock: FakeClock) -> HoldRegistry:
+    return HoldRegistry(clock=clock)
+
+
+def test_hold_resolves_exactly_once():
+    """A resolved hold never re-resolves — the second resolution is refused by name.
+
+    The registry forgets a resolved hold (it is no longer pending), so its
+    refusal reads "unknown hold"; the hold itself refuses with "already
+    resolved". Both refusals are by name.
+    """
+    clock = FakeClock()
+    reg = registry(clock)
+    hold = reg.register(1, "write_file", ("destructiveHint",), timeout=10.0)
+
+    resolved = reg.resolve(hold.hold_id, "approve")
+    assert resolved.cause == APPROVED
+    assert resolved.decision == "approve"
+    assert reg.pending() == []
+
+    with pytest.raises(ValueError, match="unknown hold"):
+        reg.resolve(hold.hold_id, "approve")
+    with pytest.raises(ValueError, match="already resolved"):
+        hold.resolve(APPROVED, decision="approve", now=clock.t)
+
+
+def test_registry_refuses_an_unknown_hold():
+    reg = registry(FakeClock())
+    with pytest.raises(ValueError, match="unknown hold"):
+        reg.resolve("0-never_registered", "approve")
+
+
+def test_registry_refuses_an_unknown_decision():
+    reg = registry(FakeClock())
+    hold = reg.register(1, "write_file", ("destructiveHint",), timeout=10.0)
+    with pytest.raises(ValueError, match="not a human decision"):
+        reg.resolve(hold.hold_id, "maybe")
+
+
+def test_a_decision_observed_before_the_deadline_wins():
+    """At the deadline the timeout owns the resolution; just before it, the human does."""
+    clock = FakeClock()
+    reg = registry(clock)
+    early = reg.register(1, "write_file", ("destructiveHint",), timeout=10.0)
+    late = reg.register(2, "write_file", ("destructiveHint",), timeout=10.0)
+
+    clock.t = 9.999
+    resolved = reg.resolve(early.hold_id, "deny")
+    assert resolved.cause == DENIED
+    assert resolved.decision == "deny"
+
+    clock.t = 10.0
+    with pytest.raises(ValueError, match="deadline reached"):
+        reg.resolve(late.hold_id, "approve")
+
+
+def test_sweep_resolves_each_expired_hold_as_timeout():
+    clock = FakeClock()
+    reg = registry(clock)
+    soon = reg.register(1, "write_file", ("destructiveHint",), timeout=10.0)
+    later = reg.register(2, "run_process", ("openWorldHint",), timeout=100.0)
+
+    clock.t = 50.0
+    timed_out = reg.sweep()
+
+    assert [h.hold_id for h in timed_out] == [soon.hold_id]
+    assert soon.cause == APPROVAL_TIMEOUT
+    assert soon.decision is None
+    assert later.cause is None
+    assert reg.pending() == [later]
+
+
+def test_timeout_decisions_are_exact_functions_of_the_injected_clock():
+    """Same clock readings, same operations, same outcomes — nothing else enters."""
+    def run() -> list[dict]:
+        clock = FakeClock()
+        reg = registry(clock)
+        hold = reg.register(1, "write_file", ("destructiveHint",), timeout=10.0)
+        clock.t = 10.0
+        (timed_out,) = reg.sweep()
+        clock.t = 20.0
+        reg.close_all()
+        return [
+            {"cause": hold.cause, "waited": hold.waited, "deadline": hold.deadline},
+            {"cause": timed_out.cause, "waited": timed_out.waited},
+        ]
+
+    assert run() == run()
+
+
+def test_waited_seconds_come_from_the_injected_clock():
+    clock = FakeClock()
+    reg = registry(clock)
+    approved = reg.register(1, "write_file", ("destructiveHint",), timeout=10.0)
+    timed_out = reg.register(2, "run_process", ("openWorldHint",), timeout=10.0)
+
+    clock.t = 5.0
+    reg.resolve(approved.hold_id, "approve")
+    clock.t = 10.0
+    (timed_out_hold,) = reg.sweep()
+
+    assert approved.waited == 5.0
+    assert timed_out_hold.waited == 10.0
+
+
+def test_close_all_resolves_every_pending_hold_as_shutdown():
+    clock = FakeClock()
+    reg = registry(clock)
+    holds = [
+        reg.register(i, "write_file", ("destructiveHint",), timeout=10.0) for i in range(3)
+    ]
+
+    closed = reg.close_all()
+
+    assert [h.hold_id for h in closed] == [h.hold_id for h in holds]
+    assert all(h.cause == APPROVAL_SHUTDOWN for h in holds)
+    assert reg.pending() == []
+    assert reg.sweep() == []
+
+
+def test_pending_holds_are_bounded_and_the_oldest_is_evicted():
+    """At the cap the OLDEST pending hold is evicted — never the newest — and
+    resolved, so nothing pending silently disappears (every hold is pending or
+    carries a closed cause)."""
+    clock = FakeClock()
+    reg = registry(clock)
+    first = reg.register(0, "write_file", ("destructiveHint",), timeout=10.0)
+
+    for i in range(1, 4096):
+        reg.register(i, "write_file", ("destructiveHint",), timeout=10.0)
+    assert len(reg) == 4096
+
+    newest = reg.register(4096, "run_process", ("openWorldHint",), timeout=10.0)
+
+    assert len(reg) == 4096
+    assert first.cause == APPROVAL_SHUTDOWN
+    assert newest in reg.pending()
+    assert reg.pending()[0] is not first
