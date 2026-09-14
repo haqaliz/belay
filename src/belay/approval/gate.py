@@ -138,6 +138,21 @@ def triggers_for(facts: Any) -> list[str]:
     ]
 
 
+def make_hold_id(tool: str, seq: int) -> str:
+    """`<seq>-<tool-slug>`: deterministic, unique per `seq`, filesystem-safe.
+
+    The slug follows the `_safe_case_id` discipline (`corpus/add.py:122`): any
+    character that is not alphanumeric / `-` / `_` / `.` becomes `_`, so an
+    awkward tool name cannot escape a directory or name an unwriteable path. A
+    tool name that leaves no alphanumeric character (empty, `..`, `///`) falls
+    back to `tool` so the id never carries an empty segment.
+    """
+    slug = "".join(c if (c.isalnum() or c in "-_.") else "_" for c in tool)
+    if not any(c.isalnum() for c in slug):
+        slug = "tool"
+    return f"{seq}-{slug}"
+
+
 @dataclass
 class Hold:
     """One `tools/call` held pending a human decision.
@@ -223,11 +238,8 @@ class HoldRegistry:
             oldest = self._pending.pop(oldest_id)
             oldest.resolve(APPROVAL_SHUTDOWN, now=self._clock())
         now = self._clock()
-        slug = "".join(c if (c.isalnum() or c in "-_.") else "_" for c in tool)
-        if not any(c.isalnum() for c in slug):
-            slug = "tool"
         hold = Hold(
-            hold_id=f"{self._seq}-{slug}",
+            hold_id=make_hold_id(tool, self._seq),
             request_id=request_id,
             tool=tool,
             triggers=tuple(triggers),

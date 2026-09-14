@@ -36,6 +36,7 @@ from belay.approval.gate import (
     Hold,
     HoldRegistry,
     is_tools_call,
+    make_hold_id,
     request_id,
     tool_name,
     triggers_for,
@@ -328,3 +329,46 @@ def test_pending_holds_are_bounded_and_the_oldest_is_evicted():
     assert first.cause == APPROVAL_SHUTDOWN
     assert newest in reg.pending()
     assert reg.pending()[0] is not first
+
+
+def test_make_hold_id_shape_and_determinism():
+    """`<seq>-<tool-slug>`, and the same inputs always produce the same id."""
+    assert make_hold_id("write_file", 0) == "0-write_file"
+    assert make_hold_id("write_file", 0) == make_hold_id("write_file", 0)
+
+
+def test_make_hold_id_unique_across_a_sequence():
+    ids = [make_hold_id("write_file", seq) for seq in range(10)]
+    assert len(set(ids)) == 10
+
+
+def test_make_hold_id_sanitizes_pathological_tool_names():
+    """No path separator and no empty segment can survive the slug."""
+    assert make_hold_id("a/b", 3) == "3-a_b"
+    assert make_hold_id("a b", 3) == "3-a_b"
+    assert make_hold_id("a\\b", 3) == "3-a_b"
+    assert make_hold_id("a..b", 3) == "3-a..b"
+    assert make_hold_id("../x", 3) == "3-.._x"
+    assert make_hold_id("café", 3) == "3-café"
+    assert make_hold_id("🔥", 3) == "3-tool"
+
+
+def test_make_hold_id_empty_slug_falls_back():
+    """A tool name that leaves no alphanumeric character gets the `tool` slug —
+    an empty segment would be unwriteable and `..` alone would name a parent."""
+    for pathological in ("", "///", "..", "___"):
+        assert make_hold_id(pathological, 5) == "5-tool"
+
+
+def test_registry_hold_ids_carry_the_tool_and_never_reuse_the_sequence():
+    clock = FakeClock()
+    reg = registry(clock)
+    first = reg.register(1, "write_file", ("destructiveHint",), timeout=10.0)
+    second = reg.register(2, "run_process", ("openWorldHint",), timeout=10.0)
+
+    assert first.hold_id == "0-write_file"
+    assert second.hold_id == "1-run_process"
+
+    reg.close_all()
+    third = reg.register(3, "write_file", ("destructiveHint",), timeout=10.0)
+    assert third.hold_id == "2-write_file"
