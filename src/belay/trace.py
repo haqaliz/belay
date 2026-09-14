@@ -63,6 +63,15 @@ KINDS = (
     # The ci-regression-gate's run identity: recorded once at proxy start when
     # `BELAY_RUN_ID` is set, as a first-class kind the reader returns in records.
     "run_identity",
+    # The approval gate's first-class observations (see
+    # docs/planning/approval-gate/trace-observations/). `approval_hold` is
+    # written when a hold begins (tool, request id, triggering annotation
+    # states, timeout); `approval_decision` is written before the refusal is
+    # delivered or an approved frame forwarded. Both are FACTS written via
+    # `record` — they never cross the server boundary, never enter the request
+    # index, and never produce a `frame` record.
+    "approval_hold",
+    "approval_decision",
 )
 
 # The three states the `state_handle` slot may hold, and the reason it is three
