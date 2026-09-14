@@ -186,10 +186,43 @@ def await_decision(
         sleep(min(poll_interval, remaining) if remaining > 0 else 0.0)
 
 
+def refusal_bytes(hold: Any, cause: str) -> bytes:
+    """The JSON-RPC 2.0 error answering a denied `tools/call`, newline-terminated.
+
+    Carries the request's OWN id (string, int, or null — never normalised), code
+    `-32000`, a message naming the gate and the tool, and
+    `data.belay.approval` naming the hold id, `decision: "deny"`, and the cause.
+    Produced here, where the serialiser lives; delivered through the injected
+    `deliver` callback, never through the proxy's forwarder. The fault path may
+    hand a minimal stand-in (an id and tool with no hold) when no hold could be
+    opened.
+    """
+    return json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": getattr(hold, "request_id", None),
+            "error": {
+                "code": -32000,
+                "message": f"approval gate denied {getattr(hold, 'tool', 'tool')}",
+                "data": {
+                    "belay": {
+                        "approval": {
+                            "hold_id": getattr(hold, "hold_id", None),
+                            "decision": DECISION_DENY,
+                            "cause": cause,
+                        }
+                    }
+                },
+            },
+        }
+    ).encode("utf-8") + b"\n"
+
+
 __all__ = [
     "ApprovalDirUnusable",
     "await_decision",
     "read_decision",
+    "refusal_bytes",
     "validate_dir",
     "write_request",
 ]

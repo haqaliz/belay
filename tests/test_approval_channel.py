@@ -256,3 +256,44 @@ def test_the_loop_never_sleeps_longer_than_min_interval_remaining():
     )
     assert result is None
     assert sleeps == [5.0]  # min(10, 5) — never past the remaining time
+
+
+# --- Phase 3: the named JSON-RPC refusal -------------------------------------
+
+
+def refusal_of(hold_obj, cause="DENIED"):
+    from belay.approval.channel import refusal_bytes
+
+    raw = refusal_bytes(hold_obj, cause)
+    assert raw.endswith(b"\n"), "the refusal must be newline-terminated"
+    return json.loads(raw)
+
+
+def test_the_refusal_is_a_jsonrpc_2_0_error_with_the_requests_own_id():
+    message = refusal_of(hold(request_id=9))
+    assert message["jsonrpc"] == "2.0"
+    assert message["id"] == 9
+    assert message["error"]["code"] == -32000
+
+
+def test_a_string_request_id_round_trips():
+    assert refusal_of(hold(request_id="call-42"))["id"] == "call-42"
+
+
+def test_a_null_request_id_round_trips():
+    assert refusal_of(hold(request_id=None))["id"] is None
+
+
+def test_the_message_names_the_gate_and_the_tool():
+    message = refusal_of(hold(tool="blast"))
+    text = message["error"]["message"]
+    assert "approval gate" in text
+    assert "blast" in text
+
+
+def test_the_data_names_hold_decision_and_cause():
+    message = refusal_of(hold(hold_id="0-blast"), cause="APPROVAL_TIMEOUT")
+    approval = message["error"]["data"]["belay"]["approval"]
+    assert approval["hold_id"] == "0-blast"
+    assert approval["decision"] == "deny"
+    assert approval["cause"] == "APPROVAL_TIMEOUT"
