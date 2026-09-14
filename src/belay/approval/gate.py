@@ -30,6 +30,13 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
+from belay.declared import DECLARED_TRUE
+
+#: The annotations that trigger a hold when declared true. `readOnlyHint` and
+#: `idempotentHint` describe the tool's contract with the caller; `destructiveHint`
+#: and `openWorldHint` are the ones that put state the human cares about at risk.
+TRIGGER_ANNOTATIONS = ("destructiveHint", "openWorldHint")
+
 
 def _load(frame: bytes) -> Any:
     """Parse a frame copy, or None on any unreadable input — never raise."""
@@ -87,3 +94,22 @@ def request_id(frame: bytes) -> Any:
     if not isinstance(message, dict):
         return None
     return message.get("id")
+
+
+def triggers_for(facts: Any) -> list[str]:
+    """The declared-true trigger annotations among `facts`, in a fixed order.
+
+    `facts` is the annotations.py shape — `{annotation: {"state": tri-state}}`
+    — so the live cache (aspect 2) feeds `triggers_for` directly. Every
+    tri-state except `declared-true` yields no trigger; a missing annotation,
+    a non-dict entry, an absent dict, and `readOnlyHint`/`idempotentHint` (not
+    trigger annotations) all yield no trigger.
+    """
+    if not isinstance(facts, dict):
+        return []
+    return [
+        annotation
+        for annotation in TRIGGER_ANNOTATIONS
+        if isinstance(facts.get(annotation), dict)
+        and facts[annotation].get("state") == DECLARED_TRUE
+    ]

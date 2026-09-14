@@ -27,7 +27,20 @@ import json
 
 import pytest
 
-from belay.approval.gate import is_tools_call, request_id, tool_name
+from belay.approval.gate import (
+    TRIGGER_ANNOTATIONS,
+    is_tools_call,
+    request_id,
+    tool_name,
+    triggers_for,
+)
+from belay.declared import (
+    DECLARED_FALSE,
+    DECLARED_NON_BOOLEAN,
+    DECLARED_TRUE,
+    NOT_DECLARED,
+    declared_state,
+)
 
 
 def tools_call(**overrides: object) -> bytes:
@@ -114,3 +127,48 @@ def test_request_id_null_is_distinct_from_absent():
     guarantees the key was present."""
     assert request_id(tools_call(id=None)) is None
     assert request_id(b"garbage") is None
+
+
+def facts_of(**states: str) -> dict:
+    """A `{annotation: {"state": tri-state}}` dict, the annotations.py shape."""
+    return {annotation: {"state": state} for annotation, state in states.items()}
+
+
+def test_triggers_for_declared_true_on_both_trigger_annotations():
+    """`destructiveHint` and `openWorldHint` declared-true both trigger, in order."""
+    facts = facts_of(destructiveHint=DECLARED_TRUE, openWorldHint=DECLARED_TRUE)
+    assert triggers_for(facts) == ["destructiveHint", "openWorldHint"]
+
+
+def test_triggers_for_only_declared_true_triggers():
+    """Every other tri-state yields no trigger, on every annotation."""
+    for annotation in TRIGGER_ANNOTATIONS:
+        for state in (DECLARED_FALSE, NOT_DECLARED, DECLARED_NON_BOOLEAN):
+            assert triggers_for(facts_of(**{annotation: state})) == []
+    # And on the non-trigger annotations, even declared-true is silent.
+    for annotation in ("readOnlyHint", "idempotentHint"):
+        assert triggers_for(facts_of(**{annotation: DECLARED_TRUE})) == []
+
+
+def test_triggers_for_absent_facts_yield_no_triggers():
+    assert triggers_for(None) == []
+    assert triggers_for({}) == []
+    assert triggers_for(facts_of(readOnlyHint=DECLARED_TRUE)) == []
+
+
+def test_triggers_for_consumes_the_annotations_shape():
+    """Facts built the way `annotations.py` builds them feed `triggers_for` directly."""
+    declared = {"destructiveHint": True, "readOnlyHint": False, "openWorldHint": None}
+    facts = {
+        annotation: declared_state(declared.get(annotation), annotation in declared)
+        for annotation in ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint")
+    }
+    assert facts["destructiveHint"]["state"] == DECLARED_TRUE
+    assert facts["openWorldHint"]["state"] == DECLARED_NON_BOOLEAN
+    assert triggers_for(facts) == ["destructiveHint"]
+
+
+def test_triggers_for_malformed_entries_yield_no_triggers():
+    """A bare string state or a non-dict facts value is doubt, not a declaration."""
+    assert triggers_for({"destructiveHint": DECLARED_TRUE}) == []
+    assert triggers_for(["destructiveHint"]) == []
