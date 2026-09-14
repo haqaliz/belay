@@ -651,6 +651,19 @@ def main(argv: list[str]) -> int:
     scope = os.environ.get("BELAY_SANDBOX_SCOPE")
     snapshot_dir = os.environ.get("BELAY_SNAPSHOT_DIR")
     run_id = os.environ.get("BELAY_RUN_ID")
+    approval_dir = os.environ.get("BELAY_APPROVAL_DIR")
+    approval_timeout = os.environ.get("BELAY_APPROVAL_TIMEOUT")
+
+    if approval_dir and not trace_dir:
+        # Loud, at startup, for the same reason every other refusal here is:
+        # a gate with no trace would deny or forward with no record of why, and
+        # the record is the whole point of the gate.
+        print(
+            "belay: BELAY_APPROVAL_DIR is set but BELAY_TRACE_DIR is not; "
+            "refusing to start rather than run an approval gate that records nothing",
+            file=sys.stderr,
+        )
+        return 2
 
     if not trace_dir and not scope:
         # Nothing to record and nothing to gate: C1's byte pump, reached by the
@@ -690,8 +703,9 @@ def main(argv: list[str]) -> int:
     # to reach a serialiser even by accident: the forwarding path has no name
     # for `json` in scope. main() is the composition root and the only place that
     # knows a recorder exists — and now the only place that knows a gate does.
-    # `belay.sandbox.gate` imports `json` and is welcome to: it parses a copy to
-    # READ it, and nothing it returns can reach the bytes being forwarded.
+    # `belay.sandbox.gate` and `belay.approval.channel` import `json` and are
+    # welcome to: they parse a copy to READ it, and nothing they return can
+    # reach the bytes being forwarded.
     writer = None
     if trace_dir:
         from belay.trace import TraceWriter
@@ -702,17 +716,82 @@ def main(argv: list[str]) -> int:
             # assigned to this run. Unset means absent — never a placeholder.
             writer.record("run_identity", run_id=run_id)
 
+    approval = None
+    peer_lock = None
+    if approval_dir:
+        # Imported locally, never at module scope, like `belay.sandbox.gate`
+        # above: the approval channel owns the serialiser.
+        from belay.approval.channel import ApprovalGate
+
+        # The refusal shares the client fd with the s2c forwarder; `run` wraps
+        # that forwarder with this same lock, so a refusal can never land inside
+        # a server frame (see `_LockedChunkWriter`).
+        peer_lock = threading.Lock()
+
+        def deliver(refusal: bytes) -> None:
+            with peer_lock:
+                _write_all(sys.stdout.fileno(), refusal)
+
+        try:
+            timeout = (
+                float(approval_timeout) if approval_timeout is not None else 300.0
+            )
+            approval = ApprovalGate(
+                approval_dir,
+                timeout=timeout,
+                poll_interval=0.1,
+                record=writer.record,
+                deliver=deliver,
+            )
+        except ValueError as exc:
+            # An unusable approval dir or timeout, refused before the first
+            # byte moves: a gate that cannot serve its channel would either
+            # deny everything (APPROVAL_FAULT) or guess, and neither is a
+            # startable posture.
+            print(f"belay: {exc}; refusing to start", file=sys.stderr)
+            if writer is not None:
+                writer.close()
+            return 2
+
+    before_frame = None
+    if approval is not None:
+        from belay.approval import compose
+
+        before_frame = compose(approval, None)
+
     try:
         if not scope:
-            return run(argv, capture=writer)
-        return _contained_run(argv, scope, snapshot_dir, writer)
+            return run(
+                argv,
+                capture=writer,
+                before_frame=before_frame,
+                peer_lock=peer_lock,
+            )
+        return _contained_run(
+            argv,
+            scope,
+            snapshot_dir,
+            writer,
+            approval=approval,
+            peer_lock=peer_lock,
+        )
     finally:
+        if approval is not None:
+            # The operator closes the gate: every pending hold is resolved
+            # APPROVAL_SHUTDOWN and the resolutions are recorded — before the
+            # writer closes, so the records land inside the connection window.
+            approval.close_all()
         if writer is not None:
             writer.close()
 
 
 def _contained_run(
-    argv: list[str], scope: str, snapshot_dir: str, writer
+    argv: list[str],
+    scope: str,
+    snapshot_dir: str,
+    writer,
+    approval=None,
+    peer_lock=None,
 ) -> int:
     """Spawn the server INSIDE the sandbox, gating and snapshotting each turn.
 
@@ -729,6 +808,7 @@ def _contained_run(
     """
     from contextlib import ExitStack
 
+    from belay.approval import compose
     from belay.sandbox.gate import TurnGate
     from belay.sandbox.launch import DenialCapture, contained, network_policy
     from belay.snapshot.bth1 import UnsupportedPlatform
@@ -761,8 +841,9 @@ def _contained_run(
         return run(
             spawn.argv,
             capture=writer,
-            before_frame=gate.before_frame,
+            before_frame=compose(approval, gate.before_frame),
             stderr_capture=DenialCapture(writer) if writer is not None else None,
+            peer_lock=peer_lock,
         )
 
 
