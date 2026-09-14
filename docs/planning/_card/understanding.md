@@ -1,73 +1,69 @@
-# Understanding — ci-regression-gate
+# Approval Gate — understanding note
 
-Source: `docs/planning/_card/issue.md` (belay-next handoff brief). Phase 2 of `bbf` — read 2026-09-13 in the worktree.
+Source: `docs/planning/_card/issue.md` (belay-next handoff, 2026-09-14).
+Research: full code-path map in the session report (proxy, trace, annotations,
+index, gate, corpus, cli, console, MRTR).
 
 ## What the work really is
 
-`docs/ROADMAP.md:305` (Phase 2 goal #1): *"CI regression gate: a past run replays in CI;
-a new agent version that breaks a previously-passing trajectory fails the build. This is
-the first surface with obvious budget attached."* And the Phase-1→2 gate's buildable
-criterion (`ROADMAP.md:295`): ≥2 users ask for a shared/CI surface. The brief's engine
-slice: **baseline-bank + re-run compare** — diff a new capture's trajectory/verdicts
-against a stored baseline, report divergence with named causes, bankable into the corpus.
+Phase 2's second goal (`docs/ROADMAP.md:307`): the MCP stdio proxy holds a
+`tools/call` whose tool declares `destructiveHint: true` or `openWorldHint: true`
+(tri-state — absent is never a trigger) pending human approval; approve forwards the
+frame verbatim, deny returns a named refusal to the client. The trace records the
+hold/deny as observations. The console (C7) is the natural approval surface but the
+engine slice ships first — wiring minimal, acceptance tests carry the shape.
 
-## What exists already (the engine is built, not greenfield)
+## Key findings (file:line)
 
-- `belay verify` — per-turn (`verify_turn`, `src/belay/verify/turn.py:321`) + instance-level
-  trajectory (`evaluate_trajectory_rules`, `src/belay/verify/trajectory.py:575`) + A3 claim
-  (`evaluate_claim`, `src/belay/verify/claims.py:248`); `--json` machine surface with pinned
-  contract (`src/belay/verify/json.py`, `tests/fixtures/verify_json_snapshot.json`).
-- `belay phase0 run` — batch verify of a trace dir with `_verify_one_trace(ingest=False)`
-  as a pure measurement (`src/belay/phase0/runner.py:241`).
-- `belay corpus run` — the detector-side regression gate: `classify_case`/`_divergences`
-  (`src/belay/corpus/run.py:436,289`) compute **exact equality of the recomputed sub-verdict
-  set** vs the banked expected, with named `(axis, kind)` divergence rows and SKIP-first
-  discipline (`_SKIP_CAUSES`). **This is the comparison model the CI gate generalizes.**
-- Corpus case schema v5 (`src/belay/corpus/case.py:93`) — expected verdict + stored trace +
-  self-contained manifests; `add_case` deterministic ids (`-turnN` / `-trajectory` / `-claim`).
+- **The hold hook already exists.** `_FrameHold` + `before_frame` (`proxy.py:202-291`)
+  reassembles frames and delays forwarding until the hook returns; forwarding is
+  otherwise unconditional (`proxy.py:254`) and the proxy cannot parse JSON
+  (`tests/test_import_guard.py:114-140`). A DENY needs a new primitive: suppress the
+  forward and write refusal bytes (produced by a json-capable module imported at the
+  composition root, exactly like `belay.sandbox.gate` at `proxy.py:617-618`).
+- **Trigger vocabulary is captured.** Tri-state facts in `declared.py:32-54`
+  (`declared-true` / `declared-false` / `not-declared` / `declared-non-boolean`); the
+  four annotations incl. `destructiveHint`/`openWorldHint` are captured per-tool in
+  `annotation_snapshot` (`annotations.py:60-81`). A default is never a declaration.
+- **Hold/deny records must be additive non-frame kinds.** `writer.record(kind, ...)`
+  is the documented extension point (`trace.py:483-493`); unknown kinds are skipped
+  by old readers (`replay/reader.py:139-152`), the `run_identity` precedent
+  (`trace.py:65`, `gate/baseline.py:135-233`). Recording a synthesized refusal as a
+  `frame` would park 2.0 s in `_await_request` and read as `response-without-request`
+  — the hold/deny carrier must be a new kind, never a frame.
+- **Holds are per tool-call, never per request-id.** MRTR retries carry NEW ids
+  (`CAPABILITY_ROADMAP.md:43-62`; `index.py:42-58`) — an id-keyed hold is bypassed
+  by the retry the spec mandates. Key on `method == "tools/call"` + `params.name`.
+- **Deadlock analysis is favorable.** The c2s pump parking on approval cannot wedge
+  the pipe: the s2c pump is a separate thread that keeps draining the server, and
+  the client is blocked on its own read, not on the proxy. The bounded-deadline
+  discipline still applies (a parked c2s frame delays nothing on s2c, but an
+  unattended agent must not block forever → deny on deadline, fail-closed).
+- **Banking wrinkle (open question).** `add_case` requires the target turn's
+  `state_handle` to be `present` (`corpus/add.py:338-349`) — a never-forwarded call
+  has no frame record, no snapshot, and no re-executable verdict. Constructing an
+  expected verdict for something that never ran would violate the honesty contract.
+  Recommend: hold/deny as trace records + named reporting (absent-never-zero) on the
+  verify surface; banking deferred by name until a case shape is decided.
+- **No approval concept exists anywhere** (`src/belay/`, `console/` — grep zero
+  hits). Clean slate; `_FrameHold` is a delay only, never a refusal.
+- **Flag parity guard** (`tests/test_cli_flag_parity.py`): any new approval flag
+  shared by ≥2 replay-bearing surfaces must be declared there.
 
-## The gap
+## Verdict axis
 
-- **No run identity in the trace.** Identity is the filename stem only (`trace-<stamp>-<uuid8>`);
-  `trace_id` is explicitly NOT unique across stages (`src/belay/phase0/population.py:12-16`).
-  A baseline bank needs its own keying (task/instance id). The trace format's unknown-kind
-  rule (`src/belay/trace.py:50-54`) makes a new `baseline`/`run_metadata` record kind addable
-  without a schema break — but nothing today distinguishes two captures of "the same" run.
-- **No capture metadata** (model/prompt/task): proxy records wire bytes only; `claim` text is
-  the sole session-level datum.
-- **No "expected trajectory" concept at run level** — only at case level (v4 `trajectory`,
-  v5 `claim` expected declarations). The bank generalizes "expected verdict of one case" →
-  "expected verdicts of a whole run".
-- Trajectory comparability is **verdict-dimension** comparison, not structural: per-turn
-  status/cause/sub-verdict set + trajectory status/cause/evidence_count + claim status.
+None of A1/A2/A3 emit a verdict for a held call — nothing ran. The approval gate is
+a **containment** surface (the sandbox axis): it prevents execution rather than
+judging it. Deny is an observation (the agent attempted a risky action), never a
+verdict; UNVERIFIED-never-PASS and the coverage line discipline apply to any
+reporting surface.
 
-## Open questions for the PRD (user to decide)
+## Open questions
 
-1. **Banking unit**: baseline = the `--json` report of a verified capture (verdicts only),
-   or the full trace + manifests (replayable re-verification, like a corpus case)? Replayable
-   costs snapshots on disk; verdict-only costs re-derivation fidelity.
-2. **Identity key**: how does the gate know two captures are "the same run"? Explicit
-   `--run-id` at capture time (env/flag), or filename convention, or a new trace record?
-3. **CI shape**: engine-side CLI only (e.g. `belay gate check --baseline … --capture …`)?
-   Where does the build's "new agent version" come from — a fresh capture driven through the
-   proxy in CI, or a user-supplied trace?
-4. **Divergence policy**: which diffs FAIL the gate vs UNVERIFIED (substrate mismatch,
-   nondeterministic turns, toolset changed)? Corpus precedent: SKIP-first, exact-equality.
-
-## Axes / guardrails
-
-- Deterministic spine (A1/A2 + trajectory) only — no LLM, no A3 involvement. Banking keeps
-  the corpus compounding (moat #2).
-- Not an agent framework; not an LLM judge; UNVERIFIED never rendered as PASS; named causes
-  on every abstention; no raw-data egress (baselines stay on the box).
-- Flag-parity guard (`tests/test_cli_flag_parity.py`) will demand a deliberate widening
-  decision for any new replay-bearing surface carrying `--shell-server`/`--timeout`.
-
-## Contradictions surfaced (flag, don't paper over)
-
-- The belay-next handoff says "no ☐ item remains open, so this pick starts Phase 2" — true of
-  the launch checklist (`CHECKLIST.md` gate TRUE 2026-09-06), BUT the Phase-1→2 gate's
-  demand-pull criterion (≥2 users ask for a shared/CI surface) is **not** satisfied; the
-  roadmap lists the CI gate as Phase-2 goal #1 anyway. The brief's caveat — "roadmap-listed,
-  not demand-validated; keep CLI/compose wiring minimal; acceptance tests carry the shape" —
-  is the agreed answer: build the engine slice thin, treat UI/compose as follow-on.
+1. Trigger vocabulary — both `destructiveHint` and `openWorldHint` declared-true?
+2. Deadline semantics — fail-closed deny (recommend) vs fail-open forward?
+3. Approval channel for the engine slice — control file/dir polling vs named pipe
+   vs HTTP listener (console wiring later)?
+4. Banking — defer by name (recommend) vs a constructed case shape?
+5. Refusal shape — JSON-RPC error with the request's id; which code?
+6. Activation — env toggle, absent = byte-identical passthrough (recommend)?
