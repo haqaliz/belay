@@ -29,6 +29,9 @@ dist/
 # (caught before push, and reset). A guardrail that depends on every future caller picking
 # the one blessed subdirectory is not a guardrail.
 /corpus/
+# The ci-regression-gate's banked baselines — traces + snapshots + expected verdicts, as
+# sensitive as the trace itself and never uploaded (no raw-data egress).
+/baselines/
 
 # Pre-installed MCP servers for the eval mint. Installed OUTSIDE the sandbox by a
 # documented `npm install` (see eval/README.md) and invoked by absolute `node` path:
