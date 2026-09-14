@@ -16,7 +16,14 @@ import time
 
 import pytest
 
-from belay.proxy import BoundedPeek, _FrameHold, _pump, _write_all, run
+from belay.proxy import (
+    BoundedPeek,
+    ObservationDesync,
+    _FrameHold,
+    _pump,
+    _write_all,
+    run,
+)
 
 
 # --- helpers ----------------------------------------------------------------
@@ -138,3 +145,86 @@ def test_a_bare_newline_is_never_ruled_on_even_by_a_denying_hook():
     peer, reports = drive(deny, [b"\n", b'{"id":1}\n'])
     assert peer == b"\n"
     assert reports == [[], [b'{"id":1}']]
+
+
+# --- Phase 2: the observer sees the delivered stream -------------------------
+
+
+def test_feed_drops_a_fully_suppressed_frame():
+    seen = collect([b'{"a":1}\n{"b":2}\n'], [[b'{"a":1}']])
+    assert seen == [(b'{"b":2}', False)]
+
+
+def test_feed_drops_a_suppressed_frame_spanning_two_chunks():
+    seen = collect(
+        [b'{"id', b'":1}\n{"id":2}\n'],
+        [[], [b'{"id":1}']],
+    )
+    assert seen == [(b'{"id":2}', False)]
+
+
+def test_multiple_suppressions_in_one_feed_apply_in_order():
+    seen = collect(
+        [b'{"id":1}\n{"id":2}\n{"id":3}\n'],
+        [[b'{"id":1}', b'{"id":3}']],
+    )
+    assert seen == [(b'{"id":2}', False)]
+
+
+def test_a_suppression_mismatching_the_stream_kills_observation():
+    seen = []
+    peek = BoundedPeek(lambda frame, truncated: seen.append((frame, truncated)))
+    with pytest.raises(ObservationDesync):
+        peek.feed(b'{"id":1}\n', [b'{"id":99}'])
+    # the delivered frame was observed before the desync was named
+    assert seen == [(b'{"id":1}', False)]
+
+
+def test_a_suppression_mismatching_the_buffer_prefix_kills_observation():
+    peek = BoundedPeek(lambda frame, truncated: None)
+    peek.feed(b'{"id', ())
+    with pytest.raises(ObservationDesync):
+        peek.feed(b'":1}\n', [b'{"id":99}'])
+
+
+def test_pump_observes_the_delivered_stream_when_the_hook_suppresses():
+    def deny_only_2(frame, direction):
+        return frame != b'{"id":2}'
+
+    src_r, src_w = os.pipe()
+    dst_r, dst_w = os.pipe()
+    seen = []
+    peek = BoundedPeek(lambda frame, truncated: seen.append((frame, truncated)))
+    held = _FrameHold(deny_only_2, "c2s")
+    try:
+        _write_all(src_w, b'{"id":1}\n{"id":2}\n{"id":3}\n')
+        os.close(src_w)
+        _pump(src_r, dst_w, peek, None, held)
+    finally:
+        os.close(src_r)
+        os.close(dst_w)
+
+    assert _read_all(dst_r) == b'{"id":1}\n{"id":3}\n'
+    assert seen == [(b'{"id":1}', False), (b'{"id":3}', False)]
+
+
+def test_pump_observed_stream_equals_the_delivered_stream_across_writes():
+    def deny_only_2(frame, direction):
+        return frame != b'{"id":2}'
+
+    src_r, src_w = os.pipe()
+    dst_r, dst_w = os.pipe()
+    seen = []
+    peek = BoundedPeek(lambda frame, truncated: seen.append((frame, truncated)))
+    held = _FrameHold(deny_only_2, "c2s")
+    try:
+        for part in (b'{"id":1', b'}\n{"id":2', b'}\n{"id":3}\n'):
+            _write_all(src_w, part)
+        os.close(src_w)
+        _pump(src_r, dst_w, peek, None, held)
+    finally:
+        os.close(src_r)
+        os.close(dst_w)
+
+    assert _read_all(dst_r) == b'{"id":1}\n{"id":3}\n'
+    assert seen == [(b'{"id":1}', False), (b'{"id":3}', False)]

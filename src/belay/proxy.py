@@ -133,6 +133,12 @@ class _CaptureGate:
             self._stopped = True
 
 
+class ObservationDesync(Exception):
+    """The forwarder suppressed bytes the observer cannot find in its copy of
+    the stream. Observation of this direction dies; forwarding is unaffected.
+    """
+
+
 class BoundedPeek:
     """Reassembles newline-delimited frames from a *copy* of a stream.
 
@@ -145,16 +151,48 @@ class BoundedPeek:
         self._buf = bytearray()
         self._truncated = False
 
-    def feed(self, chunk: bytes) -> None:
+    def feed(self, chunk: bytes, suppressed: Sequence[bytes] = ()) -> None:
+        """Reassemble and emit the chunk's frames, minus the suppressed ones.
+
+        A suppressed frame was never delivered to the peer, so the observer
+        must not emit it. Its bytes are a suffix of the reassembly buffer (the
+        cross-chunk prefix) plus a head of this chunk, plus the newline; feed
+        verifies both halves against the suppressed frame exactly and drops
+        them. A mismatch — the forwarder claims to have suppressed bytes the
+        observer cannot find in its copy of the stream — raises
+        `ObservationDesync`, which `_observe` names and which kills observation
+        of this direction. Never a silent corruption.
+        """
+        suppressed = list(suppressed)
         start = 0
         while True:
             newline = chunk.find(b"\n", start)
             if newline == -1:
+                if suppressed:
+                    raise ObservationDesync(
+                        "the forwarder suppressed frame(s) whose bytes do not "
+                        f"match the observed stream: {suppressed!r}"
+                    )
                 self._accumulate(chunk[start:])
                 return
-            self._accumulate(chunk[start:newline])
+            frame = bytes(self._buf)
+            head = chunk[start:newline]
+            if suppressed and self._matches(frame, head, suppressed[0]):
+                suppressed.pop(0)
+                self._buf.clear()
+                self._truncated = False
+                start = newline + 1
+                continue
+            self._accumulate(head)
             self._emit()
             start = newline + 1
+
+    def _matches(self, frame: bytes, head: bytes, suppressed_frame: bytes) -> bool:
+        """The suppressed frame's bytes are a buffer suffix plus a chunk head."""
+        return (
+            frame == suppressed_frame[: len(frame)]
+            and head == suppressed_frame[len(frame) : len(frame) + len(head)]
+        )
 
     def _accumulate(self, data: bytes) -> None:
         if self._truncated:
@@ -347,12 +385,13 @@ def _observe(
     peek: Optional[BoundedPeek],
     chunk: bytes,
     on_capture_error: Optional[CaptureError],
+    suppressed: Optional[Sequence[bytes]] = None,
 ) -> Optional[BoundedPeek]:
     """Feed the observed copy. Returns the peek, or None once it has died."""
     if peek is None:
         return None
     try:
-        peek.feed(chunk)
+        peek.feed(chunk, () if suppressed is None else suppressed)
     except Exception as exc:
         # Observation is best-effort; forwarding is not. But dropping `peek`
         # silently would leave the trace ending early while looking complete,
@@ -378,8 +417,9 @@ def _pump(
 
     `forward` defaults to `_write_all`, which is what every direction used before
     the gate existed and what every ungated direction still uses. A gated one
-    swaps in `_FrameHold`, which delays a frame but never edits it — the loop
-    below hands over the chunk it read and never learns which one it got.
+    swaps in `_FrameHold`, which delays a frame but never edits it — and reports
+    which frames it suppressed, so the loop can hand the suppression report to
+    the peek and keep the observer consistent with the DELIVERED stream.
     """
     try:
         while True:
@@ -392,20 +432,21 @@ def _pump(
             if not chunk:
                 return
             try:
-                forward(dst_fd, chunk)
+                suppressed = forward(dst_fd, chunk)
             except OSError as exc:
                 # The chunk is already out of the source pipe — Belay has taken
                 # custody of bytes it can no longer deliver. Returning here would
                 # drop them with no record and no cause, which is the same silent
                 # loss this module exists to prevent. So: observe what existed,
-                # then name why forwarding stopped.
+                # then name why forwarding stopped. Observed with no suppression:
+                # if `forward` raised mid-chunk, its report is unreliable.
                 peek = _observe(peek, chunk, on_capture_error)
                 _name(on_capture_error, exc)
                 return
             # Deliberately after the forward, and it stays there: forwarding must
             # never wait on the recorder. Only the failure path above observes
             # first, and only because there is no forward left to delay.
-            peek = _observe(peek, chunk, on_capture_error)
+            peek = _observe(peek, chunk, on_capture_error, suppressed)
     finally:
         if forward is not _write_all:
             # Only a hold can owe the peer anything at exit, and `_write_all`
