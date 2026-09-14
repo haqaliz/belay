@@ -364,6 +364,32 @@ class _FrameHold:
             _name(self._on_capture_error, exc)
 
 
+class _LockedChunkWriter:
+    """Make a forwarder's chunk writes atomic under a shared peer lock.
+
+    The approval gate writes its refusal to the same fd the s2c forwarder
+    writes — the client's stdout — and a refusal landing inside a server frame
+    would corrupt the client's stream. One lock per chunk write (and per flush)
+    makes each side's contribution whole: the refusal holds the same lock
+    around its own `_write_all`. The c2s forwarder is never wrapped: it writes
+    to the server, which the refusal never touches.
+    """
+
+    def __init__(self, inner: Forward, lock: threading.Lock) -> None:
+        self._inner = inner
+        self._lock = lock
+
+    def __call__(self, fd: int, chunk: bytes) -> Optional[Sequence[bytes]]:
+        with self._lock:
+            return self._inner(fd, chunk)
+
+    def flush(self, fd: int) -> None:
+        with self._lock:
+            flush = getattr(self._inner, "flush", None)
+            if flush is not None:
+                flush(fd)
+
+
 def _forwarder(
     before_frame: Optional[BeforeFrame],
     direction: str,
@@ -520,6 +546,7 @@ def run(
     capture: Optional[CaptureSink] = None,
     before_frame: Optional[BeforeFrame] = None,
     stderr_capture: Optional[CaptureSink] = None,
+    peer_lock: Optional[threading.Lock] = None,
 ) -> int:
     """Proxy `command`'s stdio, optionally observing it and gating its requests.
 
@@ -547,6 +574,12 @@ def run(
     (`belay.sandbox.launch.DenialCapture`), and it is a separate sink from `capture`
     for exactly that reason: same machinery, different question, and one of them
     must not start recording the other's records.
+
+    `peer_lock`, when set, makes the s2c forwarder's writes atomic with any other
+    holder of the lock — the approval gate's refusal delivery shares the client
+    fd, and a refusal interleaving mid-frame with a server frame would corrupt the
+    client's stream. The c2s forwarder is never wrapped: it writes to the server,
+    which the refusal never touches. Ungated runs install none of this.
     """
     proc = subprocess.Popen(
         command,
@@ -569,6 +602,12 @@ def run(
             daemon=True,
         ).start()
 
+        s2c_forward = _forwarder(before_frame, "s2c", s2c_error)
+        if peer_lock is not None:
+            # The refusal shares the client fd with this direction; a refusal
+            # mid-frame would corrupt the client's stream. One lock per chunk
+            # write makes each side's contribution whole.
+            s2c_forward = _LockedChunkWriter(s2c_forward, peer_lock)
         forwarders = [
             threading.Thread(
                 target=_pump,
@@ -577,7 +616,7 @@ def run(
                     sys.stdout.fileno(),
                     s2c_peek,
                     s2c_error,
-                    _forwarder(before_frame, "s2c", s2c_error),
+                    s2c_forward,
                 ),
             ),
             threading.Thread(

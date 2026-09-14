@@ -20,6 +20,7 @@ from belay.proxy import (
     BoundedPeek,
     ObservationDesync,
     _FrameHold,
+    _LockedChunkWriter,
     _pump,
     _write_all,
     run,
@@ -228,3 +229,102 @@ def test_pump_observed_stream_equals_the_delivered_stream_across_writes():
 
     assert _read_all(dst_r) == b'{"id":1}\n{"id":3}\n'
     assert seen == [(b'{"id":1}', False), (b'{"id":3}', False)]
+
+
+# --- Phase 3: frame-atomic client writes under a shared lock -----------------
+
+
+def test_without_the_lock_a_refusal_can_land_inside_a_frame():
+    """The control: the same slow write, no lock, interleaves."""
+    dst_r, dst_w = os.pipe()
+    half1_written = threading.Event()
+    refusal_done = threading.Event()
+
+    def slow_inner(fd, chunk):
+        half = len(chunk) // 2
+        _write_all(fd, chunk[:half])
+        half1_written.set()
+        refusal_done.wait(timeout=5)
+        _write_all(fd, chunk[half:])
+
+    chunk = b"{" + b"x" * 64 + b"}\n"
+
+    def refusal_writer():
+        half1_written.wait(timeout=5)
+        os.write(dst_w, b'{"refusal":1}\n')
+        refusal_done.set()
+
+    t = threading.Thread(target=refusal_writer)
+    t.start()
+    slow_inner(dst_w, chunk)
+    t.join()
+    os.close(dst_w)
+
+    half = len(chunk) // 2
+    assert _read_all(dst_r) == chunk[:half] + b'{"refusal":1}\n' + chunk[half:]
+
+
+def test_the_locked_writer_keeps_a_refusal_out_of_a_frame():
+    dst_r, dst_w = os.pipe()
+    lock = threading.Lock()
+    half1_written = threading.Event()
+
+    def slow_inner(fd, chunk):
+        half = len(chunk) // 2
+        _write_all(fd, chunk[:half])
+        half1_written.set()
+        time.sleep(0.2)
+        _write_all(fd, chunk[half:])
+
+    wrapped = _LockedChunkWriter(slow_inner, lock)
+    chunk = b"{" + b"x" * 64 + b"}\n"
+
+    def refusal_writer():
+        half1_written.wait(timeout=5)
+        with lock:
+            os.write(dst_w, b'{"refusal":1}\n')
+
+    t = threading.Thread(target=refusal_writer)
+    t.start()
+    wrapped(dst_w, chunk)
+    t.join()
+    os.close(dst_w)
+
+    assert _read_all(dst_r) == chunk + b'{"refusal":1}\n'
+
+
+def test_locked_writer_flush_is_a_noop_when_the_inner_has_no_flush():
+    wrapped = _LockedChunkWriter(_write_all, threading.Lock())
+    wrapped.flush(12345)  # must not raise, must not invent a flush
+
+
+def test_locked_writer_flush_delegates_to_a_frame_hold():
+    dst_r, dst_w = os.pipe()
+    held = _FrameHold(lambda frame, direction: True, "s2c")
+    wrapped = _LockedChunkWriter(held, threading.Lock())
+
+    wrapped(dst_w, b'{"id":1')  # partial: held, not forwarded
+    wrapped.flush(dst_w)
+    os.close(dst_w)
+
+    assert _read_all(dst_r) == b'{"id":1'
+
+
+def test_run_with_a_peer_lock_stays_byte_identical(monkeypatch):
+    client_r, client_w = os.pipe()
+    out_r, out_w = os.pipe()
+    monkeypatch.setattr(sys, "stdin", _Fd(client_r))
+    monkeypatch.setattr(sys, "stdout", _Fd(out_w))
+
+    os.write(client_w, b'{"id":1}\n')
+    os.close(client_w)
+
+    status = run(
+        [sys.executable, "-c", "import sys; sys.stdout.write(sys.stdin.read())"],
+        peer_lock=threading.Lock(),
+    )
+    assert status == 0
+    os.close(out_w)
+    os.close(client_r)
+
+    assert _read_all(out_r) == b'{"id":1}\n'
