@@ -30,16 +30,12 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from pathlib import Path
 
 import pytest
 
 from belay.approval.gate import (
-    APPROVAL_TIMEOUT,
-    APPROVED,
-    DECISION_APPROVE,
-    DECISION_DENY,
-    DENIED,
     Hold,
     make_hold_id,
 )
@@ -183,14 +179,16 @@ def poll(hold, reads, clock):
     from belay.approval.channel import await_decision
 
     sleeps = []
-    read = lambda hold_id: reads.pop(0) if reads else None
+
+    def read(hold_id):
+        return reads.pop(0) if reads else None
+
     return await_decision(
         hold, read=read, poll_interval=0.0, clock=clock, sleep=sleeps.append
     ), sleeps, clock.calls
 
 
 def test_decision_present_on_first_poll_wins_without_consulting_the_clock():
-    from belay.approval.gate import Hold
 
     h = hold()
     decision, sleeps, clock_calls = poll(
@@ -249,7 +247,10 @@ def test_the_loop_never_sleeps_longer_than_min_interval_remaining():
 
     h = hold(deadline=5.0)
     sleeps = []
-    read = lambda hold_id: None
+
+    def read(hold_id):
+        return None
+
     clock = FakeClock([0.0, 100.0])
     result = await_decision(
         h, read=read, poll_interval=10.0, clock=clock, sleep=sleeps.append
@@ -331,7 +332,7 @@ def test_c2s_tracking_is_a_bounded_fifo_that_drops_the_oldest():
     facts.observe_s2c(json.dumps(tools_list_response(id_=1, tools=[tool("blast", {"destructiveHint": True})])).encode())
     assert facts.facts_for("blast") == {}
     facts.observe_s2c(json.dumps(tools_list_response(id_=3, tools=[tool("blast", {"destructiveHint": True})])).encode())
-    assert facts.facts_for("blast")["annotations"]["destructiveHint"]["state"] == "declared-true"
+    assert facts.facts_for("blast")["destructiveHint"]["state"] == "declared-true"
 
 
 def test_a_tracked_tools_list_response_populates_facts_in_the_annotations_shape():
@@ -342,17 +343,20 @@ def test_a_tracked_tools_list_response_populates_facts_in_the_annotations_shape(
     facts.observe_c2s(json.dumps(tools_list_request()).encode())
     facts.observe_s2c(json.dumps(tools_list_response(tools=[tool("blast", declared)])).encode())
 
+    # The STORED record is exactly the annotations.py:60-81 shape — pinned
+    # against the derivation's own builder so aspect 4's reader and aspect 5's
+    # report can consume the same vocabulary.
+    stored = facts._facts["blast"]
+    assert stored == _tool_facts(tool("blast", declared))
+    assert stored["name"] == "blast"
+    assert stored["annotations_object"] == "present"
+    assert stored["incoherence"] == []
+    # The gate consumes the `{annotation: {"state": ...}}` mapping slice.
     live = facts.facts_for("blast")
-    # The shape is exactly the annotations.py:60-81 shape — pinned against the
-    # derivation's own builder so aspect 4's reader and aspect 5's report can
-    # consume the same vocabulary.
-    assert live == _tool_facts(tool("blast", declared))
-    assert live["name"] == "blast"
-    assert live["annotations_object"] == "present"
-    assert live["annotations"]["destructiveHint"] == {"state": "declared-true"}
-    assert live["annotations"]["readOnlyHint"] == {"state": "declared-false"}
-    assert live["annotations"]["openWorldHint"] == {"state": "not-declared"}
-    assert live["incoherence"] == []
+    assert live == _tool_facts(tool("blast", declared))["annotations"]
+    assert live["destructiveHint"] == {"state": "declared-true"}
+    assert live["readOnlyHint"] == {"state": "declared-false"}
+    assert live["openWorldHint"] == {"state": "not-declared"}
 
 
 def test_a_response_to_a_non_tools_list_request_never_updates_facts():
@@ -379,7 +383,7 @@ def test_list_changed_clears_and_the_next_snapshot_repopulates():
     assert facts.facts_for("blast") == {}
     facts.observe_c2s(json.dumps(tools_list_request(id_=5)).encode())
     facts.observe_s2c(json.dumps(tools_list_response(id_=5, tools=[tool("blast", {"destructiveHint": False})])).encode())
-    assert facts.facts_for("blast")["annotations"]["destructiveHint"]["state"] == "declared-false"
+    assert facts.facts_for("blast")["destructiveHint"]["state"] == "declared-false"
 
 
 def test_absent_and_literal_null_annotations_are_never_confused():
@@ -397,12 +401,294 @@ def test_absent_and_literal_null_annotations_are_never_confused():
         ).encode()
     )
     # Absent: not-declared, and the object's absence is recorded separately.
-    plain = facts.facts_for("plain")
+    plain = facts._facts["plain"]
     assert plain["annotations_object"] == "absent"
     assert plain["annotations"]["destructiveHint"] == {"state": "not-declared"}
     # Literal null IS a declaration — a value the wire really sent — and it is
     # not a boolean, so it is declared-non-boolean, never not-declared.
-    nulled = facts.facts_for("nulled")
+    nulled = facts._facts["nulled"]
     assert nulled["annotations_object"] == "present"
     assert nulled["annotations"]["readOnlyHint"]["state"] == "declared-non-boolean"
     assert nulled["annotations"]["readOnlyHint"]["declared_value"] is None
+
+
+# --- Phase 5: the hook surface ------------------------------------------------
+
+
+class ScriptedClock:
+    """Scripted readings; the readings must cover every call the gate makes."""
+
+    def __init__(self, readings):
+        self._readings = list(readings)
+        self.calls = 0
+
+    def __call__(self) -> float:
+        self.calls += 1
+        assert self._readings, f"scripted clock ran out after {self.calls} calls"
+        return self._readings.pop(0)
+
+
+class ParkClock:
+    """A scripted clock that parks deterministically: the SECOND reading (the
+    poll's first deadline check) sets `ready` and blocks until `release`, so a
+    test can drive `close_all` while a hold is provably mid-poll. Later readings
+    are free-running."""
+
+    def __init__(self):
+        self.ready = threading.Event()
+        self.release = threading.Event()
+        self.calls = 0
+
+    def __call__(self) -> float:
+        self.calls += 1
+        if self.calls == 1:
+            return 0.0  # register
+        if self.calls == 2:
+            self.ready.set()
+            self.release.wait(timeout=5)
+            return 1000.0  # the poll's first deadline check, unparked
+        return 5.0  # close_all, and any later resolution
+
+
+def gate(tmp_path, clock, timeout=300.0, record=None, deliver=None, sleep=None):
+    """An ApprovalGate over `tmp_path` with fake record/deliver and a shared
+    event log, so call-sequence assertions (M7) can pin record-before-refusal."""
+    from belay.approval.channel import ApprovalGate
+
+    events = []
+
+    def recorder(kind, **fields):
+        events.append(("record", kind, fields))
+
+    def deliverer(refusal):
+        events.append(("deliver", refusal))
+
+    g = ApprovalGate(
+        tmp_path,
+        timeout=timeout,
+        poll_interval=0.0,
+        clock=clock,
+        sleep=sleep if sleep is not None else (lambda _s: None),
+        record=record or recorder,
+        deliver=deliver or deliverer,
+    )
+    return g, events
+
+
+def seed_facts(g):
+    """The wire's normal path: a tools/list round trip declaring blast as
+    destructive — the facts `decide_c2s` reads at hold time."""
+    g.decide_c2s(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}).encode())
+    g.observe_s2c(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "result": {
+                    "tools": [
+                        {
+                            "name": "blast",
+                            "inputSchema": {"type": "object", "properties": {}},
+                            "annotations": {"destructiveHint": True},
+                        }
+                    ]
+                },
+            }
+        ).encode()
+    )
+
+
+def call_frame(name="blast", id_=7):
+    return json.dumps(
+        {"jsonrpc": "2.0", "method": "tools/call", "params": {"name": name, "arguments": {}}, "id": id_}
+    ).encode()
+
+
+def decisions(gate_dir):
+    return [
+        e for e in gate_dir if e[0] == "record" and e[1] == "approval_decision"
+    ]
+
+
+def test_an_approved_call_forwards_with_hold_and_decision_records(tmp_path):
+    clock = ScriptedClock([0.0, 0.0])
+    g, events = gate(tmp_path, clock)
+    seed_facts(g)
+    (tmp_path / "decisions" / "0-blast.json").write_text(
+        json.dumps({"decision": "approve", "reason": "looks right"})
+    )
+    assert g.decide_c2s(call_frame()) is True
+
+    body = json.loads((tmp_path / "requests" / "0-blast.json").read_text())
+    assert body["tool"] == "blast"
+    assert body["request_id"] == 7
+    assert body["triggers"] == ["destructiveHint"]
+
+    kinds = [e[1] for e in events if e[0] == "record"]
+    assert kinds == ["approval_hold", "approval_decision"]
+    hold_record = events[0][2]
+    assert hold_record["hold_id"] == "0-blast"
+    assert hold_record["triggers"] == ("destructiveHint",)
+    decision_record = events[1][2]
+    assert decision_record["cause"] == "APPROVED"
+    assert decision_record["decision"] == "approve"
+    assert decision_record["reason"] == "looks right"
+    assert decision_record["waited"] == 0.0
+    assert [e for e in events if e[0] == "deliver"] == []
+
+
+def test_a_denied_call_is_suppressed_with_one_refusal_recorded_after_the_decision(tmp_path):
+    clock = ScriptedClock([0.0, 0.0])
+    g, events = gate(tmp_path, clock)
+    seed_facts(g)
+    (tmp_path / "decisions" / "0-blast.json").write_text(
+        json.dumps({"decision": "deny", "reason": "not now"})
+    )
+    assert g.decide_c2s(call_frame()) is False
+
+    delivers = [e for e in events if e[0] == "deliver"]
+    assert len(delivers) == 1, f"exactly one refusal, got {len(delivers)}"
+    refusal = json.loads(delivers[0][1])
+    assert refusal["id"] == 7
+    assert refusal["error"]["data"]["belay"]["approval"]["cause"] == "DENIED"
+
+    # M7: the decision is recorded BEFORE the refusal is delivered.
+    decision_index = next(
+        i for i, e in enumerate(events) if e[0] == "record" and e[1] == "approval_decision"
+    )
+    deliver_index = next(i for i, e in enumerate(events) if e[0] == "deliver")
+    assert decision_index < deliver_index
+    assert events[decision_index][2]["cause"] == "DENIED"
+    assert events[decision_index][2]["decision"] == "deny"
+    assert events[decision_index][2]["reason"] == "not now"
+
+
+def test_everything_that_is_not_a_triggered_call_forwards_untouched(tmp_path):
+    g, events = gate(tmp_path, ScriptedClock([]))
+    frames = [
+        b"not json at all",
+        b"[1, 2]",  # a batch: never held
+        json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized", "params": None}).encode(),
+        json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "safe"}}).encode(),
+        json.dumps({"jsonrpc": "2.0", "id": 2, "method": "initialize"}).encode(),
+    ]
+    for frame in frames:
+        assert g.decide_c2s(frame) is True
+    assert events == []
+    assert list((tmp_path / "requests").iterdir()) == []
+
+
+def test_no_decision_denies_fail_closed_with_APPROVAL_TIMEOUT(tmp_path):
+    clock = ScriptedClock([0.0, 100.0, 100.0])
+    g, events = gate(tmp_path, clock, timeout=100.0)
+    seed_facts(g)
+    assert g.decide_c2s(call_frame()) is False
+
+    delivers = [e for e in events if e[0] == "deliver"]
+    assert len(delivers) == 1
+    assert json.loads(delivers[0][1])["error"]["data"]["belay"]["approval"]["cause"] == "APPROVAL_TIMEOUT"
+    decision_record = decisions(events)[0][2]
+    assert decision_record["cause"] == "APPROVAL_TIMEOUT"
+    assert decision_record["decision"] is None
+    assert decision_record["waited"] == 100.0
+
+
+def test_close_all_resolves_pending_holds_and_the_gate_stays_alive(tmp_path):
+    clock = ParkClock()
+    g, events = gate(tmp_path, clock, timeout=100.0)
+    seed_facts(g)
+
+    outcome = {}
+    parked = threading.Thread(target=lambda: outcome.setdefault("v", g.decide_c2s(call_frame())))
+    parked.start()
+    assert clock.ready.wait(timeout=5), "the poll never parked on its first deadline check"
+
+    g.close_all()
+    clock.release.set()
+    parked.join(timeout=5)
+    assert not parked.is_alive()
+    assert outcome["v"] is False
+
+    # One shutdown decision, recorded before its refusal (M7), and one refusal.
+    decided = decisions(events)
+    assert len(decided) == 1, f"exactly one decision, got {decided!r}"
+    assert decided[0][2]["cause"] == "APPROVAL_SHUTDOWN"
+    assert decided[0][2]["decision"] is None
+    delivers = [e for e in events if e[0] == "deliver"]
+    assert len(delivers) == 1
+    assert json.loads(delivers[0][1])["error"]["data"]["belay"]["approval"]["cause"] == "APPROVAL_SHUTDOWN"
+    assert next(i for i, e in enumerate(events) if e[0] == "record") < next(
+        i for i, e in enumerate(events) if e[0] == "deliver"
+    )
+
+    # The gate is sticky-but-alive: a NEW triggered call still resolves normally.
+    (tmp_path / "decisions" / "1-blast.json").write_text(json.dumps({"decision": "approve"}))
+    assert g.decide_c2s(call_frame()) is True
+
+
+def test_the_holds_facts_are_fixed_at_hold_time(tmp_path):
+    ready = threading.Event()
+    release = threading.Event()
+    clock = ScriptedClock([0.0, 0.0, 0.0])  # register, the parked tick, the resolution
+
+    def blocking_sleep(_seconds):
+        ready.set()
+        release.wait(timeout=5)
+
+    g, events = gate(tmp_path, clock, sleep=blocking_sleep)
+    seed_facts(g)
+
+    # Park the poll on its sleep, clear the cache mid-hold, then release: the
+    # hold's triggers were fixed when the call arrived, so the cache clearing
+    # cannot retroactively change what this hold is for.
+    outcome = {}
+    parked = threading.Thread(target=lambda: outcome.setdefault("v", g.decide_c2s(call_frame())))
+    parked.start()
+    assert ready.wait(timeout=5), "the poll never parked on its sleep"
+    g.observe_s2c(json.dumps({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}).encode())
+    assert g._cache.facts_for("blast") == {}
+    (tmp_path / "decisions" / "0-blast.json").write_text(json.dumps({"decision": "approve"}))
+    release.set()
+    parked.join(timeout=5)
+    assert outcome["v"] is True
+
+    hold_record = events[0][2]
+    assert hold_record["triggers"] == ("destructiveHint",)
+    assert json.loads((tmp_path / "requests" / "0-blast.json").read_text())["triggers"] == ["destructiveHint"]
+
+
+def test_an_internal_fault_suppresses_refuses_and_records_APPROVAL_FAULT(tmp_path):
+    clock = ScriptedClock([0.0, 0.0])
+    g, events = gate(tmp_path, clock)
+    seed_facts(g)
+    # The requests dir becomes a file between startup and the call: the request
+    # write fails, and the gate must refuse loudly rather than raise or forward.
+    (tmp_path / "requests").rmdir()
+    (tmp_path / "requests").write_text("a file where the requests dir was")
+
+    assert g.decide_c2s(call_frame()) is False  # totality: never raises
+
+    decided = decisions(events)
+    assert len(decided) == 1
+    assert decided[0][2]["cause"] == "APPROVAL_FAULT"
+    assert decided[0][2]["decision"] is None
+    delivers = [e for e in events if e[0] == "deliver"]
+    assert len(delivers) == 1
+    refusal = json.loads(delivers[0][1])
+    assert refusal["id"] == 7
+    assert refusal["error"]["data"]["belay"]["approval"]["cause"] == "APPROVAL_FAULT"
+
+
+def test_a_faulting_recorder_still_suppresses_and_refuses(tmp_path):
+    def bad_record(kind, **fields):
+        raise RuntimeError("recorder down")
+
+    g, events = gate(tmp_path, ScriptedClock([0.0, 0.0]), record=bad_record)
+    seed_facts(g)
+    (tmp_path / "decisions" / "0-blast.json").write_text(json.dumps({"decision": "deny"}))
+
+    assert g.decide_c2s(call_frame()) is False
+    # The refusal is best-effort and independent of the recorder: it still lands.
+    delivers = [e for e in events if e[0] == "deliver"]
+    assert len(delivers) == 1
+    assert json.loads(delivers[0][1])["id"] == 7

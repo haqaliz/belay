@@ -36,9 +36,19 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from belay.approval.gate import (
+    APPROVAL_FAULT,
+    APPROVAL_SHUTDOWN,
+    APPROVAL_TIMEOUT,
+    APPROVED,
     DECISION_APPROVE,
     DECISION_DENY,
+    DENIED,
     Hold,
+    HoldRegistry,
+    is_tools_call,
+    request_id,
+    tool_name,
+    triggers_for,
 )
 from belay.declared import DECLARED_TRUE, NOT_DECLARED, declared_state
 
@@ -351,14 +361,221 @@ class ToolFacts:
                     self._facts[facts["name"]] = facts
 
     def facts_for(self, tool: str) -> dict:
-        """The facts the wire last declared for `tool`, or {} when none were
-        observed — and an unknown tool's absence of facts is exactly that, never
-        a declaration about it."""
-        return self._facts.get(tool, {})
+        """The tri-state facts the wire last declared for `tool` — the
+        `{annotation: {"state": ...}}` mapping `triggers_for` reads — or {} when
+        none were observed. An unknown tool's absence of facts is exactly that,
+        never a declaration about it. The cache stores each tool's full
+        `annotations.py:60-81`-shaped record; `facts_for` hands the gate the
+        slice it consumes."""
+        facts = self._facts.get(tool)
+        if facts is None:
+            return {}
+        return facts["annotations"]
+
+
+class ApprovalGate:
+    """The hook surface the proxy root wires: `decide_c2s` / `observe_s2c`.
+
+    Composes aspect 1's registry with the directory contract, the poll, the
+    refusal and the live cache. `record` receives trace records (the writer's
+    `record` in production, fake-callable in tests); `deliver` receives refusal
+    bytes (the locked client writer in production). Both are best-effort: a
+    failing recorder or a failing delivery is named on stderr, never a raise
+    out of the hook.
+
+    **Totality (the fail-closed rule):** `decide_c2s` never raises. An internal
+    fault — channel I/O, the registry, anything — suppresses the call with a
+    best-effort refusal and a decision record whose cause is `APPROVAL_FAULT`.
+    A gate that cannot evaluate its trigger must refuse loudly, never forward a
+    destructive call silently and never let the client hang.
+    """
+
+    def __init__(
+        self,
+        approval_dir,
+        timeout: float = DEFAULT_TIMEOUT,
+        poll_interval: float = DEFAULT_POLL_INTERVAL,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
+        record: Optional[Callable[..., None]] = None,
+        deliver: Optional[Callable[[bytes], None]] = None,
+    ) -> None:
+        validate_dir(approval_dir)
+        if not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or timeout <= 0:
+            raise ValueError(
+                f"approval timeout {timeout!r} is unusable: it must be a positive "
+                "number of seconds (BELAY_APPROVAL_TIMEOUT)"
+            )
+        self._dir = Path(approval_dir)
+        self._timeout = float(timeout)
+        self._poll_interval = poll_interval
+        self._clock = clock
+        self._sleep = sleep
+        self._record = record if record is not None else (lambda *_a, **_k: None)
+        self._deliver = deliver if deliver is not None else (lambda _b: None)
+        self._registry = HoldRegistry(clock=clock)
+        self._cache = ToolFacts()
+        #: The hold this call opened, while the poll owns it. The c2s hook runs
+        #: on one pump thread, so a single slot is exact: it is the hold the
+        #: fault path must resolve, and it is cleared once the poll has decided.
+        self._open_hold: Optional[Hold] = None
+
+    # -- the hook surface -----------------------------------------------------
+
+    def decide_c2s(self, frame: bytes) -> bool:
+        """True = forward; False = suppress + refusal + records.
+
+        Never raises: an internal fault is refused with `APPROVAL_FAULT` (see
+        the class docstring). Returns True for everything that is not a
+        triggered `tools/call` — including unparseable frames and batches,
+        which are never held.
+        """
+        try:
+            return self._decide(frame)
+        except BaseException as exc:  # noqa: BLE001 - totality is the contract
+            return self._fault(frame, exc)
+
+    def observe_s2c(self, frame: bytes) -> None:
+        """Feed the live cache. Never raises (the cache is a pure observer)."""
+        try:
+            self._cache.observe_s2c(frame)
+        except BaseException as exc:  # noqa: BLE001
+            self._degrade(f"approval cache could not observe the s2c frame: {exc!r}")
+
+    def close_all(self) -> None:
+        """Resolve every pending hold as `APPROVAL_SHUTDOWN`, recording each, and
+        deliver one refusal per shutdown-denied hold (M13). Best-effort: a
+        failing recorder or delivery is named, never a raise."""
+        for hold in self._registry.close_all():
+            self._record_decision(hold, APPROVAL_SHUTDOWN)
+            self._deliver_refusal(hold, APPROVAL_SHUTDOWN)
+
+    # -- the decision path ----------------------------------------------------
+
+    def _decide(self, frame: bytes) -> bool:
+        self._cache.observe_c2s(frame)
+        if not is_tools_call(frame):
+            return True
+        tool = tool_name(frame)
+        if tool is None:
+            return True
+        # The facts used are FIXED at hold time: the triggers are read from the
+        # cache now, before anything can wait, so a `tools/list_changed` during
+        # the poll can never retroactively change what this hold is for.
+        triggers = tuple(triggers_for(self._cache.facts_for(tool)))
+        if not triggers:
+            return True
+        hold = self._registry.register(
+            request_id(frame), tool, triggers, timeout=self._timeout
+        )
+        self._open_hold = hold
+        self._record_hold(hold)
+        write_request(self._dir, hold)
+        decision = await_decision(
+            hold,
+            read=lambda hold_id: read_decision(self._dir, hold_id),
+            poll_interval=self._poll_interval,
+            clock=self._clock,
+            sleep=self._sleep,
+        )
+        if hold.cause is not None:
+            # Resolved while the poll was parked (close_all — shutdown): the
+            # closer already recorded the resolution and delivered its refusal.
+            # The poll's outcome is stale; nothing more is owed.
+            self._open_hold = None
+            return False
+        self._open_hold = None
+        if decision is None:
+            hold.resolve(APPROVAL_TIMEOUT, now=self._clock())
+            self._registry.remove(hold.hold_id)
+            self._record_decision(hold, APPROVAL_TIMEOUT)
+            self._deliver_refusal(hold, APPROVAL_TIMEOUT)
+            return False
+        cause = APPROVED if decision["decision"] == DECISION_APPROVE else DENIED
+        hold.resolve(cause, decision=decision["decision"], now=self._clock())
+        self._registry.remove(hold.hold_id)
+        self._record_decision(
+            hold, cause, reason=decision.get("reason") if "reason" in decision else None
+        )
+        if cause == APPROVED:
+            # The decision is recorded BEFORE the approved frame is forwarded,
+            # and before any refusal would be delivered (M7).
+            return True
+        self._deliver_refusal(hold, DENIED)
+        return False
+
+    def _fault(self, frame: bytes, exc: BaseException) -> bool:
+        """The totality path: refuse loudly, record the fault, never raise."""
+        self._degrade(f"approval gate fault: {type(exc).__name__}: {exc}")
+        hold = self._open_hold
+        self._open_hold = None
+        if hold is not None and hold.cause is None:
+            try:
+                hold.resolve(APPROVAL_FAULT, now=self._clock())
+                self._registry.remove(hold.hold_id)
+            except BaseException as resolve_exc:  # noqa: BLE001 - best-effort
+                self._degrade(
+                    f"approval gate could not resolve the faulted hold: {resolve_exc!r}"
+                )
+            self._record_decision(hold, APPROVAL_FAULT)
+            self._deliver_refusal(hold, APPROVAL_FAULT)
+            return False
+        # No hold could be opened (register itself failed): the decision record
+        # still names the fault, with the stand-in the refusal needs.
+        from types import SimpleNamespace
+
+        stand_in = SimpleNamespace(
+            hold_id=None,
+            request_id=request_id(frame),
+            tool=tool_name(frame),
+        )
+        self._record_decision(stand_in, APPROVAL_FAULT)
+        self._deliver_refusal(stand_in, APPROVAL_FAULT)
+        return False
+
+    # -- best-effort side effects ---------------------------------------------
+
+    def _record_hold(self, hold: Hold) -> None:
+        try:
+            self._record(
+                "approval_hold",
+                hold_id=hold.hold_id,
+                tool=hold.tool,
+                request_id=hold.request_id,
+                triggers=hold.triggers,
+                timeout=hold.timeout,
+            )
+        except BaseException as exc:  # noqa: BLE001 - the recorder broke, not the gate
+            self._degrade(f"approval gate could not record the hold: {exc!r}")
+
+    def _record_decision(self, hold: Any, cause: str, reason: Optional[str] = None) -> None:
+        fields: dict[str, Any] = {
+            "hold_id": getattr(hold, "hold_id", None),
+            "decision": getattr(hold, "decision", None),
+            "cause": cause,
+            "waited": getattr(hold, "waited", None),
+        }
+        if reason is not None:
+            fields["reason"] = reason
+        try:
+            self._record("approval_decision", **fields)
+        except BaseException as exc:  # noqa: BLE001 - see _record_hold
+            self._degrade(f"approval gate could not record the decision: {exc!r}")
+
+    def _deliver_refusal(self, hold: Any, cause: str) -> None:
+        try:
+            self._deliver(refusal_bytes(hold, cause))
+        except BaseException as exc:  # noqa: BLE001 - a dead client is not a raise
+            self._degrade(f"approval gate could not deliver the refusal: {exc!r}")
+
+    @staticmethod
+    def _degrade(message: str) -> None:
+        print(f"belay: {message}", file=sys.stderr)
 
 
 __all__ = [
     "ApprovalDirUnusable",
+    "ApprovalGate",
     "ToolFacts",
     "await_decision",
     "read_decision",

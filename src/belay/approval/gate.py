@@ -45,7 +45,18 @@ APPROVED = "APPROVED"
 DENIED = "DENIED"
 APPROVAL_TIMEOUT = "APPROVAL_TIMEOUT"
 APPROVAL_SHUTDOWN = "APPROVAL_SHUTDOWN"
-RESOLUTION_CAUSES = (APPROVED, DENIED, APPROVAL_TIMEOUT, APPROVAL_SHUTDOWN)
+#: The channel's totality cause: an internal fault (a channel I/O failure, a
+#: broken recorder) suppressed the call — the gate could not evaluate its
+#: trigger, so it refused loudly rather than forward a destructive call
+#: silently. Extends the PRD's closed set; the reader already lists it.
+APPROVAL_FAULT = "APPROVAL_FAULT"
+RESOLUTION_CAUSES = (
+    APPROVED,
+    DENIED,
+    APPROVAL_TIMEOUT,
+    APPROVAL_SHUTDOWN,
+    APPROVAL_FAULT,
+)
 
 #: The human decision vocabulary, for the two causes that carry one.
 DECISION_APPROVE = "approve"
@@ -285,6 +296,18 @@ class HoldRegistry:
             hold.resolve(APPROVAL_TIMEOUT, now=now)
             self._pending.pop(hold.hold_id)
         return timed_out
+
+    def remove(self, hold_id: str) -> None:
+        """Forget a hold the channel resolved directly.
+
+        The channel's poll resolves found decisions on the hold itself — a
+        decision the poll read wins even when the tick's clock has already
+        reached the deadline, which `resolve()`'s expiry guard would refuse — so
+        the registry must stop tracking a hold it no longer owns. Removing an
+        unknown id is a no-op: the hold was already resolved (shutdown) and
+        removed.
+        """
+        self._pending.pop(hold_id, None)
 
     def close_all(self, now: Optional[float] = None) -> list[Hold]:
         """Resolve every pending hold as `APPROVAL_SHUTDOWN` (the operator closes the gate).
