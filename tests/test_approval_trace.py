@@ -21,6 +21,7 @@ import json
 import threading
 from pathlib import Path
 
+from belay.approval.reader import derive_approval_events
 from belay.replay.reader import read_trace
 from belay.trace import KINDS, SCHEMA_VERSION, TraceWriter
 
@@ -183,3 +184,130 @@ def test_approval_records_survive_the_write_read_round_trip_losslessly(
         "approval_decision",
         "connection_window",
     ]
+
+
+# --- Phase 2: the derived reader ---------------------------------------------
+
+
+def _hold(seq: int, **extra: object) -> dict:
+    return {
+        "kind": "approval_hold",
+        "seq": seq,
+        "hold_id": "h1",
+        "tool": "rm",
+        "request_id": 7,
+        "triggers": ["destructiveHint"],
+        "timeout": 60,
+        **extra,
+    }
+
+
+def _decision(seq: int, **extra: object) -> dict:
+    return {
+        "kind": "approval_decision",
+        "seq": seq,
+        "hold_id": "h1",
+        "decision": "deny",
+        "cause": "DENIED",
+        "waited": 2.5,
+        **extra,
+    }
+
+
+def test_events_come_back_in_seq_order_with_exactly_the_field_contract() -> None:
+    records = [
+        _hold(1),
+        _decision(3),
+    ]
+
+    events = derive_approval_events(records)
+
+    assert events == [
+        {
+            "kind": "approval_hold",
+            "seq": 1,
+            "hold_id": "h1",
+            "tool": "rm",
+            "request_id": 7,
+            "triggers": ["destructiveHint"],
+            "timeout": 60,
+        },
+        {
+            "kind": "approval_decision",
+            "seq": 3,
+            "hold_id": "h1",
+            "decision": "deny",
+            "cause": "DENIED",
+            "waited": 2.5,
+        },
+    ]
+
+
+def test_events_are_sorted_by_seq_even_when_records_are_not() -> None:
+    records = [_decision(5), _hold(2), _decision(4)]
+
+    events = derive_approval_events(records)
+
+    assert [e["seq"] for e in events] == [2, 4, 5]
+
+
+def test_no_approval_records_yields_an_empty_list() -> None:
+    assert derive_approval_events([]) == []
+    assert derive_approval_events([{"kind": "frame", "seq": 0}]) == []
+
+
+def test_mixed_traces_return_only_the_approval_events_fields_untouched() -> None:
+    records = [
+        {"kind": "connection_window", "seq": 0, "phase": "open"},
+        _hold(1),
+        {"kind": "frame", "seq": 2, "dir": "c2s", "raw": "e30="},
+        {"kind": "annotation_snapshot", "seq": 3, "source_seq": 2},
+        _decision(4, cause="APPROVAL_TIMEOUT", waited=60.0),
+        {"kind": "connection_window", "seq": 5, "phase": "close"},
+    ]
+
+    events = derive_approval_events(records)
+
+    assert [e["kind"] for e in events] == ["approval_hold", "approval_decision"]
+    # The decision's fields pass through as recorded — a non-default cause and a
+    # fractional wait are the trace's own statement, never repaired or re-derived.
+    assert events[1]["cause"] == "APPROVAL_TIMEOUT"
+    assert events[1]["waited"] == 60.0
+
+
+def test_a_hold_without_a_decision_yields_the_hold_event_and_nothing_else() -> None:
+    """A trace cut mid-hold (shutdown): the reader reports what exists, never repairs.
+
+    Fabricating a decision for the hold would assert an outcome that was never
+    observed; the absence of a decision is the trace's own statement.
+    """
+    events = derive_approval_events([_hold(1)])
+
+    assert len(events) == 1
+    assert events[0]["kind"] == "approval_hold"
+
+
+def test_a_decision_without_a_preceding_hold_is_reported_as_is() -> None:
+    """The reader reports, never repairs: a missing hold is the trace's statement."""
+    events = derive_approval_events([_decision(2)])
+
+    assert len(events) == 1
+    assert events[0]["kind"] == "approval_decision"
+
+
+def test_unknown_approval_adjacent_kinds_are_skipped_never_fatal() -> None:
+    """The closed-kind check: only the two declared kinds are events.
+
+    A future approval-adjacent kind (`approval_*`) is not an event this reader
+    understands; it is skipped, never raised over, never silently turned into a
+    hold or decision — and never invented into one.
+    """
+    records = [
+        _hold(1),
+        {"kind": "approval_future", "seq": 2, "note": "from a newer writer"},
+        _decision(3),
+    ]
+
+    events = derive_approval_events(records)
+
+    assert [e["kind"] for e in events] == ["approval_hold", "approval_decision"]
