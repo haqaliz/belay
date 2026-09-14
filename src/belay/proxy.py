@@ -20,6 +20,10 @@ streams chunks and never reassembles frames, so byte-exactness is structural
 rather than something the tests have to catch. Any inspection happens on a
 bounded copy that is structurally unable to reach the bytes being forwarded.
 
+A gate may also suppress a frame — the peer receives no byte of it, and the
+refusal that answers it is the gate's own channel, never this module's. The
+observer is kept consistent with the DELIVERED stream, not the captured one.
+
 Both directions are pumped concurrently: MCP is bidirectional, so a server may
 originate requests and notifications at any time, unprompted.
 
@@ -32,7 +36,7 @@ import os
 import subprocess
 import sys
 import threading
-from typing import Callable, Optional, Protocol
+from typing import Callable, Optional, Protocol, Sequence
 
 # Caps only the observed copy. The data path stays unbounded so a pathological
 # frame can never be truncated or dropped on its way through.
@@ -50,7 +54,10 @@ Observer = Callable[[bytes, bool], None]
 CaptureError = Callable[[BaseException], None]
 
 # (frame, direction) — called with a frame's bytes, without the terminating
-# newline, BEFORE any of them are forwarded. Returns nothing.
+# newline, BEFORE any of them are forwarded. Returns True to forward the frame
+# verbatim; False to suppress it — the peer receives no byte of a suppressed
+# frame, and the refusal that answers it is the hook's own business (the
+# approval gate's `deliver`), never this module's.
 #
 # This is the one hook allowed to make the data path wait, and the reason is
 # narrow: what a turn began from, and whether it has ended, are both facts that
@@ -65,11 +72,15 @@ CaptureError = Callable[[BaseException], None]
 # module does not import `json`, cannot recognise a `tools/call`, and therefore
 # cannot re-serialise one even by accident (tests/test_import_guard.py). Whoever
 # installs the hook owns the parse; `belay.sandbox.gate` is that owner today.
-BeforeFrame = Callable[[bytes, str], None]
+BeforeFrame = Callable[[bytes, str], bool]
 
 # How a chunk reaches the peer. `_write_all` *is* this when nothing is gating the
 # path, so an ungated proxy runs C1's pump with nothing new on it to be wrong.
-Forward = Callable[[int, bytes], None]
+# The return value reports the frames the forwarder suppressed — the bytes of a
+# frame (without its newline) the peer never received — so the observer can stay
+# consistent with the DELIVERED stream; `_write_all` never suppresses and returns
+# None.
+Forward = Callable[[int, bytes], Optional[Sequence[bytes]]]
 
 
 class CaptureSink(Protocol):
@@ -221,6 +232,13 @@ class _FrameHold:
     gets the frame without its newline for the same reason: that is what the trace
     calls a frame, and a hook that saw a different shape than the record it
     annotates would be answering about something else.
+
+    The hook's return value decides delivery: `True` (or `None` — the turn gate's
+    answer) forwards the frame verbatim; `False` suppresses it, and the frame is
+    reported to the pump so the observer can see exactly the delivered stream. A
+    raising hook is named and the frame is FORWARDED — a hook failure must never
+    stall the data path. Fail-closed for the approval path lives inside the
+    approval hook, never here.
     """
 
     def __init__(
@@ -234,7 +252,14 @@ class _FrameHold:
         self._on_capture_error = on_capture_error
         self._held = bytearray()
 
-    def __call__(self, fd: int, chunk: bytes) -> None:
+    def __call__(self, fd: int, chunk: bytes) -> list[bytes]:
+        """Forward the chunk's frames, suppressed ones excepted, verbatim.
+
+        Returns the frames the hook suppressed (without their newline), in
+        order — the pump hands them to the observer so it can see exactly the
+        delivered stream.
+        """
+        suppressed: list[bytes] = []
         start = 0
         while True:
             newline = chunk.find(b"\n", start)
@@ -243,20 +268,29 @@ class _FrameHold:
                 # and the peer has nothing it could act on: no line-delimited
                 # parser dispatches a frame it has not seen the end of. Hold.
                 self._held.extend(chunk[start:])
-                return
+                return suppressed
             self._held.extend(chunk[start : newline + 1])
             data = bytes(self._held)
             self._held.clear()
             if len(data) > 1:
                 # A bare newline is not a frame — `BoundedPeek` does not emit one
                 # either — but it is still bytes the peer is owed.
-                self._run(data[:-1])
-            _write_all(fd, data)
+                if self._run(data[:-1]):
+                    _write_all(fd, data)
+                else:
+                    suppressed.append(data[:-1])
+            else:
+                _write_all(fd, data)
             start = newline + 1
 
-    def _run(self, frame: bytes) -> None:
+    def _run(self, frame: bytes) -> bool:
+        """Run the hook on one frame. True = forward; False = suppress.
+
+        Only a returned `False` suppresses: `None` (the turn gate's answer) and
+        `True` forward, exactly as before the suppress contract existed.
+        """
         try:
-            self._before_frame(frame, self._direction)
+            return self._before_frame(frame, self._direction) is not False
         except Exception as exc:
             # The gate is contractually total and catches its own failures, so
             # this should be unreachable through it. It is here because "should
@@ -271,6 +305,7 @@ class _FrameHold:
             # of a pre-state that was never taken. Better it keep trying and keep
             # naming its failures.
             _name(self._on_capture_error, exc)
+            return True
 
     def flush(self, fd: int) -> None:
         """Deliver bytes held from a frame the stream ended in the middle of.
