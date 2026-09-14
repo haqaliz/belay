@@ -160,3 +160,99 @@ def test_validate_dir_creates_the_contract_subdirs(tmp_path):
     validate_dir(tmp_path)
     assert (tmp_path / "requests").is_dir()
     assert (tmp_path / "decisions").is_dir()
+
+
+# --- Phase 2: the bounded poll loop, fail-closed deadline --------------------
+
+
+class FakeClock:
+    """An injected monotonic clock: each call yields the next scripted reading."""
+
+    def __init__(self, readings):
+        self._readings = list(readings)
+        self.calls = 0
+
+    def __call__(self) -> float:
+        assert self._readings, "the fake clock ran out of scripted readings"
+        self.calls += 1
+        return self._readings.pop(0)
+
+
+def poll(hold, reads, clock):
+    """Drive await_decision with a scripted reader and clock; record sleeps."""
+    from belay.approval.channel import await_decision
+
+    sleeps = []
+    read = lambda hold_id: reads.pop(0) if reads else None
+    return await_decision(
+        hold, read=read, poll_interval=0.0, clock=clock, sleep=sleeps.append
+    ), sleeps, clock.calls
+
+
+def test_decision_present_on_first_poll_wins_without_consulting_the_clock():
+    from belay.approval.gate import Hold
+
+    h = hold()
+    decision, sleeps, clock_calls = poll(
+        h, [{"decision": "approve", "reason": "ok"}], FakeClock([0.0])
+    )
+    assert decision == {"decision": "approve", "reason": "ok"}
+    # The pinned ordering: the decision is read FIRST, so a decision on disk
+    # never even consults the deadline — the poll's granularity cannot cost it.
+    assert clock_calls == 0
+    assert sleeps == []
+
+
+def test_no_decision_denies_at_the_deadline_under_the_injected_clock():
+    h = hold(deadline=100.0)
+    decision, sleeps, clock_calls = poll(h, [None, None], FakeClock([0.0, 100.0]))
+    assert decision is None  # the caller denies APPROVAL_TIMEOUT, fail-closed
+    assert clock_calls == 2
+    # After the deny the loop exited: a file written now would never be read —
+    # the M14 boundary is structural, not a post-hoc check.
+    assert len(sleeps) == 1
+
+
+def test_a_decision_arriving_mid_poll_is_found():
+    h = hold(deadline=100.0)
+    decision, sleeps, clock_calls = poll(
+        h, [None, {"decision": "deny"}], FakeClock([0.0, 50.0])
+    )
+    assert decision == {"decision": "deny"}
+    assert clock_calls == 1  # only the first tick checked the deadline
+
+
+def test_a_reason_string_is_carried_into_the_resolution():
+    h = hold()
+    decision, _, _ = poll(h, [{"decision": "deny", "reason": "not now"}], FakeClock([]))
+    assert decision == {"decision": "deny", "reason": "not now"}
+
+
+def test_the_ordering_is_pinned_decision_before_deadline():
+    """M14's boundary is the poll's decision check, not the clock's exactness.
+
+    The decision file was written before the deadline; the first tick that reads
+    it would have clocked PAST the deadline. The decision still wins — the
+    deadline check runs only when no decision was found.
+    """
+    h = hold(deadline=100.0)
+    decision, _, clock_calls = poll(
+        h, [None, {"decision": "approve"}], FakeClock([0.0, 120.0])
+    )
+    assert decision == {"decision": "approve"}
+    # The second tick never consulted the clock: the decision won first.
+    assert clock_calls == 1
+
+
+def test_the_loop_never_sleeps_longer_than_min_interval_remaining():
+    from belay.approval.channel import await_decision
+
+    h = hold(deadline=5.0)
+    sleeps = []
+    read = lambda hold_id: None
+    clock = FakeClock([0.0, 100.0])
+    result = await_decision(
+        h, read=read, poll_interval=10.0, clock=clock, sleep=sleeps.append
+    )
+    assert result is None
+    assert sleeps == [5.0]  # min(10, 5) — never past the remaining time

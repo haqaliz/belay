@@ -154,8 +154,41 @@ def read_decision(approval_dir, hold_id: str) -> Optional[dict]:
     return decision
 
 
+def await_decision(
+    hold: Hold,
+    *,
+    read: Callable[[str], Optional[dict]],
+    poll_interval: float = DEFAULT_POLL_INTERVAL,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> Optional[dict]:
+    """Poll for the hold's decision until one is found or the deadline is reached.
+
+    Returns the decision dict, or None once the deadline owns the hold (the
+    caller denies `APPROVAL_TIMEOUT`, fail-closed). One ordering, pinned: each
+    tick reads the decision FIRST — a decision the poll found is a decision the
+    human wrote, and it wins even when the tick's clock has already reached the
+    deadline; the deadline is checked only when no decision was found. Once the
+    loop has returned, nothing reads again: a decision file that appears after
+    the timeout deny is never applied retroactively (M14).
+
+    The loop never sleeps longer than `min(poll_interval, remaining)`; under the
+    injected clock and a no-op `sleep` every timeout test is exact.
+    """
+    while True:
+        decision = read(hold.hold_id)
+        if decision is not None:
+            return decision
+        now = clock()
+        if hold.expired(now):
+            return None
+        remaining = hold.deadline - now
+        sleep(min(poll_interval, remaining) if remaining > 0 else 0.0)
+
+
 __all__ = [
     "ApprovalDirUnusable",
+    "await_decision",
     "read_decision",
     "validate_dir",
     "write_request",
