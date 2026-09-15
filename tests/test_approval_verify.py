@@ -17,9 +17,12 @@ surfaces (the real `belay verify` over a captured run) are pinned in
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 
 from belay.approval.reader import derive_approval_events
+from belay.cli import _approval_line
 from belay.replay.reader import read_trace
 from belay.trace import TraceWriter
 from belay.verify.json import VerifyReport, approval_record
@@ -161,3 +164,124 @@ def test_approval_section_counts_holds_and_decisions_independently(
 
     assert record == {"holds": 1, "decisions": {}}
     assert _document(record)["approval"] == {"holds": 1, "decisions": {}}
+
+
+# --- Phase 2: the text surface's approval line --------------------------------
+
+
+def _event(kind: str, seq: int, **fields: object) -> dict:
+    return {"kind": kind, "seq": seq, **fields}
+
+
+def test_approval_line_prints_holds_and_denied_causes_once() -> None:
+    events = [
+        _event(
+            "approval_hold", 1, hold_id="h1", tool="rm", request_id=7,
+            triggers=["destructiveHint"], timeout=300.0,
+        ),
+        _event(
+            "approval_decision", 2, hold_id="h1", decision="deny",
+            cause="APPROVAL_TIMEOUT", waited=300.0,
+        ),
+    ]
+
+    assert _approval_line(events) == "approval: 1 held, 1 denied (APPROVAL_TIMEOUT)"
+
+
+def test_approval_line_splits_a_mixed_run_by_cause() -> None:
+    events = [
+        _event("approval_hold", 1, hold_id="h1"),
+        _event("approval_decision", 2, hold_id="h1", decision="approve", cause="APPROVED", waited=1.0),
+        _event("approval_hold", 3, hold_id="h2"),
+        _event("approval_decision", 4, hold_id="h2", decision="deny", cause="DENIED", waited=2.0),
+        _event("approval_hold", 5, hold_id="h3"),
+        _event("approval_decision", 6, hold_id="h3", decision="deny", cause="APPROVAL_TIMEOUT", waited=300.0),
+    ]
+
+    line = _approval_line(events)
+
+    assert line == "approval: 3 held, 1 approved, 2 denied (DENIED, APPROVAL_TIMEOUT)"
+
+
+def test_approval_line_approved_only_and_hold_without_decision() -> None:
+    assert (
+        _approval_line(
+            [
+                _event("approval_hold", 1, hold_id="h1"),
+                _event("approval_decision", 2, hold_id="h1", decision="approve", cause="APPROVED", waited=1.0),
+            ]
+        )
+        == "approval: 1 held, 1 approved"
+    )
+    assert _approval_line([_event("approval_hold", 1, hold_id="h1")]) == "approval: 1 held"
+
+
+def test_approval_line_is_none_when_the_trace_has_no_approval_events() -> None:
+    assert _approval_line([]) is None
+    assert _approval_line([{"kind": "frame", "seq": 0}]) is None
+
+
+def _zero_turn_trace(tmp_path: Path, *, approval: bool) -> Path:
+    """A trace with no tool calls — so `belay verify` replays nothing, needs no
+    sandbox and no manifests — optionally carrying one held-and-timed-out call."""
+    writer = TraceWriter.in_directory(tmp_path / "trace")
+    try:
+        if approval:
+            writer.record(
+                "approval_hold",
+                hold_id="h1", tool="rm", request_id=7,
+                triggers=["destructiveHint"], timeout=300,
+            )
+            writer.record(
+                "approval_decision",
+                hold_id="h1", decision="deny", cause="APPROVAL_TIMEOUT", waited=300.0,
+            )
+    finally:
+        writer.close()
+    traces = sorted((tmp_path / "trace").glob("*.jsonl"))
+    assert len(traces) == 1, traces
+    return traces[0]
+
+
+def _verify_text(trace: Path, tmp_path: Path) -> str:
+    """The REAL `belay verify` text run. A zero-turn trace exits 1 (the worst
+    status across no turns is UNVERIFIED) with the full report on stdout."""
+    manifest_dir = tmp_path / "manifests"
+    manifest_dir.mkdir()
+    run = subprocess.run(
+        [
+            sys.executable, "-m", "belay.cli", "verify",
+            str(trace),
+            "--manifest-dir", str(manifest_dir),
+            "--server", "true",
+        ],
+        capture_output=True,
+        text=True,
+        errors="replace",
+        timeout=120,
+    )
+    assert run.returncode == 1, run.stdout + run.stderr
+    return run.stdout
+
+
+def test_text_approval_line_prints_exactly_once_with_the_coverage_statement(
+    tmp_path: Path,
+) -> None:
+    """The line prints exactly once when records exist, and the coverage
+    statement still prints on the same surface — the honesty contract."""
+    stdout = _verify_text(_zero_turn_trace(tmp_path, approval=True), tmp_path)
+
+    assert stdout.count("approval:") == 1, stdout
+    assert "approval: 1 held, 1 denied (APPROVAL_TIMEOUT)" in stdout, stdout
+    assert "what a verdict here means, exactly" in stdout, (
+        "the coverage statement travels with the approval line"
+    )
+
+
+def test_text_prints_no_approval_line_when_the_trace_has_no_approval_records(
+    tmp_path: Path,
+) -> None:
+    stdout = _verify_text(_zero_turn_trace(tmp_path, approval=False), tmp_path)
+
+    assert "approval:" not in stdout, stdout
+    assert "what a verdict here means, exactly" in stdout, stdout

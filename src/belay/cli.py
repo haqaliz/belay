@@ -672,6 +672,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     `BELAY_CLAIM_AUTHOR`) writes an executable check, EXECUTION decides, and A3 never
     PASSes. `--no-claim-axis` disables the axis entirely and wins over both.
     """
+    from belay.approval.reader import derive_approval_events
     from belay.index import derive_correlation, tool_calls
     from belay.replay.reader import TraceCorrupt, read_trace
     from belay.verify.author import SubprocessAuthor, author_from_env
@@ -894,8 +895,6 @@ def _cmd_verify(args: argparse.Namespace) -> int:
             # trajectory/claim summaries. Nothing is recomputed for the machine surface.
             # The approval section is derived from the trace's own records — a denied
             # call is an observation, never a turn and never a verdict (absent-never-zero).
-            from belay.approval.reader import derive_approval_events
-
             report = VerifyReport(
                 trace=args.trace,
                 turns=report_turns,
@@ -915,6 +914,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
                 if claim_author is not None:
                     _emit_claim(claim, Status)
             _emit()
+            _emit_approval(derive_approval_events(records))
             for line in _VERIFY_COVERAGE.splitlines():
                 _emit(line)
 
@@ -1121,6 +1121,51 @@ def _emit_exposure(verdicts) -> None:
         f"{summary['turns_judging']}/{total} turn(s) "
         f"({summary['turns_recorded']}/{total} turn(s) recorded an exposure fact)"
     )
+
+
+def _approval_line(events: Sequence[dict]) -> Optional[str]:
+    """The approval-gate observations line, or None when the trace carries none.
+
+    Rendered from the SAME derived events the `--json` section is built from
+    (`belay.verify.json.approval_record` — one computation, two renderers):
+    `approval: N held[, N approved][, N denied (CAUSE, ...)]`, the denied
+    causes in the closed vocabulary's order. None — nothing printed, never a
+    zero line — when the trace has no approval records (absent-never-zero).
+    A denied call is an observation, never a turn and never a verdict.
+    """
+    from belay.approval.reader import CAUSES
+    from belay.verify.json import approval_record
+
+    record = approval_record(events)
+    if record is None:
+        return None
+    decisions = record["decisions"]
+    approved = decisions.get("APPROVED", 0)
+    denied = sum(n for cause, n in decisions.items() if cause != "APPROVED")
+    segments = [f"{record['holds']} held"]
+    if approved:
+        segments.append(f"{approved} approved")
+    if denied:
+        causes = ", ".join(
+            cause for cause in CAUSES if cause != "APPROVED" and decisions.get(cause)
+        )
+        segments.append(f"{denied} denied" + (f" ({causes})" if causes else ""))
+    return "approval: " + ", ".join(segments)
+
+
+def _emit_approval(events: Sequence[dict]) -> None:
+    """The approval line, exactly once, when the trace carries approval events.
+
+    Printed after the aggregate — before the coverage statement it travels
+    with — and nothing at all when the trace has no approval records: a run
+    that never configured the gate is byte-identical to one that did but
+    nothing triggered.
+    """
+    line = _approval_line(events)
+    if line is None:
+        return
+    _emit(line)
+    _emit()
 
 
 def _emit_trajectory(trajectory) -> None:
