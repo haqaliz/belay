@@ -20,6 +20,10 @@ streams chunks and never reassembles frames, so byte-exactness is structural
 rather than something the tests have to catch. Any inspection happens on a
 bounded copy that is structurally unable to reach the bytes being forwarded.
 
+A gate may also suppress a frame — the peer receives no byte of it, and the
+refusal that answers it is the gate's own channel, never this module's. The
+observer is kept consistent with the DELIVERED stream, not the captured one.
+
 Both directions are pumped concurrently: MCP is bidirectional, so a server may
 originate requests and notifications at any time, unprompted.
 
@@ -32,7 +36,7 @@ import os
 import subprocess
 import sys
 import threading
-from typing import Callable, Optional, Protocol
+from typing import Callable, Optional, Protocol, Sequence
 
 # Caps only the observed copy. The data path stays unbounded so a pathological
 # frame can never be truncated or dropped on its way through.
@@ -50,7 +54,10 @@ Observer = Callable[[bytes, bool], None]
 CaptureError = Callable[[BaseException], None]
 
 # (frame, direction) — called with a frame's bytes, without the terminating
-# newline, BEFORE any of them are forwarded. Returns nothing.
+# newline, BEFORE any of them are forwarded. Returns True to forward the frame
+# verbatim; False to suppress it — the peer receives no byte of a suppressed
+# frame, and the refusal that answers it is the hook's own business (the
+# approval gate's `deliver`), never this module's.
 #
 # This is the one hook allowed to make the data path wait, and the reason is
 # narrow: what a turn began from, and whether it has ended, are both facts that
@@ -65,11 +72,15 @@ CaptureError = Callable[[BaseException], None]
 # module does not import `json`, cannot recognise a `tools/call`, and therefore
 # cannot re-serialise one even by accident (tests/test_import_guard.py). Whoever
 # installs the hook owns the parse; `belay.sandbox.gate` is that owner today.
-BeforeFrame = Callable[[bytes, str], None]
+BeforeFrame = Callable[[bytes, str], bool]
 
 # How a chunk reaches the peer. `_write_all` *is* this when nothing is gating the
 # path, so an ungated proxy runs C1's pump with nothing new on it to be wrong.
-Forward = Callable[[int, bytes], None]
+# The return value reports the frames the forwarder suppressed — the bytes of a
+# frame (without its newline) the peer never received — so the observer can stay
+# consistent with the DELIVERED stream; `_write_all` never suppresses and returns
+# None.
+Forward = Callable[[int, bytes], Optional[Sequence[bytes]]]
 
 
 class CaptureSink(Protocol):
@@ -122,6 +133,12 @@ class _CaptureGate:
             self._stopped = True
 
 
+class ObservationDesync(Exception):
+    """The forwarder suppressed bytes the observer cannot find in its copy of
+    the stream. Observation of this direction dies; forwarding is unaffected.
+    """
+
+
 class BoundedPeek:
     """Reassembles newline-delimited frames from a *copy* of a stream.
 
@@ -134,16 +151,48 @@ class BoundedPeek:
         self._buf = bytearray()
         self._truncated = False
 
-    def feed(self, chunk: bytes) -> None:
+    def feed(self, chunk: bytes, suppressed: Sequence[bytes] = ()) -> None:
+        """Reassemble and emit the chunk's frames, minus the suppressed ones.
+
+        A suppressed frame was never delivered to the peer, so the observer
+        must not emit it. Its bytes are a suffix of the reassembly buffer (the
+        cross-chunk prefix) plus a head of this chunk, plus the newline; feed
+        verifies both halves against the suppressed frame exactly and drops
+        them. A mismatch — the forwarder claims to have suppressed bytes the
+        observer cannot find in its copy of the stream — raises
+        `ObservationDesync`, which `_observe` names and which kills observation
+        of this direction. Never a silent corruption.
+        """
+        suppressed = list(suppressed)
         start = 0
         while True:
             newline = chunk.find(b"\n", start)
             if newline == -1:
+                if suppressed:
+                    raise ObservationDesync(
+                        "the forwarder suppressed frame(s) whose bytes do not "
+                        f"match the observed stream: {suppressed!r}"
+                    )
                 self._accumulate(chunk[start:])
                 return
-            self._accumulate(chunk[start:newline])
+            frame = bytes(self._buf)
+            head = chunk[start:newline]
+            if suppressed and self._matches(frame, head, suppressed[0]):
+                suppressed.pop(0)
+                self._buf.clear()
+                self._truncated = False
+                start = newline + 1
+                continue
+            self._accumulate(head)
             self._emit()
             start = newline + 1
+
+    def _matches(self, frame: bytes, head: bytes, suppressed_frame: bytes) -> bool:
+        """The suppressed frame's bytes are a buffer suffix plus a chunk head."""
+        return (
+            frame == suppressed_frame[: len(frame)]
+            and head == suppressed_frame[len(frame) : len(frame) + len(head)]
+        )
 
     def _accumulate(self, data: bytes) -> None:
         if self._truncated:
@@ -221,6 +270,13 @@ class _FrameHold:
     gets the frame without its newline for the same reason: that is what the trace
     calls a frame, and a hook that saw a different shape than the record it
     annotates would be answering about something else.
+
+    The hook's return value decides delivery: `True` (or `None` — the turn gate's
+    answer) forwards the frame verbatim; `False` suppresses it, and the frame is
+    reported to the pump so the observer can see exactly the delivered stream. A
+    raising hook is named and the frame is FORWARDED — a hook failure must never
+    stall the data path. Fail-closed for the approval path lives inside the
+    approval hook, never here.
     """
 
     def __init__(
@@ -234,7 +290,14 @@ class _FrameHold:
         self._on_capture_error = on_capture_error
         self._held = bytearray()
 
-    def __call__(self, fd: int, chunk: bytes) -> None:
+    def __call__(self, fd: int, chunk: bytes) -> list[bytes]:
+        """Forward the chunk's frames, suppressed ones excepted, verbatim.
+
+        Returns the frames the hook suppressed (without their newline), in
+        order — the pump hands them to the observer so it can see exactly the
+        delivered stream.
+        """
+        suppressed: list[bytes] = []
         start = 0
         while True:
             newline = chunk.find(b"\n", start)
@@ -243,20 +306,29 @@ class _FrameHold:
                 # and the peer has nothing it could act on: no line-delimited
                 # parser dispatches a frame it has not seen the end of. Hold.
                 self._held.extend(chunk[start:])
-                return
+                return suppressed
             self._held.extend(chunk[start : newline + 1])
             data = bytes(self._held)
             self._held.clear()
             if len(data) > 1:
                 # A bare newline is not a frame — `BoundedPeek` does not emit one
                 # either — but it is still bytes the peer is owed.
-                self._run(data[:-1])
-            _write_all(fd, data)
+                if self._run(data[:-1]):
+                    _write_all(fd, data)
+                else:
+                    suppressed.append(data[:-1])
+            else:
+                _write_all(fd, data)
             start = newline + 1
 
-    def _run(self, frame: bytes) -> None:
+    def _run(self, frame: bytes) -> bool:
+        """Run the hook on one frame. True = forward; False = suppress.
+
+        Only a returned `False` suppresses: `None` (the turn gate's answer) and
+        `True` forward, exactly as before the suppress contract existed.
+        """
         try:
-            self._before_frame(frame, self._direction)
+            return self._before_frame(frame, self._direction) is not False
         except Exception as exc:
             # The gate is contractually total and catches its own failures, so
             # this should be unreachable through it. It is here because "should
@@ -271,6 +343,7 @@ class _FrameHold:
             # of a pre-state that was never taken. Better it keep trying and keep
             # naming its failures.
             _name(self._on_capture_error, exc)
+            return True
 
     def flush(self, fd: int) -> None:
         """Deliver bytes held from a frame the stream ended in the middle of.
@@ -289,6 +362,32 @@ class _FrameHold:
             _write_all(fd, data)
         except OSError as exc:
             _name(self._on_capture_error, exc)
+
+
+class _LockedChunkWriter:
+    """Make a forwarder's chunk writes atomic under a shared peer lock.
+
+    The approval gate writes its refusal to the same fd the s2c forwarder
+    writes — the client's stdout — and a refusal landing inside a server frame
+    would corrupt the client's stream. One lock per chunk write (and per flush)
+    makes each side's contribution whole: the refusal holds the same lock
+    around its own `_write_all`. The c2s forwarder is never wrapped: it writes
+    to the server, which the refusal never touches.
+    """
+
+    def __init__(self, inner: Forward, lock: threading.Lock) -> None:
+        self._inner = inner
+        self._lock = lock
+
+    def __call__(self, fd: int, chunk: bytes) -> Optional[Sequence[bytes]]:
+        with self._lock:
+            return self._inner(fd, chunk)
+
+    def flush(self, fd: int) -> None:
+        with self._lock:
+            flush = getattr(self._inner, "flush", None)
+            if flush is not None:
+                flush(fd)
 
 
 def _forwarder(
@@ -312,12 +411,13 @@ def _observe(
     peek: Optional[BoundedPeek],
     chunk: bytes,
     on_capture_error: Optional[CaptureError],
+    suppressed: Optional[Sequence[bytes]] = None,
 ) -> Optional[BoundedPeek]:
     """Feed the observed copy. Returns the peek, or None once it has died."""
     if peek is None:
         return None
     try:
-        peek.feed(chunk)
+        peek.feed(chunk, () if suppressed is None else suppressed)
     except Exception as exc:
         # Observation is best-effort; forwarding is not. But dropping `peek`
         # silently would leave the trace ending early while looking complete,
@@ -343,8 +443,9 @@ def _pump(
 
     `forward` defaults to `_write_all`, which is what every direction used before
     the gate existed and what every ungated direction still uses. A gated one
-    swaps in `_FrameHold`, which delays a frame but never edits it — the loop
-    below hands over the chunk it read and never learns which one it got.
+    swaps in `_FrameHold`, which delays a frame but never edits it — and reports
+    which frames it suppressed, so the loop can hand the suppression report to
+    the peek and keep the observer consistent with the DELIVERED stream.
     """
     try:
         while True:
@@ -357,20 +458,21 @@ def _pump(
             if not chunk:
                 return
             try:
-                forward(dst_fd, chunk)
+                suppressed = forward(dst_fd, chunk)
             except OSError as exc:
                 # The chunk is already out of the source pipe — Belay has taken
                 # custody of bytes it can no longer deliver. Returning here would
                 # drop them with no record and no cause, which is the same silent
                 # loss this module exists to prevent. So: observe what existed,
-                # then name why forwarding stopped.
+                # then name why forwarding stopped. Observed with no suppression:
+                # if `forward` raised mid-chunk, its report is unreliable.
                 peek = _observe(peek, chunk, on_capture_error)
                 _name(on_capture_error, exc)
                 return
             # Deliberately after the forward, and it stays there: forwarding must
             # never wait on the recorder. Only the failure path above observes
             # first, and only because there is no forward left to delay.
-            peek = _observe(peek, chunk, on_capture_error)
+            peek = _observe(peek, chunk, on_capture_error, suppressed)
     finally:
         if forward is not _write_all:
             # Only a hold can owe the peer anything at exit, and `_write_all`
@@ -444,6 +546,7 @@ def run(
     capture: Optional[CaptureSink] = None,
     before_frame: Optional[BeforeFrame] = None,
     stderr_capture: Optional[CaptureSink] = None,
+    peer_lock: Optional[threading.Lock] = None,
 ) -> int:
     """Proxy `command`'s stdio, optionally observing it and gating its requests.
 
@@ -471,6 +574,12 @@ def run(
     (`belay.sandbox.launch.DenialCapture`), and it is a separate sink from `capture`
     for exactly that reason: same machinery, different question, and one of them
     must not start recording the other's records.
+
+    `peer_lock`, when set, makes the s2c forwarder's writes atomic with any other
+    holder of the lock — the approval gate's refusal delivery shares the client
+    fd, and a refusal interleaving mid-frame with a server frame would corrupt the
+    client's stream. The c2s forwarder is never wrapped: it writes to the server,
+    which the refusal never touches. Ungated runs install none of this.
     """
     proc = subprocess.Popen(
         command,
@@ -493,6 +602,12 @@ def run(
             daemon=True,
         ).start()
 
+        s2c_forward = _forwarder(before_frame, "s2c", s2c_error)
+        if peer_lock is not None:
+            # The refusal shares the client fd with this direction; a refusal
+            # mid-frame would corrupt the client's stream. One lock per chunk
+            # write makes each side's contribution whole.
+            s2c_forward = _LockedChunkWriter(s2c_forward, peer_lock)
         forwarders = [
             threading.Thread(
                 target=_pump,
@@ -501,7 +616,7 @@ def run(
                     sys.stdout.fileno(),
                     s2c_peek,
                     s2c_error,
-                    _forwarder(before_frame, "s2c", s2c_error),
+                    s2c_forward,
                 ),
             ),
             threading.Thread(
@@ -536,6 +651,19 @@ def main(argv: list[str]) -> int:
     scope = os.environ.get("BELAY_SANDBOX_SCOPE")
     snapshot_dir = os.environ.get("BELAY_SNAPSHOT_DIR")
     run_id = os.environ.get("BELAY_RUN_ID")
+    approval_dir = os.environ.get("BELAY_APPROVAL_DIR")
+    approval_timeout = os.environ.get("BELAY_APPROVAL_TIMEOUT")
+
+    if approval_dir and not trace_dir:
+        # Loud, at startup, for the same reason every other refusal here is:
+        # a gate with no trace would deny or forward with no record of why, and
+        # the record is the whole point of the gate.
+        print(
+            "belay: BELAY_APPROVAL_DIR is set but BELAY_TRACE_DIR is not; "
+            "refusing to start rather than run an approval gate that records nothing",
+            file=sys.stderr,
+        )
+        return 2
 
     if not trace_dir and not scope:
         # Nothing to record and nothing to gate: C1's byte pump, reached by the
@@ -575,8 +703,9 @@ def main(argv: list[str]) -> int:
     # to reach a serialiser even by accident: the forwarding path has no name
     # for `json` in scope. main() is the composition root and the only place that
     # knows a recorder exists — and now the only place that knows a gate does.
-    # `belay.sandbox.gate` imports `json` and is welcome to: it parses a copy to
-    # READ it, and nothing it returns can reach the bytes being forwarded.
+    # `belay.sandbox.gate` and `belay.approval.channel` import `json` and are
+    # welcome to: they parse a copy to READ it, and nothing they return can
+    # reach the bytes being forwarded.
     writer = None
     if trace_dir:
         from belay.trace import TraceWriter
@@ -587,17 +716,82 @@ def main(argv: list[str]) -> int:
             # assigned to this run. Unset means absent — never a placeholder.
             writer.record("run_identity", run_id=run_id)
 
+    approval = None
+    peer_lock = None
+    if approval_dir:
+        # Imported locally, never at module scope, like `belay.sandbox.gate`
+        # above: the approval channel owns the serialiser.
+        from belay.approval.channel import ApprovalGate
+
+        # The refusal shares the client fd with the s2c forwarder; `run` wraps
+        # that forwarder with this same lock, so a refusal can never land inside
+        # a server frame (see `_LockedChunkWriter`).
+        peer_lock = threading.Lock()
+
+        def deliver(refusal: bytes) -> None:
+            with peer_lock:
+                _write_all(sys.stdout.fileno(), refusal)
+
+        try:
+            timeout = (
+                float(approval_timeout) if approval_timeout is not None else 300.0
+            )
+            approval = ApprovalGate(
+                approval_dir,
+                timeout=timeout,
+                poll_interval=0.1,
+                record=writer.record,
+                deliver=deliver,
+            )
+        except ValueError as exc:
+            # An unusable approval dir or timeout, refused before the first
+            # byte moves: a gate that cannot serve its channel would either
+            # deny everything (APPROVAL_FAULT) or guess, and neither is a
+            # startable posture.
+            print(f"belay: {exc}; refusing to start", file=sys.stderr)
+            if writer is not None:
+                writer.close()
+            return 2
+
+    before_frame = None
+    if approval is not None:
+        from belay.approval import compose
+
+        before_frame = compose(approval, None)
+
     try:
         if not scope:
-            return run(argv, capture=writer)
-        return _contained_run(argv, scope, snapshot_dir, writer)
+            return run(
+                argv,
+                capture=writer,
+                before_frame=before_frame,
+                peer_lock=peer_lock,
+            )
+        return _contained_run(
+            argv,
+            scope,
+            snapshot_dir,
+            writer,
+            approval=approval,
+            peer_lock=peer_lock,
+        )
     finally:
+        if approval is not None:
+            # The operator closes the gate: every pending hold is resolved
+            # APPROVAL_SHUTDOWN and the resolutions are recorded — before the
+            # writer closes, so the records land inside the connection window.
+            approval.close_all()
         if writer is not None:
             writer.close()
 
 
 def _contained_run(
-    argv: list[str], scope: str, snapshot_dir: str, writer
+    argv: list[str],
+    scope: str,
+    snapshot_dir: str,
+    writer,
+    approval=None,
+    peer_lock=None,
 ) -> int:
     """Spawn the server INSIDE the sandbox, gating and snapshotting each turn.
 
@@ -614,6 +808,7 @@ def _contained_run(
     """
     from contextlib import ExitStack
 
+    from belay.approval import compose
     from belay.sandbox.gate import TurnGate
     from belay.sandbox.launch import DenialCapture, contained, network_policy
     from belay.snapshot.bth1 import UnsupportedPlatform
@@ -646,8 +841,9 @@ def _contained_run(
         return run(
             spawn.argv,
             capture=writer,
-            before_frame=gate.before_frame,
+            before_frame=compose(approval, gate.before_frame),
             stderr_capture=DenialCapture(writer) if writer is not None else None,
+            peer_lock=peer_lock,
         )
 
 

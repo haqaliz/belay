@@ -71,5 +71,11 @@
     "cause": "NO_CLAIM_RECORDED",
     "message": "UNVERIFIED [NO_CLAIM_RECORDED] — never PASS"
   },
+  "approval": {
+    "holds": 1,
+    "decisions": {
+      "APPROVED": 1
+    }
+  },
   "error": null
 }

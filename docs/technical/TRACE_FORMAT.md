@@ -290,6 +290,73 @@ the writer's `KINDS` registry, so the current reader returns it in `records`. Ol
 schema-v1 readers without knowledge of the kind — survive it per the unknown-kind rule
 below: skipped, and the skip recorded. `SCHEMA_VERSION` is unchanged.
 
+## The `approval_hold` and `approval_decision` records
+
+The approval gate's events (see `docs/planning/approval-gate/`): first-class trace
+observations written through `TraceWriter.record`, the same documented extension point as
+`run_identity` — full envelope, no schema bump.
+
+```jsonc
+// approval_hold — written when the hold BEGINS, so a live feed can render "awaiting approval"
+{
+  "v": 1,
+  "kind": "approval_hold",
+  "seq": 6,                    // allocated under the writer's lock, like every record
+  "hold_id": "0-blast",        // `<seq>-<tool-slug>`; the key the request/decision files use
+  "tool": "blast",             // the held tool's name
+  "request_id": 3,             // the tools/call request's own JSON-RPC id (string, int, or null)
+  "triggers": ["destructiveHint"],  // the DECLARED-true trigger annotations, in a fixed order
+  "timeout": 300.0,            // seconds; the hold's deadline, from the gate's injected clock
+  "t_in": "...",
+  "observation_point": "proxy"
+}
+
+// approval_decision — written BEFORE the refusal is delivered, or before an approved frame is forwarded
+{
+  "v": 1,
+  "kind": "approval_decision",
+  "seq": 7,
+  "hold_id": "0-blast",
+  "decision": "deny",          // "approve" | "deny"; ABSENT (null) when no human decided
+  "cause": "DENIED",           // the closed vocabulary below
+  "waited": 2.5,               // seconds pending, from the gate's injected clock
+  "t_in": "...",
+  "observation_point": "proxy"
+}
+```
+
+**The never-a-frame rule.** A suppressed request and its refusal never cross the server
+boundary: the gate holds the `tools/call` before any byte of it is forwarded, and the
+refusal that answers it is delivered on the gate's own channel — never the proxy's data
+path, never the observed stream. So **no `frame` record names either one**, in any trace.
+The only records that name a held call are the two additive kinds above — which is exactly
+what makes a denied call distinguishable from a call that was never made: the trace states
+the hold and the decision, and the wire states nothing. Nothing from the gate enters the
+request index (`index.py`'s correlation sees only `frame` records), so a denied run
+correlates cleanly — no `response-without-request`, no `unanswered` caused by the gate.
+
+**The closed cause vocabulary** (`cause`, on `approval_decision`): exactly
+`APPROVED`, `DENIED`, `APPROVAL_TIMEOUT`, `APPROVAL_SHUTDOWN`, `APPROVAL_FAULT`. A
+resolution that is not pending has exactly one of these, and nothing else is ever written
+there — the channel's totality path (`APPROVAL_FAULT`: an internal fault suppressed the
+call) is in the set too, so a reader can name every way a hold ends. `decision` is
+`"approve"`/`"deny"` for the two human causes, and absent (JSON `null`) for the three
+operator/engine resolutions. A `hold_id` with a decision record but no hold record in the
+same trace — and a hold with no decision (a trace cut mid-hold by shutdown) — are the
+trace's own statements; `derive_approval_events` (`src/belay/approval/reader.py`) reports
+what exists and never repairs.
+
+**Timing is the injected clock, and ordering is the record's own.** `waited` and the
+deadline are functions of the gate's monotonic-clock seam, not wall time. The load-bearing
+ordering is the record order itself: the decision record's `seq` precedes the approved
+call's own `frame` records — the decision is recorded before the frame is forwarded (M7) —
+so a reader asserts the ordering over the records, never over timestamps.
+
+**Compatibility: two new kinds, not a schema bump.** Both kinds are first-class in the
+writer's `KINDS` registry, so the current reader returns them in `records`. Old readers —
+schema-v1 readers without knowledge of the kinds — survive them per the unknown-kind rule
+below: skipped, and the skip recorded, naming each kind. `SCHEMA_VERSION` is unchanged.
+
 ## The `claim` record
 
 ```jsonc

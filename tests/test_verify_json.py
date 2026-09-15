@@ -58,7 +58,9 @@ pytestmark = pytest.mark.skipif(
 STRONG_TEST = f"def test_rejects_wrong_password():\n    {REAL_ASSERTION}\n"
 
 
-def _capture_roundtrip(tmp_path: Path) -> tuple[Path, Path, Path]:
+def _capture_roundtrip(
+    tmp_path: Path, *, approval: bool = False
+) -> tuple[Path, Path, Path]:
     """Capture one real `write_note` turn through the gated proxy; return
     `(trace, manifest_dir, server_script)`.
 
@@ -67,6 +69,12 @@ def _capture_roundtrip(tmp_path: Path) -> tuple[Path, Path, Path]:
     symlinked tmp root (macOS `/tmp` -> `/private/tmp`) would not lexically match and the
     replayed write would be denied — the artifact-install precedent,
     `tests/test_artifact_install.py:212-217`.
+
+    With `approval=True` the capture runs behind the approval gate: the server's
+    `write_note` tool declares `destructiveHint: true`, so the gate holds the call,
+    and the approve decision for hold `0-write_note` is PRE-WRITTEN — the poll finds
+    it on its first tick and the capture proceeds exactly as the ungated one, with
+    the two approval records added to the trace.
     """
     base = Path(os.path.realpath(tmp_path))
     ws = base / "ws"
@@ -79,9 +87,18 @@ def _capture_roundtrip(tmp_path: Path) -> tuple[Path, Path, Path]:
     shutil.copy(FIXTURES / "docker_roundtrip_trace.py", ws / "docker_roundtrip_trace.py")
 
     env = os.environ.copy()
+    env.pop("BELAY_APPROVAL_DIR", None)
+    env.pop("BELAY_APPROVAL_TIMEOUT", None)
     env["BELAY_SANDBOX_SCOPE"] = str(ws)
     env["BELAY_SNAPSHOT_DIR"] = str(snap)
     env["BELAY_TRACE_DIR"] = str(trace_dir)
+    if approval:
+        approval_dir = base / "approval"
+        (approval_dir / "decisions").mkdir(parents=True)
+        (approval_dir / "decisions" / "0-write_note.json").write_text(
+            json.dumps({"decision": "approve", "reason": "go"}), encoding="utf-8"
+        )
+        env["BELAY_APPROVAL_DIR"] = str(approval_dir)
     capture = subprocess.run(
         [
             sys.executable,
@@ -109,6 +126,17 @@ def roundtrip(tmp_path_factory):
     capture, so every test here can re-run the CLI over the same trace+manifests.
     """
     return _capture_roundtrip(tmp_path_factory.mktemp("verify-json-roundtrip"))
+
+
+@pytest.fixture(scope="module")
+def roundtrip_approval(tmp_path_factory):
+    """The SAME roundtrip, captured behind the approval gate: the trace carries
+    `approval_hold` + `approval_decision` (APPROVED) and every per-turn verdict
+    is identical to the ungated run's (the orthogonality test proves it).
+    """
+    return _capture_roundtrip(
+        tmp_path_factory.mktemp("verify-json-roundtrip-approval"), approval=True
+    )
 
 
 def _verify(trace, manifest_dir, server, *flags: str) -> subprocess.CompletedProcess:
@@ -225,7 +253,7 @@ def _editor_trace(tmp_path: Path) -> tuple[Path, Path, Path]:
     return sorted(trace_dir.glob("*.jsonl"))[0], manifest_dir, FIXTURES / "weakening_editor_server.py"
 
 
-def test_json_emits_the_pinned_machine_contract(roundtrip) -> None:
+def test_json_emits_the_pinned_machine_contract(roundtrip_approval) -> None:
     """The emitted document equals the committed snapshot, field for field.
 
     The snapshot is the pinned contract (`tests/fixtures/verify_json_snapshot.json`),
@@ -233,8 +261,13 @@ def test_json_emits_the_pinned_machine_contract(roundtrip) -> None:
     renamed key, a dropped sub-verdict, a PASS rendered without its coverage block, a
     status that disagrees with the human report — fails HERE, and a deliberate contract
     change is made by re-pinning the snapshot, never silently.
+
+    The run is the approval-GATED capture: the trace carries the gate's two records,
+    so the document carries the additive `approval` section — the diff against the
+    pre-approval snapshot is exactly that section, and a re-pin touching anything
+    else is a regression this test catches.
     """
-    trace, manifest_dir, server = roundtrip
+    trace, manifest_dir, server = roundtrip_approval
     run = _verify(trace, manifest_dir, server, "--json")
 
     assert run.returncode == 0, run.stdout + run.stderr
@@ -398,3 +431,46 @@ def test_json_turn_n_keeps_one_record_and_null_trajectory(roundtrip) -> None:
     assert whole["trajectory"] is not None
     assert whole["trajectory"]["status"] == "UNVERIFIED"
     assert whole["trajectory"]["cause"] == "NO_CLAIM_RECORDED"
+
+
+def _strip_approval_records(trace: Path, tmp_path: Path) -> Path:
+    """The SAME trace with only the approval records removed — every other record
+    byte-identical, seq gaps included, which is exactly what a pre-approval capture
+    of this run would look like. Written as a sibling JSONL file."""
+    records = [
+        json.loads(line) for line in trace.read_bytes().splitlines() if line
+    ]
+    kept = [
+        r for r in records if r["kind"] not in ("approval_hold", "approval_decision")
+    ]
+    stripped = tmp_path / "stripped.jsonl"
+    stripped.write_text(
+        "".join(json.dumps(r) + "\n" for r in kept), encoding="utf-8"
+    )
+    return stripped
+
+
+def test_approval_records_never_influence_any_verdict(
+    roundtrip_approval, tmp_path
+) -> None:
+    """The orthogonality pin: verifying the approval-carrying trace produces the
+    SAME per-turn verdicts as verifying the same trace with the approval records
+    stripped — the events never influence A1/A2/A3.
+
+    The two documents agree everywhere except the additive `approval` section: a
+    diff anywhere else means the events leaked into a verdict, and that is a
+    regression this test catches.
+    """
+    trace, manifest_dir, server = roundtrip_approval
+    stripped = _strip_approval_records(trace, tmp_path)
+
+    gated = _json(_verify(trace, manifest_dir, server, "--json"))
+    clean = _json(_verify(stripped, manifest_dir, server, "--json"))
+    gated["trace"] = TRACE_PLACEHOLDER
+    clean["trace"] = TRACE_PLACEHOLDER
+
+    assert gated["approval"] == {"holds": 1, "decisions": {"APPROVED": 1}}
+    assert clean.get("approval") is None
+    assert gated == {**clean, "approval": gated["approval"]}, (
+        "the approval events must be the ONLY difference between the two documents"
+    )

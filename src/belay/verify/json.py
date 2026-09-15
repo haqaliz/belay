@@ -54,6 +54,13 @@ class VerifyReport:
     claim verdict — no author configured, the axis disabled, or D3 silence — is the
     common case, and writing `"claim": null` would rewrite the pinned `--json`
     snapshot for every such trace.
+
+    `approval` follows the same absent-never-zero rule: the additive section —
+    `{"holds": N, "decisions": {<CAUSE>: n, ...}}` — is present iff the trace
+    carries approval records, and the key is ABSENT entirely otherwise (never a
+    fabricated `0`, never an empty section). A denied call is an observation,
+    never a turn and never a verdict; the section reports the events and no
+    verdict axis reads them.
     """
 
     trace: Optional[str]
@@ -64,6 +71,7 @@ class VerifyReport:
     trajectory: Optional[dict]
     claim: Optional[dict]
     error: Optional[dict]
+    approval: Optional[dict] = None
 
     def as_dict(self) -> dict:
         """The document, in the contract's key order."""
@@ -76,6 +84,8 @@ class VerifyReport:
             "exposure": self.exposure,
             "trajectory": self.trajectory,
         }
+        if self.approval is not None:
+            payload["approval"] = self.approval
         if self.claim is not None:
             payload["claim"] = self.claim
         payload["error"] = self.error
@@ -140,6 +150,31 @@ def _subverdict_record(sub) -> dict:
             exposure.get("compared") if isinstance(exposure, dict) else None
         )
     return record
+
+
+def approval_record(events: Sequence[dict]) -> Optional[dict]:
+    """The additive `approval` section, or None when the trace carries no approval events.
+
+    Present iff the trace has approval records — `{"holds": N, "decisions":
+    {<CAUSE>: n, ...}}`, decisions keyed by cause with only present causes as
+    keys. A trace with no approval records yields `None`, and the document
+    OMITS the key entirely: **absent-never-zero** — never a fabricated `0`,
+    never an empty section. A hold with no decision (a trace cut mid-hold)
+    reports the hold with an empty `decisions` dict — the report states what
+    the trace states, never a fabricated cause.
+    """
+    holds = 0
+    decisions: dict[str, int] = {}
+    for event in events:
+        if event.get("kind") == "approval_hold":
+            holds += 1
+        elif event.get("kind") == "approval_decision":
+            cause = event.get("cause")
+            if cause is not None:
+                decisions[cause] = decisions.get(cause, 0) + 1
+    if not holds and not decisions:
+        return None
+    return {"holds": holds, "decisions": decisions}
 
 
 def aggregate_record(verdicts: Sequence) -> dict:
@@ -262,6 +297,7 @@ __all__ = [
     "SCHEMA",
     "VerifyReport",
     "aggregate_record",
+    "approval_record",
     "claim_record",
     "coverage_record",
     "error_report",

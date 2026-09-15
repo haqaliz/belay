@@ -267,7 +267,7 @@ def test_no_scope_means_a_plain_popen(monkeypatch, tmp_path):
 
     seen: dict = {}
 
-    def fake_run(command, capture=None, before_frame=None, stderr_capture=None):
+    def fake_run(command, capture=None, before_frame=None, stderr_capture=None, peer_lock=None):
         seen.update(
             command=command,
             capture=capture,
@@ -304,7 +304,7 @@ def test_a_scope_puts_sandbox_exec_in_front_of_the_command(monkeypatch, tmp_path
     workspace = make_workspace(tmp_path)
     seen: dict = {}
 
-    def fake_run(command, capture=None, before_frame=None, stderr_capture=None):
+    def fake_run(command, capture=None, before_frame=None, stderr_capture=None, peer_lock=None):
         seen.update(command=command, profile=Path(command[2]).read_text())
         seen["mode"] = oct(Path(command[2]).stat().st_mode & 0o777)
         seen["before_frame"] = before_frame
@@ -335,7 +335,7 @@ def test_the_profile_does_not_outlive_the_run(monkeypatch, tmp_path):
     workspace = make_workspace(tmp_path)
     seen: dict = {}
 
-    def fake_run(command, capture=None, before_frame=None, stderr_capture=None):
+    def fake_run(command, capture=None, before_frame=None, stderr_capture=None, peer_lock=None):
         seen["profile_path"] = command[2]
         return 0
 
