@@ -690,6 +690,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         from belay.verify.json import (
             VerifyReport,
             aggregate_record,
+            approval_record,
             claim_record,
             coverage_record,
             error_report,
@@ -891,6 +892,10 @@ def _cmd_verify(args: argparse.Namespace) -> int:
             # One document, rendered from the SAME objects the text renderers consumed:
             # the TurnVerdicts above, the shared exposure accumulator, and the same
             # trajectory/claim summaries. Nothing is recomputed for the machine surface.
+            # The approval section is derived from the trace's own records — a denied
+            # call is an observation, never a turn and never a verdict (absent-never-zero).
+            from belay.approval.reader import derive_approval_events
+
             report = VerifyReport(
                 trace=args.trace,
                 turns=report_turns,
@@ -898,6 +903,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
                 coverage=coverage_record(verdicts),
                 exposure=exposure_record(_exposure_summary(verdicts)),
                 trajectory=trajectory_record(trajectory),
+                approval=approval_record(derive_approval_events(records)),
                 claim=claim_record(claim, check=claim_check),
                 error=None,
             )
