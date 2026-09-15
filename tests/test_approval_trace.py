@@ -10,20 +10,31 @@ Nothing from the gate flows through the frame path or the request index.
 
 These tests pin the writer side (Phase 1: the kinds exist, the envelope holds,
 seq is allocated under the writer's lock, and the records survive a write→read
-round-trip losslessly) and the derived reader (Phase 2: `derive_approval_events`
+round-trip losslessly), the derived reader (Phase 2: `derive_approval_events`
 returns the events in seq order with exactly the field contract, reports what
-exists and never repairs).
+exists and never repairs), and the e2e traces the real gate writes (Phase 3:
+hold-then-decision ordering in a subprocess-level deny/approve/timeout run,
+never a frame for a suppressed request or its refusal, a clean correlation
+index, and the old-reader round trip that skips the kinds by name).
 """
 
 from __future__ import annotations
 
+import base64
 import json
 import threading
 from pathlib import Path
 
-from belay.approval.reader import derive_approval_events
+from belay.approval.reader import APPROVAL_KINDS, derive_approval_events
+from belay.index import derive_correlation
 from belay.replay.reader import read_trace
 from belay.trace import KINDS, SCHEMA_VERSION, TraceWriter
+from test_approval_proxy import (
+    approval_env,
+    run_proxy_phased,
+    server_cmd,
+    write_decision,
+)
 
 
 def _sole_trace(directory: Path) -> Path:
@@ -311,3 +322,161 @@ def test_unknown_approval_adjacent_kinds_are_skipped_never_fatal() -> None:
     events = derive_approval_events(records)
 
     assert [e["kind"] for e in events] == ["approval_hold", "approval_decision"]
+
+
+# --- Phase 3: the real gate's traces (subprocess-level e2e) -------------------
+
+
+def _e2e_deny_trace(tmp_path: Path) -> Path:
+    """One real deny run through the proxy; return the captured trace's path.
+
+    Reuses the scripted-server pattern from `test_approval_proxy.py` (phase 4 of
+    aspect 3): the deny decision for hold `0-blast` is pre-written, the client
+    handshakes, lists tools, then calls the destructive tool, and the gate
+    suppresses the call and delivers the refusal.
+    """
+    approval_dir = tmp_path / "approval"
+    write_decision(approval_dir, "0-blast", "deny", reason="not now")
+    server, log = server_cmd(tmp_path)
+    env = approval_env(tmp_path / "trace", approval_dir)
+
+    outcome = run_proxy_phased(server, env)
+    assert outcome["returncode"] == 0
+    assert outcome["elapsed"] < 15.0
+    return _sole_trace(tmp_path / "trace")
+
+
+def _decoded_frames(records: list[dict]) -> list[tuple[dict, bytes]]:
+    """Every frame record with its decoded bytes — what actually crossed the wire."""
+    return [
+        (record, base64.b64decode(record["raw"]))
+        for record in records
+        if record["kind"] == "frame"
+    ]
+
+
+def test_e2e_deny_run_records_hold_then_decision_and_never_a_frame_for_the_gate(
+    tmp_path: Path,
+) -> None:
+    """The e2e deny trace: `approval_hold` then `approval_decision` (deny, named
+    cause), no `frame` record for the suppressed request or the refusal, and a
+    correlation index the gate's events leave clean.
+
+    The refusal is the gate's own channel, never the wire — so the trace's
+    frames are exactly the handshake and the `tools/list` pair, and
+    `derive_correlation` reports no `response-without-request` and no
+    `unanswered`: nothing from the gate flows through the correlation machinery.
+    """
+    path = _e2e_deny_trace(tmp_path)
+    records = _read(path)
+
+    hold = next(r for r in records if r["kind"] == "approval_hold")
+    decision = next(r for r in records if r["kind"] == "approval_decision")
+    assert decision["seq"] > hold["seq"], "the hold is recorded before its decision"
+    assert decision["cause"] == "DENIED"
+    assert decision["decision"] == "deny"
+
+    frames = _decoded_frames(records)
+    assert len(frames) == 5, (
+        "the trace holds exactly the initialize pair, the initialized "
+        f"notification and the tools/list pair — got {len(frames)} frames"
+    )
+    assert not any(b'"method":"tools/call"' in raw for _, raw in frames), (
+        "the suppressed request must never become a frame record"
+    )
+    assert not any(b'"code": -32000' in raw for _, raw in frames), (
+        "the refusal travels on the gate's own channel, never as a frame"
+    )
+
+    index = derive_correlation(records)
+    assert not any(e["status"] == "response-without-request" for e in index)
+    assert not any(e["status"] == "unanswered" for e in index)
+
+
+def test_e2e_approve_run_records_the_decision_before_the_forwarded_call(
+    tmp_path: Path,
+) -> None:
+    """M7 ordering, pinned as a SEQUENCE assertion over the records: the approve
+    decision is recorded before the approved frame is forwarded — the decision's
+    `seq` precedes the call's own frame records, never a timing assertion."""
+    approval_dir = tmp_path / "approval"
+    write_decision(approval_dir, "0-blast", "approve", reason="go")
+    server, log = server_cmd(tmp_path)
+    env = approval_env(tmp_path / "trace", approval_dir)
+
+    outcome = run_proxy_phased(server, env)
+    assert outcome["returncode"] == 0
+    assert outcome["elapsed"] < 15.0
+
+    records = _read(_sole_trace(tmp_path / "trace"))
+    approval = [r for r in records if r["kind"] in ("approval_hold", "approval_decision")]
+    hold_seq = next(r["seq"] for r in approval if r["kind"] == "approval_hold")
+    decision = next(r for r in approval if r["kind"] == "approval_decision")
+    assert decision["cause"] == "APPROVED"
+    assert decision["decision"] == "approve"
+
+    frames = _decoded_frames(records)
+    call_seq = next(
+        record["seq"]
+        for record, raw in frames
+        if b'"method":"tools/call"' in raw
+    )
+    reply_seq = next(
+        record["seq"]
+        for record, raw in frames
+        if b'"id": 3' in raw and b'"result"' in raw
+    )
+    # hold, then the decision, then the call crosses, then its reply returns:
+    # the decision record is written BEFORE the approved frame is forwarded.
+    assert hold_seq < decision["seq"] < call_seq < reply_seq
+
+
+def test_e2e_timeout_run_records_an_APPROVAL_TIMEOUT_decision(tmp_path: Path) -> None:
+    """A short `BELAY_APPROVAL_TIMEOUT` with no decision file: the hold times
+    out fail-closed — the call never crosses, and the decision record names
+    `APPROVAL_TIMEOUT` with no human decision."""
+    server, log = server_cmd(tmp_path)
+    env = approval_env(tmp_path / "trace", tmp_path / "approval", timeout=0.4)
+
+    outcome = run_proxy_phased(server, env)
+    assert outcome["returncode"] == 0
+    assert outcome["elapsed"] < 15.0
+
+    records = _read(_sole_trace(tmp_path / "trace"))
+    decision = next(r for r in records if r["kind"] == "approval_decision")
+    assert decision["cause"] == "APPROVAL_TIMEOUT"
+    assert decision["decision"] is None, "a timeout carries no human decision"
+
+    frames = _decoded_frames(records)
+    assert not any(b'"method":"tools/call"' in raw for _, raw in frames), (
+        "a timed-out call is suppressed, never forwarded"
+    )
+
+
+def test_old_reader_round_trip_keeps_every_frame_and_skips_the_approval_kinds(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """An OLD reader — schema-v1 KINDS without the approval kinds — survives the
+    e2e deny trace: every frame is intact and byte-identical, and the two
+    approval kinds are SKIPPED with their kind named in the skip's reason, never
+    an error and never a silent drop.
+
+    The current reader knows the kinds (they are in `belay.trace.KINDS`), so the
+    old reader is simulated by pinning its `KINDS` to the pre-approval set — the
+    exact list any reader written before the kinds shipped would hold.
+    """
+    path = _e2e_deny_trace(tmp_path)
+    on_disk = _on_disk(path)
+
+    old_kinds = tuple(k for k in KINDS if k not in APPROVAL_KINDS)
+    monkeypatch.setattr("belay.replay.reader.KINDS", old_kinds)
+
+    result = read_trace(path)
+
+    assert result.records == [r for r in on_disk if r["kind"] not in APPROVAL_KINDS], (
+        "every understood record — frames included — is intact and byte-identical"
+    )
+    assert [s.kind for s in result.skips] == ["approval_hold", "approval_decision"]
+    assert all("unknown kind" in s.reason for s in result.skips), [
+        s.reason for s in result.skips
+    ]
