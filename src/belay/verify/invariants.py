@@ -11,10 +11,15 @@ invariant is the OPERATOR's policy; the trace is the AGENT's evidence. They must
 mix. If a run could author a permissive invariant into its own trace and have A1 honour
 it, A1 is defeated by construction — the agent grades its own homework. So the only ways
 to obtain an Invariant here are `load_invariants(operator_file)`,
-`default_invariants()` (a hardcoded constant) and `resolve_library_entry(name)` (the
+`default_invariants()` (a hardcoded constant), `resolve_library_entry(name)` (the
 module-level `LIBRARY` table — the DELIBERATE third producer, admitted by name in
 `test_no_invariant_is_ever_sourced_from_a_trace`, whose new pins assert it takes only
-the entry name and performs no file I/O). Nothing reads policy from a trace, and that
+the entry name and performs no file I/O) and `parse_authored_invariants(payload)` (the
+DELIBERATE fourth producer, invariant-authoring PRD M4/M5: it parses ONLY the parsed
+JSON payload of the authored artifact the author command emitted — an
+operator-controlled file, never trace records, and its `["payload"]`-only signature is
+what keeps a trace unreachable; an untrusted artifact degrades to UNVERIFIED, never
+enforces). Nothing reads policy from a trace, and that
 test asserts the absence structurally, so a future trace-reading loader breaks the build
 rather than silently opening the hole.
 
@@ -61,11 +66,13 @@ comparison, and the zero-LLM AST guard covers `src/belay/verify/`.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from belay.snapshot.bth1 import FieldDiff
@@ -146,6 +153,19 @@ IN_SCOPE_FILE_BUDGET = "in-scope-file-budget-exceeded"
 #: UNVERIFIED with this cause on every turn — never PASS, never FAIL.
 EGRESS_UNOBSERVABLE = "network-egress-unobservable"
 
+#: The named causes an AUTHORED invariant can degrade with (invariant-authoring M5): an
+#: artifact whose calibration is absent/malformed, and one whose policy set was edited
+#: after calibration (digest mismatch). Both are UNVERIFIED — never PASS, never a
+#: fabricated FAIL — because a rule nobody calibrated must not be enforced (an
+#: uncalibrated rule that manufactured a violation would teach operators to distrust
+#: authored policy, PRD Goal 2).
+AUTHORED_INVARIANT_UNCALIBRATED = "authored-invariant-uncalibrated"
+AUTHORED_INVARIANT_ALTERED = "authored-invariant-altered"
+#: The authored-artifact schema this engine understands (invariant-authoring M4).
+#: Anything else — including a FUTURE version this engine does not know — is rejected at
+#: load, fail-closed, never a silent empty policy.
+AUTHORED_SCHEMA = "belay-authored-invariants/1"
+
 #: How many in-scope files one turn may be judged over before the rule abstains. Every one
 #: of them is read twice and parsed twice, so an unbounded scope on a monorepo would turn a
 #: ~5 ms per-turn verdict into an unbounded one. A replay delta covers ONE tool call, so
@@ -166,6 +186,14 @@ class Invariant:
 
     scope: bytes
     rule: str
+    #: Non-`None` only for an invariant from an AUTHORED ARTIFACT whose calibration is
+    #: absent/malformed (`AUTHORED_INVARIANT_UNCALIBRATED`) or was invalidated by an
+    #: edit after calibration (`AUTHORED_INVARIANT_ALTERED`). An untrusted invariant is
+    #: NEVER enforced: `evaluate_invariant` short-circuits it to UNVERIFIED with this
+    #: cause before any rule dispatch or delta check — never PASS, never FAIL. Additive
+    #: by construction: every existing producer (operator file, defaults, library) leaves
+    #: it unset, so existing keyword constructors and equality are unaffected.
+    untrusted_cause: str | None = None
 
 
 @dataclass(frozen=True)
@@ -190,12 +218,15 @@ class ContentRoots:
 def load_invariants(path: Path) -> list[Invariant]:
     """Load operator-declared invariants from a JSON file. The ONLY way to obtain policy.
 
-    The file is a JSON list of `{"scope": "<str>", "rule": "<str>"}` objects. Each scope
+    The file is a JSON list of `{"scope": "<str>", "rule": "<str>"}` objects, OR — shape
+    dispatch, invariant-authoring M5 — a JSON OBJECT carrying the authored schema
+    (`AUTHORED_SCHEMA`), which is loaded through `parse_authored_invariants` and its
+    trust rules. Each list scope
     string is encoded to raw bytes with `os.fsencode` (matching BTH-1 / `effect._paths`);
     each rule is checked against `_KNOWN_RULES`. `[]` is valid — the operator declared no
-    invariants. Anything malformed (not JSON, not a list, wrong item shape, or an unknown
-    rule) raises `ValueError` with a message that names the problem — never a silent `[]`,
-    never a raw traceback.
+    invariants. Anything malformed (not JSON, not a list or authored object, wrong item
+    shape, or an unknown rule) raises `ValueError` with a message that names the problem —
+    never a silent `[]`, never a raw traceback.
 
     It takes a filesystem `path`, never trace records. That signature IS the provenance
     boundary: policy is sourced from a file the operator controls, not from the
@@ -215,6 +246,13 @@ def load_invariants(path: Path) -> list[Invariant]:
         ) from exc
 
     if not isinstance(raw, list):
+        if isinstance(raw, dict):
+            # Shape dispatch (invariant-authoring M5 / artifact-trust): a JSON OBJECT is
+            # an authored artifact and goes through the trust path — a well-formed
+            # calibrated artifact enforces like operator policy, an uncalibrated or
+            # tampered one degrades to UNVERIFIED with a named cause, and a JSON object
+            # that is neither (unknown/future schema) is a fail-closed ValueError.
+            return parse_authored_invariants(raw)
         raise ValueError(
             f"invariant file {file_path!r} must contain a JSON list of invariants, "
             f"got {type(raw).__name__}"
@@ -226,7 +264,7 @@ def load_invariants(path: Path) -> list[Invariant]:
     return invariants
 
 
-def _parse_invariant(item: object, *, index: int, source: Path) -> Invariant:
+def _parse_invariant(item: object, *, index: int, source: Path | str) -> Invariant:
     """One list entry -> a validated `Invariant`, or a `ValueError` naming what was wrong."""
     where = f"invariant #{index} in {source!r}"
 
@@ -253,6 +291,117 @@ def _parse_invariant(item: object, *, index: int, source: Path) -> Invariant:
         )
 
     return Invariant(scope=os.fsencode(scope), rule=rule)
+
+
+def canonical_policy_digest(
+    *,
+    invariants: Sequence[Invariant],
+    task_sha256: str,
+    control_sha256: str,
+) -> str:
+    """The calibration digest over a policy set: what calibration PROVES is attached.
+
+    sha256 over canonical JSON (`sort_keys=True`, compact separators) of the NORMALIZED
+    `{"rule", "scope"}` pairs — sorted by `(rule, scope)`, scopes `os.fsdecode`d,
+    duplicates collapsed — plus the task and control sha256s. Rationale text is NOT in
+    the digest, because rationale is prose, not policy: editing a rationale after
+    calibration must not invalidate the calibration, while editing a scope or a rule
+    must (invariant-authoring D-3). The exact bytes are the interface the
+    `authoring-protocol` aspect emits against and the `corpus-fixtures` enforce against;
+    the golden form is pinned in `tests/test_authored_invariants.py`.
+    """
+    normalized = sorted({(inv.rule, os.fsdecode(inv.scope)) for inv in invariants})
+    canonical = json.dumps(
+        {
+            "invariants": [{"rule": rule, "scope": scope} for rule, scope in normalized],
+            "task_sha256": task_sha256,
+            "control_sha256": control_sha256,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def parse_authored_invariants(payload: Mapping[str, Any]) -> list[Invariant]:
+    """Parse and TRUST-CHECK an authored artifact (invariant-authoring M4/M5).
+
+    The DELIBERATE fourth producer of policy, admitted by name in
+    `test_no_invariant_is_ever_sourced_from_a_trace`: it parses ONLY the parsed JSON
+    payload of the artifact the author command emitted — an operator-controlled file,
+    never trace records — and the signature of exactly `["payload"]` is what keeps a
+    trace unreachable. The control trace's hash is calibration EVIDENCE inside the
+    artifact; it is never a policy source.
+
+    Trust rules (M5), applied to EVERY invariant from the artifact:
+    - the schema must be exactly `AUTHORED_SCHEMA`; any other string — including a
+      FUTURE version this engine does not know — is a `ValueError`, fail-closed, never a
+      silent empty policy;
+    - `payload["invariants"]` must be a list, each entry validated by the same rule
+      contract as the operator file (`_parse_invariant`: unknown rule -> `ValueError`,
+      scope via `os.fsencode`);
+    - `control.calibrated` must be `is True` (a string `"true"` is fail-closed) and the
+      task/control sha256s and the `calibration.digest` must be present and
+      well-formed, else every invariant is untrusted with
+      `AUTHORED_INVARIANT_UNCALIBRATED` — absent/malformed calibration is NOT an error,
+      it is a degradation: an uncalibrated invariant is still carried so the run can
+      name WHY it abstains;
+    - the recorded digest must equal `canonical_policy_digest` recomputed over the
+      parsed invariants and the recorded hashes, else every invariant is untrusted with
+      `AUTHORED_INVARIANT_ALTERED` (the policy set was edited after calibration);
+    - otherwise `untrusted_cause=None` and the invariants enforce exactly like operator
+      policy.
+    `evaluate_invariant` refuses to enforce any invariant with `untrusted_cause` set.
+    """
+    schema = payload.get("schema")
+    if schema != AUTHORED_SCHEMA:
+        raise ValueError(
+            f"authored invariant artifact declares schema {schema!r}; Belay understands "
+            f"only {AUTHORED_SCHEMA!r}. An unknown or future schema is rejected — never "
+            "silently treated as no policy, which would verify the run against nothing."
+        )
+
+    invariants_raw = payload.get("invariants")
+    if not isinstance(invariants_raw, list):
+        raise ValueError(
+            "authored invariant artifact must carry a JSON list under \"invariants\", "
+            f"got {type(invariants_raw).__name__ if invariants_raw is not None else 'nothing'}"
+        )
+
+    invariants = [
+        _parse_invariant(item, index=i, source="authored artifact")
+        for i, item in enumerate(invariants_raw)
+    ]
+
+    control = payload.get("control")
+    task = payload.get("task")
+    calibration = payload.get("calibration")
+
+    untrusted_cause: str | None = None
+    if (
+        not isinstance(control, dict)
+        or control.get("calibrated") is not True
+        or not isinstance(control.get("sha256"), str)
+        or not isinstance(task, dict)
+        or not isinstance(task.get("sha256"), str)
+        or not isinstance(calibration, dict)
+        or not isinstance(calibration.get("digest"), str)
+    ):
+        untrusted_cause = AUTHORED_INVARIANT_UNCALIBRATED
+    else:
+        recomputed = canonical_policy_digest(
+            invariants=invariants,
+            task_sha256=task["sha256"],
+            control_sha256=control["sha256"],
+        )
+        if calibration["digest"] != recomputed:
+            untrusted_cause = AUTHORED_INVARIANT_ALTERED
+
+    if untrusted_cause is not None:
+        invariants = [
+            replace(inv, untrusted_cause=untrusted_cause) for inv in invariants
+        ]
+    return invariants
 
 
 @dataclass(frozen=True)
@@ -400,6 +549,25 @@ def evaluate_invariant(
 
     scope_str = os.fsdecode(inv.scope)
     expected = {"rule": inv.rule, "scope": scope_str, "turn": turn_index}
+
+    # An untrusted AUTHORED invariant (invariant-authoring M5) is never enforced. It
+    # fires BEFORE the content-rule dispatch and BEFORE any delta check: no content rule,
+    # no delta grounding, no underlying evaluation may ever turn it into PASS or FAIL. An
+    # uncalibrated or tampered rule that manufactured a violation would be worse than no
+    # rule at all, so the short-circuit is UNVERIFIED with the named cause on every turn
+    # — mirroring the egress abstain shape below.
+    if inv.untrusted_cause is not None:
+        return Verdict(
+            "A1", "invariant", Status.UNVERIFIED,
+            observed=None, expected={**expected, "cause": inv.untrusted_cause},
+            message=(
+                f"invariant {inv.rule!r} scoped to {scope_str!r} is UNVERIFIED for turn "
+                f"{turn_index} [{inv.untrusted_cause}]: this authored invariant is "
+                f"untrusted — its calibration is absent, malformed, or was invalidated by "
+                f"an edit after calibration — so A1 never enforces it; never PASS, never "
+                f"a fabricated FAIL"
+            ),
+        )
 
     if inv.rule in CONTENT_GROUNDED_RULES:
         return _evaluate_content_rule(inv, delta, turn_index, roots, expected)
@@ -932,6 +1100,9 @@ def trajectory_case(
 
 
 __all__ = [
+    "AUTHORED_INVARIANT_ALTERED",
+    "AUTHORED_INVARIANT_UNCALIBRATED",
+    "AUTHORED_SCHEMA",
     "CONTENT_GROUNDED_RULES",
     "ContentRoots",
     "EGRESS_UNOBSERVABLE",
@@ -955,10 +1126,12 @@ __all__ = [
     "RULE_SUITE_BEFORE_SUCCESS_CLAIM",
     "UNDECIDABLE_WEAKENING",
     "UNREADABLE_IN_SCOPE_FILE",
+    "canonical_policy_digest",
     "corrupt_success_case",
     "default_invariants",
     "evaluate_invariant",
     "load_invariants",
+    "parse_authored_invariants",
     "resolve_library_entry",
     "trajectory_case",
 ]
