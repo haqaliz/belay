@@ -10,6 +10,50 @@ carries the current state and the rules that still bind.
 
 ---
 
+**`belay invariant infer` SHIPS — R3'S THIRD MITIGATION IS BUILT: A MODEL WRITES A1
+POLICY, EXECUTION CALIBRATES IT, AND AN UNCALIBRATED ARTIFACT CAN NEVER FAIL**
+(2026-09-15, `invariant-authoring-experiment`, v-next; not yet released). Phase 2's
+invariant-authoring experiment (`docs/ROADMAP.md:308`; deferred by name at
+`docs/planning/invariant-library/prd.md:151-152`): the fourth candidate answer —
+"inferred from the task spec" — tested. `belay invariant infer --task <spec>
+--author <cmd> --control <clean-trace> --server -- CMD… --out <artifact>` runs an
+out-of-process BYOK author (JSON-in/JSON-out, the A3 `SubprocessAuthor` pattern — the
+engine never calls a model), validates candidates against the known rule vocabulary,
+**calibrates by replaying the control once through the shipped `verify_turn`
+composition** (a candidate that FAILs any control turn is rejected
+`CALIBRATION_FAILED`; a control that cannot replay to a decision is
+`CONTROL_UNREPLAYABLE`), and emits a reviewable `belay-authored-invariants/1`
+artifact carrying a sha256 over the normalized policy set + task + control. The
+`--invariants` flag loads it additively by shape — a JSON list stays operator policy,
+byte-unchanged — through `parse_authored_invariants`, the deliberate fourth policy
+producer admitted by name in the provenance guard: a well-formed calibrated artifact
+enforces exactly like operator policy, while missing/malformed calibration degrades
+every invariant to UNVERIFIED `AUTHORED_INVARIANT_UNCALIBRATED` and a policy set
+edited after calibration to `AUTHORED_INVARIANT_ALTERED` — **never FAIL, never a
+silent PASS, never a silent skip**. The `Invariant.untrusted_cause` short-circuit is
+additive; every existing producer (operator file, defaults, library) leaves it unset.
+A reference `claude -p` author ships (`python -m
+belay.authoring.reference_author --model <full-id>`) with `--tools ""` +
+`--strict-mcp-config` and the three `ANTHROPIC_*` vars scrubbed **by absence, never
+`""`**; the live proof is `manual`-marked and owner-run.
+**THE HONESTY LINES:** the author writes policy; execution decides — A1 semantics are
+untouched, no new axis, no new status, no invariant default change; the unit is dark
+by default (no `--author` → exit 2 named, never a fallback); calibration proves *this
+invariant does not fire on this control*, nothing more, and the control is
+operator-chosen (the named residual, PRD R-a); a model that produces nothing
+calibratable is a **recorded result** (PRD R-g), never hidden. **No published number
+moves:** `11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16`, `recall 0.00` stand
+unedited; nothing was recomputed.
+**NOT built, by name:** the authoring UI and per-repo library management (the
+deferral's other nouns), any live-model CI test, per-invariant calibration digests
+(one digest over the policy set ships), `--control` as a banked corpus case, and
+re-calibration of a hand-edited artifact (the remedy is re-running `infer`). Suite
+2403 → **2540** passing — 8 of them the darwin-gated end-to-end fixture: each
+authored invariant FAILs its corrupt fixture at the exact turn with A2 PASS on the
+same turn, banks via real `add_case`, recomputes MATCH, and a tampered artifact
+degrades to `AUTHORED_INVARIANT_ALTERED` (never FAIL). See
+`docs/planning/invariant-authoring/`.
+
 **THE APPROVAL GATE SHIPS — THE PROXY HOLDS A RISKY `tools/call` PENDING HUMAN
 APPROVAL, AND THE "WATCH AND STEER" SURFACE GAINS ITS STEER HALF** (2026-09-15,
 `approval-gate`, merged as PR #36, `77074f0`; the feature's five aspects —
