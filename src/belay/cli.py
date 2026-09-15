@@ -550,6 +550,198 @@ def _cmd_invariant_library_list(args: argparse.Namespace) -> int:
     return 0
 
 
+# --- belay invariant infer: the authoring pipeline (propose -> calibrate -> emit) -----
+
+
+def _cmd_invariant_infer(args: argparse.Namespace) -> int:
+    """`belay invariant infer` — a model proposes A1 invariants; execution calibrates them.
+
+    The author (`--author CMD`, ONE quoted string shlex-split here) is an
+    out-of-process BYOK command: it receives the task spec, a bounded repo inventory,
+    the rule vocabulary and the library entries on stdin, and answers with
+    `{"candidates": [{"scope", "rule", "rationale"}, ...]}` on stdout. The engine never
+    calls a model. Calibration then REPLAYS the control trace (`--control`) through the
+    same `verify_turn` composition `belay verify` uses — candidate invariants ONLY,
+    never the defaults — and a candidate that FAILs any control turn is rejected. The
+    surviving policy is emitted as the authored artifact (`--out`), digest
+    `canonical_policy_digest`, loadable by `belay verify --invariants <artifact>`.
+
+    Fail-closed on every path with a named cause and exit 2 — a bad author, an
+    unparseable proposal, an unknown rule, a calibration failure, or a control that
+    never re-executed (`CONTROL_UNREPLAYABLE`) all leave `--out` untouched: no partial
+    file, no empty artifact, no uncalibrated policy.
+
+    `--json` emits ONE JSON document (ok/cause, candidates, rejections, calibration
+    rejects, control turns, artifact path) instead of the human report; the exit code
+    is unchanged.
+    """
+    from belay.authoring.infer import NO_AUTHOR_CONFIGURED, run_infer
+
+    json_mode = args.json
+
+    def fail(cause: str, message: str) -> int:
+        if json_mode:
+            _emit(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "artifact": None,
+                        "model": None,
+                        "turns": 0,
+                        "decided_turns": 0,
+                        "candidates": [],
+                        "rejections": [],
+                        "calibration_rejects": [],
+                        "error": {"cause": cause},
+                    },
+                    sort_keys=True,
+                )
+            )
+        else:
+            _emit(f"belay: invariant infer failed [{cause}]: {message}")
+        return 2
+
+    # Dark by default (D-8): `--author` is REQUIRED in argparse, and a blank or
+    # un-lexable string is the same named failure — never a fallback, never a model
+    # import, never a guessed author.
+    if args.author is None or not args.author.strip():
+        return fail(
+            NO_AUTHOR_CONFIGURED,
+            "an author command is required after --author (BYOK: the command proposes "
+            "invariants from the task spec; nothing runs without it)",
+        )
+    try:
+        author_command = tuple(shlex.split(args.author))
+    except ValueError as exc:
+        return fail(
+            NO_AUTHOR_CONFIGURED,
+            f"--author could not be parsed as a shell command ({exc}): {args.author!r}",
+        )
+    if not author_command:
+        return fail(
+            NO_AUTHOR_CONFIGURED,
+            "--author is blank; a non-empty command is required",
+        )
+
+    if not args.server:
+        return fail(
+            "NO_SERVER_CONFIGURED",
+            "a server command is required after --server; nothing to calibrate against",
+        )
+
+    # The manifest-dir default: the control's `<stem>.manifests` sibling, ONLY when it
+    # exists — otherwise the fail-closed error stands (never a guessed directory, and
+    # calibration cannot run without the recorded snapshot manifests).
+    manifest_dir: Path | None
+    if args.manifest_dir is not None:
+        manifest_dir = Path(args.manifest_dir)
+    else:
+        sibling = Path(args.control).parent / (Path(args.control).stem + ".manifests")
+        manifest_dir = sibling if sibling.is_dir() else None
+
+    result = run_infer(
+        task_path=Path(args.task),
+        control_path=Path(args.control),
+        author_command=author_command,
+        out_path=Path(args.out),
+        manifest_dir=manifest_dir,
+        server_command=args.server,
+        timeout=args.timeout,
+        replays=args.replays,
+        repo_dir=Path(args.repo) if args.repo else None,
+    )
+
+    if not result.ok:
+        if json_mode:
+            _emit(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "artifact": None,
+                        "model": None,
+                        "turns": result.turns,
+                        "decided_turns": result.decided_turns,
+                        "candidates": list(result.candidates),
+                        "rejections": list(result.rejections),
+                        "calibration_rejects": list(result.calibration_rejects),
+                        "error": {"cause": result.cause},
+                    },
+                    sort_keys=True,
+                )
+            )
+        else:
+            _emit(f"belay: invariant infer failed [{result.cause}]")
+            for rejection in result.rejections:
+                rule = rejection.get("rule") or "?"
+                scope = rejection.get("scope") or "<whole-tree>"
+                _emit(
+                    f"  rejected {rule}@{scope}: {rejection.get('cause')} "
+                    f"({rejection.get('rationale') or 'no rationale'})"
+                )
+            for reject in result.calibration_rejects:
+                rule = reject.get("rule") or "?"
+                scope = reject.get("scope") or "<whole-tree>"
+                _emit(
+                    f"  rejected {rule}@{scope}: FAILed a control turn "
+                    f"[{reject.get('cause')}]"
+                )
+        return 2
+
+    # `ok` implies the artifact was emitted; the assert is the narrow window that
+    # makes that visible to a type checker on the success path.
+    artifact = result.artifact
+    assert artifact is not None
+
+    if json_mode:
+        _emit(
+            json.dumps(
+                {
+                    "ok": True,
+                    "artifact": result.artifact_path,
+                    "model": result.model,
+                    "turns": result.turns,
+                    "decided_turns": result.decided_turns,
+                    "candidates": list(result.candidates),
+                    "rejections": list(result.rejections),
+                    "calibration_rejects": list(result.calibration_rejects),
+                    "error": None,
+                },
+                sort_keys=True,
+            )
+        )
+    else:
+        _emit("belay invariant infer")
+        _emit(f"  task                  {artifact['task']['path']}")
+        _emit(
+            f"  control               {artifact['control']['trace']} "
+            f"({result.turns} turn(s), {result.decided_turns} decided)"
+        )
+        _emit(f"  author                {artifact['author']['program']}")
+        for rejection in result.rejections:
+            rule = rejection.get("rule") or "?"
+            scope = rejection.get("scope") or "<whole-tree>"
+            _emit(
+                f"  rejected {rule}@{scope}: {rejection.get('cause')} "
+                f"({rejection.get('rationale') or 'no rationale'})"
+            )
+        for reject in result.calibration_rejects:
+            rule = reject.get("rule") or "?"
+            scope = reject.get("scope") or "<whole-tree>"
+            _emit(f"  rejected {rule}@{scope}: FAILed a control turn")
+        for candidate in result.candidates:
+            scope = candidate.get("scope") or "<whole-tree>"
+            _emit(
+                f"  calibrating {candidate.get('rule')}@{scope} "
+                f"({candidate.get('rationale') or 'no rationale'})"
+            )
+        _emit(
+            f"  calibration           digest "
+            f"{artifact['calibration']['digest'][:12]}…"
+        )
+        _emit(f"  artifact              {result.artifact_path}")
+    return 0
+
+
 # --- belay verify: the whole-trace verdict (A2 replay + A1 invariants) ----------------
 
 #: The honest coverage statement, in the user's words. It appears BOTH here (printed
@@ -3854,6 +4046,105 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     gate_check.set_defaults(func=_cmd_gate_check)
+
+    invariant = subcommands.add_parser(
+        "invariant",
+        help="author and apply task-scoped A1 invariants",
+    ).add_subparsers(dest="action", required=True)
+
+    invariant_infer = invariant.add_parser(
+        "infer",
+        help="author invariants from a task spec and calibrate them against a control",
+        description=(
+            "Run the authoring pipeline: an out-of-process BYOK author command "
+            "(--author CMD, one quoted string) proposes A1 invariants from the task "
+            "spec (--task); the survivors are CALIBRATED against a known-clean control "
+            "trace (--control) by re-execution through the same verify composition "
+            "belay verify uses, with the candidate invariants ONLY; and the surviving "
+            "policy is emitted as the authored artifact (--out) — schema "
+            "belay-authored-invariants/1, digest recomputable by the loader, loadable "
+            "with belay verify --invariants <artifact>. Fail-closed at every step: a "
+            "bad author, a bad candidate, or a control that never re-executes "
+            "(CONTROL_UNREPLAYABLE) exits 2 with a named cause and leaves --out "
+            "untouched."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    invariant_infer.add_argument(
+        "--task",
+        required=True,
+        metavar="path",
+        help="the task spec file the author proposes invariants from (text, sha256'd "
+        "into the artifact)",
+    )
+    invariant_infer.add_argument(
+        "--repo",
+        default=None,
+        metavar="dir",
+        help="an optional repository root whose file list is shown to the author "
+        "(sorted, .git excluded, capped)",
+    )
+    invariant_infer.add_argument(
+        "--author",
+        required=True,
+        metavar="CMD",
+        help="the author command, as ONE quoted string (shlex-split at use): a BYOK "
+        "process that reads the task payload on stdin and answers with "
+        "{\"candidates\": [{\"scope\", \"rule\", \"rationale\"}, ...]} on stdout. "
+        "Blank or un-lexable is a hard error; nothing runs without it",
+    )
+    invariant_infer.add_argument(
+        "--control",
+        required=True,
+        metavar="path",
+        help="the control trace (.jsonl) calibration replays against — a known-clean "
+        "run the proposed invariants must not FAIL",
+    )
+    invariant_infer.add_argument(
+        "--manifest-dir",
+        default=None,
+        metavar="path",
+        help="where the gate persisted the control's snapshot manifests; default: the "
+        "control's <stem>.manifests sibling, ONLY when it exists — otherwise the "
+        "fail-closed error stands",
+    )
+    invariant_infer.add_argument(
+        "--replays",
+        type=_verify_replays,
+        default=3,
+        help="on a DIVERGED control turn, re-invoke this many times to classify "
+        "determinism (default: 3, minimum: 3)",
+    )
+    invariant_infer.add_argument(
+        "--timeout",
+        type=float,
+        default=DEFAULT_TIMEOUT,
+        help=f"per-replay timeout in seconds (default: {DEFAULT_TIMEOUT:g})",
+    )
+    invariant_infer.add_argument(
+        "--out",
+        required=True,
+        metavar="path",
+        help="the authored artifact to emit (atomic write; never a partial file, and "
+        "never written on any failure)",
+    )
+    invariant_infer.add_argument(
+        "--json",
+        action="store_true",
+        help="emit ONE JSON document (ok/cause, candidates, rejections, calibration "
+        "rejects, control turns, artifact path) instead of the human report; exit "
+        "codes are unchanged",
+    )
+    invariant_infer.add_argument(
+        "--server",
+        nargs=argparse.REMAINDER,
+        default=[],
+        metavar="cmd ...",
+        help="the MCP server to replay the control against; everything after --server "
+        "is its command. WRITE THIS LAST: it is a remainder and swallows every token "
+        "after it",
+    )
+    invariant_infer.set_defaults(func=_cmd_invariant_infer)
 
     invariant_library = subcommands.add_parser(
         "invariant-library",

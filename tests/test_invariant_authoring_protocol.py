@@ -171,6 +171,37 @@ def test_parse_empty_candidates():
 
 
 # ---------------------------------------------------------------------------
+# parse_author_response — the optional model id (additive, infer carries it)
+# ---------------------------------------------------------------------------
+
+
+def test_parse_carries_top_level_model_string():
+    response = parse_author_response(
+        json.dumps(
+            {
+                "model": "claude-opus-5",
+                "candidates": [{"scope": "tests/", "rule": "read-only"}],
+            }
+        )
+    )
+    assert response.failure is None
+    assert response.model == "claude-opus-5"
+    assert response.candidates == [
+        Candidate(scope="tests/", rule="read-only", rationale=None)
+    ]
+
+
+def test_parse_absent_model_is_none():
+    response = parse_author_response(json.dumps({"candidates": []}))
+    assert response.model is None
+
+
+def test_parse_non_str_model_is_none():
+    response = parse_author_response(json.dumps({"model": 7, "candidates": []}))
+    assert response.model is None
+
+
+# ---------------------------------------------------------------------------
 # parse_author_response — determinism
 # ---------------------------------------------------------------------------
 
@@ -293,14 +324,19 @@ def test_parse_non_str_scope_is_rejected():
     ]
 
 
-def test_parse_empty_scope_is_rejected():
+def test_parse_empty_scope_is_whole_tree():
+    """An empty scope is a whole-tree declaration — the library's `no-create` / `no-delete`
+    presets are exactly `{"scope": "", ...}` (`invariants.py` LIBRARY), and a resolved
+    entry is byte-identical policy to a file-loaded declaration, so the author must be
+    able to propose the same shape. Over-breadth is calibration's job, never a rejection
+    here (a whole-tree `read-only` fails the calibration control, it is not malformed)."""
     response = parse_author_response(
         json.dumps({"candidates": [{"scope": "", "rule": "read-only"}]})
     )
-    assert response.candidates == []
-    assert response.rejections == [
-        Rejection(scope="", rule="read-only", rationale=None, cause=CANDIDATE_MALFORMED)
+    assert response.candidates == [
+        Candidate(scope="", rule="read-only", rationale=None)
     ]
+    assert response.rejections == []
 
 
 def test_parse_non_str_rule_is_rejected():

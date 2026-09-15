@@ -110,11 +110,18 @@ class AuthorResponse:
     `AUTHOR_FAILED` or `AUTHOR_OUTPUT_UNPARSEABLE`) or the payload validated and
     `candidates`/`rejections` partition the proposed set (both may be empty). A
     candidate is dropped with a `Rejection`, never silently.
+
+    `model` is the OPTIONAL top-level `"model"` string the author may report (the id
+    of the model that wrote the proposal), parsed additively — absent, non-string, or
+    an author-level failure carry `None`. It is provenance prose, not policy: it rides
+    into the artifact's `author` section for review and is never part of any verdict or
+    digest.
     """
 
     candidates: list[Candidate] = field(default_factory=list)
     rejections: list[Rejection] = field(default_factory=list)
     failure: Optional[str] = None
+    model: Optional[str] = None
 
 
 #: The rule vocabulary sent to the author, in a fixed deterministic order: every member
@@ -200,12 +207,13 @@ def parse_author_response(stdout: str) -> AuthorResponse:
 
     `{"candidates": [...]}` validates each candidate: an unknown rule is a `Rejection`
     with `UNKNOWN_RULE` (including `network-egress` — a name deliberately outside
-    `_KNOWN_RULES`); a non-str or empty scope/rule, or a non-dict candidate, is a
+    `_KNOWN_RULES`); a non-str scope/rule, or a non-dict candidate, is a
     `Rejection` with `CANDIDATE_MALFORMED`; a non-str rationale is tolerated as `None`.
     Survivors are deduplicated by `(rule, scope)` — first occurrence wins — and sorted
     by `(rule, scope)`. `{"error": ...}` is `AUTHOR_FAILED`; malformed JSON, a
     non-object payload, or a missing/non-list `candidates` is
-    `AUTHOR_OUTPUT_UNPARSEABLE`. Never raises.
+    `AUTHOR_OUTPUT_UNPARSEABLE`. A top-level `"model"` string is carried additively
+    (absent/non-string -> `None`). Never raises.
     """
     try:
         payload = json.loads(stdout)
@@ -213,13 +221,16 @@ def parse_author_response(stdout: str) -> AuthorResponse:
         return AuthorResponse(failure=AUTHOR_OUTPUT_UNPARSEABLE)
     if not isinstance(payload, dict):
         return AuthorResponse(failure=AUTHOR_OUTPUT_UNPARSEABLE)
+    # The OPTIONAL top-level model id, read once for every dict payload (success and
+    # failure shapes alike) — additive: absent or non-string stays `None`.
+    model = payload.get("model") if isinstance(payload.get("model"), str) else None
     if "error" in payload:
-        return AuthorResponse(failure=AUTHOR_FAILED)
+        return AuthorResponse(failure=AUTHOR_FAILED, model=model)
     raw_candidates = payload.get("candidates")
     if not isinstance(raw_candidates, list):
-        return AuthorResponse(failure=AUTHOR_OUTPUT_UNPARSEABLE)
+        return AuthorResponse(failure=AUTHOR_OUTPUT_UNPARSEABLE, model=model)
 
-    response = AuthorResponse()
+    response = AuthorResponse(model=model)
     seen: set[tuple[str, str]] = set()
     for item in raw_candidates:
         outcome = _validate_candidate(item)
@@ -258,7 +269,7 @@ def _validate_candidate(item: object) -> Candidate | Rejection:
             rationale=rationale,
             cause=UNKNOWN_RULE,
         )
-    if not isinstance(scope, str) or not scope:
+    if not isinstance(scope, str):
         return Rejection(
             scope=scope if isinstance(scope, str) else None,
             rule=rule,
