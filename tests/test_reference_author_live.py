@@ -105,7 +105,7 @@ def _task_text() -> str:
     """The capture's task description, DERIVED from the provenance note — never
     hand-copied, so the smoke and the record cannot drift apart."""
     text = PROVENANCE.read_text(encoding="utf-8")
-    match = re.search(r'Task text:\s*"([^"]+)"', text)
+    match = re.search(r'Task text:\s*\*+\s*"([^"]+)"', text)
     assert match is not None, f"no quoted Task text in {PROVENANCE}"
     return match.group(1)
 
@@ -140,7 +140,7 @@ def test_reference_author_infers_and_the_capture_stays_clean(tmp_path: Path) -> 
         [
             sys.executable,
             "-m",
-            "belay",
+            "belay.cli",
             "invariant",
             "infer",
             "--task",
@@ -151,16 +151,15 @@ def test_reference_author_infers_and_the_capture_stays_clean(tmp_path: Path) -> 
             str(_capture_trace()),
             "--manifest-dir",
             str(_manifest_dir()),
-            "--server",
-            "--",
-            sys.executable,
-            str(SERVER),
-            _recorded_source_root(),
             "--timeout",
             str(REPLAY_TIMEOUT),
             "--out",
             str(artifact),
             "--json",
+            "--server",
+            sys.executable,
+            str(SERVER),
+            _recorded_source_root(),
         ],
         capture_output=True,
         text=True,
@@ -182,14 +181,20 @@ def test_reference_author_infers_and_the_capture_stays_clean(tmp_path: Path) -> 
         [
             sys.executable,
             "-m",
-            "belay",
+            "belay.cli",
             "verify",
             "--json",
             "--timeout",
             str(REPLAY_TIMEOUT),
             "--invariants",
             str(artifact),
+            "--manifest-dir",
+            str(_manifest_dir()),
             str(_capture_trace()),
+            "--server",
+            sys.executable,
+            str(SERVER),
+            _recorded_source_root(),
         ],
         capture_output=True,
         text=True,
