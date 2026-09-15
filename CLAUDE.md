@@ -2,6 +2,41 @@
 
 This file orients a coding agent working in this repository. Read it first.
 
+> **THE APPROVAL GATE SHIPS — A RISKY `tools/call` IS HELD PENDING HUMAN APPROVAL; THE
+> "WATCH AND STEER" SURFACE GAINS ITS STEER HALF** (2026-09-15, `approval-gate`,
+> merged as PR #36, v-next; not yet released). Phase 2's second goal
+> (`docs/ROADMAP.md:307`): with `BELAY_APPROVAL_DIR` set, the proxy holds a
+> `tools/call` whose tool declares `destructiveHint: true` or `openWorldHint: true`
+> (tri-state — a default is never a declaration; absent/declared-false/unknown/
+> batch frames forward untouched) until a human approves or denies through the
+> control-directory contract (`requests/`, `decisions/`, atomic both sides);
+> approve forwards the frame **verbatim**, deny returns a named JSON-RPC refusal
+> (`-32000`, the request's own id), the deadline is fail-closed
+> (`APPROVAL_TIMEOUT` — an unanswered hold never forwards, never hangs the
+> client; shutdown `APPROVAL_SHUTDOWN`; gate fault `APPROVAL_FAULT`, `decide_c2s`
+> is total). Engine: `BeforeFrame` returns `bool` (False = suppress), the observer
+> sees **exactly the delivered stream** (cross-chunk suppressed frames, mismatch =
+> named capture error, never silent corruption), client writes are frame-atomic
+> under a shared peer lock, the hook chain runs **approval before the turn gate**
+> (a denied call never consumes a snapshot), holds key on tool-call + name never
+> request-id (MRTR retries carry new ids), the annotation facts are a live cache
+> from the wire. Trace: two additive kinds `approval_hold` / `approval_decision`
+> (no schema bump, old readers skip by name, **never frame records** — a denied
+> trace correlates with zero `response-without-request`; the decision record is
+> written before the refusal is delivered, sequence-pinned). `belay verify` gains
+> an additive `approval` section (absent-never-zero; verdicts proven orthogonal to
+> A1/A2/A3). **Honesty lines:** a containment surface, not a verdict axis — a
+> denied call is an observation, never a turn and never a verdict; `11/60 =
+> 18.3%`, `precision 0.00`, `1/15`, `4/16` stand unedited; the gate catches
+> honest-but-buggy servers exactly like annotation conformance (annotations are
+> hints — a supplement, not an adversarial control). **NOT built, by name:**
+> console approval UI/wiring (the console is the future approver via the file
+> contract; engine slice first, no demand-pull yet), corpus banking of
+> held/denied attempts (owner decision 2026-09-14: `add_case` needs a
+> `state_handle` a never-forwarded call doesn't have), HTTP approval listeners,
+> `run_process` special-casing, batch-frame holds. Suite 2137 → **2403** passing.
+> See `docs/planning/approval-gate/` and `docs/STATUS.md`.
+>
 > **THE CONTAINER CHANNEL IS LIVE — `docker pull ghcr.io/haqaliz/belay` WORKS, AND THE IMAGE
 > IT SERVES WAS MEASURED BEFORE IT WAS PUSHED** (2026-09-05, `ghcr-publish`, v0.30.0). L3
 > (v0.21.0) shipped the IMAGE and deferred the CHANNEL by name; this closes it. The naive

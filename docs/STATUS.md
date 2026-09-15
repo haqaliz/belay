@@ -10,6 +10,77 @@ carries the current state and the rules that still bind.
 
 ---
 
+**THE APPROVAL GATE SHIPS — THE PROXY HOLDS A RISKY `tools/call` PENDING HUMAN
+APPROVAL, AND THE "WATCH AND STEER" SURFACE GAINS ITS STEER HALF** (2026-09-15,
+`approval-gate`, merged as PR #36, `77074f0`; the feature's five aspects —
+`decision-model`, `hold-channel`, `proxy-deny`, `trace-observations`,
+`verify-report` — land together; not yet released). Phase 2's second goal
+(`docs/ROADMAP.md:307`): with `BELAY_APPROVAL_DIR` set, the MCP stdio proxy holds a
+`tools/call` whose tool declares `destructiveHint: true` **or** `openWorldHint: true`
+(tri-state — a default is never a declaration; absent/declared-false/
+declared-non-boolean/unknown-tool/batch frames forward untouched, never held) until a
+human approves or denies; approve forwards the frame **verbatim**, deny returns a
+named JSON-RPC refusal to the client. The control-directory contract:
+`<dir>/requests/<hold_id>.json` (hold id, tool, request_id, triggers, created_at,
+timeout) and `<dir>/decisions/<hold_id>.json` (`{"decision": "approve"|"deny",
+"reason": ...}`), atomic temp+rename on both sides, malformed decisions retried and
+never guessed, `BELAY_APPROVAL_TIMEOUT` (default 300 s) fail-closed — an unanswered
+hold denies `APPROVAL_TIMEOUT`, never forwards a destructive call silently and never
+lets the client hang; shutdown resolves pending holds `APPROVAL_SHUTDOWN`; a gate
+fault refuses with `APPROVAL_FAULT` (`decide_c2s` is total — fail-closed lives in
+the hook, not in the proxy). The refusal is a JSON-RPC 2.0 error carrying the
+request's **own** id (code -32000, message naming the gate and tool, `data` naming
+hold id and cause), written frame-atomically to the client under a shared peer lock
+so it can never interleave with a server frame.
+**THE ENGINE CHANGES, AND WHERE:** `BeforeFrame` returns `bool` (True = forward,
+False = suppress — the proxy still writes only bytes it is given; a raising hook is
+named and the frame forwarded, exactly as before, because a hook failure must never
+stall the data path); `_FrameHold` reports suppressed frames and the observer sees
+**exactly the delivered stream** — `BoundedPeek.feed(chunk, suppressed)` removes a
+suppressed frame's bytes (cross-chunk included) from observation with an exact-match
+check whose failure names a capture error and kills observation, never forwarding
+(no silent corruption); the hook chain runs **approval before the turn gate** on
+c2s, so a denied call never consumes a snapshot and never enters the turn ledger,
+and the s2c pump keeps draining while a hold is parked (the accepted residue: the
+c2s direction is not read during a hold, bounded by the fail-closed deadline). Holds
+key on **tool-call + name, never request-id** — MRTR retries carry new ids, and an
+id-keyed hold would be bypassed by the retry the spec mandates. The annotation facts
+are a live cache from the wire (c2s id→method bounded FIFO, `tools/list` responses,
+`list_changed` clears) — the same tri-state vocabulary effect-conformance reads,
+captured live instead of derived.
+**TRACE AND REPORT:** two additive record kinds, `approval_hold` (at hold start —
+a live feed can render "awaiting approval") and `approval_decision` (written
+**before** the refusal is delivered or the approved frame is forwarded — sequence-
+pinned), no schema bump, old readers skip by name; a denied call is **never a
+`frame` record** — the suppressed request and its refusal never crossed the server
+boundary, and the e2e denied trace correlates with zero `response-without-request`
+(no new record kind's event flows through the correlation machinery). `belay
+verify` gains an additive `approval` section on `--json` and a text line
+(absent-never-zero; the pinned snapshot fixture's diff is exactly the additive
+section); the events are proven **orthogonal to A1/A2/A3** — the same trace
+verifies to the same per-turn verdicts with the records stripped.
+**THE HONESTY LINES:** this is a **containment** surface, not a verdict axis — a
+denied call is an observation (the agent attempted a risky action), never a turn
+and never a verdict; `verdict.reduce` is untouched; `UNVERIFIED`-never-`PASS` holds
+trivially. **No verdict axis, invariant, coverage line or published number moves** —
+`11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16` stand unedited. The gate catches
+**honest-but-buggy servers, exactly like annotation conformance** — annotations are
+*hints*, and README says so: it is a supplement, not an adversarial control.
+**NOT built, by name:** console approval UI/wiring (the console is the future
+approver through the file contract; the engine slice ships first, no demand-pull
+yet — the same posture the CI regression gate shipped under); corpus banking of
+held/denied attempts (owner decision, 2026-09-14: `add_case` requires a present
+`state_handle` and `corpus run` grounds MATCH in re-execution — a never-forwarded
+call has neither, and a constructed expected would be structural, not grounded);
+HTTP approval listeners (stdio-only by design); `run_process`/shell special-casing
+(shell tools carry no annotations); batch-frame holds (a hold would require
+rewriting the frame). One fixture change is verdict-inert for ungated runs
+(a roundtrip-server tool gains `destructiveHint: true`, verified against the
+in-image assertions). Suite 2137 → **2403** passing (25 named-caused skips, 11
+manual-deselected). See `docs/planning/approval-gate/`.
+
+---
+
 **THE CI REGRESSION GATE SHIPS — `belay gate baseline` / `belay gate check` CLOSE THE
 PHASE-2 FIRST SURFACE, WITH A MACHINE-CHECKED QUICKSTART** (2026-09-13,
 `ci-regression-gate`, on `feat/ci-regression-gate/aliz`; the feature's five aspects —
