@@ -30,7 +30,11 @@ effect-conformance has a contract to check instead of abstaining for want of one
 `openWorldHint: false` is declared just as truthfully and is the point of the last
 assertion in the roundtrip test: Belay has no network instrument, so that promise
 comes back NOT_COVERED — a coverage boundary printed next to the PASS, never folded
-into it.
+into it. `destructiveHint: true` is declared truthfully too, and it is what lets an
+approval-gated capture hold the call: `tests/test_verify_json.py` drives the same
+server behind the approval gate (a pre-written approve decision), so the captured
+trace carries the gate's records. For an ungated capture the annotation is
+inert — no `BELAY_APPROVAL_DIR`, no gate — and the wire is byte-identical.
 """
 
 import json
@@ -47,7 +51,11 @@ TOOL = {
         "properties": {"path": {"type": "string"}},
         "required": ["path"],
     },
-    "annotations": {"readOnlyHint": False, "openWorldHint": False},
+    "annotations": {
+        "readOnlyHint": False,
+        "openWorldHint": False,
+        "destructiveHint": True,
+    },
 }
 
 NOTE = "note\n"
