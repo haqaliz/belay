@@ -2,6 +2,39 @@
 
 This file orients a coding agent working in this repository. Read it first.
 
+> **`belay invariant infer` SHIPS — R3'S THIRD MITIGATION: A MODEL WRITES A1 POLICY,
+> EXECUTION CALIBRATES IT, AND AN UNCALIBRATED ARTIFACT CAN NEVER FAIL** (2026-09-15,
+> `invariant-authoring-experiment`, v-next; not yet released). Phase 2's
+> invariant-authoring experiment (`docs/ROADMAP.md:308`; deferred by name at
+> `docs/planning/invariant-library/prd.md:151-152`) tests the fourth candidate answer:
+> inferred from the task spec. `belay invariant infer --task <spec> --author <cmd>
+> --control <clean-trace> --server -- CMD… --out <artifact>` runs an out-of-process BYOK
+> author (JSON-in/JSON-out, the A3 `SubprocessAuthor` pattern — the engine never calls a
+> model), validates candidates against the known rule vocabulary, **calibrates by
+> replaying the control once through the shipped `verify_turn` composition** (an
+> over-firing candidate → `CALIBRATION_FAILED`; a control that cannot replay to a
+> decision → `CONTROL_UNREPLAYABLE`), and emits a reviewable
+> `belay-authored-invariants/1` artifact whose sha256 covers the normalized policy set +
+> task + control. `--invariants` loads it additively by shape — a JSON list stays
+> operator policy, byte-unchanged — through `parse_authored_invariants`, the deliberate
+> **fourth policy producer** admitted by name in the provenance guard: calibrated →
+> enforced exactly like operator policy; missing/malformed calibration →
+> `AUTHORED_INVARIANT_UNCALIBRATED`; edited after calibration →
+> `AUTHORED_INVARIANT_ALTERED`; both UNVERIFIED on every turn via
+> `Invariant.untrusted_cause` — **never FAIL, never a silent PASS, never a silent
+> skip**. The reference `claude -p` author ships (`--tools ""` +
+> `--strict-mcp-config`, `ANTHROPIC_*` scrubbed by absence, never `""`); the live proof
+> is `manual`-marked and owner-run. **Honesty lines:** the author writes policy,
+> execution decides — A1 semantics untouched, no new axis/status/default; dark by
+> default (no `--author` → exit 2 named); calibration proves *does not fire on this
+> control*, nothing more (the control is operator-chosen — the named residual); a model
+> that produces nothing calibratable is a recorded result, never hidden; **no published
+> number moves** (`11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16`, `recall 0.00` stand
+> unedited). **NOT built, by name:** the authoring UI / per-repo library management,
+> live-model CI, per-invariant digests, `--control` as a banked corpus case, artifact
+> re-calibration. Suite 2403 → **2540** passing (8 darwin-gated e2e: exact-turn FAIL
+> with A2 PASS, banked MATCH, tamper degrades). See `docs/planning/invariant-authoring/`.
+>
 > **THE APPROVAL GATE SHIPS — A RISKY `tools/call` IS HELD PENDING HUMAN APPROVAL; THE
 > "WATCH AND STEER" SURFACE GAINS ITS STEER HALF** (2026-09-15, `approval-gate`,
 > merged as PR #36, v-next; not yet released). Phase 2's second goal

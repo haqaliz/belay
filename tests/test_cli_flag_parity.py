@@ -49,6 +49,7 @@ REPLAY_BEARING = (
     "interop export",
     "gate baseline",
     "gate check",
+    "invariant infer",
 )
 
 _ALL = frozenset(REPLAY_BEARING)
@@ -101,8 +102,15 @@ EXPECTED: dict[str, frozenset[str]] = {
     "--no-default-invariants": frozenset({"verify", "corpus add", "phase0 run", "gate baseline"}),
     # The machine surface. `replay` and `corpus add` render human text only.
     # `gate baseline --json` prints the stored baseline document; `gate check
-    # --json` prints the gate report (gate.json schema 1).
-    "--json": frozenset({"verify", "interop correlate", "interop export", "gate baseline", "gate check"}),
+    # --json` prints the gate report (gate.json schema 1); `invariant infer
+    # --json` prints the infer result (candidates, rejections, calibration,
+    # artifact path).
+    "--json": frozenset({"verify", "interop correlate", "interop export", "gate baseline", "gate check", "invariant infer"}),
+    # Where a document is written. `interop export` writes the OTLP document back
+    # out; `invariant infer` writes the authored invariant artifact. Both are
+    # operator-named output files with the same never-partial contract, so the two
+    # share the flag and it is declared here.
+    "--out": frozenset({"interop export", "invariant infer"}),
     # Where corpus cases are read/written. `gate check` banks regression turns
     # into it by default (aspect 4 — divergence banking); `phase0 run` ingests
     # flagged turns into it.

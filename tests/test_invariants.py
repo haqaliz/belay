@@ -11,7 +11,10 @@ So the load-bearing test here is `test_no_invariant_is_ever_sourced_from_a_trace
 asserts an ABSENCE — that this module offers no path from trace records to policy — and is
 written to FAIL the moment such a path is introduced. The rest pin the format (scope is raw
 bytes, mirroring BTH-1's raw-path discipline) and the fail-closed loader (malformed input
-and an unknown rule are named errors, never a silent empty list).
+and an unknown rule are named errors, never a silent empty list). The guard names every
+producer by hand: `load_invariants` (operator file), `default_invariants` (a constant),
+`resolve_library_entry` (the library table) and `parse_authored_invariants` (the authored
+artifact's payload — never a trace).
 """
 
 from __future__ import annotations
@@ -59,10 +62,13 @@ def test_no_invariant_is_ever_sourced_from_a_trace(tmp_path: Path) -> None:
     operator POLICY. This module must expose no way to turn such a record into an
     Invariant. The assertion is structural so a future "read invariants from the trace
     records" loader breaks it: the only loaders are `load_invariants`, which takes a
-    filesystem path, not records; `default_invariants`, which takes nothing at all; and
+    filesystem path, not records; `default_invariants`, which takes nothing at all;
     `resolve_library_entry`, which consults only the module-level LIBRARY table (the
     deliberate third producer, admitted here by name per PRD M2 / the library-surface
-    plan).
+    plan); and `parse_authored_invariants`, which parses only the authored artifact's
+    payload — the operator-controlled JSON the author command emitted, never a trace
+    (the deliberate fourth producer, admitted here by name per invariant-authoring PRD
+    M6, pinned below to take exactly `["payload"]`).
     """
     # An invariant-shaped record riding inside a trace. If any code path honoured this, a
     # run could grant itself a permissive policy and A1 would be defeated by construction.
@@ -86,25 +92,29 @@ def test_no_invariant_is_ever_sourced_from_a_trace(tmp_path: Path) -> None:
         for name, obj in public.items()
         if "Invariant" in str(inspect.signature(obj).return_annotation)
     }
-    # Exactly three producers, and ALL THREE are provenance-safe by construction:
+    # Exactly four producers, and ALL FOUR are provenance-safe by construction:
     # `load_invariants` reads an OPERATOR FILE (a path the operator controls, asserted
     # below to take only a path), `default_invariants` reads NOTHING — it returns a
     # hardcoded constant and takes no arguments at all, so it cannot source policy from a
-    # trace — and `resolve_library_entry` (the DELIBERATE, review-approved third producer,
+    # trace — `resolve_library_entry` (the DELIBERATE, review-approved third producer,
     # PRD M2 / library-surface) consults ONLY the module-level LIBRARY table, asserted
-    # below to take only the entry name and to perform no file I/O. None is a trace->policy
-    # path. A FOURTH producer, or one of these growing a records/trace parameter, still
-    # trips this.
+    # below to take only the entry name and to perform no file I/O, and
+    # `parse_authored_invariants` (the DELIBERATE, review-approved fourth producer,
+    # invariant-authoring PRD M4/M5/M6) parses ONLY the AUTHORED ARTIFACT's payload —
+    # the operator-controlled JSON the author command emitted, asserted below to take
+    # only that payload, never records. None is a trace->policy path. A FIFTH producer,
+    # or one of these growing a records/trace parameter, still trips this.
     assert producers == {
         "load_invariants",
         "default_invariants",
         "resolve_library_entry",
+        "parse_authored_invariants",
     }, (
         "an unexpected invariant-producing callable appeared: "
-        f"{producers - {'load_invariants', 'default_invariants', 'resolve_library_entry'}}."
+        f"{producers - {'load_invariants', 'default_invariants', 'resolve_library_entry', 'parse_authored_invariants'}}."
         " Policy must be sourced only from load_invariants(operator_file), the "
-        "argument-free default_invariants(), or the LIBRARY table via "
-        "resolve_library_entry(name)."
+        "argument-free default_invariants(), the LIBRARY table via "
+        "resolve_library_entry(name), or parse_authored_invariants(authored payload)."
     )
     # The default reads nothing: its provenance safety is that it takes no input at all, so
     # there is no argument through which a trace could ever reach it.
@@ -128,6 +138,17 @@ def test_no_invariant_is_ever_sourced_from_a_trace(tmp_path: Path) -> None:
     assert resolver_params == ["name"], (
         f"resolve_library_entry parameters are {resolver_params}; it must take only the "
         "entry name. A records/trace parameter would open a trace-to-policy path."
+    )
+
+    # The authored-artifact parser (the deliberate fourth producer) takes ONLY the parsed
+    # JSON payload. There is no second argument — no path, no records — through which a
+    # trace could ever reach it; the control trace is calibration evidence only, never a
+    # policy source.
+    authored_params = list(inspect.signature(invariants.parse_authored_invariants).parameters)
+    assert authored_params == ["payload"], (
+        f"parse_authored_invariants parameters are {authored_params}; it must take only "
+        "the authored artifact payload. A records/trace parameter would open a "
+        "trace-to-policy path."
     )
 
     # The resolver performs NO file I/O: policy comes from the module-level LIBRARY
