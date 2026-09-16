@@ -1,125 +1,83 @@
-# Invariant Authoring Experiment — understanding (Phase 2 dig)
+# Corpus Shell-Axis Recompute Routing — understanding
 
-> Produced by the Phase 2 dig (agents team), 2026-09-15, in the
-> `feat/invariant-authoring-experiment` worktree. Source of truth: the unit card
-> (`docs/planning/_card/issue.md`), ROADMAP, the invariant-library and A3 planning
-> docs, and the code paths in `src/belay/verify/` + `eval/`.
+## What the work really is
 
-## What the work is really asking
+`belay corpus run --shell-server <cmd>` — thread the second replay boundary into the
+trajectory-case recompute path of the corpus. The engine seam is **already built and
+pinned**: `run_corpus` / `run_case` / `_recompute_trajectory_case` accept
+`shell_server_command` (`src/belay/corpus/run.py:701-784, 787-814`), and four tests in
+`tests/test_corpus_trajectory_run.py` already prove per-turn routing inside the whole-trace
+recompute, the byte-identical `None` default, the per-turn asymmetry, and the `run_corpus`
+threading. **Only the CLI flag and its parity-table row are missing.**
 
-R3 ("nobody authors the invariant", High/High, `docs/ROADMAP.md:372`) has two of its
-three mitigations shipped: annotation-inferred invariants inside C5, and the common
-invariant library (`invariant-library`, v0.31.0, 2026-09-12). The third — **the
-Phase-2 authoring experiment** — is explicitly deferred: "inferred-from-task-spec,
-per-repo libraries, an authoring UI" (`docs/planning/invariant-library/prd.md:151-152`).
-ROADMAP:308 says it "gets a real experiment, not an assumption" and names the candidate
-answer this unit tests: **an invariant inferred from the task spec** (the other three
-candidates — annotations, a library, user authoring — already ship).
+## Affected areas (file:line)
 
-The slice: a path where **a model writes an A1 invariant from a task spec, and
-execution decides** — the A3 split ("a model writes a check; execution decides",
-`claim-re-derivation-a3`) applied to A1 authoring. Deliverables per the card:
-(1) an authored invariant FAILs the corrupt-success fixture and PASS/abstains the clean
-control; (2) a mis-broad authored invariant degrades to UNVERIFIED, never FAIL;
-(3) banked per-entry corrupt-success corpus cases recomputing MATCH (the
-invariant-library pattern); (4) one real authored-invariant run against the launch
-capture (manual, not CI).
+- `src/belay/cli.py:3330-3372` — `corpus run` parser has only `corpus_dir` + `--no-claim-axis`;
+  `_cmd_corpus_run` (1998-2097) calls `run_corpus(corpus_dir, disable_claim_axis=...)` with no
+  shell command.
+- `tests/test_cli_flag_parity.py` — `--shell-server` row (85) is `{verify, phase0 run, gate
+  baseline, gate check}`; `corpus run` is not mentioned in its comment and is absent from
+  the set. `--server` row (62) excludes `corpus run` because "each stored case carries its
+  own resolved server command" — true for the fs boundary, false for the shell boundary (a
+  case never stores the shell command). Both guard tests (167-175, 178-192) force the row
+  edit the moment the flag lands.
+- `src/belay/verify/turn.py:363-368` — a `run_process` turn replays against
+  `shell_server_command` only when given; with `None` it replays against `server_command`.
+  This is the silent mis-route the unit fixes.
+- `src/belay/phase0/runner.py:536-538` — a trajectory case stores the **final turn's**
+  resolved command; the whole-trace recompute therefore needs the second boundary
+  caller-supplied (run.py:511-522).
+- `src/belay/corpus/run.py:398-433` — `_classify_trajectory_case`: equal → MATCH / MISS_CLOSED;
+  **everything else, including any UNVERIFIED recompute, → REGRESSION**. There is no SKIP
+  vocabulary on the trajectory path.
 
-## The precedent that exists in code (A3, shipped)
+## The defect being fixed (honest statement)
 
-- `src/belay/verify/author.py` — "A3's model-backed author, behind the `CheckAuthor`
-  seam … shelling out to a user-supplied command — BYOK by construction.
-  `BELAY_CLAIM_AUTHOR` names a command line." JSON-in/JSON-out, fail-closed `None` on
-  any failure. The closest existing seam for "an out-of-process command produces a
-  machine-checkable artifact."
-- `src/belay/verify/claims.py` — A3 evaluator: exit code decides; **A3 never emits
-  PASS**; exit 0 → silence; no author → axis absent on the coverage line (never
-  UNVERIFIED, never PASS).
-- The BYOK subprocess pattern (env scrub by absence never `""`, `--tools ""` +
-  `--strict-mcp-config`) is proven in `eval/minting_driver/clients/claude_cli_client.py`
-  and pinned by tests.
+A two-server mint (`phase0 run --shell-server`) banks trajectory corrupt-success cases
+whose stored command was resolved from the final turn. If that final turn was a
+filesystem turn (the common Shape-A shape), the stored command is the fs command and
+`corpus run` recomputes the trace's `run_process` turns against the fs server. The reply
+is a JSON-RPC error, and the trajectory evidence seam can read that in **either**
+direction (S1): as no-exit-0 evidence → recompute FAIL matches the stored FAIL (**false
+agreement**, the regression suite certifying the wrong reason), or as unverifiable →
+recompute UNVERIFIED → **false REGRESSION**. Both directions are corrupt. No real
+two-server trajectory cases exist (the mint's 11 TPs were never bankable — no-backfill),
+so the fix is forward-looking and changes only constructed fixtures, never real data.
 
-## The constraints that bind the design (each is a shipped guard)
+## Design decisions to surface at the review gate
 
-1. **The provenance boundary, not negotiable.** "the agent must never be able to
-   author its own policy"
-   (`phase0-corpus-audit/understanding.md:194-195`). A model-authored invariant is
-   still operator-declared policy once the operator runs the authoring command — but
-   the invariant must arrive by an **operator-run** path, never from the trace, and
-   the structural guard `test_no_invariant_is_ever_sourced_from_a_trace`
-   (`tests/test_invariants.py:55-114`) enumerates every invariant producer and will
-   break until the new producer is admitted **deliberately**.
-2. **No bare LLM judge.** "A model may *write a check*; only execution may *decide*"
-   (CAPABILITY_ROADMAP.md:916-917). The authored artifact is enforced by
-   `evaluate_invariant`, same as file-loaded policy.
-3. **Zero-LLM AST guard** (`test_verify_zero_llm.py`) covers `src/belay/verify/`.
-   A model-backed author that imports into the engine would trip it — the author must
-   stay behind a subprocess seam (A3's pattern) or be excluded by name, never the
-   engine calling a model.
-4. **Precision history.** A1's naive rule fired 0/7 (shapes A/B/C,
-   `phase0-corpus-audit/understanding.md:41-45`); the repair shipped "judged against
-   the **task pre-state** and the **resulting content**"
-   (CAPABILITY_ROADMAP.md:584-588). The experiment's abstain-by-default is the
-   same lesson: a mis-broad authored invariant must never manufacture a FAIL.
-   Nuance (from the dig): the repo already decided abstain-everything is an
-   acceptance failure **on human-adjudicated negatives** ("PASS, not merely
-   not-FAIL", `invariant-test-mutation-shape/prd.md:63,72-85`) — both constraints are
-   live and bind different fixtures.
-5. **Operator files never accept unimplemented rules.** Unknown rule names exit 2,
-   fail-closed (`invariants.py:247-253`); library selection is exit 2 on unknown name
-   (`resolve_library_entry`). An authored invariant must meet the same contract.
-6. **Flag-parity guard** (`tests/test_cli_flag_parity.py`): a new flag on verify that
-   also lands on corpus add / phase0 run / gate baseline must be declared in the fact
-   table.
+- **D1 — the flag:** `--shell-server CMD`, single string, shlex-split at use, fail-closed on
+  un-lexable — the exact `phase0 run` shape (cli.py:3598-3610). No REMAINDER ordering hazard
+  on this parser.
+- **D2 — the honest no-flag behavior:** today a two-server trajectory case recomputes
+  silently wrong. Options: keep byte-identical (the existing pin
+  `test_trajectory_recompute_without_a_shell_command_is_byte_for_byte_today`) vs introduce a
+  named-cause SKIP when the trace needs a boundary the operator didn't supply (the
+  `CLAIM_AXIS_DISABLED` operator-omission precedent, not the `_SKIP_CAUSES` substrate
+  class). Recommendation: named-cause SKIP — fail-closed, no real data affected.
+- **D3 — the final-turn-is-`run_process` edge (S5):** the stored command IS the shell
+  command then, and the fs turns have no expressible boundary (the flag can only supply the
+  shell side). Faithful recompute is impossible for that shape → decide: always SKIP, or
+  document as an accepted residual.
+- **D4 — `corpus add --shell-server`:** `corpus add` today banks a `run_process` turn with
+  the fs command (wrong); `phase0 run --shell-server` banks correctly. Include the flag in
+  this unit (same parity row) or declare out? Recommendation: include — same one-line wiring,
+  closes the manual-add path.
+- **D5 — `corpus show`:** its trajectory recompute (cli.py:2385, 2417) shares the gap but is
+  outside the parity guard (the guard's "corpus show replays nothing" comment is stale).
+  Include the flag and correct the comment, or declare out by name.
 
-## The real code paths (from the dig)
+## Scoping corrections from the dig
 
-- Rules: `src/belay/verify/invariants.py` — `Invariant(scope: bytes, rule: str)`;
-  admission = constant + `_KNOWN_RULES` + exactly one grounding set
-  (CONTENT_GROUNDED / INSTANCE_LEVEL / _DELTA_GROUNDED) + a branch in
-  `evaluate_invariant`. Abstain causes are closed-vocabulary str constants stamped
-  into `Verdict.expected["cause"]`.
-- Loader: `load_invariants(path)` (operator file: JSON list of `{"scope","rule"}`);
-  library resolver `resolve_library_entry(name)` is the shipped precedent for a
-  "third producer" admitted into the provenance guard by name.
-- CLI: `invariant-library` subcommand group at `cli.py:3858` — natural home for a
-  sibling `invariant` group; `--invariant-library` wiring on four surfaces.
-- Corpus: `CASE_SCHEMA_VERSION = 5`; banked fixtures via real `add_case` + `corpus
-  run` MATCH/REGRESSION, house pattern in `tests/test_invariant_library_e2e.py`
-  (fixture guards, per-entry CLI fixtures via `TraceWriter` over real snapshots,
-  banked round trips). Recompute uses the **stored** invariants, never re-resolves
-  the name.
-- BYOK: `eval/minting_driver/clients/claude_cli_client.py` `ClaudeCliModel`
-  (injectable `runner=` seam; offline tests; env scrub absent-never-`""`).
-- Tests: `tests/test_verify_author.py` (A3 fake-author tests) is the analog home for
-  `tests/test_invariant_author*.py`; darwin-gated only where replay re-invokes
-  seatbelt. Suite 2428/2439 collected (2403 passing).
+- **Claim half (S2):** `_recompute_claim_case` does not thread `shell_server_command`, but is
+  self-consistent — the claim evaluator replays only the LAST turn and the stored command is
+  that turn's resolved command. The brief's "trajectory/claim-case recompute" reduces to
+  **trajectory only**. State in the PRD.
+- **`interop correlate`/`export`** stay single-boundary (S9) — the documented default.
 
-## Open questions (for the interview — context cannot resolve these)
+## Guardrails
 
-1. **Where the authored artifact lands**: Fork A — a reviewable **file** produced by
-   an `belay invariant infer`-style subcommand, consumed later by the existing
-   `--invariants` (human-in-the-loop; provenance boundary intact). Fork B — inline
-   at verify time via `--invariant-author` (A3-style). Fork A keeps policy reviewable
-   and the operator-file contract unchanged.
-2. **The mis-broad guardrail's mechanism**: how the engine knows an authored invariant
-   is mis-broad. Leading candidate: a **calibration/control step** — the authored
-   invariant is first evaluated against the task's clean baseline (the control); an
-   over-fire there degrades the invariant to UNVERIFIED with a named cause instead of
-   FAILing the target run.
-3. **Which surfaces carry the flag** (verify-only vs the four replay-bearing surfaces)
-   — the flag-parity guard requires the decision up front.
-4. **Reference author**: `src/belay/`-adjacent JSON-in/JSON-out author wrapping
-   `claude -p` with the proven env-scrub, or the unit ships only the seam with a
-   `scripts/` reference author and the live run stays manual (A3 precedent: live smoke
-   is `manual`-marked, never CI).
-5. **The launch-capture deliverable** is a manual run, not a CI test (the capture is a
-   clean negative control; no corrupt-success case can be banked from it).
-
-## Axes
-
-- **A1** — the authored artifact is enforced by the existing A1 machinery; no new
-  verdict axis, no new status.
-- **A3** — untouched. The experiment borrows its "model writes, execution decides"
-  split and its out-of-process BYOK author seam; A3's own follow-ons (WARN vocabulary,
-  caller-supplied-workspace short-circuit) are separate units.
+Harness machinery only (corpus). No agent framework, no LLM judge. UNVERIFIED-never-PASS
+holds. No verdict axis, schema, or published number moves — `11/60 = 18.3%`, `precision
+0.00`, `1/15`, `4/16` stand unedited. The corpus is moat #2: this unit makes its highest-
+value case class recompute faithfully.
