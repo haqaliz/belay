@@ -52,6 +52,7 @@ from belay.corpus.run import (
     MATCH,
     MISS_CLOSED,
     REGRESSION,
+    SKIP,
     STILL_MISSED,
     Divergence,
     run_case,
@@ -660,18 +661,19 @@ def _recording_replay(monkeypatch) -> list[tuple[str | None, tuple[str, ...]]]:
 
 
 def _build_mixed_trajectory_case(tmp_path: Path, *, case_name: str) -> Path:
-    """A schema-v4 trajectory case over a trace whose turns are `edit_file` THEN
-    `run_process`, stored against the FILESYSTEM command — the exact shape Finding 1
-    names. `_resolve_server_command` resolved the stored command from the final turn,
-    so nothing on disk records the other boundary."""
+    """A schema-v4 trajectory case over a trace whose turns are `run_process` THEN
+    `edit_file`, stored against the FILESYSTEM command — the exact shape Finding 1
+    names, mint-faithful: `_resolve_server_command` resolved the stored command from
+    the FINAL turn, so the stored fs command matches the recorded
+    `target_tool="edit_file"`, and nothing on disk records the other boundary."""
     trace_dir = tmp_path / "traces" / case_name
-    trace_path = _write_mixed_gated_trace(trace_dir, ("edit_file", "run_process"))
+    trace_path = _write_mixed_gated_trace(trace_dir, ("run_process", "edit_file"))
     append_claim_record(trace_path, text="all tests pass")
     return add_case(
         tmp_path / "corpus",
         records=_records_of(trace_path),
         target_turn_index=1,
-        verdict=_clean_turn("run_process"),
+        verdict=_clean_turn("edit_file"),
         manifest_dir=default_manifest_dir_for(trace_path),
         server_command=["fs-server"],
         invariants=[TRAJECTORY],
@@ -697,26 +699,96 @@ def test_trajectory_recompute_routes_run_process_to_the_shell_command(
     run_case(case_dir, shell_server_command=["shell-server"])
 
     assert seen == [
-        ("edit_file", ("fs-server",)),
         ("run_process", ("shell-server",)),
+        ("edit_file", ("fs-server",)),
     ], seen
 
 
-def test_trajectory_recompute_without_a_shell_command_is_byte_for_byte_today(
+def test_mixed_trajectory_case_without_shell_command_skips_with_named_cause(
     tmp_path, monkeypatch
 ) -> None:
-    """AC-3 (half): omit the shell boundary and every turn replays against the stored
-    command, exactly as before this fix — the default is the old behaviour, so no banked
-    case needs re-adding."""
+    """AC-3 (the M3 shape): a mixed trajectory trace needs the second boundary, and
+    without a supplied `--shell-server` the recompute REFUSES rather than silently
+    replaying its `run_process` turn against the stored filesystem command — the
+    mis-routing Finding 1 names. SKIP with the named cause, decided BEFORE any replay:
+    the recording stub sees nothing."""
     seen = _recording_replay(monkeypatch)
-    case_dir = _build_mixed_trajectory_case(tmp_path, case_name="mixed-default")
+    case_dir = _build_mixed_trajectory_case(tmp_path, case_name="mixed-no-shell")
 
-    run_case(case_dir)
+    result = run_case(case_dir)
 
-    assert seen == [
-        ("edit_file", ("fs-server",)),
-        ("run_process", ("fs-server",)),
-    ], seen
+    assert result.outcome == SKIP, result
+    assert result.skip_reason == "TRAJECTORY_SHELL_BOUNDARY_NOT_SUPPLIED"
+    assert seen == []
+
+
+def _build_stored_shell_trajectory_case(tmp_path: Path, *, case_name: str) -> Path:
+    """A schema-v4 trajectory case over a trace whose turns are `edit_file` THEN
+    `run_process`, stored against the SHELL command: the final turn IS the shell turn,
+    so the recorded `target_tool` is `run_process` and the stored command IS the shell
+    boundary. The filesystem boundary was never recorded — the mirror of
+    `_build_mixed_trajectory_case`, and the shape no supplied flag can express."""
+    trace_dir = tmp_path / "traces" / case_name
+    trace_path = _write_mixed_gated_trace(trace_dir, ("edit_file", "run_process"))
+    append_claim_record(trace_path, text="all tests pass")
+    return add_case(
+        tmp_path / "corpus",
+        records=_records_of(trace_path),
+        target_turn_index=1,
+        verdict=_clean_turn("run_process"),
+        manifest_dir=default_manifest_dir_for(trace_path),
+        server_command=["shell-server"],
+        invariants=[TRAJECTORY],
+        replays=3,
+        timeout=20.0,
+        source_trace_id=f"{case_name}-trace",
+        captured_at=CAPTURED_AT,
+        trajectory={"status": "FAIL", "cause": None},
+    )
+
+
+def test_mixed_trajectory_case_with_stored_shell_boundary_skips_unexpressible(
+    tmp_path, monkeypatch
+) -> None:
+    """AC-4 (the M4 shape): a mixed trace whose recorded `target_tool` IS `run_process`
+    stores the shell boundary as its one command, so the filesystem boundary the other
+    turns replayed against was never recorded. `--shell-server` can only supply the
+    shell side, so faithful recompute is impossible on this surface: SKIP with the
+    named cause REGARDLESS of the flag, decided before any replay."""
+    seen = _recording_replay(monkeypatch)
+    case_dir = _build_stored_shell_trajectory_case(tmp_path, case_name="stored-shell")
+
+    unflagged = run_case(case_dir)
+    assert unflagged.outcome == SKIP, unflagged
+    assert unflagged.skip_reason == "TRAJECTORY_FILESYSTEM_BOUNDARY_UNEXPRESSIBLE"
+    assert seen == []
+
+    flagged = run_case(case_dir, shell_server_command=["shell-server"])
+    assert flagged.outcome == SKIP, flagged
+    assert flagged.skip_reason == "TRAJECTORY_FILESYSTEM_BOUNDARY_UNEXPRESSIBLE"
+    assert seen == []
+
+
+def test_single_boundary_trajectory_case_ignores_supplied_flag(
+    tmp_path, monkeypatch
+) -> None:
+    """AC-5 (the M5 shape): a single-boundary trace needs only its stored command, so a
+    supplied shell flag never fires the SKIP decision — the recompute runs, and its
+    outcome is whatever the engine gives for the declared verdict (never a SKIP)."""
+    seen = _recording_replay(monkeypatch)
+    case_dir = _build_trajectory_case(
+        tmp_path,
+        case_name="single-fs",
+        tool="edit_file",  # no run_process turns: one boundary only
+        claim_text="all tests pass",
+        declared_status="PASS",
+        recorded_miss=None,
+    )
+
+    result = run_case(case_dir, shell_server_command=["shell-server"])
+
+    assert result.outcome != SKIP, result
+    assert seen == [("edit_file", ("unused",)), ("edit_file", ("unused",))]
 
 
 def test_per_turn_case_ignores_a_supplied_shell_command(tmp_path, monkeypatch) -> None:
@@ -760,9 +832,11 @@ def test_run_corpus_threads_the_shell_command_to_every_case(tmp_path, monkeypatc
 def test_a_case_written_in_the_pre_change_format_still_loads_and_recomputes(
     tmp_path, monkeypatch
 ) -> None:
-    """AC-3: no schema bump, no re-add. The stored `case.json` carries exactly the keys
-    it carried before this fix — no shell-command field appeared — and a case written in
-    that format recomputes to the same outcome it always did."""
+    """AC-3 (half): no schema bump, no re-add. The stored `case.json` carries exactly
+    the keys it carried before this fix — no shell-command field appeared — and a case
+    written in that format recomputes to the same outcome it always did once the
+    operator expresses the second boundary the mixed shape needs (the flag is supplied
+    here, exactly as `phase0 run --shell-server` supplies it)."""
     _stub_replay(monkeypatch, is_error=False)
     case_dir = _build_mixed_trajectory_case(tmp_path, case_name="pre-change-format")
 
@@ -789,4 +863,4 @@ def test_a_case_written_in_the_pre_change_format_still_loads_and_recomputes(
     assert stored["schema_version"] == 5
     assert stored["server_command"] == ["fs-server"]
 
-    assert run_case(case_dir).outcome == MATCH
+    assert run_case(case_dir, shell_server_command=["shell-server"]).outcome == MATCH

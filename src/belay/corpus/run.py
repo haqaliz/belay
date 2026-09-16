@@ -54,10 +54,23 @@ sign-off line; `belay corpus score`, against human labels, is where detection is
 
 Conflating the two is the quiet failure: a naive "any non-match is a regression" would turn
 every run on a bare box RED, and a "SKIP is basically a pass" would let a real regression hide
-behind an environment excuse. So SKIP is decided FIRST and only for a closed set of
-environment/substrate causes; everything else that differs from `expected` is a REGRESSION —
-again unless the case declares a recorded miss AND the difference is exactly the one exempted
-transition, which is `MISS_CLOSED` and exits 0.
+behind an environment excuse. So SKIP is decided FIRST and only for a closed set of causes:
+the environment/substrate class below, plus the operator-omission / capability class a
+trajectory recompute refuses with pre-replay (stated after this paragraph); everything else
+that differs from `expected` is a REGRESSION — again unless the case declares a recorded miss
+AND the difference is exactly the one exempted transition, which is `MISS_CLOSED` and exits 0.
+
+**A second SKIP class, and it is not an environment gap.** A trajectory case whose stored
+trace needs a second replay boundary this surface cannot express — a mixed `run_process` +
+other-tool trace with no supplied `--shell-server`, or a case whose one stored command IS
+the shell boundary — SKIPs with a named operator-omission / capability cause
+(`TRAJECTORY_SHELL_BOUNDARY_NOT_SUPPLIED` / `TRAJECTORY_FILESYSTEM_BOUNDARY_UNEXPRESSIBLE`),
+decided PRE-REPLAY from the stored trace's tool names (`_recompute_trajectory_case`).
+The `gate check` SKIP precedent is substrate-class and decided POST-recompute; this class
+is closer to `CLAIM_AXIS_DISABLED` — an operator/declared gap — but is decided without
+any replay at all: the recompute refuses to mis-route a `run_process` turn against a
+boundary it never replayed against, so it is neither a pass, nor a regression, nor a
+REGRESSION the operator must chase for a boundary they never supplied.
 
 ## A case older than the `task_prestate` format is a REGRESSION, and that is correct
 
@@ -146,13 +159,14 @@ from typing import Optional, Sequence
 
 from belay.corpus.add import add_case
 from belay.corpus.case import Case, load_case
+from belay.index import derive_correlation, tool_calls
 from belay.phase0.runner import _verify_one_trace
 from belay.replay.reader import read_trace
 from belay.replay.report import REPLAY_DID_NOT_ANSWER, canonical_cause
 from belay.snapshot.substrate import UnrestorableCause
 from belay.verify.claims import Check, evaluate_claim
 from belay.verify.invariants import Invariant
-from belay.verify.turn import TurnVerdict, verify_turn
+from belay.verify.turn import _tool_name, TurnVerdict, verify_turn
 from belay.verify.verdict import Status
 
 #: The outcomes a case re-verification can reach. A SKIP is deliberately a THIRD state, not
@@ -202,6 +216,29 @@ _SKIP_CAUSES = frozenset(
 #: that set is the environment/substrate gap space: this cause is the OPERATOR'S
 #: declared choice, and `run_case` files it directly on the claim path.
 CLAIM_AXIS_DISABLED = "CLAIM_AXIS_DISABLED"
+
+#: The named causes a TRAJECTORY recompute SKIPs with when the case's stored trace
+#: needs a second replay boundary this surface cannot express. These are NOT in
+#: `_SKIP_CAUSES`: that set is the environment/substrate gap space ("THIS box could
+#: not replay the case"), and these are the OPERATOR-OMISSION / CAPABILITY class — a
+#: boundary the recompute needs was never recorded and the operator did not supply
+#: it. They are decided PRE-REPLAY from the stored trace's tool names, exactly as
+#: `CLAIM_AXIS_DISABLED` is decided before any replay, and filed directly on
+#: `CaseResult.skip_reason` by `_recompute_trajectory_case`. A SKIP here means the
+#: recompute REFUSED to mis-route a turn family against a boundary it never replayed
+#: against — never a MATCH certified for the wrong reason, never a REGRESSION for a
+#: boundary the caller never supplied.
+TRAJECTORY_SHELL_BOUNDARY_NOT_SUPPLIED = "TRAJECTORY_SHELL_BOUNDARY_NOT_SUPPLIED"
+TRAJECTORY_FILESYSTEM_BOUNDARY_UNEXPRESSIBLE = (
+    "TRAJECTORY_FILESYSTEM_BOUNDARY_UNEXPRESSIBLE"
+)
+
+#: The tool whose replayed outcomes are the trajectory rule's evidence, and the one
+#: tool `verify_turn` routes to the caller-supplied shell boundary (`verify/turn.py`
+#: 363-368). A trace carrying both this tool and another tool needs two boundaries;
+#: `case.target_tool` (recorded at ingest, `add.py:416`) says which one the single
+#: stored command is.
+_EVIDENCE_TOOL = "run_process"
 
 
 @dataclass(frozen=True)
@@ -484,6 +521,48 @@ def classify_case(
     return CaseResult(case_id=case_id, outcome=REGRESSION, divergences=divergences)
 
 
+def _trajectory_boundary_skip(
+    tool_names: Sequence[Optional[str]],
+    target_tool: Optional[str],
+    shell_server_command: Optional[Sequence[str]],
+) -> Optional[str]:
+    """The pre-replay SKIP cause a trajectory recompute must refuse with, or `None`.
+
+    A trajectory case re-verifies its WHOLE stored trace against the case's ONE stored
+    command, so a trace whose turns span BOTH boundaries (`run_process` and any other
+    tool) needs the second boundary expressed by the caller. `verify_turn` routes a
+    `run_process` turn to `shell_server_command` only when it is given
+    (`verify/turn.py:363-368`); with `None` that turn silently replays against the
+    stored command — the mis-routing this decision refuses.
+
+    Two causes, because the operator's fix differs:
+
+    - the stored command IS the shell boundary (`target_tool == _EVIDENCE_TOOL`,
+      recorded at ingest from the target turn, `add.py:416`; for a trajectory case the
+      target turn IS the final turn) -> `TRAJECTORY_FILESYSTEM_BOUNDARY_UNEXPRESSIBLE`:
+      the fs boundary was never recorded and `--shell-server` can only supply the shell
+      side, so no flag can make this shape faithful;
+    - the stored command is the fs boundary and no shell boundary was supplied ->
+      `TRAJECTORY_SHELL_BOUNDARY_NOT_SUPPLIED`: supply the flag and the recompute is
+      faithful.
+
+    `tool_names` is one entry per `tools/call` turn, `None` for a turn whose request
+    frame was never observed; a `None` name is treated as a non-`run_process` turn —
+    conservative in the honest direction (an unreadable turn is a second boundary we
+    cannot rule out, so the recompute refuses rather than guesses). Pure: reads no
+    files, calls no server, and never consults `expected` or `recorded_miss`.
+    """
+    has_shell = _EVIDENCE_TOOL in {t for t in tool_names if t is not None}
+    has_other = any(t != _EVIDENCE_TOOL for t in tool_names)
+    if not (has_shell and has_other):
+        return None
+    if target_tool == _EVIDENCE_TOOL:
+        return TRAJECTORY_FILESYSTEM_BOUNDARY_UNEXPRESSIBLE
+    if shell_server_command is None:
+        return TRAJECTORY_SHELL_BOUNDARY_NOT_SUPPLIED
+    return None
+
+
 def _recompute_trajectory_case(
     case_dir: Path,
     case: Case,
@@ -520,7 +599,25 @@ def _recompute_trajectory_case(
     then applies the SAME `_resolve_server_command` rule per turn. `None` — the default,
     and what every caller passed before this existed — is byte-for-byte the old
     behaviour, so no banked case needs re-adding.
+
+    **The boundary-need SKIP comes FIRST, before any replay.** The stored trace is
+    read once and its per-turn tool names derived with the SAME computation the
+    recompute's `verify_turn` uses (`tool_calls(derive_correlation(records))` →
+    `_tool_name` per turn, `verify/turn.py:363-368`). A trace whose turns span both
+    boundaries with no shell boundary supplied — or whose single stored command IS
+    the shell boundary (`case.target_tool`, recorded at ingest, `add.py:416`) — is
+    SKIPPED with the named cause before `_verify_one_trace` is ever reached: never a
+    `run_process` turn silently replayed against a boundary it never crossed, never a
+    false MATCH certified for the wrong reason, never a REGRESSION for a boundary the
+    caller never supplied. The SKIP consults neither `expected` nor `recorded_miss`.
     """
+    records = read_trace(Path(case_dir) / "trace.jsonl").records
+    calls = tool_calls(derive_correlation(records))
+    tool_names = [_tool_name(records, n) for n in range(len(calls))]
+    skip = _trajectory_boundary_skip(tool_names, case.target_tool, shell_server_command)
+    if skip is not None:
+        return CaseResult(case_id=case.id, outcome=SKIP, skip_reason=skip)
+
     invariants = [
         Invariant(scope=os.fsencode(d["scope"]), rule=d["rule"]) for d in case.invariants
     ]
@@ -821,6 +918,8 @@ __all__ = [
     "REGRESSION",
     "SKIP",
     "STILL_MISSED",
+    "TRAJECTORY_FILESYSTEM_BOUNDARY_UNEXPRESSIBLE",
+    "TRAJECTORY_SHELL_BOUNDARY_NOT_SUPPLIED",
     "CaseResult",
     "CorpusRun",
     "Divergence",
