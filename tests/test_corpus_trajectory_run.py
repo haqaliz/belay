@@ -39,13 +39,16 @@ Pinned here, in order:
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
+import io
 import json
 import sys
 from pathlib import Path
 
 import pytest
 
+from belay import cli
 from belay.corpus.add import add_case
 from belay.corpus.case import load_case, write_case
 from belay.corpus.run import (
@@ -864,3 +867,206 @@ def test_a_case_written_in_the_pre_change_format_still_loads_and_recomputes(
     assert stored["server_command"] == ["fs-server"]
 
     assert run_case(case_dir, shell_server_command=["shell-server"]).outcome == MATCH
+
+
+# --- (10) S2: the three corpus surfaces gain the `--shell-server` flag ----------------
+#
+# `docs/planning/corpus-shell-routing/cli-wiring/spec.md`: the engine seam
+# (`run_corpus` / `run_case` accept `shell_server_command`) is complete, but no CLI
+# surface could express the shell boundary for the corpus. These tests pin the CLI
+# wiring: `corpus run` / `corpus add` / `corpus show` each carry `--shell-server CMD`
+# — ONE quoted string, shlex-split at use, fail-closed on a string that will not lex —
+# and thread it exactly as `verify` / `phase0 run` do. `corpus add --server` is
+# nargs=REMAINDER, so its flag MUST be registered before it; the others carry no
+# remainder and have no ordering hazard.
+
+
+def _run_help(argv: list[str]) -> str:
+    """The help text of a subcommand surface, captured (argparse exits 0)."""
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        with pytest.raises(SystemExit):
+            cli.main(argv)
+    return buffer.getvalue()
+
+
+def test_corpus_run_shell_server_routes_the_mixed_case_to_match_end_to_end(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """AC-1 (M1): `corpus run --shell-server` over a constructed two-server mixed
+    trajectory case recomputes MATCH through the REAL command handler — parser,
+    shlex split, `run_corpus` threading, recompute — with the `run_process` turn
+    routed to the shell command and the fs turn kept on the stored one."""
+    seen = _recording_replay(monkeypatch)
+    _build_mixed_trajectory_case(tmp_path, case_name="cli-run")
+
+    rc = cli.main(
+        [
+            "corpus", "run", str(tmp_path / "corpus"),
+            "--shell-server", "node /abs/eval/servers/shell.js --stdio",
+        ]
+    )
+    out = capsys.readouterr().out
+
+    assert rc == 0, out
+    assert "MATCH" in out, out
+    assert seen == [
+        ("run_process", ("node", "/abs/eval/servers/shell.js", "--stdio")),
+        ("edit_file", ("fs-server",)),
+    ], seen
+
+
+def test_corpus_add_shell_server_stores_the_resolved_command_and_recomputes_match(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """AC-2 (M6): `corpus add --shell-server` on a `run_process` target turn stores
+    the SHELL command as the case's one resolved command — the SAME
+    `_resolve_server_command` rule `phase0 run` applies at ingest — and the banked
+    case recomputes MATCH on `corpus run` with no further flag."""
+    trace_dir = tmp_path / "traces" / "cli-add"
+    trace_path = _write_mixed_gated_trace(trace_dir, ("edit_file", "run_process"))
+
+    seen: list = []
+
+    def _stub_verify_turn(records, n, **kwargs):
+        seen.append(kwargs.get("shell_server_command", "<absent>"))
+        return _clean_turn("run_process")
+
+    monkeypatch.setattr(turn_module, "verify_turn", _stub_verify_turn)
+    rc = cli.main(
+        [
+            "corpus", "add", str(trace_path),
+            "--turn", "1",
+            "--manifest-dir", str(default_manifest_dir_for(trace_path)),
+            "--corpus-dir", str(tmp_path / "corpus"),
+            # The default content rules need a REAL re-materialized post-replay tree,
+            # which a stubbed replay cannot supply (they abstain UNVERIFIED on the
+            # fake workspace, and exact-set equality would read that as a REGRESSION).
+            # The stored command + routing is what this test pins, so the policy is
+            # declared empty and the recompute is a pure A2 comparison.
+            "--no-default-invariants",
+            "--shell-server", "shell-server",
+            "--server", "fs-server",
+        ]
+    )
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert seen == [["shell-server"]], seen
+
+    case_dir = next(p for p in (tmp_path / "corpus").iterdir() if p.is_dir())
+    stored = json.loads((case_dir / "case.json").read_text(encoding="utf-8"))
+    assert stored["server_command"] == ["shell-server"], stored
+
+    monkeypatch.undo()
+    routed = _recording_replay(monkeypatch)
+    rc2 = cli.main(["corpus", "run", str(tmp_path / "corpus")])
+    out2 = capsys.readouterr().out
+    assert rc2 == 0, out2
+    assert "MATCH" in out2, out2
+    assert routed == [("run_process", ("shell-server",))], routed
+
+
+def test_corpus_show_shell_server_shows_match_and_without_it_the_named_skip(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """AC-3 (M7): `corpus show --shell-server` over a two-server trajectory case shows
+    the recomputed MATCH with the flag; without it the recompute SKIPs with the named
+    cause — and the SKIP is RENDERED (reason shown, no recomputed verdict invented)."""
+    _recording_replay(monkeypatch)
+    case_dir = _build_mixed_trajectory_case(tmp_path, case_name="cli-show")
+
+    rc = cli.main(
+        [
+            "corpus", "show", case_dir.name,
+            "--corpus-dir", str(tmp_path / "corpus"),
+            "--shell-server", "shell-server",
+        ]
+    )
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    recomputed = next(
+        line for line in out.splitlines() if "trajectory recomputed" in line
+    )
+    assert recomputed.strip() == "trajectory recomputed MATCH", out
+
+    rc2 = cli.main(
+        ["corpus", "show", case_dir.name, "--corpus-dir", str(tmp_path / "corpus")]
+    )
+    out2 = capsys.readouterr().out
+    assert rc2 == 0, out2
+    recomputed2 = next(
+        line for line in out2.splitlines() if "trajectory recomputed" in line
+    )
+    assert recomputed2.strip() == "trajectory recomputed SKIP", out2
+    assert "TRAJECTORY_SHELL_BOUNDARY_NOT_SUPPLIED" in out2, out2
+
+
+UNLEXABLE_SHELL = 'node "/abs/shell.js'  # an unterminated quote
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["corpus", "run", ".", "--shell-server", UNLEXABLE_SHELL],
+        [
+            "corpus", "add", "trace.jsonl", "--turn", "0",
+            "--manifest-dir", "m", "--shell-server", UNLEXABLE_SHELL,
+            "--server", "srv",
+        ],
+        ["corpus", "show", "a-case", "--shell-server", UNLEXABLE_SHELL],
+    ],
+    ids=["run", "add", "show"],
+)
+def test_unlexable_shell_server_is_fail_closed_on_all_three_corpus_surfaces(
+    argv, capsys
+) -> None:
+    """AC-4: `shlex` cannot tokenize it, so Belay refuses on every corpus surface —
+    exit 2 with the named `--shell-server` message, nothing half-executed (the
+    fail-closed rule `verify` / `phase0 run` already carry)."""
+    rc = cli.main(argv)
+    out = capsys.readouterr().out
+
+    assert rc == 2, out
+    assert "--shell-server could not be parsed" in out, out
+
+
+def test_corpus_add_help_warns_to_write_shell_server_before_server() -> None:
+    """S1: `corpus add --server` is nargs=REMAINDER, so the flag ORDER is
+    load-bearing — `--shell-server` written after it becomes server argv, not a
+    flag — and the help text must warn in words."""
+    text = _run_help(["corpus", "add", "--help"])
+    assert "--shell-server" in text, text
+    assert "--shell-server BEFORE --server" in text, text
+
+
+def test_corpus_run_help_states_the_shlex_rule_and_the_skip_honesty_line() -> None:
+    """S1/S2: the flag's help carries the shlex rule and the honesty line — a
+    two-boundary trajectory case without it SKIPs with a named cause, never a
+    guessed boundary."""
+    text = _run_help(["corpus", "run", "--help"])
+    assert "--shell-server" in text, text
+    assert "shlex" in text, text
+    assert "never a guessed boundary" in text, text
+
+
+def test_corpus_show_help_states_the_shlex_rule_and_the_skip_honesty_line() -> None:
+    text = _run_help(["corpus", "show", "--help"])
+    assert "--shell-server" in text, text
+    assert "shlex" in text, text
+    assert "never a guessed boundary" in text, text
+
+
+def test_corpus_run_skip_aggregate_names_the_missing_replay_boundary_class(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """AC-6: the SKIP sign-off wording names the new cause class — a mixed trajectory
+    case SKIPPED for its missing replay boundary is stated as such, never folded into
+    the old substrate/server/capability enumeration."""
+    _recording_replay(monkeypatch)
+    _build_mixed_trajectory_case(tmp_path, case_name="cli-aggregate")
+
+    rc = cli.main(["corpus", "run", str(tmp_path / "corpus")])
+    out = capsys.readouterr().out
+
+    assert rc == 0, out
+    assert "a missing replay boundary" in out, out
