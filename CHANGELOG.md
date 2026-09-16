@@ -5,6 +5,40 @@ All notable changes to Belay are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0 — until then,
 `0.x` minor bumps may include changes that would be breaking under strict semver.
 
+## [0.33.0] - 2026-09-16
+
+**Invariant authoring** — R3's third mitigation ships (PR #37): an A1 policy
+**inferred from the task spec**, as an experiment with a recorded result.
+`belay invariant infer --task <spec> --author <cmd> --control <clean-trace> --server -- CMD… --out <artifact>`
+runs your own out-of-process BYOK author command (JSON-in/JSON-out — the engine
+never calls a model), validates its candidates against the known rule vocabulary,
+calibrates them by replaying the control once through the same re-execution
+`belay verify` uses (an over-firing candidate is rejected; a control that cannot
+replay is `CONTROL_UNREPLAYABLE`), and emits a reviewable
+`belay-authored-invariants/1` artifact carrying a digest over its policy set plus
+the task and control hashes. `--invariants` accepts the authored schema
+additively — a plain JSON list stays an operator file, byte-unchanged — and the
+artifact is tamper-evident: missing/malformed calibration degrades every authored
+invariant to UNVERIFIED (`authored-invariant-uncalibrated`), a policy set edited
+after calibration to UNVERIFIED (`authored-invariant-altered`) — never FAIL, never
+a silent PASS, never a silent skip. A reference `claude -p` author ships
+(`--tools ""` + `--strict-mcp-config`, `ANTHROPIC_*` scrubbed by absence); the
+live proof is owner-run and recorded. No verdict axis, status or published number
+moves; dark by default (no `--author` → exit 2). First real finding, recorded as
+a result: the model proposes glob-shaped scopes (`tests/**`) that the engine's
+byte-prefix semantics never match — scope normalization is the likely next unit.
+
+**Approval gate** — Phase 2's second goal ships (PR #36): the proxy holds a
+`tools/call` whose tool declares `destructiveHint` or `openWorldHint` (declared
+true, tri-state — a default is never a declaration) pending human approval
+through a control-directory file contract (`requests/` + `decisions/`, atomic
+both sides); approve forwards the frame verbatim, deny returns a named JSON-RPC
+refusal with the request's own id, and the deadline is fail-closed
+(`BELAY_APPROVAL_TIMEOUT` — an unanswered hold never forwards, never hangs the
+client). The hold/decision are additive trace observations, never frame records;
+`belay verify` gains an additive approval section. A containment surface, not a
+verdict axis — a denied call is an observation, never a turn and never a verdict.
+
 ## [0.32.0] - 2026-09-14
 
 **CI regression gate** — Phase 2's first goal ships (PR #35): a team can bank a
