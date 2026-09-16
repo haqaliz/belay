@@ -1635,6 +1635,7 @@ def _cmd_corpus_add(args: argparse.Namespace) -> int:
 
     from belay.corpus.add import add_case
     from belay.index import derive_correlation, tool_calls
+    from belay.phase0.runner import _resolve_server_command
     from belay.replay.reader import TraceCorrupt, read_trace
     from belay.verify.invariants import (
         default_invariants,
@@ -1642,6 +1643,23 @@ def _cmd_corpus_add(args: argparse.Namespace) -> int:
         resolve_library_entry,
     )
     from belay.verify.turn import verify_turn
+
+    # The SHELL boundary, the same single-string shape `belay verify --shell-server`
+    # carries: one quoted string, shlex-split at use. `--server` is nargs=REMAINDER,
+    # so the flag MUST be written BEFORE it (the parser registers it first and the
+    # help text warns in words). FAIL-CLOSED on a string shlex cannot tokenize —
+    # Belay must never half-execute a command it could not parse, and must never
+    # quietly bank a case replayed against a boundary the operator did not ask for.
+    shell_server_command = None
+    if args.shell_server is not None:
+        try:
+            shell_server_command = shlex.split(args.shell_server)
+        except ValueError as exc:
+            _emit(
+                f"belay: --shell-server could not be parsed as a shell command "
+                f"({exc}): {args.shell_server!r}"
+            )
+            return 2
 
     if not args.server:
         _emit("belay: a server command is required, after --server. Nothing to replay against.")
@@ -1688,6 +1706,7 @@ def _cmd_corpus_add(args: argparse.Namespace) -> int:
         records, args.turn,
         server_command=args.server, manifest_dir=manifest_dir, replays=args.replays,
         invariants=invariants, timeout=args.timeout,
+        shell_server_command=shell_server_command,
     )
 
     # The CLI is the boundary that may read the clock; `add_case` itself never does.
@@ -1699,7 +1718,13 @@ def _cmd_corpus_add(args: argparse.Namespace) -> int:
             target_turn_index=args.turn,
             verdict=verdict,
             manifest_dir=manifest_dir,
-            server_command=list(args.server),
+            # The ONE command this case replays against is resolved for ITS target
+            # turn, exactly as `phase0 run` resolves it at ingest: a `run_process`
+            # target with `--shell-server` stores the shell command, every other
+            # target (and every turn with no shell command) stores `--server`.
+            server_command=_resolve_server_command(
+                verdict.tool_name, list(args.server), shell_server_command
+            ),
             invariants=invariants,
             human_label=args.label,
             replays=args.replays,
@@ -2027,8 +2052,30 @@ def _cmd_corpus_run(args: argparse.Namespace) -> int:
         _emit(f"belay: corpus directory not found: {corpus_dir}")
         return 2
 
+    # The SHELL boundary, the same single-string shape `belay verify --shell-server`
+    # carries: one quoted string, shlex-split at use. `corpus run` has no `--server`
+    # (each case carries its own resolved command), so there is no REMAINDER ordering
+    # hazard here. FAIL-CLOSED on a string shlex cannot tokenize — Belay must never
+    # half-execute a command it could not parse, and must never quietly degrade a
+    # run to "no shell axis", which would recompute a two-boundary trajectory case
+    # against a boundary the operator did not ask for.
+    shell_server_command = None
+    if args.shell_server is not None:
+        try:
+            shell_server_command = shlex.split(args.shell_server)
+        except ValueError as exc:
+            _emit(
+                f"belay: --shell-server could not be parsed as a shell command "
+                f"({exc}): {args.shell_server!r}"
+            )
+            return 2
+
     try:
-        run = run_corpus(corpus_dir, disable_claim_axis=args.no_claim_axis)
+        run = run_corpus(
+            corpus_dir,
+            shell_server_command=shell_server_command,
+            disable_claim_axis=args.no_claim_axis,
+        )
     except ValueError as exc:
         # A corrupt/unreadable case dir is fail-closed — never a silent skip.
         _emit(f"belay: {exc}")
@@ -2074,8 +2121,8 @@ def _cmd_corpus_run(args: argparse.Namespace) -> int:
     if run.skips:
         _emit(
             f"  {run.skips} case(s) were SKIPPED — not evaluated on this box (off substrate, "
-            f"server unavailable, or capability mismatch). Coverage here was PARTIAL; a SKIP "
-            f"is never a pass and never a regression."
+            f"server unavailable, a missing replay boundary, or capability mismatch). "
+            f"Coverage here was PARTIAL; a SKIP is never a pass and never a regression."
         )
     if run.still_missed:
         _emit(
@@ -2326,6 +2373,23 @@ def _cmd_corpus_show(args: argparse.Namespace) -> int:
     """
     from belay.corpus.case import load_case
 
+    # The SHELL boundary, the same single-string shape `belay verify --shell-server`
+    # carries: one quoted string, shlex-split at use. `corpus show` has no `--server`
+    # (a case carries its own resolved command), so there is no REMAINDER ordering
+    # hazard here. FAIL-CLOSED on a string shlex cannot tokenize — Belay must never
+    # half-execute a command it could not parse, and must never quietly degrade a
+    # recompute to "no shell axis".
+    shell_server_command = None
+    if args.shell_server is not None:
+        try:
+            shell_server_command = shlex.split(args.shell_server)
+        except ValueError as exc:
+            _emit(
+                f"belay: --shell-server could not be parsed as a shell command "
+                f"({exc}): {args.shell_server!r}"
+            )
+            return 2
+
     case_dir = Path(args.corpus_dir) / args.case_id
     try:
         case = load_case(case_dir)
@@ -2382,7 +2446,7 @@ def _cmd_corpus_show(args: argparse.Namespace) -> int:
         cause = case.trajectory.get("cause")
         _emit(f"  trajectory expected   {status}  (cause: {cause or 'none'})")
         try:
-            result = run_case(case_dir)
+            result = run_case(case_dir, shell_server_command=shell_server_command)
         except ValueError as exc:
             _emit(f"belay: {exc}")
             return 2
@@ -2414,7 +2478,7 @@ def _cmd_corpus_show(args: argparse.Namespace) -> int:
             f"  (exit {exit_code if exit_code is not None else 'n/a'})"
         )
         try:
-            result = run_case(case_dir)
+            result = run_case(case_dir, shell_server_command=shell_server_command)
         except ValueError as exc:
             _emit(f"belay: {exc}")
             return 2
@@ -3318,6 +3382,24 @@ def _parser() -> argparse.ArgumentParser:
         default=DEFAULT_TIMEOUT,
         help=f"per-replay timeout in seconds recorded on the case (default: {DEFAULT_TIMEOUT:g})",
     )
+    # MUST be registered BEFORE `--server` (below): `--server` is nargs=REMAINDER and
+    # swallows everything after it, so `--shell-server` written after it becomes
+    # server argv, not a flag. The help text warns in words; the pin lives in
+    # tests/test_corpus_trajectory_run.py.
+    corpus_add.add_argument(
+        "--shell-server",
+        default=None,
+        metavar="CMD",
+        help=(
+            "the SHELL server command, as ONE quoted string; a recorded run_process "
+            "target turn replays against it instead of --server, and the case stores "
+            "the resolved command (a run_process target stores the shell command). "
+            "WRITE --shell-server BEFORE --server (--server is a remainder and "
+            "swallows everything after it). The string is shlex-split at use; an "
+            "un-lexable string is a hard error. Absent -> every turn replays against "
+            "--server, exactly as before"
+        ),
+    )
     corpus_add.add_argument(
         "--server",
         nargs=argparse.REMAINDER,
@@ -3367,6 +3449,19 @@ def _parser() -> argparse.ArgumentParser:
             "disable the A3 claim axis: claim cases SKIP with CLAIM_AXIS_DISABLED "
             "(never a REGRESSION), every other case is byte-identical — the "
             "refutation, at the corpus surface"
+        ),
+    )
+    corpus_run.add_argument(
+        "--shell-server",
+        default=None,
+        metavar="CMD",
+        help=(
+            "the SHELL server command, as ONE quoted string; a trajectory case whose "
+            "stored trace spans both boundaries recomputes its run_process turns "
+            "against it instead of the stored command. The string is shlex-split at "
+            "use; an un-lexable string is a hard error. Absent -> a two-boundary "
+            "trajectory case without it SKIPs with a named cause, never a guessed "
+            "boundary"
         ),
     )
     corpus_run.set_defaults(func=_cmd_corpus_run)
@@ -3487,6 +3582,19 @@ def _parser() -> argparse.ArgumentParser:
         "--corpus-dir",
         default="corpus/local",
         help="the corpus directory the case lives under (default: ./corpus/local, which is gitignored so cases never get committed)",
+    )
+    corpus_show.add_argument(
+        "--shell-server",
+        default=None,
+        metavar="CMD",
+        help=(
+            "the SHELL server command, as ONE quoted string; a trajectory case whose "
+            "stored trace spans both boundaries recomputes its run_process turns "
+            "against it instead of the stored command. The string is shlex-split at "
+            "use; an un-lexable string is a hard error. Absent -> a two-boundary "
+            "trajectory case without it SKIPs with a named cause, never a guessed "
+            "boundary"
+        ),
     )
     corpus_show.set_defaults(func=_cmd_corpus_show)
 

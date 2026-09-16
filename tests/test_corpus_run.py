@@ -305,7 +305,7 @@ def test_cli_corpus_run_exits_non_zero_on_regression(tmp_path, monkeypatch, caps
     (tmp_path / "corpus").mkdir()
     monkeypatch.setattr(
         "belay.corpus.run.run_corpus",
-        lambda _dir, *, disable_claim_axis=False: CorpusRun(
+        lambda _dir, *, shell_server_command=None, disable_claim_axis=False: CorpusRun(
             results=[_match("kept"), _regression("drifted"), _skip("off")]
         ),
     )
@@ -322,7 +322,7 @@ def test_cli_corpus_run_exits_zero_on_match_and_skip_only(tmp_path, monkeypatch,
     (tmp_path / "corpus").mkdir()
     monkeypatch.setattr(
         "belay.corpus.run.run_corpus",
-        lambda _dir, *, disable_claim_axis=False: CorpusRun(
+        lambda _dir, *, shell_server_command=None, disable_claim_axis=False: CorpusRun(
             results=[_match("kept"), _skip("off")]
         ),
     )
@@ -362,7 +362,7 @@ def test_a_long_case_id_still_renders_separated_from_its_outcome(
     (tmp_path / "corpus").mkdir()
     monkeypatch.setattr(
         "belay.corpus.run.run_corpus",
-        lambda _dir, *, disable_claim_axis=False: CorpusRun(
+        lambda _dir, *, shell_server_command=None, disable_claim_axis=False: CorpusRun(
             results=[_match(long_ids[0]), _regression(long_ids[1]), _skip(long_ids[0])]
         ),
     )
