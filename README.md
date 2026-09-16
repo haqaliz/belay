@@ -134,6 +134,22 @@ Scope semantics: every library entry uses the raw **byte-prefix** rule (the scop
 
 **The egress entry is honest.** `network-egress` is unobservable: Belay has **no egress instrument** (it observes no outbound bytes) and the sandbox denies egress by construction (seccomp deny-all), so the entry evaluates **UNVERIFIED with a named cause on every turn — never PASS, never FAIL**. It is curated-only: an operator *file* declaring `network-egress` is still rejected (exit 2), and the listing says it is ungrounded *before* you select it. Per-repo policies remain `--invariants policy.json`.
 
+#### The authored invariant: a model proposes, execution calibrates
+
+R3's third mitigation — the Phase-2 authoring experiment (2026-09-15): an A1 policy **inferred from the task spec**. `belay invariant infer` runs **your own out-of-process author command** (JSON-in/JSON-out, BYOK — the engine never calls a model), validates its candidates against the known rule vocabulary, **calibrates** them by replaying a known-clean control trace through the same re-execution `belay verify` uses (a candidate that FAILs any control turn is rejected), and emits a reviewable artifact:
+
+```bash
+belay invariant infer --task task.md --author "python3 -m belay.authoring.reference_author --model claude-opus-5" \
+  --control ./runs/known-clean.jsonl --manifest-dir ./runs.manifests \
+  --server my-mcp-server --out .belay/invariants.json
+belay verify ./traces/<run>.jsonl --manifest-dir ./traces.manifests --server my-mcp-server \
+  --invariants .belay/invariants.json
+```
+
+**The artifact is tamper-evident, and an uncalibrated authored invariant can never FAIL.** `--invariants` accepts the authored schema additively — a plain JSON list stays an operator file, byte-unchanged. The artifact carries a digest over its policy set plus the task and control hashes, so a well-formed calibrated artifact enforces exactly like operator policy, an artifact whose calibration is missing or malformed degrades every authored invariant to **UNVERIFIED** (`authored-invariant-uncalibrated`), and a policy set edited after calibration to **UNVERIFIED** (`authored-invariant-altered`) — never a FAIL, never a silent PASS, never a silent skip. Review the artifact before committing it; the remedy for an edit is re-running `infer`.
+
+**Scopes are byte-prefixes, not globs.** The engine matches a scope as a raw path prefix (`tests/` covers `tests/test_auth.py` but not `testsuite/x`), and an authored artifact is subject to the same semantics — the first real authoring run showed the model proposing `tests/**`, which never matches and would be dead teeth on any corrupt run, so check an authored artifact's scopes when you review it. The experiment is dark by default: no `--author` means `infer` refuses (exit 2), never a fallback, and nothing in the verdict path calls a model.
+
 **A3 — the claim axis — is the ONE place a model may sit, and only by your choice.** It is **dark by default**: with no author configured, no A3 verdict exists — never PASS, never a fabricated UNVERIFIED. To turn it on, name a **local** command that writes an executable check for the trace's claim (nothing leaves the box — no vendor key, nothing proxied):
 
 ```bash
