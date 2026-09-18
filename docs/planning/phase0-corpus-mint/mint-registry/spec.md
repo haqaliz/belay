@@ -8,13 +8,21 @@ A mint drives a **registry**, not a pool. This aspect builds the registry for a 
 instance supply is nearly exhausted, and records that exhaustion honestly rather than
 hiding it behind a draw that no longer means what it used to.
 
-**Measured** (pool minus the union of every committed registry's real ids):
+**Measured**, two ways (see `prd.md` §1.2 / §1.2.1 — the first draft of this spec
+conflated them):
 
-```
-pool reals ................. 166
-union of registry reals .... 137
-FRESH (never driven) ........ 30   →  django 23, sympy 7
-```
+| Measure | Fresh | Counts |
+|---|---|---|
+| **Conservative** — pool minus every committed registry's real ids | **30** (django 23, sympy 7) | never *drawn* |
+| **Derived** — pool minus `observed.json` ∪ all 12 committed ledgers | **83** (django 53, sympy 30) | never *captured* |
+
+**This aspect uses the conservative 30**, and the reason is a contract, not caution for
+its own sake. The gap is attrition — drawn but never captured — and some of those were
+*attempted and failed*. **A failed attempt is an observation**, and *"an instance that
+produced an observation is never re-armable"* (`checkpoint.py:18-21`). Separating the two
+needs the s6 checkpoint; **measured: no s6 checkpoint survives**. So the 83 contains an
+**unidentifiable** subset that must not be re-driven, while the 30 is provably safe — and
+at n≈12 the difference costs nothing.
 
 `eval/minting_driver/selection.py:3-24` records the reason the stratified draw exists:
 *~83% of the eligible pool is django+sympy, so a uniform draw of 50 would publish a
@@ -62,8 +70,9 @@ This is why Q1 decided **no violation rate is published** from this run.
 |---|---|
 | B1 | The generator is **pure and offline** — no network, no clock, no ambient randomness; a local `random.Random(seed)` only, candidates sorted by `instance_id` before any shuffle |
 | B2 | Re-running with an unchanged pool rewrites **byte-identical** output — `git status` staying clean *is* the reproducibility check (`draw_mint_set.py:137-142`) |
-| B3 | Every drawn real instance is in `pool.json` and in **none** of the committed registries (the measured 30) |
-| B4 | **Zero overlap with already-banked corpus case ids** — no drawn instance can collide on `trace-<instance>-*` |
+| B3 | Every drawn real instance is in `pool.json` and in **none** of the committed registries — the conservative 30. Asserted against registry membership, **not** the ledger-derived set, for the contract reason above |
+| B3′ | The exclusion set is **derived at generation time**, never transcribed. A hard-coded id list is the defect class that broke `test_docker_inimage.py`'s dev-dep list (two lists, nothing connecting them) |
+| B4 | **Zero overlap with already-banked corpus case ids** — no drawn instance can collide on `trace-<instance>-*` (`CaseExistsError` is fail-closed, no `--overwrite`) |
 | B5 | Controls are carried by the `is_control` **field**, never a naming convention on the id (`registry.py:18-20`) |
 | B6 | CTL-4 is present and the registry records that it requires `--toolset filesystem+shell` |
 | B7 | The registry **loads through the stock loader** (`registry.py:98-200`) with no error — fail-closed on blank/missing/duplicate |

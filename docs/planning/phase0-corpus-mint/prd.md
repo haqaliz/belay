@@ -3,10 +3,11 @@
 > **READ THIS FIRST. This is NOT a gate run and produces NO Phase-0 number.** The
 > pre-registered PROCEED clause requires a denominator **≥50**, and that clause counts
 > *instances minted*, so it is detector-independent (`PHASE0_RESULTS.md:781-784`). This
-> unit cannot reach it — only **30** never-driven instances remain in the pool
-> (**measured**, §1.2) — and does not try. It produces **banked corpus cases**, not a
-> violation rate. `11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16`, `recall 0.00` and
-> `3/93` stand **unedited**.
+> unit does not reach it and does not try: the safely-eligible pool is **30** instances
+> (**measured**, §1.2 — and see §1.2.1, which corrects an earlier overstatement that
+> ≥50 was *impossible*). It produces **banked corpus cases**, not a violation rate.
+> `11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16`, `recall 0.00` and `3/93` stand
+> **unedited**.
 >
 > **Status: DRAFT — six scope decisions are PROVISIONAL** (§7). They were taken by the
 > implementer on a "GTG" and are listed for confirmation at the review gate. Nothing
@@ -47,13 +48,52 @@ no true positive, no recorded miss.
 
 ### 1.2 Evidence the constraint is real (measured, not assumed)
 
-Pool minus the union of every committed registry's real instance ids:
+> **CORRECTED 2026-09-19.** An earlier draft labelled the figure below *"FRESH (never
+> driven) — 30"*. **That label was wrong.** 30 counts instances never drawn into any
+> *registry*, which is not the same as never *driven* — an instance can be drawn and
+> never run. Both measures are given; §1.2.1 says why the **conservative** one is
+> nevertheless the one this unit uses.
+
+Two measures, both **measured** this session:
+
+| Measure | Fresh | Counts |
+|---|---|---|
+| **Conservative** — pool minus every committed registry's real ids | **30** (django 23, sympy 7) | never *drawn* |
+| **Derived** — pool minus `observed.json` ∪ all 12 committed ledgers' real trace ids | **83** (django 53, sympy 30) | never *captured* |
 
 ```
 pool reals ................. 166
-union of registry reals .... 137
-FRESH (never driven) ........ 30   →  django 23, sympy 7
+union of registry reals .... 137   -> conservative fresh: 30
+observed.json ............... 23
+ledger-derived driven ....... 82   -> derived fresh: 83
 ```
+
+**Both are ~100% django+sympy.** The small-repo block is exhausted — a construction
+property stated by the gate generator itself: *"the committed pool has 28 small-repo
+records and stage3's 80-real draw takes **every one of them** (the small-repo block is
+exhausted before the large-repo top-up)"* (`eval/scripts/build_gate_registries.py`).
+
+#### 1.2.1 Why this unit uses the conservative 30
+
+The gap between 30 and 83 is **attrition** — drawn into `s6stage3.json`, never captured.
+Some were *attempted and failed*; the rest were never reached. **A failed attempt is an
+observation**, and the anti-re-roll contract is explicit: *"an instance that produced an
+observation is never re-armable"* (`checkpoint.py:18-21`).
+
+Telling the two apart requires the s6 **checkpoint** (which records `failed` vs
+`no_observation`). **Measured: no s6 checkpoint survives** —
+`~/dev/at/holder/belay/mint/` holds only `s1 s1b s1p s2 s3 live-smoke-claude-cli`. The
+ledgers record only instances that produced a trace, so an attempted-and-failed instance
+appears in no surviving record at all.
+
+**So the 83 cannot be used without risking a silent contract violation on an
+unidentifiable subset.** The conservative 30 is provably safe and, at n≈12, ample — the
+uncertainty costs this unit nothing. A decision, not an oversight.
+
+**Correction to a second claim:** an earlier draft said n≥50 is *impossible*. On the
+derived measure it is not. The honest statement: **n≥50 is not reachable *safely*, and is
+not attempted.** Q1's "publish no rate" never rested on the count — it rests on the
+**monoculture**, which both measures share.
 
 `eval/minting_driver/selection.py:3-24` records why the stratified draw exists: *~83% of
 the eligible pool is django+sympy, so a uniform draw of 50 would publish a django/sympy
