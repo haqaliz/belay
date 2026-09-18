@@ -1019,6 +1019,7 @@ def run_verify(
     from belay.phase0 import runner as phase0_runner
     from belay.phase0.ledger import to_json
     from belay.phase0.report import render_report
+    from belay.verify.author import author_from_env
     from belay.verify.invariants import default_invariants
 
     batch_dir = Path(report.batch_dir)
@@ -1031,6 +1032,13 @@ def run_verify(
         corpus_dir=Path(corpus_dir),
         server_command=list(server_command),
         invariants=default_invariants(),
+        # A3 exactly as `belay phase0 run` resolves it (`cli.py`): env-only
+        # (`BELAY_CLAIM_AUTHOR`), built at this boundary so the runner stays
+        # deterministic, and `None` when unset -- the axis is ABSENT, never UNVERIFIED
+        # and never PASS. Without this the default `claim_author=None` made the claim
+        # column structurally unfillable here, so `--verify` and the printed command
+        # were NOT the same measurement.
+        claim_author=author_from_env(),
         # The only clock read in the whole mint path.
         captured_at=datetime.now(timezone.utc).isoformat(),
     )
