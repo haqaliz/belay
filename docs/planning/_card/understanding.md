@@ -1,125 +1,250 @@
-# Invariant Authoring Experiment — understanding (Phase 2 dig)
+# Understanding — `phase0-corpus-mint`
 
-> Produced by the Phase 2 dig (agents team), 2026-09-15, in the
-> `feat/invariant-authoring-experiment` worktree. Source of truth: the unit card
-> (`docs/planning/_card/issue.md`), ROADMAP, the invariant-library and A3 planning
-> docs, and the code paths in `src/belay/verify/` + `eval/`.
+Phase-2 dig, 2026-09-19. Four parallel agents mapped the mint harness, the corpus
+banking/scoring path, the A3 claim seam, and the pre-registered gate/freeze protocol.
+Everything below is cited; measured facts are marked **measured** and were produced by
+running the thing, not by reading about it.
 
-## What the work is really asking
+---
 
-R3 ("nobody authors the invariant", High/High, `docs/ROADMAP.md:372`) has two of its
-three mitigations shipped: annotation-inferred invariants inside C5, and the common
-invariant library (`invariant-library`, v0.31.0, 2026-09-12). The third — **the
-Phase-2 authoring experiment** — is explicitly deferred: "inferred-from-task-spec,
-per-repo libraries, an authoring UI" (`docs/planning/invariant-library/prd.md:151-152`).
-ROADMAP:308 says it "gets a real experiment, not an assumption" and names the candidate
-answer this unit tests: **an invariant inferred from the task spec** (the other three
-candidates — annotations, a library, user authoring — already ship).
+## 1. What the work is really asking
 
-The slice: a path where **a model writes an A1 invariant from a task spec, and
-execution decides** — the A3 split ("a model writes a check; execution decides",
-`claim-re-derivation-a3`) applied to A1 authoring. Deliverables per the card:
-(1) an authored invariant FAILs the corrupt-success fixture and PASS/abstains the clean
-control; (2) a mis-broad authored invariant degrades to UNVERIFIED, never FAIL;
-(3) banked per-entry corrupt-success corpus cases recomputing MATCH (the
-invariant-library pattern); (4) one real authored-invariant run against the launch
-capture (manual, not CI).
+Not "run a mint". The brief's real ask is: **convert three shipped capabilities from
+"a capability, not a result" into results, by producing real banked corpus cases.**
 
-## The precedent that exists in code (A3, shipped)
+Three ledger entries wait on the same action:
 
-- `src/belay/verify/author.py` — "A3's model-backed author, behind the `CheckAuthor`
-  seam … shelling out to a user-supplied command — BYOK by construction.
-  `BELAY_CLAIM_AUTHOR` names a command line." JSON-in/JSON-out, fail-closed `None` on
-  any failure. The closest existing seam for "an out-of-process command produces a
-  machine-checkable artifact."
-- `src/belay/verify/claims.py` — A3 evaluator: exit code decides; **A3 never emits
-  PASS**; exit 0 → silence; no author → axis absent on the coverage line (never
-  UNVERIFIED, never PASS).
-- The BYOK subprocess pattern (env scrub by absence never `""`, `--tools ""` +
-  `--strict-mcp-config`) is proven in `eval/minting_driver/clients/claude_cli_client.py`
-  and pinned by tests.
+| Entry | Quote | Source |
+|---|---|---|
+| A3 column | *"no real intent-drift case exists yet — the fixture is synthetic, the mint's next run fills the A3 column"* | `CHECKLIST.md:407` |
+| Trajectory banking | *"the value is forward-looking: the next mint's trajectory FAILs bank"* | `CHECKLIST.md:408` |
+| Recall | *"No miss has been banked, so recall remains unmeasured and precision still reads `n/a`"* | `CAPABILITY_ROADMAP.md` C6 |
 
-## The constraints that bind the design (each is a shipped guard)
+**Measured baseline** (`belay corpus score`, this session): `TP 0 · FP 0 · FN 0 · TN 7 ·
+precision n/a · recall n/a · coverage 1.00 · independent findings 0`.
 
-1. **The provenance boundary, not negotiable.** "the agent must never be able to
-   author its own policy"
-   (`phase0-corpus-audit/understanding.md:194-195`). A model-authored invariant is
-   still operator-declared policy once the operator runs the authoring command — but
-   the invariant must arrive by an **operator-run** path, never from the trace, and
-   the structural guard `test_no_invariant_is_ever_sourced_from_a_trace`
-   (`tests/test_invariants.py:55-114`) enumerates every invariant producer and will
-   break until the new producer is admitted **deliberately**.
-2. **No bare LLM judge.** "A model may *write a check*; only execution may *decide*"
-   (CAPABILITY_ROADMAP.md:916-917). The authored artifact is enforced by
-   `evaluate_invariant`, same as file-loaded policy.
-3. **Zero-LLM AST guard** (`test_verify_zero_llm.py`) covers `src/belay/verify/`.
-   A model-backed author that imports into the engine would trip it — the author must
-   stay behind a subprocess seam (A3's pattern) or be excluded by name, never the
-   engine calling a model.
-4. **Precision history.** A1's naive rule fired 0/7 (shapes A/B/C,
-   `phase0-corpus-audit/understanding.md:41-45`); the repair shipped "judged against
-   the **task pre-state** and the **resulting content**"
-   (CAPABILITY_ROADMAP.md:584-588). The experiment's abstain-by-default is the
-   same lesson: a mis-broad authored invariant must never manufacture a FAIL.
-   Nuance (from the dig): the repo already decided abstain-everything is an
-   acceptance failure **on human-adjudicated negatives** ("PASS, not merely
-   not-FAIL", `invariant-test-mutation-shape/prd.md:63,72-85`) — both constraints are
-   live and bind different fixtures.
-5. **Operator files never accept unimplemented rules.** Unknown rule names exit 2,
-   fail-closed (`invariants.py:247-253`); library selection is exit 2 on unknown name
-   (`resolve_library_entry`). An authored invariant must meet the same contract.
-6. **Flag-parity guard** (`tests/test_cli_flag_parity.py`): a new flag on verify that
-   also lands on corpus add / phase0 run / gate baseline must be declared in the fact
-   table.
+---
 
-## The real code paths (from the dig)
+## 2. Verdict-axis placement
 
-- Rules: `src/belay/verify/invariants.py` — `Invariant(scope: bytes, rule: str)`;
-  admission = constant + `_KNOWN_RULES` + exactly one grounding set
-  (CONTENT_GROUNDED / INSTANCE_LEVEL / _DELTA_GROUNDED) + a branch in
-  `evaluate_invariant`. Abstain causes are closed-vocabulary str constants stamped
-  into `Verdict.expected["cause"]`.
-- Loader: `load_invariants(path)` (operator file: JSON list of `{"scope","rule"}`);
-  library resolver `resolve_library_entry(name)` is the shipped precedent for a
-  "third producer" admitted into the provenance guard by name.
-- CLI: `invariant-library` subcommand group at `cli.py:3858` — natural home for a
-  sibling `invariant` group; `--invariant-library` wiring on four surfaces.
-- Corpus: `CASE_SCHEMA_VERSION = 5`; banked fixtures via real `add_case` + `corpus
-  run` MATCH/REGRESSION, house pattern in `tests/test_invariant_library_e2e.py`
-  (fixture guards, per-entry CLI fixtures via `TraceWriter` over real snapshots,
-  banked round trips). Recompute uses the **stored** invariants, never re-resolves
-  the name.
-- BYOK: `eval/minting_driver/clients/claude_cli_client.py` `ClaudeCliModel`
-  (injectable `runner=` seam; offline tests; env scrub absent-never-`""`).
-- Tests: `tests/test_verify_author.py` (A3 fake-author tests) is the analog home for
-  `tests/test_invariant_author*.py`; darwin-gated only where replay re-invokes
-  seatbelt. Suite 2428/2439 collected (2403 passing).
+**This unit changes no axis and must not.** It is a *measurement and banking* unit.
 
-## Open questions (for the interview — context cannot resolve these)
+- **A1** — exercised (trajectory `suite-before-success-claim`; content
+  `no-assertion-weakening`). Semantics untouched.
+- **A2** — exercised. Untouched.
+- **A3** — *filled*, not changed. A3 still can never emit PASS
+  (`tests/test_verify_claims.py:333-340`).
+- **Reduction** — untouched.
 
-1. **Where the authored artifact lands**: Fork A — a reviewable **file** produced by
-   an `belay invariant infer`-style subcommand, consumed later by the existing
-   `--invariants` (human-in-the-loop; provenance boundary intact). Fork B — inline
-   at verify time via `--invariant-author` (A3-style). Fork A keeps policy reviewable
-   and the operator-file contract unchanged.
-2. **The mis-broad guardrail's mechanism**: how the engine knows an authored invariant
-   is mis-broad. Leading candidate: a **calibration/control step** — the authored
-   invariant is first evaluated against the task's clean baseline (the control); an
-   over-fire there degrades the invariant to UNVERIFIED with a named cause instead of
-   FAILing the target run.
-3. **Which surfaces carry the flag** (verify-only vs the four replay-bearing surfaces)
-   — the flag-parity guard requires the decision up front.
-4. **Reference author**: `src/belay/`-adjacent JSON-in/JSON-out author wrapping
-   `claude -p` with the proven env-scrub, or the unit ships only the seam with a
-   `scripts/` reference author and the live run stays manual (A3 precedent: live smoke
-   is `manual`-marked, never CI).
-5. **The launch-capture deliverable** is a manual run, not a CI test (the capture is a
-   clean negative control; no corrupt-success case can be banked from it).
+Any proposal to sharpen a rule so the mint produces more hits is **out of scope and
+would invalidate the run** — that is fitting the detector to the measurement.
 
-## Axes
+## 3. Guardrail check (`CLAUDE.md`)
 
-- **A1** — the authored artifact is enforced by the existing A1 machinery; no new
-  verdict axis, no new status.
-- **A3** — untouched. The experiment borrows its "model writes, execution decides"
-  split and its out-of-process BYOK author seam; A3's own follow-ons (WARN vocabulary,
-  caller-supplied-workspace short-circuit) are separate units.
+| Guardrail | Status |
+|---|---|
+| No agent framework | ✅ `eval/minting_driver/` is eval-only, never the `belay` CLI |
+| No bare LLM judge | ✅ A3's model writes a check; `contained()` execution decides by exit code (`claims.py:377-384`) |
+| UNVERIFIED never PASS | ✅ preserved; this unit adds no rendering surface |
+| No raw-data egress | ✅ BYOK subscription, on the owner's box |
+| Corpus compounds | ✅ **this is the entire point** |
+| Gets better as models improve | ✅ A3 + authored invariants |
+
+---
+
+## 4. Findings that change the shape of the unit
+
+### 4.1 🔴 A mint ALONE cannot move `precision` off `n/a`
+
+Every ingest site hardcodes `human_label="pending"` (`phase0/runner.py:459`, `:541`,
+`:592`). `score()` excludes `pending` **first** (`corpus/metrics.py:219-221`), so
+`tp=fp=0` and `_ratio(0,0) → None` (`:149-155`). The engine never labels its own cases
+(D3); only `set_label` (`corpus/curate.py:46-146`), run by a human, can. The label trap
+is enforced by a test that explicitly asserts `precision != 1.0`
+(`tests/test_corpus_metrics.py:114-140`).
+
+**Consequence:** the brief's acceptance line *"`corpus score` reports precision and
+recall with real denominators"* **cannot be satisfied by minting.** It needs a second,
+human step. See Q5.
+
+### 4.2 🔴 Only 30 never-driven instances remain, and they are ~100% django+sympy
+
+**Measured** (pool minus the union of every committed registry's real ids):
+
+```
+pool reals ................ 166
+union of all registry reals 137
+FRESH (never in a registry)  30   →  django 23, sympy 7
+```
+
+`selection.py:3-24` records why the stratified draw exists: *~83% of the eligible pool
+is django+sympy, so a uniform draw of 50 would publish a django/sympy rate as an agent
+rate.* **The residue is worse than the pool it was built to correct.**
+
+Consequences: (a) n≥50 on fresh instances is **impossible**; (b) the stratification
+that made 18.3% defensible **cannot be reproduced**; (c) re-driving an already-*banked*
+instance hits `CaseExistsError`, fail-closed, no `--overwrite`
+(`corpus/add.py:364-368`).
+
+This is *survivable* only because the unit is **not a gate run** (§5).
+
+### 4.3 🟡 The A3 column cannot be filled through the mint's `--verify` path
+
+`eval/minting_driver/entrypoint.py:1029-1035` calls `run_batch(...)` **without
+`claim_author=`**; the default is `None` (`phase0/runner.py:153`) and A3 engages only
+when it is not None (`runner.py:419`). The README presents `--verify` and the printed
+`belay phase0 run` as equivalent (`eval/README.md:727-729`) — **they are not**: only
+the printed CLI command reads `BELAY_CLAIM_AUTHOR` (`cli.py:2593`).
+
+### 4.4 🟡 No A3 reference author exists — writing one is real scope
+
+Nothing in `src/` authors an A3 check. Only a `python3 -c` example
+(`README.md:155-161`), a manual live gate (`tests/test_verify_author_live.py`), and a
+CI fake. Two reusable precedents carry the **scrub-by-absence** idiom:
+`src/belay/authoring/reference_author.py:60-64, 177-190` (closest analogue) and
+`eval/minting_driver/clients/claude_cli_client.py:117-121, 709-723`.
+`SubprocessAuthor` passes no `env=` (`author.py:107-113`) — scrubbing is the author's
+job.
+
+### 4.5 ✅ CORRECTION — the "flag-parity gap" in the brief is NOT a defect
+
+The brief (and my `belay-next` handoff) called the missing `phase0 run --claim-author`
+*"the same defect class the parity guard exists to catch."* **Wrong.** It is a recorded
+decision: the parity table declares the surface set as exactly
+`{verify, gate baseline, gate check}` with the reason in-line
+(`tests/test_cli_flag_parity.py:131-137`), the open question is at
+`claim-re-derivation-a3/author/spec.md:53-55`, it was decided at
+`.../surfaces/plan_20260902.md:19-22`, and it is **pinned by a test asserting
+`phase0 run --claim-author` exits 2** (`tests/test_verify_claim_surfaces.py:202-219`).
+
+Adding the flag would turn two guards RED and reverse a decision. **The env var needs
+no flag change at all.** Corrected in `issue.md`.
+
+### 4.6 🔴 A real intent-drift case may not be producible on demand
+
+A3 FAILs only if the agent asserts verification in its `Done` text (classified
+`VERIFICATION`, `trajectory.py:112-127`) while the final state contradicts it. This is
+the shape the launch demo **could not produce**: 18 observed drives, two frontier
+models, an easy bug, a hard bug and an expensive-suite lever → **zero** corrupt
+successes (`launch-demo/demo-capture/DRIVES.md`).
+
+The honest framing, borrowed from `invariant-authoring`: **a run that produces no
+intent-drift case is a recorded result, not a failure of the unit.**
+
+### 4.7 ✅ `--root` is cwd-relative — the fix is to write outside the worktree
+
+`entrypoint.py:224-236` resolves `--root` against cwd. A mint run from this worktree
+embeds `.claude/worktrees/feat-phase0-corpus-mint/…` in every manifest `source_root`,
+reproducing **the exact defect repaired at the start of this session** (three missing
+symlinks; 1,344 dead path references; **measured** broken until restored).
+
+**Decision: pin `--root` to an absolute path under `~/dev/at/holder/belay/mint/`.**
+Durable by construction, not by a stub-symlink afterwards. Never rewrite recorded paths
+(**measured**: breaks replay 0/11 → 7/11).
+
+---
+
+## 5. The unit is NOT a gate run — and the record says exactly how to say so
+
+The ≥50 clause counts **instances minted** and is **detector-independent**
+(`PHASE0_RESULTS.md:781-784`), so no run below it reaches a gate decision. The record
+explicitly permits such runs and pre-registers the disclosure:
+
+> *"The write-up's first paragraph states what this is not — not a gate run (≥50 counts
+> instances minted, detector-independent), not a precision number, not a base rate…"*
+> — `under-firing-measurable/miss-measurement/spec.md:97-99`
+
+with the reason: *"**The top risk is misreading** … Mitigated in the script, in the
+metrics, and in the write-up's first paragraph — **three places, because two have not
+been enough before.**"*
+
+### But a non-gate mint is still bound by all of these
+
+| Rule | Source |
+|---|---|
+| **Rule D — freeze protocol**: tooling committed first in a commit containing **no result**; run **once**; verbatim output committed next, whatever it says; a second run only if **declared** | `phase0-mint-run/prd.md:97-101`; grep-checked, `mint-run/spec.md:42` |
+| **Rule A — stage gating + stop-loss**: stage 1 probe → stage 2 (controls first) → stage 3 | `phase0-mint-run/prd.md:73-79` |
+| **D-3 — a FAILing control VOIDS the mint**, regardless of later adjudication | `phase0-remint/prd.md:215`; `PHASE0_RESULTS.md:42` |
+| **Exposure gate (D-1 reading)**: 0/N judged on the trajectory line → STOP | `phase0-remint/prd.md:94-101` |
+| **`INSTRUMENT SUSPECT` → STOP**, never a 0% | `phase0-remint/prd.md:92`; `report.py:6-12, 66-78` |
+| **Audit rules S-1…S-6** — notably **S-1 the auditor is the OWNER; agents prepare evidence, never judgments**, and **S-5 every trajectory FAIL is adjudicated** | `phase0-remint/audit-and-publish/plan_20260809.md:24-29` |
+| **REPRODUCIBILITY gate** — clean-checkout `belay phase0 report` byte-identical; mismatch → STOP | `mint-shell-toolset-run/audit-and-publish/spec.md:24-25` |
+| **Six honesty properties** | `phase0-live-mint/prd.md:310-317` |
+
+**S-1 is load-bearing for this unit's shape**: I can prepare evidence; I cannot
+adjudicate. The human labeling pass (§4.1) is *owner work* by pre-registered rule.
+
+---
+
+## 6. The composition to reuse (2026-08-12, the only one measured to produce TPs)
+
+Frozen invocation, verbatim (`mint-run/acceptance-stage3.sh:5-12`):
+
+```sh
+set -euo pipefail
+export BELAY_EVAL_SERVER_ROOT="${BELAY_EVAL_SERVER_ROOT:-$PWD/eval/servers}"
+uv run python -m eval.minting_driver batch \
+  --root eval/mint/s6c --registry eval/instances/stage6c.json \
+  --provider claude-cli --model claude-opus-5 --max-steps 20 --request-timeout 120 \
+  --toolset filesystem+shell
+```
+
+Operating point (`mint-shell-toolset-run/prd.md:146-149`): `claude-opus-5`,
+`--max-steps 20`, `--request-timeout 120`, macOS Seatbelt, servers pinned in
+`eval/servers/`. **Local `claude` is 2.1.277; the gate run used 2.1.228** — a stated
+environment difference, not a blocker.
+
+Verify side — **`--shell-server` MUST precede `--server`** (`--server` is
+`nargs=REMAINDER` and swallows everything after it; `eval/README.md:790-793`).
+**Measured this session:** I hit the REMAINDER defect myself — `--server -- node …`
+fails with `unrecognized arguments`.
+
+Pinned servers **present and working** (**measured**: `s1p` replayed
+`VERIFIED_CLEAN`, 0/11 UNVERIFIED).
+
+---
+
+## 7. Contradictions between the brief and the code, stated not papered over
+
+1. **"`corpus score` reports precision/recall with real denominators"** — not reachable
+   by minting (§4.1). Needs an owner labeling pass.
+2. **"the flag-parity gap"** — not a gap; a pinned decision (§4.5). **Corrected.**
+3. **"Reuse the 2026-08-12 composition … n≥50"** — the brief does not claim n≥50, but
+   the composition it names *was* an n=60 gate run. The instance supply makes that
+   impossible (§4.2). The unit must state its own, smaller size and its
+   non-gate status.
+4. **"an A3 intent-drift FAIL banks a real case"** — cannot be *promised*, only
+   attempted (§4.6). Acceptance must be written so an empty A3 column is a recorded
+   result, not a red test.
+
+---
+
+## 8. Open questions for the PRD (⛔ owner decides)
+
+- **Q1 — Publish a violation rate at all?** Recommend **NO**. Any rate from a ~100%
+  django+sympy draw is precisely the artifact the stratified draw exists to prevent.
+  Report dispositions and banked-case counts; decline the rate explicitly.
+- **Q2 — Mint size and registry.** 30 fresh max. Pick n, build a registry by the
+  committed generator pattern, record the seed in `SEED_HISTORY` (no silent re-roll).
+- **Q3 — Is the owner labeling pass in scope?** If out, precision stays `n/a` and the
+  unit must say so. If in, S-1 makes it owner work, which the implementer cannot do.
+- **Q4 — A3: build a reference author?** (a) write one modeled on
+  `reference_author.py`, (b) thread `author_from_env()` into `run_verify`
+  (`entrypoint.py:1029`), or (c) skip A3 this run and say so.
+- **Q5 — Controls.** CTL-1/2/3 + CTL-4 (positive, needs `filesystem+shell`). D-3 means
+  a control FAIL **voids** the run — the re-mint died exactly here.
+- **Q6 — `--root` location.** Recommend absolute under `~/dev/at/holder/belay/mint/`
+  (§4.7).
+- **Q7 — Live spend.** Real subscription time on `claude-opus-5`. Stop-loss is Rule A.
+
+---
+
+## 9. Out of scope (name them, do not drift)
+
+- Sharpening any A1/A2/A3 rule to increase hits — that is fitting to the measurement.
+- Re-deriving any published number: `11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16`,
+  `recall 0.00`, `3/93` stand unedited.
+- Adding `--claim-author` to `phase0 run` (§4.5) unless the owner reverses a decision.
+- Fixing PR #38 (separate open branch, currently RED).
+- Backfilling the s6 captures — **gone**; `mint/` holds only
+  `s1 s1b s1p s2 s3 live-smoke-claude-cli`.
