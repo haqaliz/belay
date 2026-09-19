@@ -8,12 +8,12 @@ proxies MCP, where annotations are declared contracts — the wedge's payoff, na
 CLAUDE.md as "the readOnlyHint that mutates -> FAIL with zero LLM".
 
 **The whole discipline, in one line: an absent contract is NOT a permissive one.** A tool
-that declared no `readOnlyHint` cannot be verified for conformance — UNVERIFIED, never
-PASS. Defaulting an un-annotated tool to "it never claimed read-only, so a mutation is
-fine -> PASS" is the exact false pass the tri-state (C1) was built to prevent. The
-tri-state (declared-true / declared-false / not-declared / declared-non-boolean) already
-lives in the trace; this module READS it per-turn and applies the rule. It never
-re-introduces a default — the spec defaults appear nowhere here, deliberately.
+that declared no `readOnlyHint` is never PASSed for conformance. Defaulting an un-annotated
+tool to "it never claimed read-only, so a mutation is fine -> PASS" is the exact false pass
+the tri-state (C1) was built to prevent. The tri-state (declared-true / declared-false /
+not-declared / declared-non-boolean) already lives in the trace; this module READS it
+per-turn and applies the rule. It never re-introduces a default — the spec defaults appear
+nowhere here, deliberately.
 
 The rule, over the turn's `readOnlyHint` state and the replay's `delta`:
 
@@ -21,8 +21,27 @@ The rule, over the turn's `readOnlyHint` state and the replay's `delta`:
     declared-true    + an EMPTY delta       -> PASS   (declared read-only, honoured it)
     declared-true    + NO delta observed    -> UNVERIFIED (cannot confirm; never PASS)
     declared-false   (any delta)            -> PASS   (declared it may mutate; nothing to violate)
-    not-declared                            -> UNVERIFIED (no contract to check against)
+    not-declared, SERVER DECLARED NOTHING   -> NOT_COVERED (there was never a contract)
+    not-declared, CONTRACT NOT OBSERVED     -> UNVERIFIED (we tried to read one and could not)
     declared-non-boolean                    -> UNVERIFIED (no readable contract)
+
+**This replaces the flat rule this table stated until 2026-09-20 —** *"`not-declared` ->
+UNVERIFIED (no contract to check against)"* **— which collapsed four structurally different
+facts into one status.** Three of them are genuine abstentions: no `tools/list` was captured
+before the call, the tool was absent from the snapshot that was observed, or the request
+frame could not be read. Belay tried to learn the contract and could not; the server may
+well declare one. The fourth is not an attempt at all — the snapshot WAS observed, the tool
+IS in it, and the server declared no `readOnlyHint`. Nothing was promised, so there is no
+contract for a delta to confirm or refute, and there never was one: a **coverage boundary**,
+the same non-finding `openWorldHint` already carries, not an abstention about this run.
+`NOT_COVERED` is sub-verdict-only and `reduce` drops it before ranking, so the turn's status
+comes from its other sub-verdicts. The split keys on `TurnAnnotation.producer`, never on an
+absent `cause` (see `Producer` below); the two populations must stay legible in the MESSAGE
+as well as the status, which is why producer iv says *the server declared no contract* and
+producer i says *the contract was never observed*. Neither branch ever PASSes this dimension
+on an absent contract, so the false pass above is still refused — what changed is that
+Belay no longer reports a failed attempt it never made. See
+`docs/planning/effect-conformance-coverage/absent-contract-coverage/`.
 
 `declared-false` is always PASS because there is no read-only contract to violate — the
 tool announced it mutates, so any observed effect (or none) conforms.
