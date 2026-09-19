@@ -20,8 +20,10 @@ mistake that produces an empty mint, which `belay phase0 run` reads as
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -1407,6 +1409,113 @@ def test_run_verify_on_a_missing_batch_dir_is_a_named_failure(tmp_path: Path) ->
     )
 
     assert run_verify(report, server_command=["node", "x"]) == 2
+
+
+# --------------------------------------------------------------------------------------
+# `a3-author` Phase 3 — `--verify` must be able to reach the A3 claim axis
+#
+# `run_verify` called `run_batch` without `claim_author=`, whose default is `None`
+# (`phase0/runner.py:153`), and A3 engages only when it is NOT None (`runner.py:419`).
+# So the in-process `--verify` path could never fill the claim column, whatever
+# `BELAY_CLAIM_AUTHOR` said — while the printed `belay phase0 run` command could
+# (`cli.py:2593`). `eval/README.md` presented the two as the same measurement; they were
+# not, and a mint verified in process would have reported "claim unrecorded" for every
+# instance.
+#
+# The batch here is one trace with a claim record and ZERO `tools/call` turns, so the
+# evaluator abstains at the first step it cannot ground (`FINAL_STATE_UNOBSERVABLE`) —
+# offline, no replay, no sandbox, no model. What is pinned is the WIRING: the column is
+# filled with a named cause instead of being structurally absent. `BELAY_CLAIM_AUTHOR`
+# points at a stub author, never the real `claude` binary.
+# --------------------------------------------------------------------------------------
+
+
+STUB_CLAIM_AUTHOR = """\
+import json, sys
+json.load(sys.stdin)
+json.dump({"source": "pytest -q", "argv": ["pytest", "-q"]}, sys.stdout)
+"""
+
+
+def _claim_batch(tmp_path: Path) -> MintReport:
+    """A one-trace batch carrying a verification claim and no `tools/call` turns."""
+    from belay.trace import TraceWriter, append_claim_record
+
+    batch_dir = tmp_path / "mint" / "batch"
+    batch_dir.mkdir(parents=True)
+    writer = TraceWriter.in_directory(batch_dir)
+    writer.close()
+    append_claim_record(writer.path, text="all tests pass")
+    return MintReport(
+        batch_dir=batch_dir,
+        checkpoint_path=tmp_path / "mint" / "checkpoint.json",
+        checkpoint=Checkpoint(),
+        instance_ids=("stub__instance-1",),
+        counts={"captured": 1, "failed": 0},
+        verify_command="belay phase0 run ...",
+    )
+
+
+def _stub_claim_author(tmp_path: Path) -> str:
+    """A `BELAY_CLAIM_AUTHOR` command line: a stub script, never the real `claude`."""
+    script = tmp_path / "stub_claim_author.py"
+    script.write_text(STUB_CLAIM_AUTHOR, encoding="utf-8")
+    return f"{sys.executable} {script}"
+
+
+def test_run_verify_reaches_the_claim_axis_when_an_author_is_configured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With `BELAY_CLAIM_AUTHOR` set, the in-process verify fills the A3 claim column.
+
+    A verdict or a named cause — never a structurally absent column, which is what
+    "claim unrecorded" would have read as for every instance of a mint verified through
+    `--verify` rather than the printed `belay phase0 run`.
+    """
+    monkeypatch.setenv("BELAY_CLAIM_AUTHOR", _stub_claim_author(tmp_path))
+    report = _claim_batch(tmp_path)
+    ledger_path = tmp_path / "runs" / "phase0.json"
+
+    code = run_verify(
+        report,
+        server_command=["node", "server.js", WORKSPACE_PLACEHOLDER],
+        ledger_path=ledger_path,
+        corpus_dir=tmp_path / "corpus",
+    )
+
+    assert code == 0
+    instance = json.loads(ledger_path.read_text(encoding="utf-8"))["instances"][0]
+    claim = instance.get("claim")
+    assert claim is not None, (
+        "the A3 column is empty: `run_verify` never threaded the configured author "
+        "into `run_batch`, so the claim axis could not engage"
+    )
+    assert claim["status"] == "UNVERIFIED", claim
+    assert claim["cause"] == "FINAL_STATE_UNOBSERVABLE", claim
+
+
+def test_run_verify_keeps_the_claim_axis_dark_without_an_author(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No `BELAY_CLAIM_AUTHOR`: the axis stays ABSENT — byte-identical to today.
+
+    Dark by default. An absent author is absent, never UNVERIFIED and never PASS, so the
+    claim column is `None` and no surface may render it as a clean claim.
+    """
+    monkeypatch.delenv("BELAY_CLAIM_AUTHOR", raising=False)
+    report = _claim_batch(tmp_path)
+    ledger_path = tmp_path / "runs" / "phase0.json"
+
+    code = run_verify(
+        report,
+        server_command=["node", "server.js", WORKSPACE_PLACEHOLDER],
+        ledger_path=ledger_path,
+        corpus_dir=tmp_path / "corpus",
+    )
+
+    assert code == 0
+    instance = json.loads(ledger_path.read_text(encoding="utf-8"))["instances"][0]
+    assert instance.get("claim") is None, instance.get("claim")
 
 
 # --------------------------------------------------------------------------------------

@@ -1,5 +1,81 @@
 # Belay: Status Log
 
+**THE CORPUS-FILLING MINT STOPPED AT ITS OWN PRE-REGISTERED GATE — AND THE CAUSES ARE
+PRE-EXISTING, NOT A REGRESSION** (2026-09-19, `phase0-corpus-mint`, v-next; not released).
+**This is NOT a gate run and produces NO Phase-0 number.** The unit set out to close three
+ledger entries that all read *"a capability, not a result"* and all wait on the same action
+— a mint under the current composition (`CHECKLIST.md:407-408`; `CAPABILITY_ROADMAP.md` C6).
+Measured baseline: `TP 0 / FP 0 / FN 0 / TN 7`, `precision n/a`, `recall n/a`, 0 independent
+findings.
+
+**TWO ASPECTS SHIPPED; THE THIRD STOPPED.**
+
+**`a3-author` — the A3 claim axis can be driven for the first time.** C8 shipped 2026-09-02
+with **no reference author at all** and, worse, a path that could never reach it:
+`eval/minting_driver/entrypoint.py:1029-1035` called `run_batch()` **without
+`claim_author=`**, whose default is `None`, and A3 engages only when it is not
+(`runner.py:419`) — so the mint's in-process `--verify` **could never fill the claim column
+whatever the environment said**, while the printed CLI command could, and
+`eval/README.md:727-729` called the two equivalent. Fixed in +8 lines, with the import
+inside the existing lazy block so the "runs with `belay` absent" contract survives. The
+reference author ships as `src/belay/verify/reference_claim_author.py` — placed there, not
+in `src/belay/authoring/`, because that package declares *"Nothing in this package is in the
+verdict path"* and **A3 is** (it may downgrade a turn). Stdlib only; `--tools ""` **and**
+`--strict-mcp-config`; `ANTHROPIC_*` scrubbed **by absence, never `""`**; aliases refused;
+every malformed reply an abstention, never a crash. **Proven live at n=1** (`claude-opus-5`,
+184.50 s): the author ran (**observed on disk, not inferred**), wrote a check, the check
+**executed** under `contained()` with network denied against the replayed final state and
+**exited 0** — D3 silence. **A3 did not manufacture intent drift on the honest negative
+control**, and the capture's known verdict reproduced exactly (7/7 PASS, trajectory PASS).
+**Finding, recorded not fixed:** an absent `claim` key in `--json` is **ambiguous** —
+`evaluate_claim` returns `None` both when no author is configured (the axis never ran) and
+when the check exited 0 (silence, confirmed), so a reader cannot tell *"checked and
+confirmed"* from *"never checked"*. A coverage-legibility gap of the shape `NOT_COVERED` was
+introduced to fix.
+
+**`mint-registry` — a reproducible, honestly-scoped draw.** The exclusion set is **derived at
+generation time**, never transcribed (a hand-copied id list is the defect class that broke
+`test_docker_inimage.py`'s dev-dep list); byte-identical regeneration is the reproducibility
+check; the 8 drawn reals collide with **no** prior registry and **no** committed ledger,
+verified both directions. **A published figure was corrected:** an earlier draft called 30
+*"never driven"* — 30 is never **drawn**; never **captured** is 83. The unit uses the
+conservative 30 anyway, for a contract reason: the gap is attrition, some of it
+attempted-and-failed, *"an instance that produced an observation is never re-armable"*, and
+**no s6 checkpoint survives** to say which. An earlier claim that n≥50 is *impossible* is
+also corrected — it is not safely reachable, and is not attempted.
+
+**`mint-run` — RUN ONCE, and its gate said STOP.** Under the freeze protocol (scripts
+committed at `70c190e` containing **no result**, grep-checked for result *shapes*), stage 1
+(CTL-1 + CTL-4) minted **2 captured, 0 failed** and then verified to **`NO_VERIFIABLE_TURNS:
+2`, `INSTRUMENT SUSPECT`, UNVERIFIED 3/3 = 100%**. That is a pre-registered **STOP**
+(*"wiring failure, never a result"*), so **stage 2 was not launched** — the probe cost 2
+control instances (67.5 s, 5 model requests) instead of 12. **Not a D-3 void** (no control
+FAILed; a void is the instrument *manufacturing* a violation, the opposite direction), **not
+a result about agents** (the mint half succeeded), **not a zero** (`INSTRUMENT SUSPECT`
+refuses to print a rate — the R6 false-zero defense).
+**The causes are PRE-EXISTING, proven from the committed gate ledgers rather than asserted:**
+the 2026-08-12 run *that PROCEEDed* carries `UNRESTORABLE_SNAPSHOT_FAILED` **16** (s6b) and
+**122** (s6c) plus `replayed but effect unverified` **8** (s6c). What differs is **scale** —
+s6c absorbed those across hundreds of turns and still produced 52 verified instances; this
+probe had **3 turns** and the same rate consumed all of them.
+**Root cause, measured:** the capture contains **no `readOnlyHint` or annotations anywhere**
+— the pinned npm `@modelcontextprotocol/server-filesystem` declares none, so
+effect-conformance abstains by its own rule (*not-declared → UNVERIFIED*, `effect.py:22-25`).
+**Honest, not broken** — but worst-status-wins then drags every turn to UNVERIFIED even where
+result-equivalence passed, which means **against annotation-less servers a corpus-filling
+mint can never bank a per-turn case.** That is the finding worth more than the mint.
+**MH-1 worked** — manifests record `source_root` in the holder, outside any worktree, so the
+defect repaired at the start of this unit (three missing symlinks, **1,344** dead recorded
+paths, measured and fixed by running `corpus run` 7/7 MATCH and `s1p` `VERIFIED_CLEAN` 0/11
+UNVERIFIED) **will not recur for these captures**.
+**Open, and the owner's by S-1:** fix the instrument / re-scope the probe / declare a second
+run / stop. Recommendation: **fix the instrument** — the record's own 2026-07 lesson is
+*"this is an invariant problem, not a sample-size problem"*.
+
+**No published number moves:** `11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16`,
+`recall 0.00`, `3/93` stand unedited, and this run produces **no rate of any kind**. Suite
+2540 → **2575** passing. See `docs/planning/phase0-corpus-mint/`.
+
 The full, append-only engineering status log for this repository —
 what landed, when, and what each change did and did not do.
 Previously the preamble of `CLAUDE.md`; moved here 2026-08-31 so the

@@ -2,6 +2,57 @@
 
 This file orients a coding agent working in this repository. Read it first.
 
+> **THE CORPUS-FILLING MINT STOPPED AT ITS OWN PRE-REGISTERED GATE, AND THE CAUSES ARE
+> PRE-EXISTING** (2026-09-19, `phase0-corpus-mint`, v-next; not released). **NOT a gate run;
+> produces NO Phase-0 number.** Two aspects shipped, the third stopped.
+> **`a3-author`:** C8 shipped the A3 axis in v0.27.0 with **no reference author**, and with a
+> path that could never reach one — `entrypoint.py:1029-1035` called `run_batch()` **without
+> `claim_author=`** (default `None`; A3 engages only when it is not, `runner.py:419`), so the
+> mint's `--verify` **could never fill the claim column** whatever the env said, while the
+> printed CLI command could and `eval/README.md:727-729` called them equivalent. Fixed in +8
+> lines, import inside the lazy block so the "runs with `belay` absent" contract holds. The
+> author ships at **`src/belay/verify/reference_claim_author.py`** — deliberately not
+> `src/belay/authoring/`, which declares *"Nothing in this package is in the verdict path"*
+> while **A3 may downgrade a turn**. Stdlib only, `--tools ""` **and** `--strict-mcp-config`,
+> `ANTHROPIC_*` scrubbed **by absence never `""`**, aliases refused, every malformed reply an
+> abstention. **Live at n=1** (`claude-opus-5`, 184.5 s): author ran (**observed on disk**),
+> check **EXECUTED** under `contained()` deny-all and **exited 0** — D3 silence; **A3 did not
+> manufacture intent drift on the honest negative control**, capture verdict reproduced
+> exactly. **Recorded finding:** an absent `claim` key in `--json` is **ambiguous** — `None`
+> means both *"no author, the axis never ran"* and *"check exited 0, confirmed"*, so a reader
+> cannot tell **checked** from **never checked**. Coverage-legibility gap, not fixed here.
+> **`mint-registry`:** exclusion set **derived at generation time, never transcribed**;
+> byte-identical regeneration is the reproducibility check; 8 reals collide with no prior
+> registry and no committed ledger. **Correction: "30 fresh" is never-DRAWN; never-CAPTURED is
+> 83** — the conservative 30 is used anyway because the gap is attrition, some
+> attempted-and-failed, *"an instance that produced an observation is never re-armable"*, and
+> **no s6 checkpoint survives** to say which. "n≥50 is impossible" is corrected to **not
+> safely reachable, and not attempted**.
+> **`mint-run` — RUN ONCE, GATE SAID STOP.** Freeze protocol honoured (scripts committed
+> containing **no result**, grep-checked for result *shapes*). Stage 1 minted **2 captured, 0
+> failed**, verified to **`NO_VERIFIABLE_TURNS: 2`, `INSTRUMENT SUSPECT`, UNVERIFIED 3/3 =
+> 100%** → pre-registered **STOP**; **stage 2 never launched** (cost 2 controls / 67.5 s / 5
+> requests, not 12 instances). **Not a D-3 void** (no control FAILed — a void is the instrument
+> *manufacturing* a violation), **not a result about agents** (the mint half succeeded), **not
+> a zero** (`INSTRUMENT SUSPECT` refuses to print a rate — the R6 false-zero defense).
+> **Causes PRE-EXISTING, proven from committed gate ledgers:** the 2026-08-12 run that
+> PROCEEDed carries `UNRESTORABLE_SNAPSHOT_FAILED` **16**/**122** and `replayed but effect
+> unverified` **8**; it absorbed them across hundreds of turns, a **3-turn** probe cannot.
+> **Root cause measured: the pinned npm filesystem server declares NO annotations**, so
+> effect-conformance abstains by its own rule (*not-declared → UNVERIFIED*, `effect.py:22-25`)
+> — honest, not broken, but worst-status-wins then drags every turn to UNVERIFIED, so **a
+> corpus-filling mint can never bank a per-turn case against annotation-less servers.** That is
+> worth more than the mint. **MH-1 worked:** manifests record `source_root` in the holder,
+> outside any worktree — the defect repaired at this unit's start (**1,344** dead recorded
+> paths from three missing symlinks; fixed and proven by `corpus run` 7/7 MATCH and `s1p`
+> `VERIFIED_CLEAN` 0/11 UNVERIFIED) **cannot recur for these captures**.
+> **A second correction recorded:** the missing `phase0 run --claim-author` is a **pinned
+> decision**, not a parity defect (`test_verify_claim_surfaces.py:202-219` asserts it exits 2).
+> **Open, owner's by S-1:** fix the instrument / re-scope the probe / declare a second run /
+> stop — recommendation **fix the instrument**. **No published number moves** (`11/60 = 18.3%`,
+> `precision 0.00`, `1/15`, `4/16`, `recall 0.00` stand unedited). Suite 2540 → **2575**.
+> See `docs/planning/phase0-corpus-mint/`.
+>
 > **`belay invariant infer` SHIPS — R3'S THIRD MITIGATION: A MODEL WRITES A1 POLICY,
 > EXECUTION CALIBRATES IT, AND AN UNCALIBRATED ARTIFACT CAN NEVER FAIL** (2026-09-15,
 > `invariant-authoring-experiment`, v-next; not yet released). Phase 2's

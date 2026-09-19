@@ -86,6 +86,7 @@ SCAN_AREA: frozenset[str] = frozenset(
         "test_replay_relocation_e2e.py",
         "test_replay_relocation_shell_e2e.py",
         "test_reference_author_live.py",
+        "test_reference_claim_author_live.py",
         "test_refutation_no_claim_axis.py",
         "test_sandbox_check.py",
         "test_sbpl_limits.py",
