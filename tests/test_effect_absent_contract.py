@@ -38,7 +38,11 @@ from dataclasses import replace
 from conftest import trace_of
 from fixtures.annotation_frames import TOOLS_LIST_REQUEST, TOOLS_LIST_RESPONSE
 
+from belay.phase0.ledger import Disposition
+from belay.phase0.report import instrument_suspect
+from belay.phase0.runner import run_batch
 from belay.replay.engine import EQUAL, REPLAYED, TurnReplay
+from belay.trace import TraceWriter
 from belay.verify import effect as effect_module
 from belay.verify import turn as turn_module
 from belay.verify.effect import (
@@ -371,3 +375,102 @@ def test_a_producer_that_named_itself_nothing_abstains_rather_than_bounding_cove
     assert verdict.status is not Status.PASS, verdict
     # It carries no cause either — so the message must not leak a `None` on this path.
     assert "(None)" not in verdict.message, verdict.message
+
+
+# --- AC-8: `VERIFIED_CLEAN` is reachable, and the ledger tells ONE story --------------
+
+#: Injected by the caller at the CLI boundary — `belay.phase0` never reads a clock.
+CAPTURED_AT = "2026-09-20T00:00:00+00:00"
+
+
+def _contractless_instance(trace_dir):
+    """Write ONE `trace-*.jsonl` whose only turn is the AC-1 turn, through the real writer.
+
+    A `tools/list` the server really answered, and one `tools/call` for `mystery` — the tool
+    that tool listing carries with **no `annotations` object**, which is the shape the pinned
+    npm filesystem server emits for every one of its tools. The reply frame is written too, so
+    the turn is a complete correlated pair as `derive_correlation` sees it; result-equivalence
+    is decided by the stubbed replay, not by this byte.
+    """
+    writer = TraceWriter.in_directory(trace_dir)
+    try:
+        for direction, raw in LISTING + [("c2s", _call(3, "mystery")), ("s2c", _reply(3, "ok"))]:
+            writer.observer(direction)(raw, False)
+    finally:
+        writer.close()
+    return writer.path
+
+
+def test_verified_clean_is_reachable_and_the_ledger_tells_one_story(tmp_path, monkeypatch):
+    """AC-8 — an instance whose ONLY turn is the AC-1 turn is `VERIFIED_CLEAN`, counts in the
+    denominator, is not `INSTRUMENT SUSPECT`, **and its turn tally says `PASS`**.
+
+    THE RULE THIS PINS, and the last assertion is the whole point of the test: a ledger must
+    tell ONE story. A candidate design was rejected for producing exactly two — a printed
+    violation rate reading *"0% of 2 verified"* while `turn_status_counts` still read
+    `{'UNVERIFIED': 3}`; one ledger, two surfaces, opposite claims, and the printed one a
+    FALSE ZERO of the kind `INSTRUMENT SUSPECT` exists to refuse (the R6 defense). Asserting
+    the disposition alone would pass under that design. So the tally is asserted whole,
+    `{"PASS": 1}`: the turn the rate counts as verified is the same turn the tally calls PASS.
+
+    WHY IT MATTERS: this is the outcome the aspect exists for. Before the split, this exact
+    instance read `NO_VERIFIABLE_TURNS` -> `violation_denominator() == 0` ->
+    `instrument_suspect` True, which is the structurally-zero denominator the 2026-09-19 mint
+    stopped on — *"a corpus-filling mint can never bank a per-turn case against
+    annotation-less servers"*.
+
+    NOTHING in `src/belay/phase0/runner.py` is touched to make this green (plan D3). The
+    existing `replayed_any` predicate counts this turn because the turn's REDUCED status
+    became PASS on its own — `reduce` drops `NOT_COVERED` before ranking — not because the
+    predicate learned about coverage boundaries. If this test needed the predicate changed,
+    the split slid back into the rejected design.
+
+    **The verifier is the REAL `verify_turn`** — `run_batch`'s default, injected nowhere here,
+    unlike every test in `tests/test_phase0_runner.py`, which cans its verdicts. That is
+    deliberate: a canned `TurnVerdict` would assert the composition this test exists to
+    measure. Only C3's re-execution is stubbed, so the sub-verdicts come from the real
+    `render_effect_verdict` — the trap recorded at `tests/test_interop_attach.py:366-372`,
+    where a test built through a stub seam was green against a live bug.
+
+    `ingest=False`: the corpus is never written and the ingester never called. Nothing is
+    flagged here anyway, and the disposition rule is computed identically either way.
+    """
+    trace_dir = tmp_path / "traces"
+    _contractless_instance(trace_dir)
+    reply = _reply(3, "ok")
+    monkeypatch.setattr(
+        turn_module,
+        "replay_turn",
+        lambda *a, **k: TurnReplay(
+            turn_index=0,
+            status=REPLAYED,
+            reinvoked=True,
+            result_equivalence=EQUAL,
+            recorded_reply=reply,
+            replayed_reply=reply,
+            delta=[],
+        ),
+    )
+
+    ledger = run_batch(
+        trace_dir,
+        corpus_dir=tmp_path / "corpus",
+        server_command=UNUSED,
+        invariants=[],
+        captured_at=CAPTURED_AT,
+        ingest=False,
+    )
+
+    (instance,) = ledger.instances
+    assert instance.disposition is Disposition.VERIFIED_CLEAN, instance
+    assert ledger.violation_denominator() == 1, instance
+    assert instrument_suspect(ledger) is False, instance
+
+    # THE ANTI-TWO-STORIES ASSERTION. Whole-dict, not `.get("PASS")`: an UNVERIFIED turn
+    # hiding alongside the PASS is exactly the disagreement being refused.
+    assert instance.turn_status_counts == {"PASS": 1}, instance.turn_status_counts
+
+    # The boundary is PERSISTED, not swallowed — the same ledger that calls the turn PASS
+    # also records which dimension went unchecked, which is what keeps the PASS honest.
+    assert instance.not_covered_turns == {"effect": 1}, instance.not_covered_turns
+    assert instance.unverified_causes == {}, instance.unverified_causes
