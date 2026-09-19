@@ -93,8 +93,10 @@ def _trace_path() -> Path:
 @pytest.mark.manual
 @pytest.mark.skipif(
     sys.platform != "darwin",
-    reason="A3 materializes the final state by replaying the final turn, which "
-    "re-invokes inside the macOS Seatbelt sandbox (the demo capture's own gate)",
+    reason=(
+        "replay-reinvokes-seatbelt: A3 materializes the final state by replaying "
+        "the final turn inside the macOS Seatbelt sandbox"
+    ),
 )
 def test_reference_claim_author_does_not_manufacture_intent_drift_on_the_negative_control() -> None:
     model = (os.environ.get(MODEL_ENV) or "").strip()
