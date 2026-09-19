@@ -33,13 +33,21 @@ server is ever spawned.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 from conftest import trace_of
 from fixtures.annotation_frames import TOOLS_LIST_REQUEST, TOOLS_LIST_RESPONSE
 
 from belay.replay.engine import EQUAL, REPLAYED, TurnReplay
+from belay.verify import effect as effect_module
 from belay.verify import turn as turn_module
-from belay.verify.effect import render_effect_verdict
+from belay.verify.effect import (
+    PRODUCER_SERVER_DECLARED_NOTHING,
+    PRODUCER_UNNAMED,
+    TurnAnnotation,
+    annotation_for_turn,
+    render_effect_verdict,
+)
 from belay.verify.turn import verify_turn
 from belay.verify.verdict import Status
 
@@ -284,3 +292,82 @@ def test_the_unobserved_producer_still_says_the_contract_was_never_observed(tmp_
     assert verdict.status is Status.UNVERIFIED, verdict
     assert any(phrase in message for phrase in _CONTRACT_NOT_OBSERVED), message
     assert not any(phrase in message for phrase in _SERVER_DECLARED_NOTHING), message
+
+
+# --- AC-4: the discriminator is EXPLICIT, and its default abstains -------------------
+
+
+def test_the_split_keys_on_the_named_producer_not_on_an_absent_cause(
+    tmp_path, monkeypatch
+):
+    """The split must key on a NAMED field, not on `ann.cause is None`.
+
+    THE RULE THIS PINS: today producer iv is distinguishable from producers i/ii/iii by one
+    accident — it is the single return site that passes no `cause=`, so the dataclass default
+    leaves the field `None` (`effect.py:225-231` vs `:132`). Nothing says that is load-bearing.
+    A future edit that gives producer iv the explanation it currently lacks — the obvious,
+    well-meant repair for the leaked `(None)` this file also pins — would silently re-merge
+    the very populations the split exists to separate, and every test would stay green.
+
+    So this test gives producer iv a `cause` and demands the verdict be unmoved. The
+    annotation is the REAL one `annotation_for_turn` derived (only `cause` is substituted),
+    and the verdict comes from the REAL `render_effect_verdict`; what is stubbed is the
+    correlation, not the rule under test.
+
+    The two `assert`s before the substitution are deliberate: they record what today's
+    implicit discriminator actually is, so a reader can see what is being replaced.
+    """
+    records = _producer_records(tmp_path)["iv-server-declared-nothing"]
+
+    observed = annotation_for_turn(records, 0)
+    assert observed.producer == PRODUCER_SERVER_DECLARED_NOTHING, observed
+    assert observed.cause is None, observed  # the accident this test retires
+
+    explained = replace(observed, cause="a later edit added an explanation here")
+    monkeypatch.setattr(effect_module, "annotation_for_turn", lambda *a, **k: explained)
+
+    verdict = render_effect_verdict(records, 0, [])
+
+    assert verdict.status is Status.NOT_COVERED, verdict
+    assert verdict.status is not Status.UNVERIFIED, verdict
+    assert "(None)" not in verdict.message, verdict.message
+
+
+def test_a_producer_that_named_itself_nothing_abstains_rather_than_bounding_coverage(
+    tmp_path, monkeypatch
+):
+    """The default marker must ABSTAIN — a return site nobody updated cannot become a
+    coverage boundary.
+
+    THE RULE THIS PINS: the two sides of this split are not symmetric. `UNVERIFIED` overstates
+    nothing — it says Belay tried and could not, and worst-status-wins carries it to the turn.
+    `NOT_COVERED` is dropped before ranking (`verdict.py:104-112`), so a turn carrying only it
+    reads PASS. A marker that defaulted to the boundary would therefore let a future return
+    site — some fifth way of arriving at not-declared, added years from now by someone who
+    never read this file — quietly LIFT turns to PASS without one line of review. Defaulting to
+    the abstention makes the same oversight cost coverage instead of honesty, which is the
+    direction this project has always failed in on purpose.
+
+    A `TurnAnnotation` built without naming a producer stands in for that future site. It is
+    constructed by hand precisely because no production return site should ever produce one —
+    if one day this test can be written by calling `annotation_for_turn`, that is the defect.
+    """
+    records = _producer_records(tmp_path)["iv-server-declared-nothing"]
+    observed = annotation_for_turn(records, 0)
+
+    unnamed = TurnAnnotation(
+        tool=observed.tool,
+        readonly=observed.readonly,
+        snapshot_seq=observed.snapshot_seq,
+    )
+    assert unnamed.producer == PRODUCER_UNNAMED, unnamed
+
+    monkeypatch.setattr(effect_module, "annotation_for_turn", lambda *a, **k: unnamed)
+
+    verdict = render_effect_verdict(records, 0, [])
+
+    assert verdict.status is Status.UNVERIFIED, verdict
+    assert verdict.status is not Status.NOT_COVERED, verdict
+    assert verdict.status is not Status.PASS, verdict
+    # It carries no cause either — so the message must not leak a `None` on this path.
+    assert "(None)" not in verdict.message, verdict.message

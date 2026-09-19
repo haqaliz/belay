@@ -61,7 +61,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, Literal, Optional, Sequence
 
 from belay.annotations import derive_annotations
 from belay.declared import (
@@ -113,6 +113,41 @@ _HINT = "readOnlyHint"
 _HINT_OPENWORLD = "openWorldHint"
 
 
+#: WHICH return site of `annotation_for_turn` built this annotation. Four of the five arrive
+#: at the same not-declared fall-through carrying four different claims, and the fall-through
+#: must tell them apart to decide between an abstention and a coverage boundary.
+#:
+#: Plain strings rather than an `Enum`: this module is stdlib-only by contract, the values are
+#: never persisted (nothing in the trace format or a corpus case reads them), and a `Literal`
+#: gives the same exhaustiveness check mypy would get from an enum without a new type to
+#: import at every call site.
+#:
+#: **`PRODUCER_UNNAMED` is the DEFAULT, and that is the safety property.** A future return
+#: site added without naming itself abstains (UNVERIFIED, which worst-status-wins carries to
+#: the turn) rather than silently declaring a coverage boundary (`NOT_COVERED`, which `reduce`
+#: drops before ranking, so it would LIFT that turn to PASS unreviewed). The asymmetry is
+#: deliberate: an oversight here must cost coverage, never honesty.
+Producer = Literal[
+    "unnamed",
+    "unreadable-request",
+    "no-snapshot",
+    "tool-absent",
+    "server-declared-nothing",
+]
+
+PRODUCER_UNNAMED: Producer = "unnamed"
+#: iii — the request frame, or its `params`, could not be read, so no tool name was observed.
+PRODUCER_UNREADABLE_REQUEST: Producer = "unreadable-request"
+#: i — no `tools/list` response was captured before the call: no snapshot to correlate to.
+PRODUCER_NO_SNAPSHOT: Producer = "no-snapshot"
+#: ii — a snapshot WAS observed, and this tool is absent from it.
+PRODUCER_TOOL_ABSENT: Producer = "tool-absent"
+#: iv — a snapshot WAS observed, the tool IS in it, and the server declared no `readOnlyHint`.
+#: The one producer that is not a failed attempt: a complete observation of a server that
+#: promised nothing.
+PRODUCER_SERVER_DECLARED_NOTHING: Producer = "server-declared-nothing"
+
+
 @dataclass(frozen=True)
 class TurnAnnotation:
     """The `readOnlyHint` contract in force for one turn, plus the facts around it.
@@ -123,6 +158,14 @@ class TurnAnnotation:
     test asserts on. `incoherence` rides along to be surfaced on the verdict. `cause`
     names why the contract is not-declared, when it is, so a downstream UNVERIFIED can
     say WHY rather than assert a bare absence.
+
+    `producer` names the return site that built this annotation — see the `PRODUCER_*`
+    constants above. It exists because `cause` cannot carry that weight: `cause` is prose
+    for a human, and the not-declared fall-through used to tell the one complete observation
+    apart from the three failed ones by `cause is None` alone, i.e. by the undocumented fact
+    that exactly one return site passes no `cause=`. Giving that site the explanation it
+    lacked would have re-merged the populations with every test still green. `producer` is
+    the discriminator; `cause` remains the explanation.
     """
 
     tool: Optional[str]
@@ -130,6 +173,7 @@ class TurnAnnotation:
     incoherence: list = field(default_factory=list)
     snapshot_seq: Optional[int] = None
     cause: Optional[str] = None
+    producer: Producer = PRODUCER_UNNAMED
     openworld: dict = field(default_factory=lambda: declared_state(None, False))
 
 
@@ -165,6 +209,11 @@ def annotation_for_turn(records: Sequence[dict], n: int) -> TurnAnnotation:
     correlates it against the MOST RECENT snapshot whose `source_seq` precedes the call's
     `request_seq`. A missing snapshot, an absent tool, or an unreadable request all yield
     a not-declared contract WITH a named cause — never a manufactured default.
+
+    **Every return site names its `producer` explicitly**, including the one that needs no
+    `cause`. Downstream, `render_effect_verdict` decides between an abstention and a coverage
+    boundary on that name alone; a site that forgot to set it would abstain, never bound
+    coverage (see `PRODUCER_UNNAMED`).
     """
     records = list(records)
     index = derive_correlation(records)
@@ -181,13 +230,17 @@ def annotation_for_turn(records: Sequence[dict], n: int) -> TurnAnnotation:
             tool=None,
             readonly=declared_state(None, False),
             cause="the tools/call has no recorded request frame to correlate an annotation to",
+            producer=PRODUCER_UNREADABLE_REQUEST,
         )
 
     by_seq = {r["seq"]: r for r in records if r.get("kind") == "frame"}
     name, name_cause = _tool_name(by_seq.get(request_seq))
     if name_cause is not None:
         return TurnAnnotation(
-            tool=name, readonly=declared_state(None, False), cause=name_cause
+            tool=name,
+            readonly=declared_state(None, False),
+            cause=name_cause,
+            producer=PRODUCER_UNREADABLE_REQUEST,
         )
 
     snapshots = sorted(
@@ -207,6 +260,7 @@ def annotation_for_turn(records: Sequence[dict], n: int) -> TurnAnnotation:
                 "readOnlyHint is not-declared for want of observation rather than by the "
                 "server's choice"
             ),
+            producer=PRODUCER_NO_SNAPSHOT,
         )
 
     snapshot = live[-1]
@@ -220,13 +274,20 @@ def annotation_for_turn(records: Sequence[dict], n: int) -> TurnAnnotation:
                 "the tool is absent from the most recent tools/list snapshot "
                 f"(seq {snapshot['source_seq']}), so its readOnlyHint is not-declared"
             ),
+            producer=PRODUCER_TOOL_ABSENT,
         )
 
+    # The complete observation: the snapshot was seen and the tool is in it. Whatever
+    # `readOnlyHint` says here — declared-true, declared-false, non-boolean, or absent — it is
+    # the SERVER's own answer, not Belay's ignorance. That is the whole warrant for treating
+    # the absent case as a coverage boundary downstream, and `producer` is how it travels.
+    # There is deliberately no `cause=`: nothing failed, so there is nothing to excuse.
     return TurnAnnotation(
         tool=name,
         readonly=facts["annotations"][_HINT],
         incoherence=facts["incoherence"],
         snapshot_seq=snapshot["source_seq"],
+        producer=PRODUCER_SERVER_DECLARED_NOTHING,
         openworld=facts["annotations"][_HINT_OPENWORLD],
     )
 
@@ -591,6 +652,12 @@ def verify_effect(
 
 
 __all__ = [
+    "PRODUCER_NO_SNAPSHOT",
+    "PRODUCER_SERVER_DECLARED_NOTHING",
+    "PRODUCER_TOOL_ABSENT",
+    "PRODUCER_UNNAMED",
+    "PRODUCER_UNREADABLE_REQUEST",
+    "Producer",
     "TurnAnnotation",
     "annotation_for_turn",
     "network_subverdict",
