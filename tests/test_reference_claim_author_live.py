@@ -90,6 +90,20 @@ def _trace_path() -> Path:
     return traces[0]
 
 
+def _manifest_dir() -> Path:
+    """The capture's manifest dir — `<trace-stem>.manifests`, the same resolver
+    `tests/test_demo_capture.py:304-308` uses.
+
+    `belay verify` requires `--manifest-dir` (it is not optional and has no default
+    on this surface). Omitting it is an argparse error: exit 2, EMPTY stdout, and no
+    verdict — the defect class that made every console verify degrade to
+    `empty-output` in L7. The first assertion in the test below exists to catch
+    exactly that and print the usage, rather than letting an empty stdout read as a
+    verdict.
+    """
+    return CAPTURE / f"{_trace_path().stem}.manifests"
+
+
 @pytest.mark.manual
 @pytest.mark.skipif(
     sys.platform != "darwin",
@@ -98,7 +112,9 @@ def _trace_path() -> Path:
         "the final turn inside the macOS Seatbelt sandbox"
     ),
 )
-def test_reference_claim_author_does_not_manufacture_intent_drift_on_the_negative_control() -> None:
+def test_reference_claim_author_does_not_manufacture_intent_drift_on_the_negative_control(
+    tmp_path: Path,
+) -> None:
     model = (os.environ.get(MODEL_ENV) or "").strip()
     if not model:
         pytest.fail(
@@ -109,9 +125,29 @@ def test_reference_claim_author_does_not_manufacture_intent_drift_on_the_negativ
         )
 
     trace = _trace_path()
-    author = (
-        f"{sys.executable} -m belay.verify.reference_claim_author --model {model}"
+
+    # A3 returns None — and `belay verify --json` therefore OMITS the `claim` key —
+    # for TWO different reasons: (a) no author was configured, the axis never ran
+    # (`claims.py:277-278`), and (b) the authored check EXECUTED and exited 0, which
+    # is D3 silence, the correct confirmation outcome (`claims.py:377-384`). The JSON
+    # surface cannot distinguish them, so "key absent" alone can neither prove nor
+    # disprove that the author engaged.
+    #
+    # So the author is wrapped in a marker script: invoking it is recorded on disk,
+    # which makes "the author ran" an OBSERVED fact rather than an inference from an
+    # absence. The wrapper execs the real reference author, so what runs is the
+    # shipped module, not a stand-in.
+    marker = tmp_path / "author-invoked"
+    wrapper = tmp_path / "author-wrapper.sh"
+    wrapper.write_text(
+        "#!/bin/sh\n"
+        f'printf x >> "{marker}"\n'
+        f'exec "{sys.executable}" -m belay.verify.reference_claim_author '
+        f"--model {model}\n",
+        encoding="utf-8",
     )
+    wrapper.chmod(0o755)
+    author = str(wrapper)
 
     proc = subprocess.run(
         [
@@ -120,6 +156,8 @@ def test_reference_claim_author_does_not_manufacture_intent_drift_on_the_negativ
             "belay.cli",
             "verify",
             str(trace),
+            "--manifest-dir",
+            str(_manifest_dir()),
             "--json",
             "--timeout",
             "300",
@@ -128,6 +166,13 @@ def test_reference_claim_author_does_not_manufacture_intent_drift_on_the_negativ
             "--server",
             sys.executable,
             str(SERVER),
+            # The demo server takes the workspace as its third argv token; replay
+            # substitutes the scratch it restored into. Omitting it leaves the server
+            # unable to answer the target frame, and EVERY turn degrades to UNVERIFIED
+            # "replay did not answer target" — which A3 then reports as
+            # FINAL_STATE_UNOBSERVABLE, an honest abstention about an operator mistake.
+            # Same token the canonical demo path uses (`test_demo_capture.py:583`).
+            "{workspace}",
         ],
         capture_output=True,
         text=True,
@@ -142,17 +187,44 @@ def test_reference_claim_author_does_not_manufacture_intent_drift_on_the_negativ
     )
 
     payload = json.loads(proc.stdout)
-    claim = payload.get("claim_record")
+    # The `belay verify --json` key is `claim` (`cli.py`'s JSON surface), NOT
+    # `claim_record`. Reading the wrong key made this test report "the column is
+    # EMPTY" against a payload that carried a perfectly good A3 verdict — a false
+    # negative in the test, not a defect in the engine.
+    claim = payload.get("claim")
 
-    # 1. The column is FILLED. The whole point of the aspect: never the
-    #    "claim unrecorded" sentinel, which is what it read before the author existed.
-    assert claim is not None, (
-        "the A3 column is EMPTY — the author never engaged. This is the defect the "
-        "aspect exists to close.\n"
+    # 1. THE AUTHOR ACTUALLY RAN. Observed from the marker, never inferred from the
+    #    payload: an absent `claim` key is ambiguous between "no author" and "the
+    #    check exited 0" (see the wrapper comment above). Without this the whole
+    #    proof could pass against an axis that never engaged.
+    invocations = len(marker.read_text(encoding="utf-8")) if marker.exists() else 0
+    assert invocations >= 1, (
+        "the A3 author was NEVER INVOKED — the axis did not engage at all. This is "
+        "the defect the aspect exists to close, and an absent `claim` key alone "
+        "could not have told us.\n"
         f"stdout:\n{proc.stdout[-4000:]}"
     )
 
-    status = claim.get("status")
+    # 2. Silence is a RESULT, not a gap. A3 returning nothing after the check ran and
+    #    exited 0 is D3: the authored check re-derived the claim from the final state
+    #    and confirmed it. Never PASS, and correct on an honest run.
+    status = claim.get("status") if claim is not None else None
+
+    # The outcome is the RESULT of this proof, so it is printed rather than merely
+    # asserted: the precedent requires recording "the exact command, the model id, the
+    # wall clock, the outcome" (tests/test_reference_author_live.py). A test that passes
+    # without saying what it observed cannot be transcribed into the record. Run with
+    # `-s` to see it.
+    print(
+        "\n=== A3 LIVE PROOF — observed outcome ===\n"
+        f"model:            {model}\n"
+        f"author invoked:   {invocations} time(s)  (observed on disk, not inferred)\n"
+        f"claim key present: {claim is not None}\n"
+        f"status:           {status!r}   (None = exit 0, D3 silence — never PASS)\n"
+        f"claim record:     {json.dumps(claim, indent=2) if claim else '<absent: D3 silence>'}\n"
+        f"aggregate:        {json.dumps(payload.get('aggregate'))}\n"
+        f"trajectory:       {json.dumps(payload.get('trajectory'))}\n"
+    )
 
     # 2. A3 NEVER emits PASS. Pinned as a property at
     #    tests/test_verify_claims.py:333-340; asserted here against the real binary too,
