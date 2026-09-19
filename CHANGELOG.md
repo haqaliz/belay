@@ -5,6 +5,67 @@ All notable changes to Belay are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0 — until then,
 `0.x` minor bumps may include changes that would be breaking under strict semver.
 
+## [0.34.0] - 2026-09-19
+
+**The A3 claim axis becomes drivable, and a corpus-filling mint stops at its own gate**
+(PR #39). Two aspects shipped; the third ran once and its pre-registered gate stopped it.
+**This release contains no Phase-0 number and no violation rate.**
+
+### Added
+
+- **A reference author for the A3 claim axis** — `python -m
+  belay.verify.reference_claim_author --model <full-id>`. C8 shipped the axis in v0.27.0
+  with no reference implementation, so nothing could be pointed at
+  `BELAY_CLAIM_AUTHOR` without writing one first. Stdlib only; the model is granted no
+  tools (`--tools ""` **and** `--strict-mcp-config`); `ANTHROPIC_API_KEY` /
+  `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_BASE_URL` are scrubbed **by absence, never `""`**
+  (an empty value still occupies its precedence slot); model aliases are refused; every
+  malformed reply is an abstention (`NO_CHECK_AUTHOR`), never a crash.
+  It lives in `belay/verify/` rather than `belay/authoring/`, because that package
+  declares it holds nothing in the verdict path and **A3 may downgrade a turn**.
+
+### Fixed
+
+- **The mint's `--verify` path could never fill the A3 claim column.** It called
+  `run_batch()` without `claim_author=`, whose default is `None`, and A3 engages only
+  when it is not — so the column read `claim unrecorded` regardless of the environment,
+  while the printed `belay phase0 run` command filled it correctly. A silent
+  coverage-loss bug: nothing failed, the axis simply never ran. Fixed in eight lines.
+
+### Changed
+
+- `eval/README.md` no longer claims `--verify` and the printed command are equivalent
+  without qualification; it now states that both resolve the A3 author **env-only**, that
+  neither takes a `--claim-author` flag, and that the equivalence was false until this
+  release.
+
+### Notes
+
+- **Verified live at n=1**, not merely tested: the author ran, wrote a check, the check
+  **executed** under containment with network denied against a replayed final state, and
+  **exited 0** — silence. A3 did **not** manufacture intent drift on a run that was
+  honest, which is the harder half of the claim. Read it as *"the path works at n=1"*,
+  never as a quality claim about the model's checks, and never as evidence that A3
+  **catches** intent drift.
+- **Known limitation, recorded:** an absent `claim` key in `belay verify --json` is
+  **ambiguous** — it means both *"no author was configured, the axis never ran"* and
+  *"the check ran and confirmed the claim"*. A reader cannot distinguish **checked** from
+  **never checked**. Nothing is rendered as PASS, so the verdict contract holds, but this
+  is a coverage-legibility gap and it is not fixed here.
+- **A mint attempt stopped at its gate and is published as such.** Stage 1 minted
+  cleanly, then verified to `NO_VERIFIABLE_TURNS` and `INSTRUMENT SUSPECT` — a
+  pre-registered STOP, so stage 2 never launched. Not a void, not a result about agents,
+  and **not a zero**: the report refuses to print a rate when nothing was verified.
+  The causes are pre-existing, shown from previously committed ledgers rather than
+  asserted. Root cause, measured: the pinned reference MCP filesystem server declares
+  **no tool annotations**, so effect-conformance abstains by its own rule — honest, not
+  broken — which means **a corpus-filling mint cannot bank a per-turn case against
+  annotation-less servers**.
+- **No published number moves.** `11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16` and
+  `recall 0.00` stand unedited. No verdict axis, status, default or coverage line
+  changed; A3 still can never emit `PASS`, and `--no-claim-axis` remains the one-command
+  refutation.
+
 ## [0.33.0] - 2026-09-16
 
 **Invariant authoring** — R3's third mitigation ships (PR #37): an A1 policy
