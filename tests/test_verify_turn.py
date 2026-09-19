@@ -178,13 +178,35 @@ def test_both_sub_verdicts_are_carried_result_pass_effect_fail(tmp_path, monkeyp
     assert "written.txt" in kinds["effect"].message, kinds["effect"].message
 
 
-# --- 3. Independence: result PASS, effect UNVERIFIED -> reduced UNVERIFIED -----------
+# --- 3. Independence: result PASS, effect NOT_COVERED -> reduced PASS ----------------
 
 
-def test_result_pass_effect_unverified_reduces_to_unverified(tmp_path, monkeypatch):
-    """A REPLAYED turn on an un-annotated tool: result PASS, effect UNVERIFIED (no
-    contract to check) -> reduced UNVERIFIED, because UNVERIFIED outranks PASS. Both
-    sub-verdicts are still carried."""
+def test_result_pass_effect_not_covered_reduces_to_pass(tmp_path, monkeypatch):
+    """A REPLAYED turn on a tool whose server declared no `readOnlyHint`: result PASS,
+    effect `NOT_COVERED` (the server promised nothing, so there is no contract to check) ->
+    reduced **PASS**. Both sub-verdicts are still carried, so a reader sees exactly what was
+    and was not verified.
+
+    **This test previously asserted UNVERIFIED, and inverting it is the deliberate act of
+    this change** (`absent-contract-coverage`). The old expectation read:
+
+        "A REPLAYED turn on an un-annotated tool: result PASS, effect UNVERIFIED (no
+        contract to check) -> reduced UNVERIFIED, because UNVERIFIED outranks PASS."
+
+    That encoded the rule that a server's SILENCE about a tool should sink a turn Belay had
+    replayed and verified perfectly — the same shape the network dimension already shed: it
+    pinned every turn against the annotation-less reference filesystem server at UNVERIFIED
+    forever, and no amount of correct behaviour could ever move it. An absent contract is a
+    coverage boundary, not a failed attempt; `reduce` drops `NOT_COVERED`, so the turn passes
+    *on the dimensions Belay actually verifies* while the boundary stays visible as a
+    sub-verdict and travels on the coverage line.
+
+    Nothing here weakens UNVERIFIED-never-PASS: no UNVERIFIED sub-verdict is present to be
+    promoted, and a genuine one would still win (`tests/test_verdict_not_covered.py:165-175`).
+    Nor does it make an absent contract permissive — the effect sub-verdict is never a PASS
+    (`tests/test_verify_effect.py::test_a5_server_declared_nothing_is_not_covered_and_never_pass`),
+    and the three producers that are genuine failed attempts still abstain.
+    """
     records = trace_of(tmp_path, LISTING + [("c2s", _call(3, "mystery"))])
     _stub_replay(
         monkeypatch,
@@ -201,11 +223,13 @@ def test_result_pass_effect_unverified_reduces_to_unverified(tmp_path, monkeypat
 
     verdict = _run(records, monkeypatch)
 
-    assert verdict.status is Status.UNVERIFIED, verdict
-    assert verdict.status is not Status.PASS
+    assert verdict.status is Status.PASS, verdict
     kinds = {v.kind: v for v in verdict.sub_verdicts}
     assert kinds["replay"].status is Status.PASS
-    assert kinds["effect"].status is Status.UNVERIFIED
+    # Both sub-verdicts survive the reduction: the boundary is dropped from the RANKING,
+    # never from the record — a PASS that hid it would be the failure mode this status creates.
+    assert kinds["effect"].status is Status.NOT_COVERED, kinds["effect"]
+    assert kinds["effect"].status is not Status.PASS
 
 
 # --- 4. Clean turn: result PASS, effect PASS -> PASS --------------------------------

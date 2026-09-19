@@ -39,6 +39,19 @@ from belay.verify.verdict import Status, Verdict
 
 LISTING = [("c2s", TOOLS_LIST_REQUEST), ("s2c", TOOLS_LIST_RESPONSE)]
 UNUSED = ["unused-server"]
+
+#: The VEHICLE these tests use to manufacture a replayed-then-UNVERIFIED turn on the EFFECT
+#: dimension. `sloppy` declares `readOnlyHint: "yes"` — present, but not a boolean — so no
+#: contract can be read off it and effect-conformance abstains: UNVERIFIED, never PASS.
+#:
+#: **It used to be `mystery` (a tool the server declared no `readOnlyHint` for), and the swap
+#: is a change of VEHICLE, not of subject.** `absent-contract-coverage` reclassified that case:
+#: a tool PRESENT in an observed `tools/list` snapshot whose server declared nothing is now a
+#: coverage boundary (`NOT_COVERED`, which `reduce` drops), not an abstention — so `mystery` no
+#: longer reduces to UNVERIFIED and can no longer carry these tests. Nothing below asserts
+#: anything about which tool it is; every assertion is about the named-cause machinery, and
+#: `sloppy` buckets to the identical `replayed but effect unverified` label the old vehicle did.
+EFFECT_UNVERIFIED_TOOL = "sloppy"
 CAPTURED_AT = "2026-07-23T00:00:00+00:00"
 
 
@@ -92,9 +105,11 @@ def _run(records, monkeypatch) -> TurnVerdict:
 
 
 def test_replayed_unverified_turn_names_its_cause(tmp_path, monkeypatch) -> None:
-    """An un-annotated tool replays fine, effect is UNVERIFIED (no contract) -> the turn
+    """A tool with an unreadable contract replays fine, effect is UNVERIFIED -> the turn
     is UNVERIFIED and MUST carry a named cause. `None` here is what became `unknown: 12`."""
-    records = trace_of(tmp_path, LISTING + [("c2s", _call(3, "mystery"))])
+    # Vehicle only: see EFFECT_UNVERIFIED_TOOL. The un-annotated tool this used to call is
+    # NOT_COVERED now, so it no longer produces the replayed-then-UNVERIFIED turn under test.
+    records = trace_of(tmp_path, LISTING + [("c2s", _call(3, EFFECT_UNVERIFIED_TOOL))])
     _stub_replay(monkeypatch, _replayed(_mutation("x")))
 
     verdict = _run(records, monkeypatch)
@@ -112,7 +127,11 @@ def test_the_replayed_cause_names_the_deciding_dimension(tmp_path, monkeypatch) 
     """The cause is derived from the sub-verdict that DROVE the reduction, not an
     arbitrary one: an effect-driven UNVERIFIED and a result-driven UNVERIFIED must not
     collapse into the same bucket."""
-    records = trace_of(tmp_path / "a", LISTING + [("c2s", _call(3, "mystery"))])
+    # The EFFECT-driven half. Vehicle only (see EFFECT_UNVERIFIED_TOOL): the un-annotated tool
+    # that used to stand here now reduces to PASS, which would erase the contrast this test
+    # exists to hold. `sloppy` keeps the effect dimension as the DECIDING UNVERIFIED one while
+    # result-equivalence PASSes — the same shape as before, on a producer that still abstains.
+    records = trace_of(tmp_path / "a", LISTING + [("c2s", _call(3, EFFECT_UNVERIFIED_TOOL))])
     _stub_replay(monkeypatch, _replayed(_mutation("x")))
     effect_driven = _run(records, monkeypatch)
 
@@ -151,7 +170,10 @@ def test_replayed_causes_bucket_by_dimension_not_one_bucket_per_turn(
     detail and is not labelled falls through `canonical_cause` verbatim, and a breakdown
     with one bucket per turn explains no more than `unknown` did.
     """
-    records = trace_of(tmp_path, LISTING + [("c2s", _call(3, "mystery"))])
+    # Vehicle only (see EFFECT_UNVERIFIED_TOOL): the varying detail under test is the DELTA,
+    # which is unchanged. The un-annotated tool this used to call no longer reduces to
+    # UNVERIFIED, so it cannot produce two same-bucket turns to compare.
+    records = trace_of(tmp_path, LISTING + [("c2s", _call(3, EFFECT_UNVERIFIED_TOOL))])
     _stub_replay(monkeypatch, _replayed(_mutation("a/one.txt")))
     first = _run(records, monkeypatch)
 
@@ -165,7 +187,9 @@ def test_replayed_causes_bucket_by_dimension_not_one_bucket_per_turn(
 def test_the_replayed_cause_is_a_canonical_bucket(tmp_path, monkeypatch) -> None:
     """`TurnVerdict.cause` is the canonical bucket on BOTH paths, so a consumer never has
     to know which path produced it, and re-bucketing is a no-op."""
-    records = trace_of(tmp_path, LISTING + [("c2s", _call(3, "mystery"))])
+    # Vehicle only (see EFFECT_UNVERIFIED_TOOL): the un-annotated tool this used to call is a
+    # coverage boundary now, so it reduces to PASS and carries no cause to canonicalise.
+    records = trace_of(tmp_path, LISTING + [("c2s", _call(3, EFFECT_UNVERIFIED_TOOL))])
     _stub_replay(monkeypatch, _replayed(_mutation("x")))
 
     verdict = _run(records, monkeypatch)
