@@ -614,14 +614,38 @@ def render_effect_verdict(
             ),
         )
 
-    # NOT_DECLARED: an absent contract is not a permissive one. This is the false PASS the
-    # whole capability exists to refuse.
+    # NOT_DECLARED: an absent contract is still not a permissive one — a mutation by an
+    # un-annotated tool is never a PASS here, which is the false PASS the whole capability
+    # exists to refuse. What the absence MEANS, though, depends on which producer built the
+    # annotation, and those four meanings used to arrive at one status.
+    if ann.producer == PRODUCER_SERVER_DECLARED_NOTHING:
+        # The complete observation: Belay looked, the snapshot was there, the tool was in it,
+        # and the server promised nothing about it. Nothing was attempted and nothing failed,
+        # so there is no contract for a filesystem delta to confirm or refute — and there
+        # never was one. That is a COVERAGE BOUNDARY, the same non-finding `openWorldHint`
+        # already carries, not an abstention about this run.
+        seen = f" (seq {ann.snapshot_seq})" if ann.snapshot_seq is not None else ""
+        return Verdict(
+            _AXIS, _KIND, Status.NOT_COVERED,
+            observed=_paths(delta) if delta else None, expected=contract,
+            message=(
+                f"effect-conformance NOT_COVERED: tool {tool!r} is present in the tools/list "
+                f"snapshot Belay observed{seen}, and the server declared no readOnlyHint for "
+                f"it — nothing was promised, so there is no contract for the observed effect "
+                f"to be weighed against. This states a limit on what Belay checked, NOT that "
+                f"the tool was checked and behaved: never PASS, never a fabricated FAIL"
+            ),
+        )
+
+    # Producers i, ii and iii: Belay tried to learn this tool's contract and could not. The
+    # server may well declare one — we never saw it. UNVERIFIED, exactly as before.
+    because = f" ({ann.cause})" if ann.cause else ""
     return Verdict(
         _AXIS, _KIND, Status.UNVERIFIED,
         observed=_paths(delta) if delta else None, expected=contract,
         message=(
-            f"effect-conformance UNVERIFIED: tool {tool!r} did not declare readOnlyHint "
-            f"({ann.cause}); an absent contract cannot be verified for conformance — "
+            f"effect-conformance UNVERIFIED: tool {tool!r} did not declare readOnlyHint"
+            f"{because}; an absent contract cannot be verified for conformance — "
             f"never PASS"
         ),
     )
