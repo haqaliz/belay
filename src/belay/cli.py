@@ -1551,9 +1551,15 @@ def _emit_aggregate(verdicts, Status) -> None:
 def _first_unverified_message(verdict, Status) -> str:
     """The message of a REPLAYED-but-UNVERIFIED turn's driving sub-verdict.
 
-    A turn that WAS replayed can still reduce to UNVERIFIED (an un-annotated tool, a
-    nondeterministic divergence) with `cause is None` — its explanation lives in the
+    A turn that WAS replayed can still reduce to UNVERIFIED (a nondeterministic divergence, a
+    contract Belay could not observe) with `cause is None` — its explanation lives in the
     sub-verdict, not a bucket. Surface it so no UNVERIFIED turn is causeless in the list.
+
+    *(This used to cite "an un-annotated tool" as the example. Since 2026-09-21 that is the
+    wrong example: an OBSERVED server that declared no `readOnlyHint` is now `NOT_COVERED`, not
+    UNVERIFIED, and reaches the paragraph below instead. The three ways Belay can fail to
+    OBSERVE a contract — no `tools/list` snapshot before the call, the tool absent from the
+    snapshot, an unreadable request frame — are still UNVERIFIED and still arrive here.)*
 
     A turn whose ONLY non-PASS sub-verdicts are NOT_COVERED reduces to UNVERIFIED via the
     empty-after-filter rule in `verdict.reduce`, and has no UNVERIFIED sub-verdict at all.

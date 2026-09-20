@@ -1,5 +1,83 @@
 # Belay: Status Log
 
+**AN ABSENT CONTRACT IS NO LONGER A FAILED CHECK — THE INSTRUMENT THE MINT STOPPED ON IS
+FIXED, AND IT IS A RECLASSIFICATION, NOT IMPROVED DETECTION** (2026-09-21,
+`effect-conformance-coverage`, v-next; not released). The open S-1 decision from
+`phase0-corpus-mint` — *"fix the instrument / re-scope the probe / declare a second run /
+stop"*, recommendation **fix the instrument** — is answered by taking option (1).
+
+**The defect: four different claims wore one status.** `annotation_for_turn` produces
+*not-declared* from **four** producers (`verify/effect.py:161-231`), and the NOT_DECLARED
+fall-through returned `UNVERIFIED` for all four (`:556-566`, a fall-through with no `if`).
+Three of them genuinely are *"we tried to observe the contract and could not"* — no
+`tools/list` snapshot before the call (*"not-declared for want of observation rather than by
+the server's choice"*), the tool absent from the snapshot, an unreadable request frame. The
+fourth — **the snapshot was observed, the tool was in it, and the server declared no
+`readOnlyHint`** — is not an attempt at all: there is no contract, so conformance was never in
+scope. By `CLAUDE.md`'s own split (`UNVERIFIED` = *tried and could not*; `NOT_COVERED` = *never
+inside what Belay claims to check*) only the fourth is a coverage boundary. **It is now
+`NOT_COVERED`; the other three are untouched, each keeping its named cause.**
+
+**Why it mattered:** the pinned npm `@modelcontextprotocol/server-filesystem` declares no
+annotations, so every turn against it hit producer iv, worst-status-wins dragged the turn to
+UNVERIFIED **even where result-equivalence passed**, `VERIFIED_CLEAN` was unreachable, the
+violation denominator was structurally zero, and `INSTRUMENT SUSPECT` fired on an honest run.
+Every self-hoster on the reference server saw a permanent 100% UNVERIFIED — R7's *"the product
+says 'shrug'"*, whose own mitigation says *"if it dominates, that's a gate signal."* It
+dominated at 3/3 = 100%.
+
+**Not a new mechanism — the pattern already shipped.** `verdict-coverage-status` did exactly
+this for the `openWorldHint` network dimension. A turn with result PASS + an unobservable
+network promise already reduced to PASS with a `NOT_COVERED` sub-verdict and already counted
+`VERIFIED_CLEAN`. The instance is verified **because result-equivalence decided**, never
+because of the boundary — `reduce` drops `NOT_COVERED` before ranking
+(`verify/verdict.py:114`), which is the direct answer to
+`tests/test_coverage_rendering.py:412`'s *"A coverage boundary must never manufacture a
+verified instance."*
+
+**The discriminator is explicit, and that is deliberate.** `ann.cause is None` happened to
+separate producer iv, but only through an undocumented dataclass default — a future edit adding
+a `cause=` there would have **silently re-merged the populations with no test noticing**. A
+`producer` field now names which producer built each annotation, set explicitly at all five
+return sites, and **defaults to the abstaining case**, because the two outcomes are asymmetric:
+UNVERIFIED is carried to the turn by worst-status-wins, while `NOT_COVERED` is dropped and so
+lifts its turn toward PASS. A forgotten marker must abstain, never quietly bound coverage.
+
+**MEASURED, not estimated.** Scratch-copy baseline `2575 passed, 0 failed`; the narrow mutation
+produced **exactly 8 newly-RED tests, 0 newly-green**, same collection total. The decisive check
+passed: `test_a_call_with_no_preceding_snapshot_is_unverified` **stays GREEN** (producer i never
+reaches the new branch). The 9-test protection list — including
+`test_verify_tool_not_offered.py:1189`, which asserts whole-`Verdict` equality *including the
+message* — passes **unmodified and byte-identical**, verified by extracting each function body
+from git. Of the 8: 3 deliberate rule updates (each quoting the rule it replaces),
+4 re-vehiclings (vehicle changed, **no assertion weakened**), and
+`test_docker_inimage` as a pure cascade. `test_interop_attach.py:391` needed **no** change —
+its vehicle is producer ii. **A methodological trap is recorded:** `uv run` inside a copied
+worktree resolves to the *original* worktree's venv, so the mutation is never exercised and the
+measurement silently lies; use the copy's own interpreter and verify `belay.__file__`.
+
+**THE HONESTY LINES.** This is a **RECLASSIFICATION, NOT improved detection** — the UNVERIFIED
+rate before and after is **NOT COMPARABLE** (a second such boundary; see `CLAUDE.md`), nothing
+was recomputed, and **no published number moves**: `11/60 = 18.3%`, `precision 0.00`, `1/15`,
+`4/16`, `recall 0.00`, `3/93` stand unedited. **The cost, recorded not buried: it rewards server
+silence** — omitting the annotation now earns PASS where it earned UNVERIFIED, and omission is
+the *adversarial* move. Accepted because this axis **catches nothing adversarial** by
+construction and **user-declared invariants remain the load-bearing A1 mechanism**; the
+remaining pressure on a server author is the coverage line, which is non-suppressible.
+**A2 kept its teeth:** declared-true + a mutation is still a grounded FAIL.
+**NOT built, by name:** the mint was not re-run and **no Phase-0 number was produced**;
+`UNRESTORABLE_SNAPSHOT_FAILED` is untouched; `reduce`, `_RANK`, `phase0/runner.py`, A1 and A3
+are **unmodified** (the reduced status becomes PASS on its own — the verifiability predicate was
+deliberately *not* widened, because doing so would print a clean 0% beside a 100%-UNVERIFIED
+turn tally, the R6 false zero); the A3 `--json` claim-key ambiguity is still open.
+**Named follow-ups:** `annotation_for_turn` reads only `annotation_snapshot` and **never
+`annotation_staleness`**, so a snapshot invalidated by an unre-snapshotted `tools/list_changed`
+is used as if live — the trajectory rule handles that case by name (`TOOLSET_UNKNOWN`), A2's
+effect axis does not; and the coverage sentence is duplicated across **8 render sites** with
+only the data helper shared. See `docs/planning/effect-conformance-coverage/`.
+
+---
+
 **THE CORPUS-FILLING MINT STOPPED AT ITS OWN PRE-REGISTERED GATE — AND THE CAUSES ARE
 PRE-EXISTING, NOT A REGRESSION** (2026-09-19, `phase0-corpus-mint`, v-next; not released).
 **This is NOT a gate run and produces NO Phase-0 number.** The unit set out to close three
@@ -64,6 +142,26 @@ effect-conformance abstains by its own rule (*not-declared → UNVERIFIED*, `eff
 **Honest, not broken** — but worst-status-wins then drags every turn to UNVERIFIED even where
 result-equivalence passed, which means **against annotation-less servers a corpus-filling
 mint can never bank a per-turn case.** That is the finding worth more than the mint.
+
+> **CORRECTED 2026-09-21 (`effect-conformance-coverage`) — the conclusion stands, the stated
+> mechanism was wrong, and the difference decided where the fix belongs.** The sentence above —
+> *"against annotation-less servers a corpus-filling mint can never bank a per-turn case"* — is
+> **not what the code does**, and it is quoted here rather than deleted. `reduce` ranks
+> `FAIL (3) > UNVERIFIED (2)` and takes the max (`verify/verdict.py:67-73`, `:114-117`), so a
+> turn whose effect dimension abstains but whose A1 or result-equivalence **decides a FAIL**
+> reduces to FAIL, enters `flagged_turns` (`phase0/runner.py:378`) and banks normally;
+> `add_case` enforces **no status precondition at all** (*"It enforces NO precondition on the
+> turn's verdict"*, `corpus/add.py:4-8`). **What the abstention actually blocked was
+> `VERIFIED_CLEAN`, and therefore the DENOMINATOR** — `replayed_any` is set only for a decided,
+> non-UNVERIFIED *reduced* status (`phase0/runner.py:353-376`), `violation_denominator()` counts
+> only `VERIFIED_CLEAN | VERIFIED_FLAGGED` (`phase0/ledger.py:216-218`), and a zero denominator
+> with ≥1 instance trips `instrument_suspect` **trigger A** (`phase0/report.py:65-89`) — which
+> is what this run tripped. The mint banked nothing for a plainer reason than the abstention:
+> **its two controls were honest negatives with no FAIL to bank**, plus one turn with no
+> manifest (above). So the harm was never "cases cannot be banked" but **"an honest clean run
+> cannot be distinguished from a broken instrument, so no rate can ever be printed"** — a
+> *product* defect (R7) as much as a mint defect, which is why the fix landed in the verdict
+> rather than in the mint's gate.
 **MH-1 worked** — manifests record `source_root` in the holder, outside any worktree, so the
 defect repaired at the start of this unit (three missing symlinks, **1,344** dead recorded
 paths, measured and fixed by running `corpus run` 7/7 MATCH and `s1p` `VERIFIED_CLEAN` 0/11

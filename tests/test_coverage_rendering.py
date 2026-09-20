@@ -50,9 +50,12 @@ from belay.trace import TraceWriter
 from belay.verify.turn import TurnVerdict
 from belay.verify.verdict import Status, Verdict
 
-#: The kind the network dimension emits — the only NOT_COVERED sub-verdict that exists
-#: today, and the one the reference `@modelcontextprotocol/server-filesystem` triggers on
-#: every single turn.
+#: The kind the network dimension emits. **Was "the only NOT_COVERED sub-verdict that exists
+#: today" until 2026-09-21** (`effect-conformance-coverage`); there are now two, the other
+#: being the bare `effect` kind for a tool the observed server declared no `readOnlyHint` for.
+#: This is still the one the reference `@modelcontextprotocol/server-filesystem` triggers on
+#: every single turn — and since that server declares no annotations at all, it now triggers
+#: BOTH on every turn.
 NETWORK_KIND = "effect:network"
 
 NETWORK_MESSAGE = (
