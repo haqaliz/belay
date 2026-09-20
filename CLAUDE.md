@@ -916,10 +916,17 @@ verdict must survive unchanged — that guarantee is enforced by a test, and it 
 one-command refutation of "isn't this an LLM judge with extra steps?"
 
 **`NOT_COVERED` is a fifth status, and it is SUB-VERDICT-ONLY.** It marks a dimension Belay
-has no instrument for at all — today exactly one: a tool's `openWorldHint: false` network
-promise, which no filesystem delta can confirm or refute. `UNVERIFIED` means *"we tried to
-check this and could not"*; `NOT_COVERED` means *"this was never inside what Belay claims to
-check"*. `verdict.reduce` **drops it before ranking**, so it can never be a turn's reduced
+cannot weigh a verdict on at all — **today two** *(was "exactly one" until 2026-09-21)*:
+(1) a tool's `openWorldHint: false` network promise, which no filesystem delta can confirm or
+refute; and (2) **an observed server that declared no `readOnlyHint` for the tool** — there is
+no contract, so contract-conformance was never in scope for that turn
+(`effect-conformance-coverage`). `UNVERIFIED` means *"we tried to check this and could not"*;
+`NOT_COVERED` means *"this was never inside what Belay claims to check"*. **The second one is
+the distinction doing the work:** a *not-declared* `readOnlyHint` used to be UNVERIFIED for all
+four of its producers, which collapsed *"the server supplied no contract"* (never in scope)
+into *"we could not observe the contract"* (a failed attempt). Only the first moved; the three
+observation failures — no `tools/list` snapshot before the call, tool absent from the snapshot,
+unreadable request frame — **are still UNVERIFIED, each with its named cause.** `verdict.reduce` **drops it before ranking**, so it can never be a turn's reduced
 status, never lowers a turn, and never lifts one — the empty-after-filter case reduces to
 `UNVERIFIED`, never to `NOT_COVERED` and never to `PASS`. Folding it in was the old behavior
 and it made an honestly-declared closed posture strictly *worse* than silence (declare
@@ -935,6 +942,19 @@ per surface, not by review.
 turns that were UNVERIFIED only because of an unobservable network promise are now PASS with a
 `NOT_COVERED` sub-verdict. Any Phase-0 write-up quoting an UNVERIFIED-rate drop across this
 boundary must say so — the drop is a reclassification, **not** improved detection.
+
+**There is now a SECOND such boundary, and the same rule binds it** (2026-09-21,
+`effect-conformance-coverage`): turns that were UNVERIFIED only because the server declared no
+`readOnlyHint` are now PASS with an `effect` `NOT_COVERED` sub-verdict. **The UNVERIFIED rate
+across this boundary is likewise NOT COMPARABLE, and the drop is a reclassification, never
+improved detection** — nothing was recomputed and **no published number moves** (`11/60 =
+18.3%`, `precision 0.00`, `1/15`, `4/16`, `recall 0.00`, `3/93` stand unedited). **The honest
+cost, recorded rather than buried: it rewards server silence.** A server that omits the
+annotation now gets PASS where it got UNVERIFIED, and omitting the annotation is the
+*adversarial* move. Accepted because this axis already **catches nothing adversarial** by
+construction and **user-declared invariants remain the load-bearing A1 mechanism** — a
+turn-wide UNVERIFIED was never functioning as that defense. The pressure that remains on a
+server author is the coverage line: declaring still buys a verdict with nothing withheld.
 
 **The axes are NOT redundant, and this is the easiest thing here to get wrong.** A2 cannot
 catch a cheating agent, because a cheater's trace is perfectly *faithful* — it really did

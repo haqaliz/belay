@@ -100,19 +100,43 @@ def test_a4_readonly_tool_that_mutates_is_a_grounded_fail(tmp_path):
 # --- 2. A5: un-annotated -> UNVERIFIED; declared-true + no mutation -> PASS -----
 
 
-def test_a5_unannotated_tool_is_unverified_for_effect(tmp_path):
-    """`mystery` declared no `readOnlyHint` at all -> UNVERIFIED, even though it mutated.
+def test_a5_server_declared_nothing_is_not_covered_and_never_pass(tmp_path):
+    """`mystery` IS in the observed snapshot and its server declared no `readOnlyHint` at
+    all -> `NOT_COVERED`, even though it mutated.
 
-    An absent contract cannot be verified for conformance. Defaulting it to PASS ("it
-    never claimed read-only, so a mutation is fine") is the exact false pass the tri-state
-    was built to prevent — so this is UNVERIFIED, never PASS.
+    **This test previously asserted UNVERIFIED, and changing it is the deliberate act of
+    `absent-contract-coverage`.** It used to read:
+
+        "An absent contract cannot be verified for conformance. Defaulting it to PASS ('it
+        never claimed read-only, so a mutation is fine') is the exact false pass the
+        tri-state was built to prevent — so this is UNVERIFIED, never PASS."
+
+    **That concern is still valid and is still enforced here** — see the second assertion,
+    which is the whole point of keeping it. What changed is the NAME of the non-finding, not
+    its permissiveness. UNVERIFIED means *"we tried to check this and could not"*; here
+    nothing was attempted and nothing failed — Belay saw the snapshot, found the tool in it,
+    and the server promised nothing, so there is no contract for a delta to confirm or
+    refute and there never was one. That is a coverage boundary, the same non-finding
+    `openWorldHint` already carries, and `NOT_COVERED` is its name.
+
+    The turn this sits in may now reach PASS, and that is NOT the tri-state defaulting to
+    permissive: `reduce` DROPS `NOT_COVERED` before ranking (it can never lower a turn and
+    never lifts an UNVERIFIED one), and the coverage line discloses the boundary on every
+    surface. The sub-verdict itself is never PASS — which is what this test pins.
+
+    The three producers that ARE failed attempts (no snapshot, tool absent from the
+    snapshot, unreadable request) still abstain: `test_a_call_with_no_preceding_snapshot_is_unverified`
+    below is unmodified and green.
     """
     records = trace_of(tmp_path, LISTING + [("c2s", _call(3, "mystery"))])
 
     verdict = render_effect_verdict(records, 0, _mutation("written.txt"))
 
-    assert verdict.status is Status.UNVERIFIED, verdict
-    assert verdict.status is not Status.PASS
+    assert verdict.status is Status.NOT_COVERED, verdict
+    # The companion the old rule existed for, kept verbatim in force: whatever this
+    # dimension is called, an absent contract is NEVER a permissive one at the sub-verdict
+    # level. A mutation by a tool that promised nothing does not get scored as conformance.
+    assert verdict.status is not Status.PASS, verdict
     assert verdict.axis == "A2" and verdict.kind == "effect"
 
 
@@ -242,15 +266,35 @@ def test_incoherence_is_surfaced_on_the_verdict_not_resolved(tmp_path):
 
 
 def test_effect_is_independent_of_result_equivalence(tmp_path):
-    """An un-annotated tool is UNVERIFIED for effect-conformance regardless of whether its
-    result reproduced. This check produces its OWN Verdict and does not reduce with
-    result-equivalence here — the per-turn composition (a later task) reduces them."""
+    """A tool whose server declared no `readOnlyHint` reaches the SAME effect verdict
+    regardless of what the replay observed. This check produces its OWN Verdict and does not
+    reduce with result-equivalence here — the per-turn composition (a later task) reduces them.
+
+    **The SUBJECT is independence, and it is unchanged. Only the status value it is expressed
+    in moved**, deliberately, in `absent-contract-coverage`. This used to read:
+
+        "An un-annotated tool is UNVERIFIED for effect-conformance regardless of whether its
+        result reproduced. … effect-conformance is UNVERIFIED either way, because the tool
+        declared no contract to check the effect against."
+
+    The clause after *because* is still exactly why the two agree; the name of the answer is
+    `NOT_COVERED` now (see `test_a5_server_declared_nothing_is_not_covered_and_never_pass`).
+    So the test asserts the invariant it always asserted — empty delta and non-empty delta
+    decide alike — and pins the two verdicts EQUAL to each other rather than trusting a
+    hard-coded constant to keep carrying the property.
+    """
     records = trace_of(tmp_path, LISTING + [("c2s", _call(3, "mystery"))])
 
-    # Same tool, both an empty and a non-empty delta: effect-conformance is UNVERIFIED
-    # either way, because the tool declared no contract to check the effect against.
-    assert render_effect_verdict(records, 0, []).status is Status.UNVERIFIED
-    assert render_effect_verdict(records, 0, _mutation("x")).status is Status.UNVERIFIED
+    empty = render_effect_verdict(records, 0, [])
+    mutated = render_effect_verdict(records, 0, _mutation("x"))
+
+    # Same tool, both an empty and a non-empty delta: the effect dimension decides the same
+    # way either way, because the tool declared no contract to weigh the effect against.
+    assert empty.status is mutated.status, (empty, mutated)
+    assert empty.status is Status.NOT_COVERED, empty
+    assert mutated.status is Status.NOT_COVERED, mutated
+    # And neither is a PASS — the observed effect was never scored as conformance.
+    assert empty.status is not Status.PASS and mutated.status is not Status.PASS
 
 
 def test_delta_none_cannot_confirm_a_readonly_tool(tmp_path):

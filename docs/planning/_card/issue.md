@@ -1,224 +1,204 @@
-# Card — `feat/phase0-corpus-mint/aliz`
+# Card — `feat/effect-conformance-coverage/aliz`
 
-No GitHub issue: `phase0-corpus-mint` is a descriptive slug, not an issue id.
-Source is the inline brief below, produced by `belay-next` on 2026-09-19 and
-accepted by the user when they invoked `bbf feat phase0-corpus-mint`.
+**Source:** no GitHub issue. Belay's tracker has exactly one open issue (#29, *A2A Handshake
+Discovery & Capabilities Offer*), unrelated. This unit was picked by `belay-next` on
+2026-09-20 from the repo's own open decision, so the brief below is the source of truth.
+
+**Type:** feat · **Slug (provisional):** `effect-conformance-coverage` · **Owner:** aliz
+**Base:** `origin/master` @ `472ce3b` (v0.34.0)
+
+---
 
 ## Brief
 
-Run a corpus-filling mint under the current engine composition to convert three
-shipped-but-unexercised capabilities into measured results.
+Fix the instrument that stopped the 2026-09-19 corpus-filling mint at its own pre-registered
+gate.
 
-The corpus today holds 7 cases, all A1 false-positive negatives, and zero true
-positives — so `corpus score` reads `precision n/a`, recall is unmeasured, and the
-A3 column has only a synthetic fixture (`CHECKLIST.md:407-408`; verified by listing
-`~/dev/at/holder/belay/corpus-local/`).
+Against MCP servers that **declare no annotations**, A2 effect-conformance abstains by its own
+rule — *not-declared → UNVERIFIED, no contract to check against* (`src/belay/verify/effect.py`,
+the rule table in the module docstring). Worst-status-wins then drags the whole turn to
+UNVERIFIED **even where result-equivalence passed**. The consequence, measured and recorded:
 
-Reuse the 2026-08-12 shell-toolset composition (`--toolset filesystem+shell`,
-composite transport, verbatim `run_process`) since it is the only one measured to
-produce TPs — the two earlier mints were stopped by their own exposure and control
-gates, which is this unit's main feasibility risk.
+> "against annotation-less servers a corpus-filling mint can never bank a per-turn case"
+> — `docs/STATUS.md:61-66`
 
-Acceptance is test-first and about *banking*, not a new rate: trajectory FAILs bank
-as `trace-<instance>-trajectory` cases and recompute MATCH; an A3 intent-drift FAIL
-banks a real (non-synthetic) case; `corpus score` reports precision and recall with
-real denominators instead of `n/a`; and **no published number moves** —
-`11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16`, `recall 0.00` stand unedited,
-with any new figure stated as an addition.
+The pinned reference server the mint actually drives — npm
+`@modelcontextprotocol/server-filesystem` — declares none. The contrast is recorded too:
+`demo/server.py` *does* declare annotations, which is the only reason demo turns reach PASS.
 
-Fold in the flag-parity gap found during the pick: `belay verify` has
-`--claim-author` but `phase0 run` does not, so A3 is reachable only via
-`BELAY_CLAIM_AUTHOR` — the same defect class the parity guard exists to catch.
+### CORRECTION (2026-09-20, established from code during Phase 2 — supersedes the quote above)
 
-> **⚠️ CORRECTED 2026-09-19, during the Phase-2 dig — this sentence is WRONG and must
-> not reach the PRD.** The absence of `--claim-author` on `phase0 run` is **a recorded
-> decision, not a defect and not a parity gap.** The parity table declares the flag's
-> surface set as exactly `{verify, gate baseline, gate check}` with the reason stated
-> in-line (`tests/test_cli_flag_parity.py:131-137`): *"the INTERACTIVE A3 author
-> surface … the batch surfaces are env-only (`BELAY_CLAIM_AUTHOR`) by design (plan open
-> question, decided at plan time)."* The open question is at
-> `docs/planning/claim-re-derivation-a3/author/spec.md:53-55` and was decided at
-> `.../surfaces/plan_20260902.md:19-22`. It is **pinned by a test that asserts
-> `phase0 run --claim-author` exits 2** (`tests/test_verify_claim_surfaces.py:202-219`).
-> Adding the flag is therefore *blocked-until-recorded*, not required: it would turn
-> two guards RED and would mean reversing a decision, which needs its own justification.
-> **The cheap path needs no flag at all** — export `BELAY_CLAIM_AUTHOR` into the
-> environment of the `belay phase0 run` process (`cli.py:2593`).
+**`docs/STATUS.md:65-66` overstates its own finding, and this unit must not inherit the
+overstatement.** *"Can never bank a per-turn case"* is not what the code does.
 
-Never rewrite recorded paths in the eval data (measured to break replay 0/11→7/11).
+`reduce` ranks `FAIL (3) > UNVERIFIED (2)` and takes the max (`src/belay/verify/verdict.py:67-73`,
+`:114-117`). So a turn whose effect dimension abstains but whose A1 or result-equivalence
+**decides a FAIL** still reduces to FAIL, enters `flagged_turns` (`phase0/runner.py:378`) and
+banks normally. `add_case` enforces **no status precondition at all** — *"It enforces NO
+precondition on the turn's verdict"* (`corpus/add.py:4-8`); bankability gates on a restorable
+pre-state and id-collision only (`add.py:333-368`).
 
-## Why this unit (from `belay-next`, 2026-09-19)
+**What the abstention actually blocks is `VERIFIED_CLEAN`, and therefore the denominator.**
+`replayed_any` is set only for a decided, non-UNVERIFIED **reduced** status
+(`phase0/runner.py:353-376`); `violation_denominator()` counts only
+`VERIFIED_CLEAN | VERIFIED_FLAGGED` (`phase0/ledger.py:216-218`, `:41`); a zero denominator with
+≥1 instance trips `instrument_suspect` **trigger A** (`phase0/report.py:65-89`). The
+2026-09-19 mint tripped exactly that. It banked nothing for a plainer reason than the
+abstention: **its two controls were honest negatives with no FAIL to bank**, plus one turn with
+no manifest at all (`STAGE1_FINDINGS.md:76-80`).
 
-Three shipped capabilities are still labelled "a capability, not a result", and all
-three wait on the same single action — a mint run under the current composition:
+**So the harm to state precisely:** an honest clean run cannot be distinguished from a broken
+instrument, so **no rate can ever be printed**, and every real user of the reference filesystem
+server sees 100% UNVERIFIED. That is a product defect (R7, *"the product says 'shrug'"*), not
+merely a mint defect — which is why the fix belongs in the verdict, not in the mint's gate.
 
-- `claim-re-derivation-a3` (`CHECKLIST.md:407`): *"no real intent-drift case exists
-  yet — the fixture is synthetic, the mint's next run fills the A3 column."*
-- `corpus-trajectory-banking` (`CHECKLIST.md:408`): *"nothing backfilled (s6 captures
-  gone) — the value is forward-looking: the next mint's trajectory FAILs bank."*
-- `CAPABILITY_ROADMAP.md` C6: *"No miss has been banked, so recall remains unmeasured
-  and precision still reads `n/a`."*
+**Deliverable implied:** a correction to `docs/STATUS.md` quoting what it replaces, per this
+repo's house style for corrections.
 
-Nothing has been minted since **2026-08-12** (`mint-shell-toolset-run`). Five
-capabilities shipped after that date that a mint would exercise or fill:
-`corpus-trajectory-banking` (09-01), `claim-re-derivation-a3` (09-02),
-`invariant-library` (09-12), `ci-regression-gate` (09-13), `approval-gate` (09-15),
-`invariant-authoring-experiment` (09-15).
+**This is the open owner decision, option (1), with the recorded recommendation:**
 
-## Measured state of the substrate (this session, 2026-09-19)
+> "Fix the instrument first. The annotation-abstention interaction is the deeper issue …
+> That is a real coverage-loss path and arguably the more valuable unit than the mint itself."
+> — `docs/planning/phase0-corpus-mint/mint-run/STAGE1_FINDINGS.md` → *Decision required
+> (owner — S-1)*, and `docs/STATUS.md:71-73`
 
-Run before any planning, because the unit depends on the eval substrate working.
+## What the mint measured (the evidence, not a hypothesis)
 
-### ⚠️ FINDING — the three load-bearing eval symlinks were MISSING, and are restored
+- Stage 1 minted 2 captured / 0 failed, verified to `NO_VERIFIABLE_TURNS: 2`,
+  `INSTRUMENT SUSPECT`, **UNVERIFIED 3/3 = 100%** → pre-registered STOP; stage 2 never launched.
+- The capture contains **no `readOnlyHint` / `annotations` anywhere**.
+- Causes are **pre-existing, not a regression** — the 2026-08-12 run that PROCEEDed carries
+  `replayed but effect unverified` 8 and `UNRESTORABLE_SNAPSHOT_FAILED` 16/122. What differs is
+  **scale**: s6c absorbed them across hundreds of turns; a 3-turn probe cannot.
 
-`~/dev/at/holder/belay` holds all eval data. Three stub dirs under
-`.claude/worktrees/` carry an `eval` symlink into it, so that absolute paths recorded
-*inside* the banked traces/manifests still resolve after the original worktrees were
-deleted. All three were absent at the start of this session.
+## The design question this unit must settle FIRST (in the PRD, before any code)
 
-Measured impact before restore — recorded references that did not resolve:
+### Three live behaviours in one annotation family, not two (established from the tree)
 
-```
-1344  /Users/aliz/dev/at/belay/.claude/worktrees/feat-verdict-coverage-status
-  17  /Users/aliz/dev/at/belay/.claude/worktrees/feat-subscription-model-client
-   0  /Users/aliz/dev/at/belay/.claude/worktrees/feat-phase0-mint-execution
-```
+| | dimension · state | behaviour today | where |
+|---|---|---|---|
+| **(a)** | `openWorldHint` **not-declared** | **no sub-verdict at all** (returns `None`, composed conditionally) | `effect.py:382-385`, `turn.py:462-464` |
+| **(b)** | `openWorldHint` declared-false / non-boolean | `NOT_COVERED`, dropped by `reduce` | `effect.py:382-385`, `verdict.py:114-117` |
+| **(c)** | `readOnlyHint` **not-declared** | `UNVERIFIED`, folded **unconditionally** → always drags | `effect.py:556-567`, `turn.py:445` |
 
-Restored with the recorded recipe (changes **no recorded byte** — that is the whole
-reason the fix is a symlink and not a path rewrite):
+`turn.py:445` is `sub_verdicts = [result_verdict, effect_verdict]` — no `is not None` guard,
+unlike the network path. That asymmetry is the whole mechanism.
 
-```sh
-for w in feat-verdict-coverage-status feat-phase0-mint-execution feat-subscription-model-client; do
-  mkdir -p ~/dev/at/belay/.claude/worktrees/$w
-  ln -sfn ~/dev/at/holder/belay ~/dev/at/belay/.claude/worktrees/$w/eval
-done
-```
+### Two findings that cut AGAINST simply extending NOT_COVERED
 
-**Verified after restore, by running it, not by asserting it:**
+**1. The precedent unit already considered and rejected folding a not-declared boundary into a
+turn.** `render_openworld_verdict` returns `NOT_COVERED` for not-declared on the *standalone*
+surface, but `network_subverdict` deliberately stays silent for it — *"so a turn's sub-verdict
+list is not padded with a boundary nobody asked about"* (`effect.py:337-347`). That is a
+recorded decision against design (b) for the not-declared case specifically.
 
-- `belay corpus run ~/dev/at/holder/belay/corpus-local` → **7/7 MATCH**, 0 REGRESSION,
-  0 SKIP, 0 STILL_MISSED. Matches the recorded baseline.
-- `belay phase0 run ~/dev/at/holder/belay/mint/s1p/batch --no-ingest --server …` →
-  **VERIFIED_CLEAN 1, ERRORED 0**, exposure `judged 1 file-comparison(s)`,
-  `effect:network NOT_COVERED 11/11`, **0 UNVERIFIED**. Matches the recorded
-  baseline (`s1p` → `VERIFIED_CLEAN`, 0/11 UNVERIFIED).
+**2. The perverse-incentive warrant RUNS BACKWARDS here.** The network change was justified
+because honesty was punished: *"a server that **honestly declares** a closed posture gets a
+strictly **worse** verdict than one that stays silent"*
+(`verdict-coverage-status/prd.md:26-28`). For `readOnlyHint` the incentive currently points the
+**right** way — declare `readOnlyHint: true` and honour it → PASS; declare nothing →
+UNVERIFIED. **Making not-declared stop dragging would remove a working incentive for servers
+to declare annotations**, which is the free A1 supplement the wedge leans on (`CLAUDE.md`:
+annotations are *"a free supplement"*; R3's zero-friction mitigation). This cost does not exist
+in the precedent case and must be priced explicitly.
 
-**Open question for the PRD:** a *new* mint records absolute paths under this
-worktree (`.claude/worktrees/feat-phase0-corpus-mint/`). When the worktree is removed
-at `belay-end-fast`, the new captures inherit exactly this defect. The unit must
-decide where a mint writes, or pre-register the stub+symlink as part of its own
-teardown. This is a real recurrence, not a hypothetical — it has now bitten twice.
+### The original framing (kept — still the tension, now better grounded)
 
-### Corpus contents — confirmed zero true positives
+There is a shipped precedent and a documented counter-argument, and they disagree.
 
-`~/dev/at/holder/belay/corpus-local/` holds exactly 7 cases, all the 2026-07 A1
-false-positive negatives:
+**For reclassifying *not-declared* → `NOT_COVERED`:** `verdict-coverage-status` already did
+exactly this for the `openWorldHint` network dimension (`effect.py` `_openworld_verdict`), for
+the identical reason — UNVERIFIED-forever made an honestly-declared posture strictly *worse*
+than silence (declare nothing → PASS; declare truthfully → UNVERIFIED forever). `reduce` drops
+`NOT_COVERED` before ranking, so it can never be a turn's reduced status, never lowers a turn
+and never lifts one.
 
-```
-trace-pallets__flask-4045-turn8
-trace-pallets__flask-4992-turn{10,12,14,19}
-trace-pylint-dev__pylint-5859-turn{6,11}
-```
+**Against:** `effect.py`'s own module docstring argues the opposite in its own voice —
+*"an absent contract is NOT a permissive one. A tool that declared no `readOnlyHint` cannot be
+verified for conformance — UNVERIFIED, never PASS. Defaulting an un-annotated tool to 'it never
+claimed read-only, so a mutation is fine → PASS' is the exact false pass the tri-state (C1) was
+built to prevent."* Because `reduce` drops `NOT_COVERED`, the reclassification **would** let
+such turns reach PASS on result-equivalence alone.
 
-No trajectory case, no A3/claim case, no true positive, no recorded miss.
+**And the precedent is not perfectly analogous.** Per `CLAUDE.md`: UNVERIFIED = *"we tried to
+check this and could not"*; NOT_COVERED = *"this was never inside what Belay claims to check"*.
+For `openWorldHint` Belay has **no instrument at all** (no filesystem delta can confirm or
+refute a network promise). For a not-declared `readOnlyHint` Belay **has** the instrument — it
+observes the delta — and is missing only the *contract*. That asymmetry is the crux.
 
-### The s6 captures are confirmed gone
+**Narrower alternative to weigh in the PRD:** leave the verdict semantics untouched and change
+what the mint/corpus will **bank** — i.e. a turn with a *decided* result-equivalence becomes
+bankable even while the effect dimension abstains. Moves the fix out of the verdict and into
+the corpus/phase0 gate.
 
-`~/dev/at/holder/belay/mint/` contains only `s1  s1b  s1p  s2  s3
-live-smoke-claude-cli`. There is no `s6`, which corroborates the repeated doc claim
-that the shell-toolset mint's captures no longer exist on disk and that its 171
-per-turn FAILs and 11 hand-audited TPs **cannot be backfilled**.
+## Constraints this unit inherits (non-negotiable)
 
-### Pinned MCP servers are present
+- **It is a RECLASSIFICATION, not improved detection.** Any UNVERIFIED-rate change crosses a
+  population boundary; the two rates are **not comparable** and every write-up must say so.
+  (The same rule `verdict-coverage-status` and R7 already established.)
+- **No published number moves:** `11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16`,
+  `recall 0.00`, `3/93` stand unedited. Nothing is recomputed.
+- **`UNVERIFIED` is never rendered as `PASS`**, and if a PASS can newly arise where the effect
+  dimension is uncovered, **the coverage line must travel with the status on every surface** —
+  per-turn `belay verify`, `--json`, `belay corpus show`, `interop correlate`/`export`, the
+  console. That rule is enforced per-surface by tests, not by review.
+- **A declared-true-and-mutated turn must remain a FAIL.** A2 keeps its teeth; no widening of
+  the abstention is acceptable.
+- **A default is never a declaration** — absent must stay distinguishable from declared-false,
+  or a default manufactures a false PASS (the C1 tri-state contract).
 
-`~/dev/at/holder/belay/servers/node_modules/` — the filesystem server resolves:
-`node …/@modelcontextprotocol/server-filesystem/dist/index.js {workspace}`.
-Corpus cases already pin this absolute path in `server_command` (the one safe
-path rewrite, done 2026-08-06).
+## Surface audit (established Phase 2) — the constraint on EVERY option
 
-### Two CLI facts the plan must respect
+Today a `NOT_COVERED` dimension is **rare** (only where a tool declared `openWorldHint`). Any
+change that makes one routine — i.e. every turn against the reference server — converts these
+latent gaps into the live false-PASS-by-omission path the per-surface rule exists to prevent.
 
-- **`phase0 run` has no `--claim-author`.** `belay verify` does; `phase0 run` exposes
-  only `--no-claim-axis`. A mint reaches A3 exclusively through the
-  `BELAY_CLAIM_AUTHOR` env var. This is the flag-parity defect class named in the
-  brief (it bit `--timeout` in L7 and again in the console).
-- **`--server` is `nargs=REMAINDER`.** It must come last and take the rest *without*
-  a `--` separator; `--server -- node …` fails with `unrecognized arguments`. Same
-  REMAINDER class as the three runbook defects found on 2026-09-06.
-- **`--shell-server` must PRECEDE `--server`** for the same reason
-  (`eval/README.md:792-794`, `entrypoint.py:686-690`).
+**Four surfaces would render a clean/PASS status with NO coverage disclosure whatsoever**, and
+**none of them has any test pinning coverage**:
 
-### ⚠️ THE REAL A3 BLOCKER (found in the dig; distinct from the corrected non-gap above)
+| Surface | file:line | Discloses? |
+|---|---|---|
+| `belay corpus list` | `cli.py:2303` | **No** — bare status column |
+| `belay corpus run` aggregate | `cli.py:2065-2072` | **No** — a MATCH discloses nothing; only a divergence surfaces the kind |
+| `belay corpus score` | `cli.py:2194-2197` | **No** — and its own `coverage` metric means *adjudicable labels*, a name collision |
+| `belay phase0 combine` | `phase0/report.py:786` | **No** — `_coverage_section` never called on this path |
 
-`eval/minting_driver/entrypoint.py:1029-1035` calls `phase0_runner.run_batch(...)`
-**without `claim_author=`**. `run_batch`'s default is `claim_author=None`
-(`src/belay/phase0/runner.py:153`) and A3 only engages when `claim_author is not None`
-(`runner.py:419`). So **the mint's in-process `--verify` path can never fill the A3
-column, no matter what `BELAY_CLAIM_AUTHOR` is set to.**
+Two further weaknesses: `phase0 report`'s prose table `_COVERAGE_PROSE` has exactly **one**
+entry (`effect:network`), so a new cause reads anonymously as *"outside what Belay observes"*
+(`phase0/report.py:145`, `:198`); and `interop export` writes `belay.verdict.coverage` only
+`if uncovered_kinds:`, kinds without the message (`export.py:109`).
 
-The README presents `--verify` and the printed `belay phase0 run` command as
-equivalent (`eval/README.md:727-729`). They are not: the printed command reads the env
-var (`cli.py:2593`), `--verify` does not. Two ways out, to be decided in the PRD:
-(a) run the CLI command with the env var exported, or (b) thread `author_from_env()`
-into `run_verify` at `entrypoint.py:1029`, respecting the lazy-`belay`-import
-constraint documented at `entrypoint.py:1011-1018`.
+**The coverage sentence is duplicated across 8 render sites** — only the *data* helper
+`verify/json.coverage_record` is shared (`json.py:196`, reused solely by `gate/check.py:64,331`).
+The 8: `cli.py:1478-1487`, `cli.py:1567-1572`, `cli.py:751`+`:798`, `interop/report.py:108-111`,
+`phase0/report.py:169-176`, `gate/check.py:422-432`, `interop/export.py:109`,
+`console/src/components/CoverageLine.vue`. A new cause must be added to each.
 
-### ⚠️ NO A3 REFERENCE AUTHOR EXISTS
+**Clean, and a model to copy:** the console (`TurnRow.vue`, `TraceView.vue`, `ReplayDialog.vue`,
+the server seam) is fully pinned and renders `null` as *"coverage unavailable"*, never a
+fabricated status.
 
-There is **no shipped `claude -p` author for the A3 claim axis** anywhere in `src/`.
-What exists: a `python3 -c` one-liner *example* in `README.md:155-161`, a manual live
-gate that drives whatever the operator points at
-(`tests/test_verify_author_live.py`), and a deterministic CI fake
-(`tests/test_verify_author.py`).
+## Risks this touches (`docs/ROADMAP.md` register)
 
-Two reusable precedents, both with the **scrub-by-absence** idiom
-(`env.pop(name, None)` over `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`/
-`ANTHROPIC_BASE_URL`, never `""`):
-`src/belay/authoring/reference_author.py:60-64, 177-190` (for `invariant infer`, the
-closest analogue) and `eval/minting_driver/clients/claude_cli_client.py:117-121,
-709-723`. Note `SubprocessAuthor` passes **no `env=`** (`author.py:107-113`), so
-scrubbing is the author command's job, not Belay's.
+- **R7** — *"Nondeterministic tools make UNVERIFIED the default verdict — the product says
+  'shrug'"*; mitigation: *"if it dominates, that's a gate signal."* It dominated at 3/3 = 100%.
+  This unit is the response to that signal.
+- **R3** — *"infer from MCP annotations first (free, zero-friction)"* is measurably hollow when
+  the reference server declares nothing. Worth recording; not this unit's job to fix.
+- **R5** — over-claiming what A2 proves. The whole risk of getting this wrong.
 
-**Writing an A3 reference author is therefore real scope in this unit**, not a
-configuration step.
+## Out of scope (name it, don't drift into it)
 
-### ⚠️ FEASIBILITY: a real intent-drift case may not be producible on demand
+- Re-running the mint or producing any Phase-0 number.
+- `UNRESTORABLE_SNAPSHOT_FAILED` (cause #3 in the findings) — a separate defect.
+- The A3 `--json` coverage-legibility gap (absent `claim` key is ambiguous) — recorded
+  separately, adjacent but distinct.
+- Committed junk at the repo root (`err.txt`, `err2.txt`, from `9d7ead2`) — incidental.
 
-For A3 to FAIL rather than fall silent, the drive must end with the agent
-**voluntarily asserting verification** in its `Done` text (classified `VERIFICATION`
-by `trajectory.py:112-127`) while the final state contradicts it. The claim record is
-written post-capture from `transcript.done.reason` (`eval/minting_driver/batch.py:525-526`
-→ `trace.py:616+`); a session that stops on `max_steps` or an error records nothing.
+## Related in-flight work
 
-This is the **same shape the launch demo could not produce**: 18 observed drives
-across two frontier models, an easy bug, a hard bug and an expensive-suite lever
-yielded **zero** corrupt successes
-(`docs/planning/launch-demo/demo-capture/DRIVES.md`). A plan that assumes the A3
-column will fill with a real FAIL is assuming away a measured negative result. The
-honest framing: a run that produces no intent-drift case is **a recorded result, not
-a failure of the unit** — the same rule `invariant-authoring` applied to a model that
-produces nothing calibratable.
-
-## Out-of-band state at the time of branching
-
-`PR #38` (`feat/corpus-shell-routing`) is open, code-complete and **RED**:
-
-- `AttributeError: 'types.SimpleNamespace' object has no attribute 'shell_server'`
-  at `src/belay/cli.py:2383` — pre-existing args stubs in
-  `tests/test_coverage_rendering.py` and `tests/test_verify_boundary_cause.py`.
-- `tests/test_docker_inimage.py:197` — the in-image skip-cause check rejects
-  `replay-reinvokes-seatbelt` as unnamed on Linux.
-
-This branch is cut from `master` (`2dec7c0`, v0.33.0) and does not include #38.
-
-## Guardrails this unit must not violate (`CLAUDE.md`)
-
-- Harness only — no agent framework. The minting driver is **eval-only**, never a
-  product surface, never the `belay` CLI.
-- No bare LLM judge. A3's model writes a check; **execution** decides; A3 can never
-  emit PASS.
-- `UNVERIFIED` is never rendered as `PASS`.
-- **No published number moves.** `11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16`,
-  `recall 0.00` stand unedited. Any new figure is an addition, stated with its
-  denominator.
-- R6/R7 hold by construction: the oracle gets no tools, one `tools/call` in flight.
+**PR #38 is OPEN and RED** (`feat/corpus-shell-routing/aliz`), 2 failed / 2256 passed:
+`AttributeError: 'types.SimpleNamespace' object has no attribute 'shell_server'` at
+`src/belay/cli.py:2383` (2 tests), and `test_docker_inimage` failing its own unknown-skip⇒FAIL
+rule on `replay-reinvokes-seatbelt`. It touches the corpus recompute path this unit also
+touches — check for collision before landing.

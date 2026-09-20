@@ -8,12 +8,12 @@ proxies MCP, where annotations are declared contracts — the wedge's payoff, na
 CLAUDE.md as "the readOnlyHint that mutates -> FAIL with zero LLM".
 
 **The whole discipline, in one line: an absent contract is NOT a permissive one.** A tool
-that declared no `readOnlyHint` cannot be verified for conformance — UNVERIFIED, never
-PASS. Defaulting an un-annotated tool to "it never claimed read-only, so a mutation is
-fine -> PASS" is the exact false pass the tri-state (C1) was built to prevent. The
-tri-state (declared-true / declared-false / not-declared / declared-non-boolean) already
-lives in the trace; this module READS it per-turn and applies the rule. It never
-re-introduces a default — the spec defaults appear nowhere here, deliberately.
+that declared no `readOnlyHint` is never PASSed for conformance. Defaulting an un-annotated
+tool to "it never claimed read-only, so a mutation is fine -> PASS" is the exact false pass
+the tri-state (C1) was built to prevent. The tri-state (declared-true / declared-false /
+not-declared / declared-non-boolean) already lives in the trace; this module READS it
+per-turn and applies the rule. It never re-introduces a default — the spec defaults appear
+nowhere here, deliberately.
 
 The rule, over the turn's `readOnlyHint` state and the replay's `delta`:
 
@@ -21,8 +21,27 @@ The rule, over the turn's `readOnlyHint` state and the replay's `delta`:
     declared-true    + an EMPTY delta       -> PASS   (declared read-only, honoured it)
     declared-true    + NO delta observed    -> UNVERIFIED (cannot confirm; never PASS)
     declared-false   (any delta)            -> PASS   (declared it may mutate; nothing to violate)
-    not-declared                            -> UNVERIFIED (no contract to check against)
+    not-declared, SERVER DECLARED NOTHING   -> NOT_COVERED (there was never a contract)
+    not-declared, CONTRACT NOT OBSERVED     -> UNVERIFIED (we tried to read one and could not)
     declared-non-boolean                    -> UNVERIFIED (no readable contract)
+
+**This replaces the flat rule this table stated until 2026-09-20 —** *"`not-declared` ->
+UNVERIFIED (no contract to check against)"* **— which collapsed four structurally different
+facts into one status.** Three of them are genuine abstentions: no `tools/list` was captured
+before the call, the tool was absent from the snapshot that was observed, or the request
+frame could not be read. Belay tried to learn the contract and could not; the server may
+well declare one. The fourth is not an attempt at all — the snapshot WAS observed, the tool
+IS in it, and the server declared no `readOnlyHint`. Nothing was promised, so there is no
+contract for a delta to confirm or refute, and there never was one: a **coverage boundary**,
+the same non-finding `openWorldHint` already carries, not an abstention about this run.
+`NOT_COVERED` is sub-verdict-only and `reduce` drops it before ranking, so the turn's status
+comes from its other sub-verdicts. The split keys on `TurnAnnotation.producer`, never on an
+absent `cause` (see `Producer` below); the two populations must stay legible in the MESSAGE
+as well as the status, which is why producer iv says *the server declared no contract* and
+producer i says *the contract was never observed*. Neither branch ever PASSes this dimension
+on an absent contract, so the false pass above is still refused — what changed is that
+Belay no longer reports a failed attempt it never made. See
+`docs/planning/effect-conformance-coverage/absent-contract-coverage/`.
 
 `declared-false` is always PASS because there is no read-only contract to violate — the
 tool announced it mutates, so any observed effect (or none) conforms.
@@ -61,7 +80,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, Literal, Optional, Sequence
 
 from belay.annotations import derive_annotations
 from belay.declared import (
@@ -113,6 +132,41 @@ _HINT = "readOnlyHint"
 _HINT_OPENWORLD = "openWorldHint"
 
 
+#: WHICH return site of `annotation_for_turn` built this annotation. Four of the five arrive
+#: at the same not-declared fall-through carrying four different claims, and the fall-through
+#: must tell them apart to decide between an abstention and a coverage boundary.
+#:
+#: Plain strings rather than an `Enum`: this module is stdlib-only by contract, the values are
+#: never persisted (nothing in the trace format or a corpus case reads them), and a `Literal`
+#: gives the same exhaustiveness check mypy would get from an enum without a new type to
+#: import at every call site.
+#:
+#: **`PRODUCER_UNNAMED` is the DEFAULT, and that is the safety property.** A future return
+#: site added without naming itself abstains (UNVERIFIED, which worst-status-wins carries to
+#: the turn) rather than silently declaring a coverage boundary (`NOT_COVERED`, which `reduce`
+#: drops before ranking, so it would LIFT that turn to PASS unreviewed). The asymmetry is
+#: deliberate: an oversight here must cost coverage, never honesty.
+Producer = Literal[
+    "unnamed",
+    "unreadable-request",
+    "no-snapshot",
+    "tool-absent",
+    "server-declared-nothing",
+]
+
+PRODUCER_UNNAMED: Producer = "unnamed"
+#: iii — the request frame, or its `params`, could not be read, so no tool name was observed.
+PRODUCER_UNREADABLE_REQUEST: Producer = "unreadable-request"
+#: i — no `tools/list` response was captured before the call: no snapshot to correlate to.
+PRODUCER_NO_SNAPSHOT: Producer = "no-snapshot"
+#: ii — a snapshot WAS observed, and this tool is absent from it.
+PRODUCER_TOOL_ABSENT: Producer = "tool-absent"
+#: iv — a snapshot WAS observed, the tool IS in it, and the server declared no `readOnlyHint`.
+#: The one producer that is not a failed attempt: a complete observation of a server that
+#: promised nothing.
+PRODUCER_SERVER_DECLARED_NOTHING: Producer = "server-declared-nothing"
+
+
 @dataclass(frozen=True)
 class TurnAnnotation:
     """The `readOnlyHint` contract in force for one turn, plus the facts around it.
@@ -123,6 +177,14 @@ class TurnAnnotation:
     test asserts on. `incoherence` rides along to be surfaced on the verdict. `cause`
     names why the contract is not-declared, when it is, so a downstream UNVERIFIED can
     say WHY rather than assert a bare absence.
+
+    `producer` names the return site that built this annotation — see the `PRODUCER_*`
+    constants above. It exists because `cause` cannot carry that weight: `cause` is prose
+    for a human, and the not-declared fall-through used to tell the one complete observation
+    apart from the three failed ones by `cause is None` alone, i.e. by the undocumented fact
+    that exactly one return site passes no `cause=`. Giving that site the explanation it
+    lacked would have re-merged the populations with every test still green. `producer` is
+    the discriminator; `cause` remains the explanation.
     """
 
     tool: Optional[str]
@@ -130,6 +192,7 @@ class TurnAnnotation:
     incoherence: list = field(default_factory=list)
     snapshot_seq: Optional[int] = None
     cause: Optional[str] = None
+    producer: Producer = PRODUCER_UNNAMED
     openworld: dict = field(default_factory=lambda: declared_state(None, False))
 
 
@@ -165,6 +228,11 @@ def annotation_for_turn(records: Sequence[dict], n: int) -> TurnAnnotation:
     correlates it against the MOST RECENT snapshot whose `source_seq` precedes the call's
     `request_seq`. A missing snapshot, an absent tool, or an unreadable request all yield
     a not-declared contract WITH a named cause — never a manufactured default.
+
+    **Every return site names its `producer` explicitly**, including the one that needs no
+    `cause`. Downstream, `render_effect_verdict` decides between an abstention and a coverage
+    boundary on that name alone; a site that forgot to set it would abstain, never bound
+    coverage (see `PRODUCER_UNNAMED`).
     """
     records = list(records)
     index = derive_correlation(records)
@@ -181,13 +249,17 @@ def annotation_for_turn(records: Sequence[dict], n: int) -> TurnAnnotation:
             tool=None,
             readonly=declared_state(None, False),
             cause="the tools/call has no recorded request frame to correlate an annotation to",
+            producer=PRODUCER_UNREADABLE_REQUEST,
         )
 
     by_seq = {r["seq"]: r for r in records if r.get("kind") == "frame"}
     name, name_cause = _tool_name(by_seq.get(request_seq))
     if name_cause is not None:
         return TurnAnnotation(
-            tool=name, readonly=declared_state(None, False), cause=name_cause
+            tool=name,
+            readonly=declared_state(None, False),
+            cause=name_cause,
+            producer=PRODUCER_UNREADABLE_REQUEST,
         )
 
     snapshots = sorted(
@@ -207,6 +279,7 @@ def annotation_for_turn(records: Sequence[dict], n: int) -> TurnAnnotation:
                 "readOnlyHint is not-declared for want of observation rather than by the "
                 "server's choice"
             ),
+            producer=PRODUCER_NO_SNAPSHOT,
         )
 
     snapshot = live[-1]
@@ -220,13 +293,20 @@ def annotation_for_turn(records: Sequence[dict], n: int) -> TurnAnnotation:
                 "the tool is absent from the most recent tools/list snapshot "
                 f"(seq {snapshot['source_seq']}), so its readOnlyHint is not-declared"
             ),
+            producer=PRODUCER_TOOL_ABSENT,
         )
 
+    # The complete observation: the snapshot was seen and the tool is in it. Whatever
+    # `readOnlyHint` says here — declared-true, declared-false, non-boolean, or absent — it is
+    # the SERVER's own answer, not Belay's ignorance. That is the whole warrant for treating
+    # the absent case as a coverage boundary downstream, and `producer` is how it travels.
+    # There is deliberately no `cause=`: nothing failed, so there is nothing to excuse.
     return TurnAnnotation(
         tool=name,
         readonly=facts["annotations"][_HINT],
         incoherence=facts["incoherence"],
         snapshot_seq=snapshot["source_seq"],
+        producer=PRODUCER_SERVER_DECLARED_NOTHING,
         openworld=facts["annotations"][_HINT_OPENWORLD],
     )
 
@@ -553,14 +633,38 @@ def render_effect_verdict(
             ),
         )
 
-    # NOT_DECLARED: an absent contract is not a permissive one. This is the false PASS the
-    # whole capability exists to refuse.
+    # NOT_DECLARED: an absent contract is still not a permissive one — a mutation by an
+    # un-annotated tool is never a PASS here, which is the false PASS the whole capability
+    # exists to refuse. What the absence MEANS, though, depends on which producer built the
+    # annotation, and those four meanings used to arrive at one status.
+    if ann.producer == PRODUCER_SERVER_DECLARED_NOTHING:
+        # The complete observation: Belay looked, the snapshot was there, the tool was in it,
+        # and the server promised nothing about it. Nothing was attempted and nothing failed,
+        # so there is no contract for a filesystem delta to confirm or refute — and there
+        # never was one. That is a COVERAGE BOUNDARY, the same non-finding `openWorldHint`
+        # already carries, not an abstention about this run.
+        seen = f" (seq {ann.snapshot_seq})" if ann.snapshot_seq is not None else ""
+        return Verdict(
+            _AXIS, _KIND, Status.NOT_COVERED,
+            observed=_paths(delta) if delta else None, expected=contract,
+            message=(
+                f"effect-conformance NOT_COVERED: tool {tool!r} is present in the tools/list "
+                f"snapshot Belay observed{seen}, and the server declared no readOnlyHint for "
+                f"it — nothing was promised, so there is no contract for the observed effect "
+                f"to be weighed against. This states a limit on what Belay checked, NOT that "
+                f"the tool was checked and behaved: never PASS, never a fabricated FAIL"
+            ),
+        )
+
+    # Producers i, ii and iii: Belay tried to learn this tool's contract and could not. The
+    # server may well declare one — we never saw it. UNVERIFIED, exactly as before.
+    because = f" ({ann.cause})" if ann.cause else ""
     return Verdict(
         _AXIS, _KIND, Status.UNVERIFIED,
         observed=_paths(delta) if delta else None, expected=contract,
         message=(
-            f"effect-conformance UNVERIFIED: tool {tool!r} did not declare readOnlyHint "
-            f"({ann.cause}); an absent contract cannot be verified for conformance — "
+            f"effect-conformance UNVERIFIED: tool {tool!r} did not declare readOnlyHint"
+            f"{because}; an absent contract cannot be verified for conformance — "
             f"never PASS"
         ),
     )
@@ -591,6 +695,12 @@ def verify_effect(
 
 
 __all__ = [
+    "PRODUCER_NO_SNAPSHOT",
+    "PRODUCER_SERVER_DECLARED_NOTHING",
+    "PRODUCER_TOOL_ABSENT",
+    "PRODUCER_UNNAMED",
+    "PRODUCER_UNREADABLE_REQUEST",
+    "Producer",
     "TurnAnnotation",
     "annotation_for_turn",
     "network_subverdict",

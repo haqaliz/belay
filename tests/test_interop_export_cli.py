@@ -428,9 +428,17 @@ def test_ac6_end_to_end_matched_turn_exports_real_pass(tmp_path, capsys):
     assert attrs[f"{VERDICT_ATTRIBUTE_PREFIX}.axis"] == "A2"
     assert attrs[f"{VERDICT_ATTRIBUTE_PREFIX}.turn_index"] == 0
     assert f"{VERDICT_ATTRIBUTE_PREFIX}.cause" not in attrs, "a clean replay has no cause"
-    # coverage per the verdict: no NOT_COVERED dimension on the echo replay -> no
-    # coverage key, and the real sub-verdicts are carried verbatim.
-    assert f"{VERDICT_ATTRIBUTE_PREFIX}.coverage" not in attrs
+    # coverage per the verdict: no NOT_COVERED dimension on the echo replay -> the key is
+    # present and EMPTY, and the real sub-verdicts are carried verbatim.
+    #
+    # Deliberately changed on 2026-09-21 (`coverage-surface-parity`), quoting what it
+    # replaces: *"no NOT_COVERED dimension on the echo replay -> no coverage key"*,
+    # asserted as `f"{VERDICT_ATTRIBUTE_PREFIX}.coverage" not in attrs`. An absent key
+    # cannot be told apart from an exporter that never had the attribute, so a measured
+    # "nothing was outside coverage" and a writer that knows nothing about coverage
+    # reached a collector as identical bytes. `verify --json` had already settled it the
+    # other way (`verify/json.coverage_record`: always present, empty when none).
+    assert attrs[f"{VERDICT_ATTRIBUTE_PREFIX}.coverage"] == "[]"
     sub_verdicts = json.loads(attrs[f"{VERDICT_ATTRIBUTE_PREFIX}.sub_verdicts"])
     assert [sv["status"] for sv in sub_verdicts] == ["PASS", "PASS"]
     assert all(sv["kind"] in {"replay", "effect"} for sv in sub_verdicts)
