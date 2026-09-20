@@ -202,3 +202,58 @@ def test_corpus_score_discloses_the_coverage_boundary(tmp_path: Path, capsys) ->
     assert "not the same" in out.lower() or "different" in out.lower(), (
         "the NOT_COVERED boundary and the adjudicable-label metric must be told apart"
     )
+
+
+# -------------------------------------------------------- additivity, all three surfaces
+
+
+def _render(argv: list[str], capsys) -> str:
+    from belay import cli
+
+    assert cli.main(argv) == 0
+    return capsys.readouterr().out
+
+
+def test_no_uncovered_dimension_leaves_every_surface_unchanged(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """A corpus with NO uncovered dimension renders exactly as it did before.
+
+    The disclosure is strictly ADDITIVE: it is the block that appears when there IS a
+    boundary, not a line every surface grew. A corpus whose cases declare none has nothing
+    withheld, so an unconditional block would only add noise to every golden-output test in
+    the suite — and noise in the tests that guard a disclosure is how the disclosure stops
+    being trusted.
+
+    Asserted as the absence of the block's own header and of the status name, on all three
+    surfaces, from one case that is identical to the fixtures above except for the one
+    sub-verdict.
+    """
+    from belay.corpus.run import MATCH, CaseResult, CorpusRun
+
+    corpus = tmp_path / "corpus"
+    case = _case(uncovered=False)
+    write_case(corpus / case.id, case)
+    monkeypatch.setattr(
+        "belay.corpus.run.run_corpus",
+        lambda _dir, *, disable_claim_axis=False: CorpusRun(
+            results=[CaseResult(case_id=case.id, outcome=MATCH)]
+        ),
+    )
+
+    for argv in (
+        ["corpus", "list", str(corpus)],
+        ["corpus", "run", str(corpus)],
+        ["corpus", "score", str(corpus)],
+    ):
+        out = _render(argv, capsys)
+        assert "NOT_COVERED" not in out, f"{argv[1]} grew a block with no boundary: {out}"
+        assert "coverage (NOT_COVERED" not in out, out
+        # The surface still rendered the case — an empty disclosure must not be the
+        # by-product of a surface that found nothing to render in the first place.
+        # (`corpus score` prints counts, not ids, hence the denominator rather than the id.)
+        assert "1 case" in out, out
+
+    # And `corpus score`'s own coverage RATE is untouched by any of this: it is a
+    # different metric that happens to share the word, and it still prints.
+    assert "decided / adjudicable" in _render(["corpus", "score", str(corpus)], capsys)
