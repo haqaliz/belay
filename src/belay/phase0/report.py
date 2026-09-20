@@ -20,7 +20,7 @@ Pure and deterministic: stdlib only, no filesystem, no clock, no randomness. Sam
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Sequence
 
 from belay.corpus.metrics import Metrics
 from belay.phase0.ledger import Disposition, RunLedger
@@ -142,11 +142,64 @@ def _disposition_breakdown(ledger: RunLedger) -> str:
 #: Human wording for each sub-verdict `kind` that can be NOT_COVERED. A kind with no entry
 #: is still rendered, under its own name — a new coverage boundary must never be silently
 #: dropped from this section for want of a phrase.
+#:
+#: The fallback below is kept for exactly that reason, and it is NOT a resting place: an
+#: unlisted kind reaches a reader anonymously, which is how the routine `effect` boundary
+#: shipped nameless. `tests/test_coverage_surface_parity_phase0.py` parses `src/belay/` for
+#: every `kind` a `NOT_COVERED` `Verdict` is DECLARED with and fails if one has no entry
+#: here, so the table cannot fall behind the vocabulary again.
+#:
+#: Each entry names the ANNOTATION whose absence or unobservability created the boundary
+#: (`openWorldHint`, `readOnlyHint`), because that is the only part an operator can act on
+#: — by declaring an A1 invariant, or by choosing a server that annotates. A sentence that
+#: fits both kinds would satisfy the guard and inform nobody.
 _COVERAGE_PROSE = {
     "effect:network": (
         "network egress is NOT observed, so openWorldHint conformance is NOT_COVERED"
     ),
+    "effect": (
+        "the server declared no readOnlyHint for the tool called, so there was never a "
+        "contract for the observed filesystem effect to be weighed against — "
+        "effect-conformance is NOT_COVERED, not abstained"
+    ),
 }
+
+#: What an unlisted kind renders as. True of every kind and distinguishing none, which is
+#: why the guard above exists — see `_COVERAGE_PROSE`.
+_ANONYMOUS_COVERAGE_PROSE = "outside what Belay observes"
+
+
+def _coverage_lines(
+    by_kind: dict[str, int], total: int, *, subject: str, scope: Sequence[str] = ()
+) -> list[str]:
+    """The coverage block itself — ONE definition, rendered by both report surfaces.
+
+    Shared rather than copied because the single-ledger report and the merged population
+    report state the same boundary about the same data, and two copies of this sentence are
+    two places for a new kind to be disclosed differently. `subject` is what the empty
+    tally names ("this ledger" / "this population"); `scope` is any extra lines a surface
+    needs to state its own denominator.
+
+    An empty tally says so in those words. It must never read as "nothing was outside
+    coverage", because a ledger written before this field existed is indistinguishable from
+    one that recorded no boundary.
+    """
+    lines = [
+        "coverage (NOT_COVERED — dimensions Belay does not observe; never a PASS, "
+        "and outside every rate in this report):"
+    ]
+    lines.extend(scope)
+    if not by_kind:
+        lines.append(
+            f"  no NOT_COVERED dimension recorded in {subject} — a ledger written "
+            "before coverage was recorded reads the same way; this is NOT a claim that "
+            "everything was inside coverage"
+        )
+        return lines
+    for kind in sorted(by_kind):
+        prose = _COVERAGE_PROSE.get(kind, _ANONYMOUS_COVERAGE_PROSE)
+        lines.append(f"  {kind}: NOT observed for {by_kind[kind]}/{total} turn(s) — {prose}")
+    return lines
 
 
 def _coverage_section(ledger: RunLedger) -> list[str]:
@@ -158,28 +211,48 @@ def _coverage_section(ledger: RunLedger) -> list[str]:
     is the exact misreading (`PASS` == "the network was checked") this status exists to
     prevent. `render_report` places this section OUTSIDE the INSTRUMENT SUSPECT branch:
     the headline can be suppressed, the limits of what Belay looked at cannot.
-
-    An empty tally says so in those words. It must never read as "nothing was outside
-    coverage", because a ledger written before this field existed is indistinguishable
-    from one that recorded no boundary.
     """
-    by_kind = ledger.not_covered_by_kind()
-    total = ledger.total_turns()
-    lines = [
-        "coverage (NOT_COVERED — dimensions Belay does not observe; never a PASS, "
-        "and outside every rate in this report):"
-    ]
-    if not by_kind:
-        lines.append(
-            "  no NOT_COVERED dimension recorded in this ledger — a ledger written "
-            "before coverage was recorded reads the same way; this is NOT a claim that "
-            "everything was inside coverage"
-        )
-        return lines
-    for kind in sorted(by_kind):
-        prose = _COVERAGE_PROSE.get(kind, "outside what Belay observes")
-        lines.append(f"  {kind}: NOT observed for {by_kind[kind]}/{total} turn(s) — {prose}")
-    return lines
+    return _coverage_lines(
+        ledger.not_covered_by_kind(), ledger.total_turns(), subject="this ledger"
+    )
+
+
+#: Why the merged coverage section does NOT partition the controls out, printed in the
+#: section so a reader never has to reconcile it with the headline's denominator silently.
+_POPULATION_COVERAGE_SCOPE = (
+    "  counted over EVERY capture in this population, CONTROLS INCLUDED — unlike every",
+    "  other number here. A coverage boundary is a limit on what the INSTRUMENT observed,",
+    "  not a rate about agents, and the controls ran through the same instrument; "
+    "computing",
+    "  it over the measured set alone would let a boundary only a control recorded vanish",
+    "  from the one section whose whole job is to state limits.",
+)
+
+
+def _population_coverage_section(population) -> list[str]:
+    """The coverage boundary for a MERGED population — AC-4.
+
+    `belay phase0 combine` is a pure re-render exactly as `phase0 report` is, and it is the
+    surface a published merged number is read off, so a status rendered here without its
+    limits is the same false-PASS-by-omission one merge wider. The data was already on this
+    path — every `Capture` wraps an untouched `InstanceRecord` and therefore its stored
+    `not_covered_turns` — so nothing is computed that was not persisted.
+
+    Counted per capture with NO dedup, matching `Population.total_turns()`'s discipline
+    (`population.py:269-273`): a capture that ran really was verified, and its turns really
+    were outside coverage on that dimension. Deduping to the instance here would divide a
+    per-instance numerator by a per-capture denominator.
+    """
+    by_kind: dict[str, int] = {}
+    for capture in population.captures:
+        for kind, count in capture.record.not_covered_turns.items():
+            by_kind[kind] = by_kind.get(kind, 0) + count
+    return _coverage_lines(
+        by_kind,
+        population.total_turns(),
+        subject="this population",
+        scope=_POPULATION_COVERAGE_SCOPE,
+    )
 
 
 #: The `no opportunity` and `unrecorded` sentences, verbatim — quoted here rather than
@@ -796,6 +869,11 @@ def render_population_report(population) -> str:
     4. ALONGSIDE, per CAPTURE — the same instance counts TWICE, and the line says it is not
        the headline. Both carry their denominator, and a 0 denominator is `n/a`, never a
        bare `0%` and never a conjured `100%`.
+    4b. THE COVERAGE BOUNDARY, read back from each capture's stored `not_covered_turns` —
+       the same slot and the same wording `render_report` gives it, because a merged rate
+       rendered without its limits is the identical false-PASS one merge wider. The ONLY
+       section computed over the whole population rather than `measured()`, and it says so
+       on the page: see `_population_coverage_section`.
     5. DISAGREEMENTS, named, or the words "no disagreement".
     5b. EXPOSURE — the merge rule (§1.4) printed beside the dedup rule, then one line per
        instance, EVERY instance named individually regardless of state (judged /
@@ -850,6 +928,12 @@ def render_population_report(population) -> str:
         f"headline) = {capture_numerator}/{capture_denominator} = "
         f"{_format_rate(_ratio(capture_numerator, capture_denominator))}"
     )
+    lines.append("")
+
+    # 5a. THE COVERAGE BOUNDARY, in the same slot `render_report` gives it — directly after
+    # the rate and before everything that explains it. Placed here, and over the WHOLE
+    # population rather than `measured`, for the reasons in `_population_coverage_section`.
+    lines.extend(_population_coverage_section(population))
     lines.append("")
 
     # Over the MEASURED population, because this section exists to explain the HEADLINE's
