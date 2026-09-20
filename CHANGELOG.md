@@ -5,6 +5,81 @@ All notable changes to Belay are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0 — until then,
 `0.x` minor bumps may include changes that would be breaking under strict semver.
 
+## [0.35.0] - 2026-09-21
+
+**An absent contract is no longer a failed check** (PR #40). The instrument the 2026-09-19
+corpus-filling mint stopped on is fixed, by taking option (1) of that unit's open S-1
+decision. **This is a reclassification, not improved detection, and it contains no Phase-0
+number.**
+
+### Changed
+
+- **A2 effect-conformance now distinguishes *"the server supplied no contract"* from *"we
+  could not observe the contract"*.** `annotation_for_turn` produces *not-declared* from
+  four producers and the fall-through returned `UNVERIFIED` for all four. Three of them
+  genuinely are failed observations — no `tools/list` snapshot before the call, the tool
+  absent from the snapshot, an unreadable request frame — and **they are unchanged, each
+  keeping its named cause.** The fourth, where the snapshot **was** observed, the tool was
+  in it, and the server declared no `readOnlyHint`, is not an attempt at all: there is no
+  contract, so conformance was never in scope. It is now a `NOT_COVERED` sub-verdict on the
+  `effect` kind.
+  Consequence: against a server that declares no annotations (the pinned reference
+  filesystem server declares none) a replayed turn can now reach `PASS` with the boundary
+  disclosed, instead of every turn reading `UNVERIFIED` however well it replayed. That
+  makes `VERIFIED_CLEAN` reachable, so an honest clean run is no longer indistinguishable
+  from a broken instrument.
+  **The `UNVERIFIED` rate before and after this change is not comparable** — the drop is a
+  reclassification of a dimension Belay never had a contract for, **not** improved
+  detection. Nothing was recomputed and no published number moves.
+  **The cost, stated rather than buried: it rewards a silent server.** Omitting the
+  annotation now earns a `PASS` where it earned an `UNVERIFIED`, and omitting it is the
+  adversarial move — accepted because this axis catches nothing adversarial by construction
+  and user-declared invariants (A1) remain the load-bearing mechanism. What a declaring
+  server still buys is a verdict with nothing withheld.
+- **`reduce`, `_RANK` and the Phase-0 verifiability predicate are deliberately untouched.**
+  The reduced status becomes `PASS` on its own. Widening the predicate instead was
+  implemented and measured, and rejected: it breaks no tests while printing a clean `0%`
+  violation rate beside a 100%-`UNVERIFIED` turn tally — the false zero `INSTRUMENT
+  SUSPECT` exists to refuse.
+
+### Added
+
+- **The producer of a not-declared annotation is now an explicit field**, set at all five
+  return sites and defaulting to the abstaining case. The two outcomes are asymmetric —
+  `UNVERIFIED` is carried to the turn by worst-status-wins while `NOT_COVERED` is dropped
+  before ranking — so a forgotten marker must abstain, never silently bound coverage.
+- **Coverage disclosure on five surfaces that rendered a status without one**, each pinned
+  by its own test: `belay corpus list`, `corpus run` (on a MATCH, where nothing was
+  disclosed before), `corpus score`, `corpus add`, and `phase0 combine`. A named
+  `phase0 report` prose entry for the `effect` kind, so a routine boundary no longer reads
+  through the anonymous fallback. `belay interop export` now always writes
+  `belay.verdict.coverage` (present-but-empty rather than absent).
+- **A structural guard so a new status surface cannot omit its coverage line.** It
+  classifies every CLI subcommand from argparse's own table and every status-rendering
+  function from the AST, keyed on the status name `NOT_COVERED` rather than the word
+  "coverage" — which matters, because `corpus score` already prints a line labelled
+  `coverage` meaning something else entirely. It found `corpus add`, which no list had.
+
+### Fixed
+
+- A not-declared effect verdict rendered the literal `(None)` to users, because the
+  message interpolated a cause that is absent on that path.
+- `docs/STATUS.md`'s claim that *"against annotation-less servers a corpus-filling mint can
+  never bank a per-turn case"* is corrected, quoting what it replaces. `reduce` ranks `FAIL`
+  above `UNVERIFIED`, so a turn with a decided `FAIL` always banked; what the abstention
+  blocked was `VERIFIED_CLEAN`, and therefore the denominator.
+
+### Known limits
+
+- The mint was **not re-run**; whether a corpus-filling mint actually banks cases against
+  annotation-less servers is untested.
+- `annotation_for_turn` reads only `annotation_snapshot` and **never
+  `annotation_staleness`**, so a snapshot invalidated by an unre-snapshotted
+  `tools/list_changed` is used as if live. The trajectory rule handles that case by name
+  (`TOOLSET_UNKNOWN`); A2's effect axis does not.
+- The coverage sentence remains duplicated across eight render sites, with only the data
+  helper shared.
+
 ## [0.34.0] - 2026-09-19
 
 **The A3 claim axis becomes drivable, and a corpus-filling mint stops at its own gate**
