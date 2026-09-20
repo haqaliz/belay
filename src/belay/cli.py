@@ -1721,6 +1721,22 @@ def _cmd_corpus_add(args: argparse.Namespace) -> int:
     _emit(f"  turn {args.turn}  verdict {verdict.status.value}  label {args.label}")
     _emit("  A recomputed verdict and a HUMAN label — the label is 'pending' until a human")
     _emit("  relabels it; the engine never labels a case from its own verdict.")
+    # The line above renders the banked turn's reduced status, so the rule binds here too:
+    # no surface renders a status without also rendering what that status did not cover.
+    # This surface was NOT one of the four the aspect set out to fix — it was found by the
+    # structural guard (`tests/test_coverage_surface_guard.py`) scanning for status renders,
+    # which is the whole reason the guard exists. Same helper, same wording, same
+    # suppressed-when-empty additivity as the three corpus surfaces.
+    from belay.verify.json import coverage_record
+
+    _emit_stored_coverage(
+        coverage_record([verdict]),
+        noun="banked turn(s)",
+        bound=(
+            "the verdict banked above is a decision on the dimensions Belay checked; "
+            "these were never among them"
+        ),
+    )
     return 0
 
 
