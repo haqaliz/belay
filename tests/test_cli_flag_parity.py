@@ -141,6 +141,16 @@ EXPECTED: dict[str, frozenset[str]] = {
     # mirrors it the same way: a stored claim can only be re-derived and compared
     # when an author is supplied at check time.
     "--claim-author": frozenset({"verify", "gate baseline", "gate check"}),
+    # The C10 triage budget (aspect surfaces): `belay verify` takes the triage
+    # command as a flag; the other replay-bearing surfaces are env-only
+    # (`BELAY_TRIAGE_AUTHOR`) by the same pinned decision as `--claim-author`
+    # (tests/test_verify_claim_surfaces.py:202-219) — batch surfaces follow in a
+    # later slice. The budget knobs and the kill-switch share the author's
+    # surface: triage is the verify surface's budget in this slice.
+    "--triage-author": frozenset({"verify"}),
+    "--triage-threshold": frozenset({"verify"}),
+    "--triage-top-n": frozenset({"verify"}),
+    "--no-triage": frozenset({"verify"}),
     # The identity fallback for pre-record captures: `gate baseline` banks under
     # the override, `gate check` resolves the same baseline by it. Two surfaces,
     # one flag — the gate's join key.

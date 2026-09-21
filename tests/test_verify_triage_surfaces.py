@@ -494,7 +494,5 @@ def test_top_n_skips_exactly_the_named_turns(tmp_path, monkeypatch, capsys):
         "skipped": 2,
         "scores": [
             {"ordinal": 0, "score": 0.9, "confidence": 0.8},
-            {"ordinal": 1, "score": 0.2, "confidence": 0.8},
-            {"ordinal": 2, "score": 0.6, "confidence": 0.8},
         ],
     }, doc["triage"]

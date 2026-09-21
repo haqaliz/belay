@@ -61,6 +61,13 @@ class VerifyReport:
     fabricated `0`, never an empty section). A denied call is an observation,
     never a turn and never a verdict; the section reports the events and no
     verdict axis reads them.
+
+    `triage` follows the identical rule: the additive C10 section — `{"mode",
+    "skipped", "scores", ...}` — is present iff a triage command was configured
+    for the run, and the key is ABSENT entirely otherwise (never a fabricated
+    zero, never an empty section). A skipped turn is UNVERIFIED-by-budget in the
+    `turns` records; the section reports the budget's decisions and no verdict
+    axis reads them.
     """
 
     trace: Optional[str]
@@ -72,6 +79,7 @@ class VerifyReport:
     claim: Optional[dict]
     error: Optional[dict]
     approval: Optional[dict] = None
+    triage: Optional[dict] = None
 
     def as_dict(self) -> dict:
         """The document, in the contract's key order."""
@@ -86,6 +94,8 @@ class VerifyReport:
         }
         if self.approval is not None:
             payload["approval"] = self.approval
+        if self.triage is not None:
+            payload["triage"] = self.triage
         if self.claim is not None:
             payload["claim"] = self.claim
         payload["error"] = self.error
