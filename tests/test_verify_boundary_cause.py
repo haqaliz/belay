@@ -403,7 +403,11 @@ def test_surface_corpus_show_renders_the_boundary_kind_and_message(
         encoding="utf-8",
     )
 
-    rc = cli._cmd_corpus_show(SimpleNamespace(case_id="case-001", corpus_dir=str(tmp_path)))
+    rc = cli._cmd_corpus_show(
+        SimpleNamespace(
+            case_id="case-001", corpus_dir=str(tmp_path), shell_server=None
+        )
+    )
     out = capsys.readouterr().out
 
     assert rc == 0, out

@@ -146,7 +146,7 @@ def test_corpus_run_discloses_the_coverage_boundary_on_a_match(
 
     monkeypatch.setattr(
         "belay.corpus.run.run_corpus",
-        lambda _dir, *, disable_claim_axis=False: CorpusRun(
+        lambda _dir, *, disable_claim_axis=False, shell_server_command=None: CorpusRun(
             results=[CaseResult(case_id=case.id, outcome=MATCH)]
         ),
     )
@@ -236,7 +236,7 @@ def test_no_uncovered_dimension_leaves_every_surface_unchanged(
     write_case(corpus / case.id, case)
     monkeypatch.setattr(
         "belay.corpus.run.run_corpus",
-        lambda _dir, *, disable_claim_axis=False: CorpusRun(
+        lambda _dir, *, disable_claim_axis=False, shell_server_command=None: CorpusRun(
             results=[CaseResult(case_id=case.id, outcome=MATCH)]
         ),
     )
