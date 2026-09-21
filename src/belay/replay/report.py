@@ -91,6 +91,14 @@ REPLAY_DID_NOT_ANSWER = "replay did not answer target"
 #: report must never do — so it does not.
 _NO_RECORDED_CAUSE = "unrestorable (no recorded cause)"
 
+#: The C10 triage-budget bucket. A turn the replay budget skipped is UNVERIFIED, never
+#: PASS, and the surfaces aspect stamps it with the verbatim cause
+#: `"skipped by the triage budget"` (see `belay.verify.triage_budget`'s module
+#: docstring — the next aspect quotes it). This constant is the stable label the rate
+#: breaks down by; it equals the verbatim sentence, so a skipped turn always lands in
+#: this named bucket and never in the `_NO_RECORDED_CAUSE` catch-all above.
+TRIAGE_SKIPPED_BY_BUDGET = "skipped by the triage budget"
+
 #: The prefix `belay.verify.turn` stamps on the cause of a turn that REPLAYED cleanly and
 #: only then reduced to UNVERIFIED (an un-annotated tool, an invariant that could not be
 #: evaluated, …). The rest of that string is `<axis>/<kind>: <verbatim sub-verdict
@@ -168,6 +176,10 @@ _PREFIX_LABELS: tuple[tuple[str, str], ...] = (
     (f"{REPLAYED_SUB_VERDICT} A1/invariant", REPLAYED_INVARIANT_UNVERIFIED),
     (f"{REPLAYED_SUB_VERDICT} A3/claim", A3_CLAIM_UNVERIFIED),
     ("A3/claim", A3_CLAIM_UNVERIFIED),
+    #: The C10 triage-budget bucket: a skipped turn's verbatim cause. It prefixes
+    #: nothing and nothing prefixes it, but it is registered like every other bucket —
+    #: a skipped turn is UNVERIFIED with a NAME, never the causeless catch-all.
+    (TRIAGE_SKIPPED_BY_BUDGET, TRIAGE_SKIPPED_BY_BUDGET),
     (REPLAYED_SUB_VERDICT, REPLAYED_UNVERIFIED),
 )
 
@@ -399,6 +411,7 @@ def replay_trace(
 __all__ = [
     "MANIFEST_NOT_FOUND",
     "REPLAY_DID_NOT_ANSWER",
+    "TRIAGE_SKIPPED_BY_BUDGET",
     "TraceReport",
     "TurnReport",
     "canonical_cause",
