@@ -728,6 +728,25 @@ absent from the summary. A stopped batch prints, above the accounting:
 is a live observation and is not reproducible**; the ledger → report path is, and this
 printed line is what makes that second half true.
 
+> **The A3 claim axis, and what "that same command" does and does not cover.** Both paths
+> resolve the A3 author the same way — **env-only**, from `BELAY_CLAIM_AUTHOR`
+> (`cli.py:2593` for the printed command; `entrypoint.py`'s `run_verify` for `--verify`).
+> Neither surface takes a `--claim-author` flag: that flag is `belay verify` /
+> `gate baseline` / `gate check` only, a decision recorded in
+> `tests/test_cli_flag_parity.py:131-137` and pinned by
+> `tests/test_verify_claim_surfaces.py:202-219`.
+>
+> So **export `BELAY_CLAIM_AUTHOR` before either path** if you want the claim column
+> filled; unset, A3 is ABSENT by design — dark, never UNVERIFIED and never PASS — and the
+> report says `claim unrecorded`. A reference author ships:
+> `python -m belay.verify.reference_claim_author --model <full-id>`.
+>
+> **This equivalence was false until 2026-09-19.** `run_verify` called `run_batch()`
+> without `claim_author=`, whose default is `None`, and A3 engages only when it is not
+> None — so `--verify` could never fill the claim column whatever the environment said,
+> while the printed command could. Fixed in `phase0-corpus-mint`; the two are now the same
+> measurement on this axis, and two tests pin both directions.
+
 ### The dual-server mint (`--toolset filesystem+shell`)
 
 Since 2026-08-12 the driver can offer **both** pinned servers on one boundary: the

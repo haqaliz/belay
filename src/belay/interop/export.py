@@ -23,9 +23,19 @@ zip), and enriches every ingested span with `belay.verdict.*` attributes plus ON
 - `belay.verdict.cause` — the span's named cause; ABSENT when `None`, never `""`.
 - `belay.verdict.turn_index` — int; matched spans only.
 - `belay.verdict.coverage` — a JSON string array of the `kind`s of `NOT_COVERED`
-  sub-verdicts (e.g. `["effect:network"]`); ABSENT when none. The coverage line
-  travels with the status on every surface — a PASS exported without it is the named
-  failure mode of this surface.
+  sub-verdicts (e.g. `["effect:network"]`), in sub-verdict order. **ALWAYS present on
+  a verdict-bearing span, `"[]"` when nothing was outside coverage** — never absent,
+  matching `verify --json`'s `coverage_record`. An absent key cannot be told apart
+  from an older exporter, so "we checked everything" and "this writer knows nothing
+  about coverage" would reach a collector as the same bytes. The coverage line travels
+  with the status on every surface — a PASS exported without it is the named failure
+  mode of this surface. ABSENT on an uncovered span, which carries no verdict at all
+  (see `_attach_verdict`).
+  **The residue, named:** the array carries KINDS, not the sub-verdict MESSAGE that
+  distinguishes *"this tool PROMISED and we cannot observe it"* from *"nothing was
+  promised"*. That message is not lost — `belay.verdict.sub_verdicts` carries every
+  sub-verdict verbatim, NOT_COVERED ones included — but a reader of `coverage` alone
+  does not have it.
 - `belay.verdict.sub_verdicts` — a JSON string array of `{"axis","kind","status",
   "message"}` (a plain dict per sub-verdict, `.value` for status); ABSENT when empty.
 - Span event `belay.verdict` — `timeUnixNano` is the span's OWN
@@ -149,7 +159,14 @@ def _enrich(span: dict, result: CorrelatedSpan) -> None:
     read as PASS and the export never spells `Status.PASS` itself. Matched spans
     carry their `TurnVerdict` verbatim; absent facts stay absent (absent-never-zero:
     no `cause` key for `None`, no `axis`/`turn_index`/`sub_verdicts` for an uncovered
-    span, no `coverage` key without a `NOT_COVERED` dimension).
+    span).
+
+    `coverage` is the ONE key that is present-but-empty rather than absent, and only on
+    a verdict-bearing span. It is not an exception to absent-never-zero but an
+    application of it: for a span that WAS verified, "nothing was outside coverage" is a
+    fact Belay measured and can state, and leaving it absent would make that measured
+    fact indistinguishable from an exporter that never had the concept. For a span with
+    no verdict there is no such measurement, so the key stays absent.
     """
     prefix = VERDICT_ATTRIBUTE_PREFIX
     verdict = result.verdict
@@ -166,11 +183,26 @@ def _enrich(span: dict, result: CorrelatedSpan) -> None:
             attributes.append(_attribute(f"{prefix}.cause", result.cause))
         if result.turn_index is not None:
             attributes.append(_attribute(f"{prefix}.turn_index", result.turn_index))
-        uncovered_kinds = _coverage_dimensions(verdict.sub_verdicts)
-        if uncovered_kinds:
-            attributes.append(
-                _attribute(f"{prefix}.coverage", json.dumps(uncovered_kinds))
+        # ALWAYS written for a verdict-bearing span, EMPTY when nothing was outside
+        # coverage — never absent. The conditional this replaces made two very different
+        # facts arrive at a collector identically: "Belay checked every dimension it
+        # claims to" and "this exporter predates the coverage attribute". A dashboard
+        # cannot tell those apart, and one of them is a clean bill of health nobody
+        # issued. `verify --json` settled the same question the same way —
+        # `verify/json.coverage_record` is "ALWAYS present, empty when no NOT_COVERED
+        # dimension appeared on these turns" — and this surface now matches it.
+        #
+        # Scoped to the verdict-bearing branch on purpose. An unmatched or unreplayed
+        # span carries no `axis`, `turn_index` or `sub_verdicts` either: nothing was
+        # verified, so there are no dimensions to report on, and an empty array there
+        # would assert "every dimension was inside coverage" about a turn Belay never
+        # looked at — the false-PASS shape, one status over.
+        attributes.append(
+            _attribute(
+                f"{prefix}.coverage",
+                json.dumps(_coverage_dimensions(verdict.sub_verdicts)),
             )
+        )
         if verdict.sub_verdicts:
             attributes.append(
                 _attribute(

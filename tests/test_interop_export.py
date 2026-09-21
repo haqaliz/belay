@@ -210,9 +210,21 @@ def test_ac2_ambiguous_span_exports_unverified_never_pass(tmp_path):
 
 def test_ac3_coverage_line_survives(tmp_path):
     """A `NOT_COVERED` sub-verdict (a tool's `openWorldHint: false` network promise)
-    exports as `belay.verdict.coverage`; a verdict without one exports NO coverage key
+    exports as `belay.verdict.coverage`; a verdict without one exports the key EMPTY
     — a PASS rendered without its coverage line is the failure mode this status exists
-    to prevent."""
+    to prevent.
+
+    **The second half was deliberately changed on 2026-09-21 (`coverage-surface-parity`),
+    quoting what it replaces:** *"a verdict without one exports NO coverage key"*, asserted
+    as `f"{VERDICT_ATTRIBUTE_PREFIX}.coverage" not in span.attributes`. That conditional
+    made two very different facts arrive at a collector as the same bytes — *"Belay checked
+    every dimension it claims to"* and *"this exporter predates the coverage attribute"* —
+    and `verify --json` had already settled the same question the other way
+    (`verify/json.coverage_record`: "ALWAYS present, empty when no NOT_COVERED dimension
+    appeared on these turns"). The first half is untouched, and `exported_ok.json` is
+    byte-identical, so the change is additive for every span that already carried a
+    dimension. The absent case that remains is the span with NO verdict at all, pinned in
+    `tests/test_coverage_surface_parity_phase0.py`."""
     records = trace_of(tmp_path, [("c2s", TRACE_CONTEXT_META)])
     spans = [_span(TRACE_ID, SPAN_ID)]
     doc = _doc([_otlp_span(TRACE_ID, SPAN_ID)])
@@ -256,7 +268,7 @@ def test_ac3_coverage_line_survives(tmp_path):
     exported = build_enriched_document(doc, spans, results)
 
     [span] = parse_otlp(json.dumps(exported))
-    assert f"{VERDICT_ATTRIBUTE_PREFIX}.coverage" not in span.attributes
+    assert span.attributes[f"{VERDICT_ATTRIBUTE_PREFIX}.coverage"] == "[]"
 
 
 # --- AC4: absent-never-zero — no cause key (never ""), no empty sub_verdicts key ----

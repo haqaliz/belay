@@ -5,6 +5,142 @@ All notable changes to Belay are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0 — until then,
 `0.x` minor bumps may include changes that would be breaking under strict semver.
 
+## [0.35.0] - 2026-09-21
+
+**An absent contract is no longer a failed check** (PR #40). The instrument the 2026-09-19
+corpus-filling mint stopped on is fixed, by taking option (1) of that unit's open S-1
+decision. **This is a reclassification, not improved detection, and it contains no Phase-0
+number.**
+
+### Changed
+
+- **A2 effect-conformance now distinguishes *"the server supplied no contract"* from *"we
+  could not observe the contract"*.** `annotation_for_turn` produces *not-declared* from
+  four producers and the fall-through returned `UNVERIFIED` for all four. Three of them
+  genuinely are failed observations — no `tools/list` snapshot before the call, the tool
+  absent from the snapshot, an unreadable request frame — and **they are unchanged, each
+  keeping its named cause.** The fourth, where the snapshot **was** observed, the tool was
+  in it, and the server declared no `readOnlyHint`, is not an attempt at all: there is no
+  contract, so conformance was never in scope. It is now a `NOT_COVERED` sub-verdict on the
+  `effect` kind.
+  Consequence: against a server that declares no annotations (the pinned reference
+  filesystem server declares none) a replayed turn can now reach `PASS` with the boundary
+  disclosed, instead of every turn reading `UNVERIFIED` however well it replayed. That
+  makes `VERIFIED_CLEAN` reachable, so an honest clean run is no longer indistinguishable
+  from a broken instrument.
+  **The `UNVERIFIED` rate before and after this change is not comparable** — the drop is a
+  reclassification of a dimension Belay never had a contract for, **not** improved
+  detection. Nothing was recomputed and no published number moves.
+  **The cost, stated rather than buried: it rewards a silent server.** Omitting the
+  annotation now earns a `PASS` where it earned an `UNVERIFIED`, and omitting it is the
+  adversarial move — accepted because this axis catches nothing adversarial by construction
+  and user-declared invariants (A1) remain the load-bearing mechanism. What a declaring
+  server still buys is a verdict with nothing withheld.
+- **`reduce`, `_RANK` and the Phase-0 verifiability predicate are deliberately untouched.**
+  The reduced status becomes `PASS` on its own. Widening the predicate instead was
+  implemented and measured, and rejected: it breaks no tests while printing a clean `0%`
+  violation rate beside a 100%-`UNVERIFIED` turn tally — the false zero `INSTRUMENT
+  SUSPECT` exists to refuse.
+
+### Added
+
+- **The producer of a not-declared annotation is now an explicit field**, set at all five
+  return sites and defaulting to the abstaining case. The two outcomes are asymmetric —
+  `UNVERIFIED` is carried to the turn by worst-status-wins while `NOT_COVERED` is dropped
+  before ranking — so a forgotten marker must abstain, never silently bound coverage.
+- **Coverage disclosure on five surfaces that rendered a status without one**, each pinned
+  by its own test: `belay corpus list`, `corpus run` (on a MATCH, where nothing was
+  disclosed before), `corpus score`, `corpus add`, and `phase0 combine`. A named
+  `phase0 report` prose entry for the `effect` kind, so a routine boundary no longer reads
+  through the anonymous fallback. `belay interop export` now always writes
+  `belay.verdict.coverage` (present-but-empty rather than absent).
+- **A structural guard so a new status surface cannot omit its coverage line.** It
+  classifies every CLI subcommand from argparse's own table and every status-rendering
+  function from the AST, keyed on the status name `NOT_COVERED` rather than the word
+  "coverage" — which matters, because `corpus score` already prints a line labelled
+  `coverage` meaning something else entirely. It found `corpus add`, which no list had.
+
+### Fixed
+
+- A not-declared effect verdict rendered the literal `(None)` to users, because the
+  message interpolated a cause that is absent on that path.
+- `docs/STATUS.md`'s claim that *"against annotation-less servers a corpus-filling mint can
+  never bank a per-turn case"* is corrected, quoting what it replaces. `reduce` ranks `FAIL`
+  above `UNVERIFIED`, so a turn with a decided `FAIL` always banked; what the abstention
+  blocked was `VERIFIED_CLEAN`, and therefore the denominator.
+
+### Known limits
+
+- The mint was **not re-run**; whether a corpus-filling mint actually banks cases against
+  annotation-less servers is untested.
+- `annotation_for_turn` reads only `annotation_snapshot` and **never
+  `annotation_staleness`**, so a snapshot invalidated by an unre-snapshotted
+  `tools/list_changed` is used as if live. The trajectory rule handles that case by name
+  (`TOOLSET_UNKNOWN`); A2's effect axis does not.
+- The coverage sentence remains duplicated across eight render sites, with only the data
+  helper shared.
+
+## [0.34.0] - 2026-09-19
+
+**The A3 claim axis becomes drivable, and a corpus-filling mint stops at its own gate**
+(PR #39). Two aspects shipped; the third ran once and its pre-registered gate stopped it.
+**This release contains no Phase-0 number and no violation rate.**
+
+### Added
+
+- **A reference author for the A3 claim axis** — `python -m
+  belay.verify.reference_claim_author --model <full-id>`. C8 shipped the axis in v0.27.0
+  with no reference implementation, so nothing could be pointed at
+  `BELAY_CLAIM_AUTHOR` without writing one first. Stdlib only; the model is granted no
+  tools (`--tools ""` **and** `--strict-mcp-config`); `ANTHROPIC_API_KEY` /
+  `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_BASE_URL` are scrubbed **by absence, never `""`**
+  (an empty value still occupies its precedence slot); model aliases are refused; every
+  malformed reply is an abstention (`NO_CHECK_AUTHOR`), never a crash.
+  It lives in `belay/verify/` rather than `belay/authoring/`, because that package
+  declares it holds nothing in the verdict path and **A3 may downgrade a turn**.
+
+### Fixed
+
+- **The mint's `--verify` path could never fill the A3 claim column.** It called
+  `run_batch()` without `claim_author=`, whose default is `None`, and A3 engages only
+  when it is not — so the column read `claim unrecorded` regardless of the environment,
+  while the printed `belay phase0 run` command filled it correctly. A silent
+  coverage-loss bug: nothing failed, the axis simply never ran. Fixed in eight lines.
+
+### Changed
+
+- `eval/README.md` no longer claims `--verify` and the printed command are equivalent
+  without qualification; it now states that both resolve the A3 author **env-only**, that
+  neither takes a `--claim-author` flag, and that the equivalence was false until this
+  release.
+
+### Notes
+
+- **Verified live at n=1**, not merely tested: the author ran, wrote a check, the check
+  **executed** under containment with network denied against a replayed final state, and
+  **exited 0** — silence. A3 did **not** manufacture intent drift on a run that was
+  honest, which is the harder half of the claim. Read it as *"the path works at n=1"*,
+  never as a quality claim about the model's checks, and never as evidence that A3
+  **catches** intent drift.
+- **Known limitation, recorded:** an absent `claim` key in `belay verify --json` is
+  **ambiguous** — it means both *"no author was configured, the axis never ran"* and
+  *"the check ran and confirmed the claim"*. A reader cannot distinguish **checked** from
+  **never checked**. Nothing is rendered as PASS, so the verdict contract holds, but this
+  is a coverage-legibility gap and it is not fixed here.
+- **A mint attempt stopped at its gate and is published as such.** Stage 1 minted
+  cleanly, then verified to `NO_VERIFIABLE_TURNS` and `INSTRUMENT SUSPECT` — a
+  pre-registered STOP, so stage 2 never launched. Not a void, not a result about agents,
+  and **not a zero**: the report refuses to print a rate when nothing was verified.
+  The causes are pre-existing, shown from previously committed ledgers rather than
+  asserted. Root cause, measured: the pinned reference MCP filesystem server declares
+  **no tool annotations**, so effect-conformance abstains by its own rule — honest, not
+  broken — which means **a corpus-filling mint cannot bank a per-turn case against
+  annotation-less servers**.
+- **No published number moves.** `11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16` and
+  `recall 0.00` stand unedited. No verdict axis, status, default or coverage line
+  changed; A3 still can never emit `PASS`, and `--no-claim-axis` remains the one-command
+  refutation.
+
 ## [0.33.0] - 2026-09-16
 
 **Invariant authoring** — R3's third mitigation ships (PR #37): an A1 policy

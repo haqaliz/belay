@@ -1551,9 +1551,15 @@ def _emit_aggregate(verdicts, Status) -> None:
 def _first_unverified_message(verdict, Status) -> str:
     """The message of a REPLAYED-but-UNVERIFIED turn's driving sub-verdict.
 
-    A turn that WAS replayed can still reduce to UNVERIFIED (an un-annotated tool, a
-    nondeterministic divergence) with `cause is None` — its explanation lives in the
+    A turn that WAS replayed can still reduce to UNVERIFIED (a nondeterministic divergence, a
+    contract Belay could not observe) with `cause is None` — its explanation lives in the
     sub-verdict, not a bucket. Surface it so no UNVERIFIED turn is causeless in the list.
+
+    *(This used to cite "an un-annotated tool" as the example. Since 2026-09-21 that is the
+    wrong example: an OBSERVED server that declared no `readOnlyHint` is now `NOT_COVERED`, not
+    UNVERIFIED, and reaches the paragraph below instead. The three ways Belay can fail to
+    OBSERVE a contract — no `tools/list` snapshot before the call, the tool absent from the
+    snapshot, an unreadable request frame — are still UNVERIFIED and still arrive here.)*
 
     A turn whose ONLY non-PASS sub-verdicts are NOT_COVERED reduces to UNVERIFIED via the
     empty-after-filter rule in `verdict.reduce`, and has no UNVERIFIED sub-verdict at all.
@@ -1740,6 +1746,22 @@ def _cmd_corpus_add(args: argparse.Namespace) -> int:
     _emit(f"  turn {args.turn}  verdict {verdict.status.value}  label {args.label}")
     _emit("  A recomputed verdict and a HUMAN label — the label is 'pending' until a human")
     _emit("  relabels it; the engine never labels a case from its own verdict.")
+    # The line above renders the banked turn's reduced status, so the rule binds here too:
+    # no surface renders a status without also rendering what that status did not cover.
+    # This surface was NOT one of the four the aspect set out to fix — it was found by the
+    # structural guard (`tests/test_coverage_surface_guard.py`) scanning for status renders,
+    # which is the whole reason the guard exists. Same helper, same wording, same
+    # suppressed-when-empty additivity as the three corpus surfaces.
+    from belay.verify.json import coverage_record
+
+    _emit_stored_coverage(
+        coverage_record([verdict]),
+        noun="banked turn(s)",
+        bound=(
+            "the verdict banked above is a decision on the dimensions Belay checked; "
+            "these were never among them"
+        ),
+    )
     return 0
 
 
@@ -2020,6 +2042,83 @@ def _cmd_gate_check(args: argparse.Namespace) -> int:
     return {"clean": 0, "regression": 1, "preflight": 2}[result.comparison.exit_reason]
 
 
+def _stored_coverage_record(cases) -> dict:
+    """The NOT_COVERED dimensions of a set of STORED cases, keyed by sub-verdict kind.
+
+    The corpus surfaces read plain `expected` dicts off disk, never a live `TurnVerdict`,
+    so this rehydrates each case's NOT_COVERED sub-verdicts into `Verdict`s and hands them
+    to the SAME `verify.json.coverage_record` every verdict surface counts with. That reuse
+    is the point: a second counting rule here would let `n/total` mean one thing on `belay
+    verify` and another on the corpus, about the identical boundary.
+
+    Only the NOT_COVERED entries are rehydrated, because that is all `coverage_record`
+    reads; the per-case wrapper still exists for every case, so its `of_turns` denominator
+    counts cases loaded, not cases that happened to carry a boundary.
+
+    Returns `{}` when no case carries a NOT_COVERED sub-verdict, which is what keeps the
+    three blocks below strictly additive — a corpus with no uncovered dimension renders
+    byte-identically to before.
+    """
+    from types import SimpleNamespace
+
+    from belay.verify.json import coverage_record
+    from belay.verify.verdict import Status, Verdict
+
+    rehydrated = [
+        SimpleNamespace(
+            sub_verdicts=[
+                Verdict(
+                    sub.get("axis", "?"),
+                    sub.get("kind", "?"),
+                    Status.NOT_COVERED,
+                    None,
+                    None,
+                    sub.get("message") or "",
+                )
+                for sub in case.expected.get("sub_verdicts", [])
+                if sub.get("status") == Status.NOT_COVERED.value
+            ]
+        )
+        for case in cases
+    ]
+    return coverage_record(rehydrated)
+
+
+def _emit_stored_coverage(coverage: dict, *, noun: str, bound: str) -> None:
+    """The coverage block for a surface rendering STORED verdicts — kinds, counts, message.
+
+    Wording is `_emit_coverage`'s, because a reader must recognise the same boundary on
+    both surfaces; the counts are not, because this one counts banked CASES, not the turns
+    of a live run, and `noun` says so on the line itself. `bound` is the one sentence that
+    ties the block back to the status column above it — different per surface, because
+    what a status MEANS differs (a listed verdict, a re-verification outcome, a scored
+    matrix), and a generic sentence would leave the reader to make the connection.
+
+    The block is suppressed when there is no uncovered dimension at all. That is not the
+    unconditional form `_emit_coverage` uses, and the difference is deliberate: `verify`
+    also carries a standing coverage banner that the block qualifies, whereas here an empty
+    record means no case declared a boundary, so there is nothing being withheld. It also
+    keeps this change additive — an existing corpus surface's output is unchanged.
+
+    The message is echoed once per kind, because a NOT_COVERED rendered as kind+count alone
+    reads identically whether the server DECLARED a posture Belay could not check or
+    declared nothing at all — the distinction the reduction stopped keeping.
+    """
+    if not coverage:
+        return
+    _emit()
+    _emit("  coverage (NOT_COVERED — outside what Belay observes; never a PASS)")
+    for kind in sorted(coverage):
+        entry = coverage[kind]
+        _emit(
+            f"    {kind:<20}NOT observed for "
+            f"{entry['not_observed_turns']}/{entry['of_turns']} {noun}"
+        )
+        if entry["message"]:
+            _emit(f"      {entry['message']}")
+    _emit(f"    {bound}")
+
+
 def _cmd_corpus_run(args: argparse.Namespace) -> int:
     """`belay corpus run [corpus_dir]` — re-verify every case; exit non-zero IFF a REGRESSION.
 
@@ -2081,6 +2180,17 @@ def _cmd_corpus_run(args: argparse.Namespace) -> int:
         _emit(f"belay: {exc}")
         return 2
 
+    # The banked verdicts each outcome was compared against — read for their coverage
+    # boundary alone. `run_corpus` has already loaded every case fail-closed by now, so
+    # this cannot introduce a new failure mode; it stays fail-closed anyway, because a
+    # coverage statement computed over fewer cases than the run covered would understate
+    # the boundary, which is the one direction this block must never err in.
+    cases, load_error = _load_scored_cases(corpus_dir)
+    if load_error is not None:
+        _emit(load_error)
+        return 2
+    coverage = _stored_coverage_record(cases)
+
     _emit(f"belay corpus run {corpus_dir}")
     _emit()
     _emit(f"  {len(run.results)} case(s) re-verified by re-execution.")
@@ -2116,6 +2226,24 @@ def _cmd_corpus_run(args: argparse.Namespace) -> int:
     _emit(f"  SKIP                  {run.skips}")
     _emit(f"  STILL_MISSED          {run.still_missed}")
     _emit(f"  MISS_CLOSED           {run.miss_closed}")
+
+    # A MATCH is exactly where this was missing. The NOT_COVERED sub-verdict IS compared,
+    # so it already names itself in a REGRESSION's divergence list — and therefore only
+    # ever surfaced when it DIVERGED. A green run, the ordinary one, said nothing at all
+    # about dimensions that were checked on neither side of the comparison.
+    _emit_stored_coverage(
+        coverage,
+        noun="banked case(s)",
+        # The sentence has to hold for all five outcomes, not just MATCH: a SKIP is not
+        # agreement about anything, so it cannot say "an outcome above is agreement on
+        # what Belay checked". It states what the BANKED verdicts leave outside coverage,
+        # which is true of every case here however its outcome came out.
+        bound=(
+            "The banked verdicts these outcomes were compared against leave these "
+            "dimensions outside coverage — no outcome above, MATCH included, says "
+            "anything about them."
+        ),
+    )
 
     _emit()
     if run.skips:
@@ -2250,6 +2378,20 @@ def _cmd_corpus_score(args: argparse.Namespace) -> int:
     _emit("  Precision/recall are reported ONLY with coverage: a corpus can look perfect on the")
     _emit("  cases it decided while shrugging on the rest. An n/a rate means a 0 denominator —")
     _emit("  it is NOT a 1.00. UNVERIFIED and unadjudicated labels are excluded, never a PASS.")
+    # Last, and deliberately after the rate and its explanation: the word `coverage` is
+    # used in two unrelated senses on this one screen, and the metric above is the OTHER
+    # one. A reader shown an adjudicable-label rate has been shown a coverage number and
+    # still does not know what was outside coverage, which is worse than silence — so the
+    # block names the collision rather than leaving it to be noticed.
+    _emit_stored_coverage(
+        _stored_coverage_record(cases),
+        noun="scored case(s)",
+        bound=(
+            "This is the NOT_COVERED boundary of the verdicts scored above. It is NOT "
+            "the same thing as the `coverage` rate, which is decided / adjudicable "
+            "labels — a scoring denominator, not a statement about what Belay observes."
+        ),
+    )
     return 0
 
 
@@ -2349,6 +2491,17 @@ def _cmd_corpus_list(args: argparse.Namespace) -> int:
             f"  {case_dir.name:<{id_width}}{case.human_label:<16}"
             f"{case.expected['reduced_status']:<12}{key:<{key_width}}{miss}"
         )
+    # The `verdict` column above is a status, and every status this project renders travels
+    # with what it did not cover. The fact is in the very `expected` the column is read
+    # from, so omitting it was dropping a value already in hand.
+    _emit_stored_coverage(
+        _stored_coverage_record([case for _, case in cases]),
+        noun="case(s)",
+        bound=(
+            "A verdict above is bounded by this: on these dimensions the case was "
+            "never checked."
+        ),
+    )
     return 0
 
 
@@ -3480,7 +3633,12 @@ def _parser() -> argparse.ArgumentParser:
             "coverage; a `pending` or `unverifiable` label has no ground truth and is "
             "excluded too. The engine's own verdict can never stand in for a human label, so "
             "precision cannot be inflated to 1.0 by counting every FAIL as a hit. A rate with "
-            "a 0 denominator prints 'n/a', never a fabricated 1.00."
+            "a 0 denominator prints 'n/a', never a fabricated 1.00.\n\n"
+            "NOTE on the word 'coverage', which this command prints in two unrelated senses. "
+            "The `coverage` RATE is decided / adjudicable labels — a scoring denominator. It "
+            "is NOT the NOT_COVERED boundary (the dimensions Belay has no instrument for at "
+            "all), which prints as its own block naming each kind. A high coverage rate says "
+            "nothing about how much was outside coverage."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
