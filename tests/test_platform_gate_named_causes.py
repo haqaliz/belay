@@ -89,6 +89,7 @@ SCAN_AREA: frozenset[str] = frozenset(
         "test_reference_claim_author_live.py",
         "test_reference_triage_author_live.py",
         "test_refutation_no_claim_axis.py",
+        "test_refutation_triage.py",
         "test_sandbox_check.py",
         "test_sbpl_limits.py",
         "test_seam_dispatch.py",
