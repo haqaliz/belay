@@ -1,5 +1,63 @@
 # Belay: Status Log
 
+> **C10 SLICE 1 SHIPS ON A BRANCH — THE CALIBRATED-TRIAGE SEAM: A MODEL MAY TRIAGE,
+> ONLY EXECUTION MAY DECIDE** (2026-09-21, `jev-triage`, branch `feat/jev-triage/aliz`;
+> not merged, not released). Owner demand-pull 2026-09-19; rewritten to a
+> **provider-neutral** seam per the owner's PS (laya / any model later): the engine
+> never knows the model — triage is a **subprocess command** (the A3 `SubprocessAuthor`
+> pattern), so **any model = any command**; Jev is the first **reference author**, laya
+> would be another reference author, never an engine adapter. Five aspects, strict TDD,
+> suite 2575 → **2714** (the PRD predicted +40–60; the honest actual is +139 — a low
+> estimate, not a surprise to hide).
+> **`triage-seam`:** `src/belay/verify/triage.py` — `Triage` protocol, `TriageFeatures`
+> (whitelisted derived features only — tool name, tri-state annotations, hashes, sizes,
+> ordering; raw state/trace bytes **structurally unrepresentable** and the payload key
+> set asserted against `WHITELISTED_KEYS`), `TriageScore` (fail-closed parse, ranges
+> validated at parse), `NullTriage` (default), `SubprocessTriage` (60 s timeout + 1 MiB
+> stdout cap carried over from the A3 author; **every** failure — exit ≠ 0, malformed
+> stdout, timeout, cap — is an abstention, never a raise, never a fabricated score),
+> `triage_from_env` (`BELAY_TRIAGE_AUTHOR`, unset/blank/un-lexable ⇒ absent, never a
+> crash).
+> **`budget`:** `src/belay/verify/triage_budget.py` — `decide_replays` with threshold
+> (replay iff score ≥ threshold) and top-N (N highest, tie-break lowest index), union
+> when both, shadow default (no knobs ⇒ replay everything, record alongside),
+> all-abstain ⇒ full replay (fail-open — a broken triage command never shrinks the
+> budget, the review-gate amendment). Skip cause **`"skipped by the triage budget"`**
+> registered in the closed vocabulary (`replay/report.py` `_PREFIX_LABELS`) with the
+> closed-vocabulary guard pattern.
+> **`surfaces`:** `verify`-only flags `--triage-author CMD` (shlex, exit 2 un-lexable,
+> env fallback), `--triage-threshold`, `--triage-top-n`, `--no-triage` (wins over env);
+> flag-parity guard registered (verify only — the pinned `--claim-author` decision).
+> A skipped turn is a `TurnVerdict` UNVERIFIED with the triage cause, **never replayed,
+> never PASS**; additive `triage` section in `--json` + text line, absent-never-zero
+> (the `approval` precedent); scores recorded for replayed turns.
+> **`reference-author`:** `src/belay/verify/reference_triage_author.py` — the Jev REST
+> author: stdin whitelist-validated (a non-whitelisted field ⇒ fail-closed error before
+> any egress), POSTs to `BELAY_JEV_ENDPOINT` (documented RFC-2606 placeholder until the
+> owner pins the real contract) with the operator's `BELAY_JEV_KEY` as
+> `Authorization: Bearer` — **read by the author only, the engine never reads or passes
+> a key** (pinned by test), full model ids only, aliases refused; stdlib urllib, so the
+> zero-LLM guard stays green.
+> **`refutation`:** `tests/test_refutation_triage.py` — the three pins: (1) **identity**
+> — the committed demo capture through the real CLI, triage on (stub, fixed scores) vs
+> off ⇒ verdicts byte-identical, differing only in the additive `triage` section,
+> anti-vacuity proven on disk (marker per invocation, on-side == turn count, off-side
+> untouched); (2) **absent ⇒ no-op** — no flag, no env ⇒ no subprocess, no network;
+> (3) **whitelist at the surface** — the constructed payload carries only whitelisted
+> keys. The manual owner-run live test ships `manual`-marked (owner's key, local test
+> only, never for users, never committed; FAIL-with-instructions when the env is unset).
+> **Honesty lines:** this slice **banks no calibration ledger and saves no cost yet** —
+> that is the honest state, not a shortfall; shadow mode is the default with a
+> configured author; triage is a router, **never a verdict** (on/off identity is the
+> refutation); a skipped turn is UNVERIFIED-by-budget, never PASS; **no published number
+> moves** (`11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16`, `recall 0.00`, `3/93`
+> stand unedited). **Open, owner's:** the real Jev REST contract (endpoint/schema) before
+> the live manual test can run; the **calibration ledger** slice is downstream of the
+> S-1 mint decision (decided per-turn cases at volume — the `effect-conformance-coverage`
+> fix closed its named gate; the mint re-run supplies the data); the section omits
+> skipped turns' scores in budgeted mode (coherent today — scores pair with verdicts;
+> the ledger slice will extend the section). See `docs/planning/jev-triage/`.
+
 **AN ABSENT CONTRACT IS NO LONGER A FAILED CHECK — THE INSTRUMENT THE MINT STOPPED ON IS
 FIXED, AND IT IS A RECLASSIFICATION, NOT IMPROVED DETECTION** (2026-09-21,
 `effect-conformance-coverage`, v-next; not released). The open S-1 decision from
