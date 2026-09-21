@@ -1,24 +1,47 @@
-# Corpus Shell-Axis Recompute Routing — unit card
+# C10 first slice — the calibrated-triage seam (shadow mode)
 
-> `gh` issue not used — `corpus-shell-routing` is a slug, not a numeric issue id (no
-> GitHub issue exists for this work). Source is the inline brief below, produced by the
-> `belay-next` skill handoff (2026-09-16).
+> Inline brief (no GitHub issue). Source: belay-next handoff (2026-09-21) + owner additions (same day).
 
 ## Brief
 
-Build the corpus's shell-axis recompute completion: `belay corpus run --shell-server <cmd>`
-threads the second replay boundary to trajectory/claim-case recompute (the seam exists —
-`run_corpus` / `run_case` / `_recompute_trajectory_case` already accept
-`shell_server_command`; only the CLI flag and its parity-table row are missing, named
-NOT-built at `docs/planning/corpus-trajectory-banking/prd.md:145`). Without it, trajectory
-cases banked by a two-server mint recompute through the stored single command and read as
-false REGRESSION. Test-first REDs: a two-server mint banks a trajectory corrupt-success case
-and `corpus run --shell-server` recomputes it MATCH; the no-flag path is byte-identical; the
-flag-parity guard declares the widened set. Caveat: a trajectory case stores ONE resolved
-command from its final turn — if that final turn is itself `run_process`, routing needs the
-PRD's decision; decide also whether a trajectory case with `run_process` turns and no
-supplied shell boundary SKIPs with a named cause (the `gate check` precedent) rather than
-silently recomputing, and whether `corpus add --shell-server` lands in the same unit. Update
-`tests/test_cli_flag_parity.py`, the `corpus run` help text, and `docs/STATUS.md`; no verdict
-axis, schema or published number moves — `11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16`
-stand unedited.
+C10 first slice: the calibrated-triage seam, shadow mode (owner demand-pull 2026-09-19).
+A cheap calibrated decision model (Jev — TypeSafe's "System One") orders and samples the
+replay queue behind a budget knob; execution alone decides every verdict. Triage is a
+router, never a verdict.
+
+The PRD for the full capability lives on the local branch `proposal/jev-triage`
+(previously `feat/jev-triage`, renamed to free the ref namespace) at
+`docs/planning/jev-triage/PRD.md`; port it into this worktree before planning.
+
+## Guardrails (from the handoff)
+
+- `BELAY_JEV_KEY` opt-in only; absent key ⇒ triage is a no-op with no network call
+  (asserted on the constructed request/env, scrubbed by absence, never `""`).
+- Egress limited to whitelisted derived features — never raw state or trace bytes
+  (asserted on the constructed payload).
+- A skipped turn is UNVERIFIED-by-budget, named, never PASS.
+- Triage on vs off ⇒ identical verdicts on the turns replayed — the
+  `--no-claim-axis`-style refutation, never weakened.
+
+## Acceptance tests (written first; repo is test-first)
+
+1. Triage on vs off ⇒ identical verdicts on the turns replayed.
+2. Absent key ⇒ no-op, no network call.
+3. Payload carries only whitelisted derived features.
+4. Model stubbed — deterministic, no network in CI; live call `manual`-marked and owner-run.
+
+## Owner additions (PS, 2026-09-21)
+
+1. **BYOK local test key:** the owner can supply an API key for *local manual testing only*
+   — it is never for users; users always provide their own key.
+2. **Model-agnostic seam (laya):** there is a second model, **laya**
+   (https://huggingface.co/convaiinnovations/laya), and the design must let users connect
+   any triage model (jev, laya, …) later. The seam must be **provider-neutral** — not a
+   Jev-specific implementation baked into the engine. This is a requirements change to the
+   proposed PRD, which is Jev-named throughout.
+
+## Caveat (recorded, do not paper over)
+
+This slice is shadow mode: it banks no calibration ledger and saves no cost yet. The
+ledger half is downstream of the owner declaring the second corpus-mint run (S-1) — do
+not build it against a 100%-UNVERIFIED column.
