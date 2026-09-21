@@ -28,8 +28,6 @@ registration — mirroring `tests/test_interop_attach.py::test_replayed_cause_vo
 
 from __future__ import annotations
 
-from typing import Sequence
-
 
 def _score(*pairs: float) -> list:
     """A per-turn fixture: `pairs` are `(score, confidence)` in turn order."""
