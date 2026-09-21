@@ -118,6 +118,8 @@ For each recorded `tools/call`, Belay restores its pre-state, re-invokes the ser
 
 Both are decided by **re-execution and diffing. No model is consulted** — enforced by an AST test that bans any inference import from the verdict path.
 
+**Triage is an optional, BYOK replay-budget, off by default.** `belay verify --triage-author CMD` (or `BELAY_TRIAGE_AUTHOR`) names a LOCAL command that reads whitelisted derived features per turn and answers a suspicion score — `--triage-threshold FLOAT` replays every turn at or above it, `--triage-top-n INT` the N highest-score turns, `--no-triage` turns it off entirely. A cheap model (or any script) can order the replay queue, but **it never emits a verdict**: a turn the budget skipped is `UNVERIFIED` with the named cause `skipped by the triage budget` — never PASS, never WARN, and not replayed. No knobs given is shadow mode: everything replays and the scores are recorded alongside. A broken triage command never shrinks the replay budget.
+
 #### The invariant library: named presets, no JSON
 
 Do not want to hand-author JSON? Belay ships a library of named presets, applied by name — `--invariant-library <name>` on `belay verify`, `belay corpus add` and `belay phase0 run` (repeatable; an unknown name is a fail-closed error). `belay invariant-library list` shows every entry with its grounding:
