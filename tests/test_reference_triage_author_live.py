@@ -84,8 +84,8 @@ FEATURES = triage.TriageFeatures(
 @pytest.mark.skipif(
     sys.platform != "darwin",
     reason=(
-        "owner-run live checkpoint on the owner's machine: BYOK key + real Jev REST "
-        "endpoint spend; never CI"
+        "owner-live-checkpoint: an owner-run manual checkpoint on the owner's "
+        "machine — BYOK key + real Jev REST endpoint spend; never CI"
     ),
 )
 def test_reference_triage_author_round_trips_a_score_against_the_live_endpoint() -> None:

@@ -31,6 +31,7 @@ none (by absence, never `""`).
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import subprocess
@@ -255,6 +256,7 @@ def test_malformed_or_unexpected_response_is_fail_closed(
 
 def test_default_endpoint_is_used_when_belay_jev_endpoint_is_absent(
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     seen: list[Any] = []
 
@@ -267,21 +269,30 @@ def test_default_endpoint_is_used_when_belay_jev_endpoint_is_absent(
             def read(self) -> bytes:
                 return json.dumps(SCORE_REPLY).encode("utf-8")
 
+            def __enter__(self) -> "_FakeResponse":
+                return self
+
+            def __exit__(self, *exc: Any) -> None:
+                pass
+
         return _FakeResponse()
 
     monkeypatch.setattr(reference_triage_author, "urlopen", fake_urlopen)
+    monkeypatch.setattr(reference_triage_author.sys, "stdin", io.StringIO(json.dumps(FEATURES_PAYLOAD)))
+    monkeypatch.delenv("BELAY_JEV_ENDPOINT", raising=False)
+    monkeypatch.setenv("BELAY_JEV_KEY", KEY)
+    monkeypatch.setenv("BELAY_JEV_MODEL", MODEL)
 
-    proc = _run_author(
-        payload=FEATURES_PAYLOAD,
-        env={"BELAY_JEV_KEY": KEY, "BELAY_JEV_MODEL": MODEL},
-    )
+    exit_code = reference_triage_author.main()
 
-    assert proc.returncode == 0, proc.stderr
+    captured = capsys.readouterr()
+    assert exit_code == 0, captured.err
     assert len(seen) == 1
     assert seen[0].full_url == reference_triage_author.DEFAULT_ENDPOINT, (
         "an unset BELAY_JEV_ENDPOINT must resolve to the documented default, never a "
         "guessed endpoint"
     )
+    assert json.loads(captured.out) == SCORE_REPLY
 
 
 # --- 6. BELAY_JEV_MODEL: full ids only, aliases refused ------------------------------------
