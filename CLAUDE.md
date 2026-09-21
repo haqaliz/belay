@@ -252,6 +252,11 @@ This file orients a coding agent working in this repository. Read it first.
 > name:** N-server routing, any trace-format provenance field, capture-side multiplexing
 > (`proxy.py` is one pipe by construction, so a trace carries **no server provenance** and
 > replay routing must be TOLD, never inferred), and `corpus run --shell-server`.
+> **[Corrected 2026-09-16 (`corpus-shell-routing`) — "`corpus run --shell-server`
+> NOT built" is no longer current: `corpus run`, `corpus add` and `corpus show` all
+> carry the flag now; the corpus recompute SKIPs with a named cause
+> (`TRAJECTORY_SHELL_BOUNDARY_NOT_SUPPLIED` / `TRAJECTORY_FILESYSTEM_BOUNDARY_UNEXPRESSIBLE`)
+> before replaying a mixed-boundary trace without it. The rest of this block stands.]**
 > See `docs/planning/verify-tool-not-offered/`.
 >
 > **THE LAUNCH DEMO IS BUILT, AND IT IS GREEN — THE CORRUPT SUCCESS COULD NOT BE PRODUCED

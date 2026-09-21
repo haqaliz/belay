@@ -35,15 +35,19 @@ import argparse
 from belay import cli
 
 #: The surfaces that restore a pre-state and re-invoke an MCP server. `sandbox check`,
-#: `corpus label/list/show/score`, `phase0 report/combine` are excluded because they
+#: `corpus label/list/score`, `phase0 report/combine` are excluded because they
 #: replay nothing — a `--server` on them would be meaningless. `corpus run` is IN scope:
 #: it re-verifies every stored case by re-execution (it was omitted from the original
 #: list because it carried no flags at all; it carries the claim-axis flag now).
+#: `corpus show` is IN scope: its recompute re-invokes the server too (a stored
+#: trajectory case can be re-derived on demand), so the surface that carries the shell
+#: flag must be declared with it; `corpus label/list/score` still replay nothing.
 REPLAY_BEARING = (
     "replay",
     "verify",
     "corpus add",
     "corpus run",
+    "corpus show",
     "phase0 run",
     "interop correlate",
     "interop export",
@@ -57,37 +61,39 @@ _ALL = frozenset(REPLAY_BEARING)
 #: flag -> the replay-bearing surfaces that MUST carry it.
 EXPECTED: dict[str, frozenset[str]] = {
     # The replay boundary itself. Every surface that re-invokes needs one, EXCEPT
-    # `corpus run`: each stored case carries its own resolved server command
-    # (`add_case` records it), so the batch never takes one.
-    "--server": _ALL - {"corpus run"},
+    # `corpus run` and `corpus show`: each stored case carries its own resolved server
+    # command (`add_case` records it), so neither the batch nor the display takes one.
+    "--server": _ALL - {"corpus run", "corpus show"},
     # The determinism gate's re-invoke count: shared by every surface that can reach a
-    # DIVERGED reply, which is all of them — except `corpus run`, whose per-case
-    # replays count is recorded on the case at ingest, and `gate check`, which
+    # DIVERGED reply, which is all of them — except `corpus run` and `corpus show`, whose
+    # per-case replays count is recorded on the case at ingest, and `gate check`, which
     # re-verifies against the BASELINE's stored policy (the banked replays count) —
     # a deliberate narrowing: the gate's policy is the banked one by decision (M3).
-    "--replays": _ALL - {"corpus run", "gate check"},
+    "--replays": _ALL - {"corpus run", "corpus show", "gate check"},
     # The per-replay wall. `replay` is excluded: it is the raw re-invoke surface with no
     # verdict of its own, and its timeout has never been operator-settable. If it ever
-    # grows one, this row is the place that says so. `corpus run` is excluded the same
-    # way: a case's timeout is recorded on the case, never operator-settable. `gate
-    # check` is excluded by the same decision as `--replays`: the banked timeout is
-    # the policy (M3).
-    "--timeout": _ALL - {"replay", "corpus run", "gate check"},
+    # grows one, this row is the place that says so. `corpus run` and `corpus show` are
+    # excluded the same way: a case's timeout is recorded on the case, never
+    # operator-settable. `gate check` is excluded by the same decision as `--replays`:
+    # the banked timeout is the policy (M3).
+    "--timeout": _ALL - {"replay", "corpus run", "corpus show", "gate check"},
     # Per-tool routing: a recorded `run_process` turn replays against this instead.
     # `replay` re-invokes one named turn, so the operator already chooses the server;
-    # `corpus add` and `interop correlate` are DELIBERATELY out of scope for the unit that
-    # added this (PRD open question 3 — proposed `verify` only). `gate baseline` widens
-    # it by decision (M8): the bank composes the verdict set exactly as verify does, so
-    # it must be able to ask for the same boundary. Widening is a decision, and it
-    # belongs here. `gate check` widens it the same way: `--shell-server` is an
-    # OVERRIDE of the stored boundary, so the surface that banks the boundary must also
-    # be able to override it.
-    "--shell-server": frozenset({"verify", "phase0 run", "gate baseline", "gate check"}),
+    # `gate baseline` widens it by decision (M8): the bank composes the verdict set
+    # exactly as verify does, so it must be able to ask for the same boundary. Widening
+    # is a decision, and it belongs here. `gate check` widens it the same way:
+    # `--shell-server` is an OVERRIDE of the stored boundary, so the surface that banks
+    # the boundary must also be able to override it. `corpus add` resolves the stored
+    # command for the target turn, `corpus run`/`corpus show` recompute whole traces
+    # whose second boundary is caller-supplied — the old "deliberately out of scope"
+    # rationale for `corpus add` is retired by this unit.
+    "--shell-server": frozenset({"verify", "phase0 run", "gate baseline", "gate check", "corpus add", "corpus run", "corpus show"}),
     # Where the gate persisted the run's snapshot manifests. `phase0 run` is excluded: it
     # takes a whole trace DIRECTORY and resolves each trace's `.manifests` sibling itself.
-    # `corpus run` is excluded the same way, one level further: a case is self-contained
-    # — its manifests are bundled IN the case dir, so the batch never points at a sibling.
-    "--manifest-dir": _ALL - {"phase0 run", "corpus run"},
+    # `corpus run` and `corpus show` are excluded the same way, one level further: a case
+    # is self-contained — its manifests are bundled IN the case dir, so neither the batch
+    # nor the display points at a sibling.
+    "--manifest-dir": _ALL - {"phase0 run", "corpus run", "corpus show"},
     # Single-turn narrowing. The batch surfaces (`phase0 run`) and the span-driven one
     # (`interop correlate`) have no single-turn meaning; `gate baseline` banks the WHOLE
     # trace (its expected set is the run's, and a partial bank would be a partial record).
@@ -113,8 +119,8 @@ EXPECTED: dict[str, frozenset[str]] = {
     "--out": frozenset({"interop export", "invariant infer"}),
     # Where corpus cases are read/written. `gate check` banks regression turns
     # into it by default (aspect 4 — divergence banking); `phase0 run` ingests
-    # flagged turns into it.
-    "--corpus-dir": frozenset({"corpus add", "phase0 run", "gate check"}),
+    # flagged turns into it; `corpus show` reads cases from it today.
+    "--corpus-dir": frozenset({"corpus add", "phase0 run", "gate check", "corpus show"}),
     # Measure-without-writing: suppress the corpus WRITE, not the detection.
     # `phase0 run` ingests flagged turns into the corpus; `gate check` banks
     # regression turns into it. Both default-on, both with the same opt-out, so

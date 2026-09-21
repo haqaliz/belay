@@ -184,6 +184,47 @@ carries the current state and the rules that still bind.
 
 ---
 
+**`belay corpus run`/`add`/`show` GAIN THE SHELL BOUNDARY — THE CORPUS TWO-SERVER
+RECOMPUTE NOW ASKS FOR ITS SECOND SERVER OR REFUSES BY NAME** (2026-09-16,
+`corpus-shell-routing`, v-next; not yet released). The v0.25.0-era deferral is
+retired: `corpus run --shell-server <cmd>` — and `corpus add`, plus `corpus show`
+(whose recompute re-invokes the server too) — thread the second replay boundary into
+the corpus recompute that has routed `run_process` turns to a caller-supplied server
+since `9138cea`. **The pre-replay SKIP decision, with named causes:** a trajectory
+case re-verifies its WHOLE stored trace against its ONE stored command, so a
+mixed-boundary trace (shell + any other tool) cannot be recomputed faithfully without
+the shell side — the recompute now refuses BEFORE any replay runs:
+`TRAJECTORY_SHELL_BOUNDARY_NOT_SUPPLIED` when the stored command is the fs boundary
+and no `--shell-server` was given (supply the flag and the recompute is faithful);
+`TRAJECTORY_FILESYSTEM_BOUNDARY_UNEXPRESSIBLE` when the stored command IS the shell
+boundary — the fs side was never recorded and no flag can make that shape faithful.
+Never a silent mis-route: an unreadable turn counts as a second boundary and refuses
+the same way. **The flag-parity guard is widened to match:** `corpus show` joins
+`REPLAY_BEARING` (its recompute re-invokes a server; `corpus label/list/score` still
+replay nothing and stay out), the `--shell-server` row declares all seven surfaces,
+and the `--server` / `--replays` / `--timeout` / `--manifest-dir` rows gain the
+display surface's exclusions (a case's command, replays count and timeout are
+recorded on the case at ingest; its manifests are bundled IN the case dir — neither
+the batch nor the display overrides or points at a sibling), while `--corpus-dir`
+gains `corpus show` because it reads cases from it today.
+**THE RECLASSIFICATION DISCIPLINE, stated plainly:** the no-flag recompute of a
+mixed two-server trace changes outcome — a real verdict becomes a named SKIP — on
+**constructed fixtures only**. No real banked two-server trajectory case exists: the
+mint's 11 hand-audited TPs were never bankable (s6 captures no longer exist on disk,
+no-backfill), so **no real-world verdict moves** and `11/60 = 18.3%`, `precision
+0.00`, `1/15`, `4/16` stand unedited. A SKIP is a coverage refusal, never a verdict —
+the honest side of the same decision that keeps UNVERIFIED never-PASS. **NOT built,
+by name:** a `--server` override on `corpus run` — a trajectory case whose stored
+command IS the shell boundary (`target_tool == run_process`) SKIPs
+`TRAJECTORY_FILESYSTEM_BOUNDARY_UNEXPRESSIBLE`, and no flag can express the fs side
+that was never recorded; standalone `belay corpus add` trajectory banking;
+N-server routing; capture-side server provenance (a trace still carries none, so
+replay routing must be TOLD, never inferred). Suite grows by the unit's corpus/CLI
+tests: `tests/test_corpus_trajectory_run.py` 13 → **23** test functions across the
+two engine commits; the parity guard's 2 tests went RED→GREEN in this aspect, not
+added (the corpus/CLI/parity subset collects 105). See
+`docs/planning/corpus-shell-routing/`.
+
 **`belay invariant infer` SHIPS — R3'S THIRD MITIGATION IS BUILT: A MODEL WRITES A1
 POLICY, EXECUTION CALIBRATES IT, AND AN UNCALIBRATED ARTIFACT CAN NEVER FAIL**
 (2026-09-15, `invariant-authoring-experiment`, v-next; not yet released). Phase 2's
@@ -598,7 +639,12 @@ tests passing (25 named-caused skips, 9 manual-deselected).
 **What this does NOT do:** no backfill, no re-adjudication of the 12 unverifiable-by-seam
 instances; `corpus run --shell-server` still unexposed (library seam exists); standalone
 `belay corpus add` trajectory support out of scope; A3, Langfuse export-back, GHCR publish
-and N-server routing remain the standing named non-goals. See
+and N-server routing remain the standing named non-goals. **[Corrected 2026-09-16
+(`corpus-shell-routing`) — "`corpus run --shell-server` still unexposed" is no longer
+current: the flag ships on `corpus run`, `corpus add` and `corpus show`, and the
+mixed-boundary recompute SKIPs with a named cause before replaying without it. The
+"standing named non-goals" above are retracted only for this item — the rest stands.]**
+See
 `docs/planning/corpus-trajectory-banking/`.
 
 **`belay verify` NO LONGER FAILS A TURN IT NEVER VERIFIED** (2026-08-29,
@@ -646,6 +692,11 @@ discriminator. **No axis moved but A2** — the trajectory rule is proved blind 
 name:** N-server routing, any trace-format provenance field, capture-side multiplexing
 (`proxy.py` is one pipe by construction, so a trace carries **no server provenance** and
 replay routing must be TOLD, never inferred), and `corpus run --shell-server`.
+**[Corrected 2026-09-16 (`corpus-shell-routing`) — "`corpus run --shell-server` NOT
+built" is no longer current: the flag ships on `corpus run`, `corpus add` and `corpus
+show`; the corpus recompute SKIPs with a named cause
+(`TRAJECTORY_SHELL_BOUNDARY_NOT_SUPPLIED` / `TRAJECTORY_FILESYSTEM_BOUNDARY_UNEXPRESSIBLE`)
+before replaying a mixed-boundary trace without it. The rest of this block stands.]**
 See `docs/planning/verify-tool-not-offered/`.
 
 **THE LAUNCH DEMO IS BUILT, AND IT IS GREEN — THE CORRUPT SUCCESS COULD NOT BE PRODUCED

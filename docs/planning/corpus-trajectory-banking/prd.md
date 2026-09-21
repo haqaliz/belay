@@ -143,6 +143,14 @@ silently. The corpus-trajectory plan's own edge-case table promised coexistence:
 ## Out of Scope
 
 - `belay corpus run --shell-server` CLI flag (named NOT-built; library seam exists).
+  **Closed 2026-09-16 (`corpus-shell-routing`):** `belay corpus run`, `belay corpus add`
+  and `belay corpus show` all carry `--shell-server` now (the third flag lands on the
+  display surface because its recompute re-invokes the server); the parity guard's
+  `--shell-server` row is widened to all seven surfaces and `corpus show` joins
+  `REPLAY_BEARING`. The named residual stands: a trajectory case whose stored command
+  IS the shell boundary (`target_tool == run_process`) SKIPs
+  `TRAJECTORY_FILESYSTEM_BOUNDARY_UNEXPRESSIBLE` — no flag can make that shape
+  faithful, and a `--server` override on `corpus run` remains NOT built.
 - Standalone `belay corpus add` trajectory support and any change to per-turn recompute
   (the corpus-trajectory spec's "Out of scope" section — unchanged).
 - Backfilling the mint's 11 TPs (impossible: s6 captures no longer exist) and any

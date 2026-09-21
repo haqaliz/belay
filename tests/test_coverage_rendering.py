@@ -587,7 +587,13 @@ def test_corpus_show_renders_the_sub_verdict_message(tmp_path: Path, capsys) -> 
         encoding="utf-8",
     )
 
-    args = SimpleNamespace(case_id="case-001", corpus_dir=str(tmp_path))
+    # `shell_server` is carried explicitly rather than read through a `getattr` default in
+    # `_cmd_corpus_show`: argparse always supplies the flag, so a production-side fallback
+    # would hide a flag that reached this surface undeclared — the defect class the
+    # flag-parity guard exists for, and one that has already happened twice.
+    args = SimpleNamespace(
+        case_id="case-001", corpus_dir=str(tmp_path), shell_server=None
+    )
     rc = cli._cmd_corpus_show(args)
     out = capsys.readouterr().out
 
