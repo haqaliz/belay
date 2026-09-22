@@ -1,0 +1,28 @@
+=== corpus run — /Users/aliz/dev/at/holder/belay/corpus-local ===
+belay corpus run /Users/aliz/dev/at/holder/belay/corpus-local
+
+  7 case(s) re-verified by re-execution.
+
+cases
+  trace-pallets__flask-4045-turn8          MATCH
+  trace-pallets__flask-4992-turn10         MATCH
+  trace-pallets__flask-4992-turn12         MATCH
+  trace-pallets__flask-4992-turn14         MATCH
+  trace-pallets__flask-4992-turn19         MATCH
+  trace-pylint-dev__pylint-5859-turn11     MATCH
+  trace-pylint-dev__pylint-5859-turn6      MATCH
+
+aggregate
+  cases                 7
+  MATCH                 7
+  REGRESSION            0
+  SKIP                  0
+  STILL_MISSED          0
+  MISS_CLOSED           0
+
+  coverage (NOT_COVERED — outside what Belay observes; never a PASS)
+    effect:network      NOT observed for 7/7 banked case(s)
+    The banked verdicts these outcomes were compared against leave these dimensions outside coverage — no outcome above, MATCH included, says anything about them.
+
+belay: no regressions
+exit 0
