@@ -524,6 +524,29 @@ def test_same_document_rerenders_byte_identically(tmp_path) -> None:
 # --- (7) PARITY: the `--json` row declares the new machine surface --------------------
 
 
+def test_top_n_sweep_caps_at_the_decided_total(tmp_path) -> None:
+    """A top-N budget larger than the decided set skips AT MOST the decided rows:
+    the text and `--json` must agree (`min(n, total)`), never a `skipped 5/2
+    (150.0%)` in text beside a 100.0% budget_saved in JSON — the two-renderers
+    divergence found by running the command, now pinned."""
+    doc = _synthetic_document()
+    doc["turns"] = doc["turns"][:2]
+    doc["triage"]["scores"] = doc["triage"]["scores"][:2]
+    doc_path = tmp_path / "verify.json"
+    doc_path.write_text(json.dumps(doc), encoding="utf-8")
+
+    rc, text = _run_cli(["triage-ledger", str(doc_path)])
+    assert rc == 0, text
+    assert "  3: skipped 2/2 (100.0%), violations skipped 1" in text, text
+    assert "  5: skipped 2/2 (100.0%), violations skipped 1" in text, text
+
+    rc, out = _run_cli(["triage-ledger", "--json", str(doc_path)])
+    assert rc == 0, out
+    parsed = json.loads(out)
+    assert parsed["top_n_sweep"][2] == {"n": 3, "skipped": 2, "violations_skipped": 1, "budget_saved": 1.0}
+    assert parsed["top_n_sweep"][4] == {"n": 5, "skipped": 2, "violations_skipped": 1, "budget_saved": 1.0}
+
+
 def test_parity_json_row_declares_triage_ledger() -> None:
     """The flag-parity `--json` row must declare `triage-ledger` — widened in the
     SAME commit as the command, or guard 1 fails (a machine surface that ships

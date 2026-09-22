@@ -312,8 +312,8 @@ def render_text(ledger: Ledger) -> str:
     )
     lines.append("top-N sweep (N lowest scores skipped, ties by lowest ordinal):")
     lines.extend(
-        f"  {point.n}: skipped {point.n}/{total} "
-        f"({_format_rate(_ratio(point.n, total))}), "
+        f"  {point.n}: skipped {min(point.n, total)}/{total} "
+        f"({_format_rate(_ratio(min(point.n, total), total))}), "
         f"violations skipped {point.violations_skipped}"
         for point in top_n_sweep(rows, SWEEP_NS)
     )
@@ -366,7 +366,7 @@ def render_json(ledger: Ledger) -> str:
         "top_n_sweep": [
             {
                 "n": point.n,
-                "skipped": point.n,
+                "skipped": min(point.n, total),
                 "violations_skipped": point.violations_skipped,
                 "budget_saved": point.budget_saved,
             }
