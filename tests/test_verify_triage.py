@@ -22,7 +22,6 @@ or trace bytes), and `build_triage_payload` emits exactly the module-level
 
 from __future__ import annotations
 
-import json
 import shlex
 import sys
 
