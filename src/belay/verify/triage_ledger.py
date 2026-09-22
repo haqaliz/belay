@@ -43,8 +43,6 @@ from typing import Any, Optional, Sequence
 from belay.verify.calibration import (
     LedgerRow,
     ReliabilityBin,
-    ThresholdSweepPoint,
-    TopNSweepPoint,
     ece,
     reliability_curve,
     threshold_sweep,
