@@ -5,10 +5,13 @@ phase 3: run the reference author (`python -m belay.verify.reference_triage_auth
 the way `belay verify --triage-author` will run it — whitelisted features JSON on
 stdin — against the **real** Jev REST endpoint, and assert it round-trips a score.
 
-This is the **pin for the documented REST contract** (PRD open question: the endpoint
-path, key header name, and response schema are owner-provided; the author lands against
-the documented contract with a stub-verified shape, and this live test is where the
-documented shape meets the real service).
+This is the **owner-run pin for the REAL REST contract**, verified live by the
+integrator on 2026-09-22: `POST https://api.typesafe.ai/v1/systemone` with
+`Authorization: Bearer <key>`, the `{"model", "state", "questions"}` envelope with one
+`score` question (ordered two-level `criteria`), and the
+`{"answers": {"triage": {"score", "confidence"}}}` reply shape. The author's default
+endpoint IS that real URL; this live test is where the stub-verified shape meets the
+real service again, on the owner's key.
 
 This is an **OWNER CHECKPOINT**, never CI: it spends the owner's key against a live
 endpoint. It is `manual`-marked and excluded by the default `addopts`
@@ -17,7 +20,9 @@ endpoint. It is `manual`-marked and excluded by the default `addopts`
 shape, exactly as the precedent argues: the owner who asks for `-m manual` gets a
 readable refusal, not a silent green.
 
-To run it:
+To run it (all three vars are still REQUIRED by the gate below — `BELAY_JEV_ENDPOINT`
+is only optional for the author itself, which defaults to the real endpoint, so this
+gate keeps it explicit to pin the endpoint on the record):
 
     BELAY_JEV_KEY=... BELAY_JEV_MODEL=<full-id> BELAY_JEV_ENDPOINT=https://... \\
         uv run pytest tests/test_reference_triage_author_live.py -m manual -q
