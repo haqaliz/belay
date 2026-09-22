@@ -275,14 +275,17 @@ def test_skipped_turn_renders_unverified_with_budget_cause_and_is_never_replayed
     assert "edit_file         UNVERIFIED" in out, out
     assert f"cause: {BUDGET_CAUSE}" in out, out
     assert BUDGET_CAUSE in out, out  # the UNVERIFIED list names it verbatim too
-    assert "triage: budgeted, threshold 0.5, 1 skipped, 2 scored" in out, out
+    assert "triage: budgeted, threshold 0.5, 1 skipped, 3 scored" in out, out
 
 
 def test_skipped_turn_json_record_is_unverified_with_budget_cause(
     tmp_path, monkeypatch, capsys
 ):
     """The `--json` surface of the same skip: the skipped turn's record carries
-    status UNVERIFIED and the verbatim cause; the replayed turns stay PASS."""
+    status UNVERIFIED and the verbatim cause; the replayed turns stay PASS. The
+    `triage.scores` list carries one row per SCORED turn — the skipped turn's score
+    is recorded too, marked `"skipped": true` (the section-extension pin), so the
+    future calibration ledger can audit what the budget skipped."""
     calls: list[int] = []
     monkeypatch.setattr(turn_module, "verify_turn", _spy_verifier(calls))
     monkeypatch.delenv("BELAY_TRIAGE_AUTHOR", raising=False)
@@ -311,6 +314,7 @@ def test_skipped_turn_json_record_is_unverified_with_budget_cause(
         "skipped": 1,
         "scores": [
             {"ordinal": 0, "score": 0.9, "confidence": 0.8},
+            {"ordinal": 1, "score": 0.2, "confidence": 0.8, "skipped": True},
             {"ordinal": 2, "score": 0.6, "confidence": 0.8},
         ],
     }, doc["triage"]
@@ -467,7 +471,9 @@ def test_threshold_skips_exactly_the_named_turns(tmp_path, monkeypatch, capsys):
 
 def test_top_n_skips_exactly_the_named_turns(tmp_path, monkeypatch, capsys):
     """Acceptance 5's top-N half: top 1 of scores [0.9, 0.2, 0.6] replays exactly
-    turn 0 (the highest score, ties broken by lowest index) and skips turns 1 and 2."""
+    turn 0 (the highest score, ties broken by lowest index) and skips turns 1 and 2.
+    The skipped turns' score rows are recorded with `"skipped": true` (the
+    section-extension pin — the budget's skipped rows are auditable)."""
     calls: list[int] = []
     monkeypatch.setattr(turn_module, "verify_turn", _spy_verifier(calls))
     monkeypatch.delenv("BELAY_TRIAGE_AUTHOR", raising=False)
@@ -494,5 +500,7 @@ def test_top_n_skips_exactly_the_named_turns(tmp_path, monkeypatch, capsys):
         "skipped": 2,
         "scores": [
             {"ordinal": 0, "score": 0.9, "confidence": 0.8},
+            {"ordinal": 1, "score": 0.2, "confidence": 0.8, "skipped": True},
+            {"ordinal": 2, "score": 0.6, "confidence": 0.8, "skipped": True},
         ],
     }, doc["triage"]
