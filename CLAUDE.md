@@ -2,6 +2,43 @@
 
 This file orients a coding agent working in this repository. Read it first.
 
+> **THE DECLARED SECOND MINT STOPPED AT ITS OWN GATE AGAIN, AND THE RUN REFUTED THE
+> WARRANT, NOT THE BRANCH** (2026-09-23, `corpus-mint-second-run`, branch
+> `feat/corpus-mint-second-run/aliz`; not merged, not released). **NOT a gate run; produces
+> NO Phase-0 number; NOT a result about agents.** Four aspects.
+> **`verify-parity`:** the mint's `--verify` now threads the shell server into
+> `run_verify`, so `--verify` ≡ the printed `phase0 run` command (the run-1 `a3-author`
+> defect class, second instance). TDD: RED `4915341` → `b6195dd`.
+> **`mint-run` — RUN ONCE, GATE SAID STOP.** Freeze `2ef2e09` (no result), verbatim
+> `77dc4bf`, engine v0.37.0, root `cm3`, registries reused verbatim, controls re-driven
+> as the owner's declared decision: **2 captured, 0 failed**, 34.4 s, 7 requests →
+> **`NO_VERIFIABLE_TURNS: 2`, UNVERIFIED 5/5, `INSTRUMENT SUSPECT` → STOP; stage 2 never
+> launched.** Not a D-3 void (no control FAILed), not a zero. **The PRD's warrant ("turns
+> now reduce to decided") is refuted.** NOT_COVERED never fired. An offline derivation
+> (not re-execution, not yet adjudicated) finds a **composite-transport correlation
+> artifact**: two `tools/list` responses interleave on the merged pipe,
+> `annotation_for_turn` takes `live[-1]` (the shell list), and filesystem tools read as
+> `tool-absent` → UNVERIFIED. The v0.35.0 fix was **necessary, not sufficient**. The 5th
+> turn is `UNRESTORABLE_SNAPSHOT_FAILED`, which predates this run.
+> **`corpus-banking`:** recompute scripts frozen and **pinned against the real parser**
+> (`a3a4147`; the plan's `--corpus-dir`/`--server` flags do not exist on `corpus run`,
+> and the plan is corrected). **Zero cases banked** (nothing flagged). The 7 pre-existing
+> cases recompute **7/7 MATCH, 0 REGRESSION, 0 SKIP**. `corpus score` shows TN 7, precision/recall
+> **n/a**. The freeze landed after stage 1's verify, not before it. The deviation is recorded,
+> and the run-once rule held.
+> **`audit-and-publish`:** evidence pack (FLAGS / AUDIT / HAND_REPLAY / REPRODUCIBILITY).
+> Zero flags, so none dropped and none judged. Both stage-1 ledgers are now committed and
+> **re-render byte-identically** from a clean checkout, run 1's (written by 0.33.0)
+> included. HAND_REPLAY says plainly that no FAIL exists to replay.
+> **Honesty lines:** UNVERIFIED 3/3 (run 1, 0.33.0) and 5/5 (run 2, 0.37.0) are **NOT
+> comparable** because they sit across the v0.35.0 NOT_COVERED boundary. The calibration ledger
+> still has **zero decided rows** from real data. **No published number moves**
+> (`11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16`, `recall 0.00`, `3/93` stand
+> unedited). **Open, the owner's by S-1** (`AUDIT.md`, unsigned): continue (fix the
+> correlation to use the latest snapshot *containing* the tool, then a third probe; the
+> preparer's recommendation) / re-scope / stop. Suite 2743 → **2755**. See
+> `docs/planning/phase0-corpus-mint/`.
+>
 > **C10 SLICE 2 SHIPS — THE CALIBRATION LEDGER: THE VENDOR'S "CALIBRATED CONFIDENCE"
 > MEETS EXECUTION-GROUNDED VERDICTS** (2026-09-22, `calibration-ledger`, PR #42,
 > v0.37.0). The moat half of C10 (the slice-1 PRD's "Eval data captured" promise, now

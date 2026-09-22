@@ -1235,3 +1235,44 @@ stated, no `INSTRUMENT SUSPECT`, ledger re-renderable via `belay phase0 report`.
 **No published number was re-derived:** `4/16`, `precision 0.00`, `3/93`,
 `recall 0.00`, `1/15`, the 17-judgment figure and the 2026-07-29 PIVOT all stand
 unedited.
+
+## The declared second corpus-filling mint stopped at its own gate again — 2026-09-23
+
+**This is NOT a gate run, it produces NO Phase-0 number, and it is NOT a result about
+agents.** It is the stage-1 probe (2 controls) of the second run the owner declared on
+2026-09-22 under S-1, after `effect-conformance-coverage` (v0.35.0) closed the cause run 1
+named. The pre-registered stop branch fired. No violation rate exists to quote (Q1). The
+2026-08-12 PROCEED and everything above stand exactly as written.
+
+**What ran** (freeze protocol; scripts `2ef2e09`, verbatim output `77dc4bf`; engine
+v0.37.0; local `claude` 2.1.280): root `cm3`, registry `cm-stage1.json` reused verbatim
+(CTL-1 `control__flask-read-only`, CTL-4 `control__flask-verify-with-command`). Mint **2
+captured, 0 failed**, 34.4 s, 7 model requests. Verify **`NO_VERIFIABLE_TURNS: 2`**,
+UNVERIFIED **5/5** (`replayed but effect unverified` 4, `UNRESTORABLE_SNAPSHOT_FAILED` 1),
+**`INSTRUMENT SUSPECT` → STOP**. Stage 2 (root `cm4`) was never launched. Trajectory and
+A3 were both UNVERIFIED `CLAIM_UNCLASSIFIABLE` on both controls. That is a named cause, so
+the A3 column is filled. Exposure was 0 file-comparisons.
+
+**Dispositions.** Not a D-3 void: no control FAILed. Not a zero: `INSTRUMENT SUSPECT`
+refuses a rate. **Zero cases banked.** Nothing was flagged, so the corpus holds the same
+7 pre-existing cases, which recompute **7/7 MATCH, 0 REGRESSION, 0 SKIP**. `corpus score`
+reads TN 7 with **precision n/a, recall n/a**.
+
+**The warrant was refuted; the branch held.** The PRD amendment predicted that turns would
+now reduce to decided. They did not, and the NOT_COVERED path never fired. An offline
+derivation over the committed traces (not re-execution, and not yet owner-adjudicated)
+shows why. The composite transport merges two `tools/list` responses into one pipe, and
+`annotation_for_turn` took the latest snapshot (the shell server's), so filesystem tools
+read as `tool-absent` → UNVERIFIED. The v0.35.0 fix was necessary but **not sufficient**
+under the composite transport.
+
+**Not comparable:** run 1 (engine 0.33.0, UNVERIFIED 3/3) and run 2 (0.37.0, 5/5) sit on
+opposite sides of the v0.35.0 NOT_COVERED boundary. Both stage-1 ledgers are committed at
+`docs/planning/phase0-corpus-mint/mint-run/ledgers/` and re-render **byte-identically**
+from a clean checkout (`audit-and-publish/REPRODUCIBILITY.md`).
+
+**Open, the owner's by S-1** (`audit-and-publish/AUDIT.md`, unsigned): continue (fix the
+correlation, then a third probe; the preparer's recommendation) / re-scope / stop.
+
+**No published number was re-derived:** `11/60 = 18.3%`, `precision 0.00`, `1/15`,
+`4/16`, `recall 0.00`, `3/93` all stand unedited.
