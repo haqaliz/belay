@@ -863,8 +863,21 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     same rule as the trajectory seam): the author (`--claim-author CMD`, or
     `BELAY_CLAIM_AUTHOR`) writes an executable check, EXECUTION decides, and A3 never
     PASSes. `--no-claim-axis` disables the axis entirely and wins over both.
+
+    The C10 triage budget orders and samples the replay queue and NEVER emits a
+    verdict: the command (`--triage-author CMD`, or `BELAY_TRIAGE_AUTHOR`) reads
+    whitelisted derived features per turn and answers `{"score", "confidence"}`;
+    `--triage-threshold` replays every turn at or above it, `--triage-top-n` the N
+    highest-score turns (union when both given), and a turn the budget skipped is
+    UNVERIFIED-by-budget — `"skipped by the triage budget"` — never PASS, never
+    WARN, never replayed. Neither knob given is shadow mode: everything replays
+    and the scores are recorded alongside. `--no-triage` disables triage entirely
+    and wins over both. Fail-open: a broken or abstaining triage command never
+    shrinks the replay budget.
     """
     from belay.approval.reader import derive_approval_events
+    from belay.annotations import derive_annotations
+    from belay.connection import derive_connection_context
     from belay.index import derive_correlation, tool_calls
     from belay.replay.reader import TraceCorrupt, read_trace
     from belay.verify.author import SubprocessAuthor, author_from_env
@@ -875,6 +888,13 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         resolve_library_entry,
     )
     from belay.verify.trajectory import evaluate_trajectory_rules
+    from belay.verify.triage import SubprocessTriage, triage_from_env
+    from belay.verify.triage_budget import decide_replays
+    from belay.verify.triage_surfaces import (
+        build_turn_features,
+        skipped_verdict,
+        triage_section,
+    )
     from belay.verify.turn import verify_turn
     from belay.verify.verdict import Status
 
@@ -961,6 +981,31 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         else:
             claim_author = author_from_env()
 
+    # The C10 triage command. `--triage-author CMD` is the interactive surface, ONE
+    # quoted string shlex-split here — the same fail-closed rule as `--claim-author`:
+    # Belay must never half-execute a command it could not parse, and must never
+    # quietly degrade the run to "no triage". Absent, `BELAY_TRIAGE_AUTHOR` decides
+    # at use; both absent -> triage is ABSENT (every turn replays, no triage section).
+    # `--no-triage` disables triage ENTIRELY and wins over both, so an operator can
+    # turn the budget off without unsetting anything.
+    triage = None
+    if not args.no_triage:
+        if args.triage_author is not None:
+            try:
+                triage = SubprocessTriage(tuple(shlex.split(args.triage_author)))
+            except ValueError as exc:
+                message = (
+                    f"belay: --triage-author could not be parsed as a shell command "
+                    f"({exc}): {args.triage_author!r}"
+                )
+                if json_mode:
+                    _emit(render_json(error_report(args.trace, message)))
+                else:
+                    _emit(message)
+                return 2
+        else:
+            triage = triage_from_env()
+
     # The A1 policy this run enforces: the defaults (unless dropped) plus any operator file.
     # A file that will not parse is a fail-closed error — verifying against a silently dropped
     # policy would report the run against LESS than the operator declared, the exact false PASS
@@ -1031,13 +1076,57 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         report_turns = []
         if not json_mode:
             _emit("turns")
-        for n in indices:
-            verdict = verify_turn(
-                records, n,
-                server_command=args.server, shell_server_command=shell_server_command,
-                manifest_dir=manifest_dir, replays=args.replays,
-                timeout=args.timeout, invariants=invariants,
+
+        # C10 triage: score every turn IN SCOPE first (whitelisted derived features
+        # only, through the seam — never raw state), then let the budget machinery
+        # decide which turns earn the expensive replay. Scores are indexed by
+        # ABSOLUTE turn index (the budget's contract: index = turn), with abstained
+        # turns (None) fail-open — a broken triage command never shrinks the budget.
+        # `triage_section` is the one object both renderers consume (absent-never-zero).
+        triage_replay_indices = None
+        score_by_turn: dict = {}
+        features_by_turn: dict = {}
+        if triage is not None:
+            annotations = derive_annotations(records)
+            connection = derive_connection_context(records)
+            for n in indices:
+                features = build_turn_features(
+                    records, calls, n,
+                    annotations=annotations, connection=connection,
+                )
+                features_by_turn[n] = features
+                score_by_turn[n] = triage.triage(features)
+            full_scores = [score_by_turn.get(i) for i in range(total)]
+            triage_replay_indices = decide_replays(
+                full_scores,
+                threshold=args.triage_threshold,
+                top_n=args.triage_top_n,
             )
+        triage_section_record = None
+        if triage is not None:
+            triage_section_record = triage_section(
+                score_by_turn,
+                scope=indices,
+                threshold=args.triage_threshold,
+                top_n=args.triage_top_n,
+                replay_indices=triage_replay_indices,
+            )
+
+        for n in indices:
+            if triage_replay_indices is not None and n not in triage_replay_indices:
+                # A skipped turn is UNVERIFIED-by-budget, never PASS: verify_turn's
+                # replay is NOT called for it — nothing was re-executed, so there is
+                # no result or effect to verify, and the verdict says so by name.
+                verdict = skipped_verdict(
+                    n, features_by_turn[n].tool_name or None
+                )
+            else:
+                verdict = verify_turn(
+                    records, n,
+                    server_command=args.server, shell_server_command=shell_server_command,
+                    manifest_dir=manifest_dir, replays=args.replays,
+                    timeout=args.timeout, invariants=invariants,
+                )
             verdicts.append(verdict)
             if json_mode:
                 report_turns.append(turn_record(verdict))
@@ -1087,6 +1176,8 @@ def _cmd_verify(args: argparse.Namespace) -> int:
             # trajectory/claim summaries. Nothing is recomputed for the machine surface.
             # The approval section is derived from the trace's own records — a denied
             # call is an observation, never a turn and never a verdict (absent-never-zero).
+            # The triage section is the SAME object the text line renders from, present
+            # iff a triage command was configured (absent-never-zero, the approval rule).
             report = VerifyReport(
                 trace=args.trace,
                 turns=report_turns,
@@ -1095,6 +1186,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
                 exposure=exposure_record(_exposure_summary(verdicts)),
                 trajectory=trajectory_record(trajectory),
                 approval=approval_record(derive_approval_events(records)),
+                triage=triage_section_record,
                 claim=claim_record(claim, check=claim_check),
                 error=None,
             )
@@ -1107,6 +1199,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
                     _emit_claim(claim, Status)
             _emit()
             _emit_approval(derive_approval_events(records))
+            _emit_triage(triage_section_record)
             for line in _VERIFY_COVERAGE.splitlines():
                 _emit(line)
 
@@ -1354,6 +1447,41 @@ def _emit_approval(events: Sequence[dict]) -> None:
     nothing triggered.
     """
     line = _approval_line(events)
+    if line is None:
+        return
+    _emit(line)
+    _emit()
+
+
+def _triage_line(record: Optional[dict]) -> Optional[str]:
+    """The C10 triage-budget line, rendered from the SAME record the `--json` section
+    is built from (`belay.verify.triage_surfaces.triage_section` — one computation,
+    two renderers): `triage: <mode>[, threshold <t>][, top <n>], <k> skipped,
+    <m> scored`. None — nothing printed, never a zero line — when triage was not
+    configured for the run (absent-never-zero). A skipped turn is UNVERIFIED-by-budget
+    in the turn list above; this line reports the budget's decision, never a verdict.
+    """
+    if record is None:
+        return None
+    segments = [record["mode"]]
+    if "threshold" in record:
+        segments.append(f"threshold {record['threshold']:g}")
+    if "top_n" in record:
+        segments.append(f"top {record['top_n']}")
+    segments.append(f"{record['skipped']} skipped")
+    segments.append(f"{len(record['scores'])} scored")
+    return "triage: " + ", ".join(segments)
+
+
+def _emit_triage(record: Optional[dict]) -> None:
+    """The triage line, exactly once, when triage was configured for the run.
+
+    Printed after the approval line, before the coverage statement — and nothing
+    at all when no triage command was configured: a run without triage is
+    byte-identical to one whose triage never engaged, and never carries a
+    fabricated zero line (the absent-never-zero rule).
+    """
+    line = _triage_line(record)
     if line is None:
         return
     _emit(line)
@@ -3428,6 +3556,50 @@ def _parser() -> argparse.ArgumentParser:
             "observed facts on stdin and answers with an executable check; EXECUTION "
             "decides (A3 never PASSes). An un-lexable string is a hard error. Absent "
             "-> BELAY_CLAIM_AUTHOR decides; no author configured -> the axis is ABSENT"
+        ),
+    )
+    verify.add_argument(
+        "--no-triage",
+        action="store_true",
+        help=(
+            "disable the C10 triage budget ENTIRELY: no triage command runs and every "
+            "turn is replayed exactly as before. Wins over --triage-author and "
+            "BELAY_TRIAGE_AUTHOR"
+        ),
+    )
+    verify.add_argument(
+        "--triage-author",
+        default=None,
+        metavar="CMD",
+        help=(
+            "the triage command, as ONE quoted string (shlex-split at use): "
+            "BELAY_TRIAGE_AUTHOR as a flag. The command receives whitelisted derived "
+            "features per turn on stdin and answers with {\"score\", \"confidence\"} "
+            "JSON; it orders and samples the replay budget and NEVER emits a verdict. "
+            "An un-lexable string is a hard error. Absent -> BELAY_TRIAGE_AUTHOR "
+            "decides; no author configured -> triage is ABSENT"
+        ),
+    )
+    verify.add_argument(
+        "--triage-threshold",
+        type=float,
+        default=None,
+        metavar="FLOAT",
+        help=(
+            "replay every turn whose triage score is at least FLOAT; the rest are "
+            "skipped UNVERIFIED-by-budget (\"skipped by the triage budget\"), "
+            "never PASS"
+        ),
+    )
+    verify.add_argument(
+        "--triage-top-n",
+        type=int,
+        default=None,
+        metavar="INT",
+        help=(
+            "replay exactly the INT highest-score turns (ties broken by lowest turn "
+            "index); the rest are skipped UNVERIFIED-by-budget, never PASS. With "
+            "--triage-threshold both rules are a union"
         ),
     )
     verify.add_argument(

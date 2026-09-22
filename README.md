@@ -118,6 +118,8 @@ For each recorded `tools/call`, Belay restores its pre-state, re-invokes the ser
 
 Both are decided by **re-execution and diffing. No model is consulted** — enforced by an AST test that bans any inference import from the verdict path.
 
+**Triage is an optional, BYOK replay-budget, off by default.** `belay verify --triage-author CMD` (or `BELAY_TRIAGE_AUTHOR`) names a LOCAL command that reads whitelisted derived features per turn and answers a suspicion score — `--triage-threshold FLOAT` replays every turn at or above it, `--triage-top-n INT` the N highest-score turns, `--no-triage` turns it off entirely. A cheap model (or any script) can order the replay queue, but **it never emits a verdict**: a turn the budget skipped is `UNVERIFIED` with the named cause `skipped by the triage budget` — never PASS, never WARN, and not replayed. No knobs given is shadow mode: everything replays and the scores are recorded alongside. A broken triage command never shrinks the replay budget.
+
 #### The invariant library: named presets, no JSON
 
 Do not want to hand-author JSON? Belay ships a library of named presets, applied by name — `--invariant-library <name>` on `belay verify`, `belay corpus add` and `belay phase0 run` (repeatable; an unknown name is a fail-closed error). `belay invariant-library list` shows every entry with its grounding:
@@ -386,6 +388,7 @@ The sandbox and snapshot have **two substrate implementations**, each measured o
 | `collision-fixture-uncreatable` | Runtime: this filesystem cannot hold the distinct byte names (case-insensitive or normalising) — the fixture cannot exist here. |
 | `root-environment` | Runtime: running as root, foreign ownership is restorable — nothing to refuse. |
 | `docker-unavailable` | Runtime: no Docker CLI/daemon on the host — docker-gated tests skip with this cause. |
+| `owner-live-checkpoint` | Owner-run manual checkpoint on the owner's machine — a BYOK key + live endpoint spend (the Jev triage reference author's live test); `manual`-marked, never CI. |
 
 **The cross-substrate consequence is first-class, not an edge case.** A corpus case banked on clonefile/APFS (macOS) re-verifying on a Linux box refuses at restore with `UNRESTORABLE_CAPABILITY_MISMATCH` and classifies **SKIP with that named cause** — never a guessed restore, never a REGRESSION, and never a MATCH. The mirror holds (a copy-fidelity case on macOS). `run_case` admits both substrates and lets the capability check decide; only a platform with *no* backend at all skips up front. What the sandbox does and does not enforce on each substrate — reads are not scoped on either, and denial records are inferred on both — is in [`docs/technical/THREAT_MODEL.md`](docs/technical/THREAT_MODEL.md).
 

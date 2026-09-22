@@ -12,7 +12,7 @@ here rests on a bare LLM judge. See the guardrails at the end.
 
 ## How to read this
 
-- Capabilities are labelled **C1 … C9** in build order. Each is independently shippable and
+- Capabilities are labelled **C1 … C10** in build order. Each is independently shippable and
   leaves the engine more capable than before.
 - **Time windows** are guidance for sequencing, not commitments. Real demand-pull reorders
   this freely.
@@ -899,10 +899,67 @@ named cause (`no-matching-mcp-turn` / `ambiguous-correlation` / `not-replayed-no
 second aspect** (`belay interop export <otlp> <trace> [--out FILE] [--json]`,
 `src/belay/interop/export.py`): verdicts → OTLP/JSON span attributes/events → a
 fixture-collector round-trip (a file, or stdout), with the coverage line and
-UNVERIFIED-never-PASS in-band. A **live OTLP exporter** and **multi-trace-directory
-aggregation** remain deferred. (The `NOT_COVERED` reclassification item is dropped — it
-shipped via `interop-merge-repair`, `docs/STATUS.md`'s v0.24.0-era entry: a correction,
-not a reclassification.)
+    UNVERIFIED-never-PASS in-band. A **live OTLP exporter** and **multi-trace-directory
+    aggregation** remain deferred. (The `NOT_COVERED` reclassification item is dropped — it
+    shipped via `interop-merge-repair`, `docs/STATUS.md`'s v0.24.0-era entry: a correction,
+    not a reclassification.)
+
+---
+
+## C10. Calibrated triage seam — BYOK, optional  ·  demand-pulled 2026-09-19
+
+**Why it is moat.** Replay is the trustworthy verdict, and it is expensive: at production
+trace volumes you cannot replay every turn, and the only knobs are "replay everything"
+(correct, costly) or coarse sampling (cheap, blind). C10 is the cheap, **calibrated**
+middle: a suspicion score per turn that orders and samples the replay queue. It only ever
+saves cost — it never adds coverage and never emits a verdict, so the moat (the
+execution-grounded verdict) is untouched.
+
+**The seam is provider-neutral, by construction.** The engine never knows the model: the
+triage is a **subprocess command** (the A3 `SubprocessAuthor` pattern). The engine writes
+one JSON payload of **whitelisted derived features** (tool name, tri-state annotation
+declarations, offered toolset, reply size and hashes, indices/ids, ordering, truncated
+flag, state-handle status, protocol version, `run_process` command_line — never raw state
+or trace bytes) on stdin and reads `{"score", "confidence"}` JSON on stdout, fail-closed.
+Any model — Jev, laya, a local model, a shell script — is one command. **Jev is the FIRST
+reference author, never an engine adapter** (`reference_triage_author.py`; it reads the
+operator's `BELAY_JEV_KEY` itself, and the engine neither reads nor forwards any key).
+A broken or abstaining triage command never shrinks the replay budget (fail-open).
+
+**What we build:**
+- The `Triage` seam with `SubprocessTriage`/`NullTriage` and `triage_from_env`
+  (`BELAY_TRIAGE_AUTHOR`); whitelisted payload asserted on the constructed object.
+- Budget knobs behind the seam: `--triage-threshold FLOAT` (replay every turn whose score
+  is at least FLOAT) and `--triage-top-n INT` (the N highest-score turns), union when both
+  given. Neither given is **shadow mode**: everything replays, scores recorded alongside
+  (the safe default until the calibration ledger earns a tighter budget).
+- `belay verify` surfaces only (the pinned `--claim-author`-on-verify-only decision):
+  `--triage-author CMD` / `--triage-threshold` / `--triage-top-n` / `--no-triage`.
+- A skipped turn is **UNVERIFIED-by-budget** with the named cause `"skipped by the triage
+  budget"` (registered in `belay.replay.report`'s closed vocabulary), never PASS, never
+  WARN, never replayed.
+- Additive `triage` section in `belay verify --json` + a text line — absent-never-zero,
+  the `approval` precedent.
+
+**Acceptance (test-first):** identity (triage on vs off ⇒ identical verdicts on the turns
+replayed, anti-vacuity spy); absent ⇒ no-op (no subprocess); whitelist asserted on the
+constructed payload; deterministic stub author (no network in CI); budget knobs each skip
+exactly the named turns; fail-open (timeout / non-zero exit / malformed reply ⇒ full
+replay); bounded subprocess (60 s timeout, 1 MiB stdout cap); flag-parity guard
+registration.
+
+**Eval data captured:** none yet — nothing is skipped by default and nothing is banked.
+What ships is the instrumentation the future ledger will need: per-turn triage scores in
+the additive `triage` section, ready to be compared against the verdicts replay produced.
+
+**Dependencies:** C1 (the derived features), C4 (a replay verdict to triage toward), C6
+(the corpus, where the future ledger lives). **As built (slice 1, aspect `surfaces`,
+2026-09-21):** the verify surface above, end-to-end. **Not built, by name (slice 2+):**
+the calibration ledger (Jev's confidence vs the replay verdict that followed — gated on
+the S-1 mint decision; it needs corpus-banked decided per-turn cases, which the second
+corpus-mint run supplies), other reference authors (laya etc. — provider-neutrality is
+proven by a stub, not a second vendor integration), budget knobs on other surfaces, the
+live Jev REST contract pin (owner-supplied before the manual live test runs).
 
 ---
 
@@ -942,3 +999,4 @@ built.
 | C7 | Live console | Wk 5–6 | 1 | No — the launch surface |
 | C8 | Claim re-derivation (A3) | Wk 7 | 1 | **Yes — cut first** · ✅ **SHIPPED** (PR #28, v0.27.0; the A3 WARN vocabulary is empty in v0 and the evaluator's caller-supplied-workspace short-circuit is a follow-on) |
 | C9 | Observability interop | Wk 8 | 1 | ✅ **SHIPPED** (ingest+correlate+attach + export-back fixture-collector round-trip; live-collector export deferred) |
+| C10 | Calibrated triage seam (BYOK, optional) | Wk 9+ | 1 | ✅ **SHIPPED** (slice 1: verify surface — shadow mode + threshold/top-N, UNVERIFIED-by-budget, additive `triage` section; calibration ledger deferred to slice 2, gated on the S-1 mint decision) |

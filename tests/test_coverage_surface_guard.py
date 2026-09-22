@@ -271,6 +271,11 @@ NON_VERDICT_STATUS: dict[str, str] = {
     # The MCP connection context's resolution status (resolved / unknown).
     "src/belay/connection.py::_resolved": "connection-context resolution, not a verdict",
     "src/belay/connection.py::_unknown": "connection-context resolution, not a verdict",
+    # C10: reads the SAME connection-context resolution status as `connection.py`
+    # to derive the whitelisted `protocol_version` triage feature. It renders
+    # nothing itself — the feature travels inside the triage payload, which is not
+    # a verdict surface at all.
+    "src/belay/verify/triage_surfaces.py::_protocol_version": "derives the whitelisted triage feature; renders nothing",
     # JSON-RPC / MCP error records: the protocol's own status fields.
     "src/belay/errors.py::_protocol_error": "a JSON-RPC error record",
     "src/belay/errors.py::_result_type": "an MCP result-shape record",

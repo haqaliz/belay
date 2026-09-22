@@ -1,83 +1,78 @@
-# Corpus Shell-Axis Recompute Routing — understanding
+# Understanding — C10 triage seam (shadow mode)
 
-## What the work really is
+## What this work is really asking
 
-`belay corpus run --shell-server <cmd>` — thread the second replay boundary into the
-trajectory-case recompute path of the corpus. The engine seam is **already built and
-pinned**: `run_corpus` / `run_case` / `_recompute_trajectory_case` accept
-`shell_server_command` (`src/belay/corpus/run.py:701-784, 787-814`), and four tests in
-`tests/test_corpus_trajectory_run.py` already prove per-turn routing inside the whole-trace
-recompute, the byte-identical `None` default, the per-turn asymmetry, and the `run_corpus`
-threading. **Only the CLI flag and its parity-table row are missing.**
+A BYOK, off-by-default triage/router seam that orders and samples which recorded turns get
+the expensive replay verification, using a cheap external decision model. Execution alone
+decides every verdict. Slice 1 is **shadow mode**: the seam exists, triage runs and logs
+alongside, the replay budget is untouched, nothing is skipped, and triage on/off produce
+identical verdicts on the turns replayed.
 
-## Affected areas (file:line)
+## Key findings from the dig
 
-- `src/belay/cli.py:3330-3372` — `corpus run` parser has only `corpus_dir` + `--no-claim-axis`;
-  `_cmd_corpus_run` (1998-2097) calls `run_corpus(corpus_dir, disable_claim_axis=...)` with no
-  shell command.
-- `tests/test_cli_flag_parity.py` — `--shell-server` row (85) is `{verify, phase0 run, gate
-  baseline, gate check}`; `corpus run` is not mentioned in its comment and is absent from
-  the set. `--server` row (62) excludes `corpus run` because "each stored case carries its
-  own resolved server command" — true for the fs boundary, false for the shell boundary (a
-  case never stores the shell command). Both guard tests (167-175, 178-192) force the row
-  edit the moment the flag lands.
-- `src/belay/verify/turn.py:363-368` — a `run_process` turn replays against
-  `shell_server_command` only when given; with `None` it replays against `server_command`.
-  This is the silent mis-route the unit fixes.
-- `src/belay/phase0/runner.py:536-538` — a trajectory case stores the **final turn's**
-  resolved command; the whole-trace recompute therefore needs the second boundary
-  caller-supplied (run.py:511-522).
-- `src/belay/corpus/run.py:398-433` — `_classify_trajectory_case`: equal → MATCH / MISS_CLOSED;
-  **everything else, including any UNVERIFIED recompute, → REGRESSION**. There is no SKIP
-  vocabulary on the trajectory path.
+1. **The seam mirrors the A3 `SubprocessAuthor` pattern exactly** — and that pattern is
+   already model-agnostic:
+   - `BELAY_CLAIM_AUTHOR` env / `--claim-author` flag, unset/blank/un-lexable => `None`
+     (axis absent, never a crash): `src/belay/verify/author.py:45,56-74`.
+   - `SubprocessAuthor` (BYOK, stdlib-only, JSON-in/JSON-out, fail-closed parse):
+     `author.py:77-143`; protocols `CheckAuthor`/`CheckRunner`: `verify/claims.py:120-145`.
+   - Engine never reads or forwards any key; the operator's command handles its own
+     credentials. Reference author scrubs `ANTHROPIC_*` by absence, never `""`:
+     `verify/reference_claim_author.py:72-76,209-224`.
+   - **This satisfies the owner's PS (laya / any model) by construction**: any triage model
+     = any subprocess command. Jev and Laya are reference authors, not engine providers.
+     The engine must NOT grow vendor adapters or an HTTP client (would break the
+     zero-LLM guard `tests/test_verify_zero_llm.py`).
 
-## The defect being fixed (honest statement)
+2. **The per-turn loop lives above `verify_turn`** — the only place ordering/sampling can
+   happen: `phase0/runner.py:303-319` (mint loop), `cli.py:1034-1040` (verify CLI),
+   `corpus/run.py:870-878` (per-turn cases). Replay itself is inside `verify_turn` at
+   `turn.py:369-373`. Slice 1 scopes to the **verify CLI** (mirroring the pinned
+   `--claim-author`-on-verify-only decision: `tests/test_verify_claim_surfaces.py:202-219`).
 
-A two-server mint (`phase0 run --shell-server`) banks trajectory corrupt-success cases
-whose stored command was resolved from the final turn. If that final turn was a
-filesystem turn (the common Shape-A shape), the stored command is the fs command and
-`corpus run` recomputes the trace's `run_process` turns against the fs server. The reply
-is a JSON-RPC error, and the trajectory evidence seam can read that in **either**
-direction (S1): as no-exit-0 evidence → recompute FAIL matches the stored FAIL (**false
-agreement**, the regression suite certifying the wrong reason), or as unverifiable →
-recompute UNVERIFIED → **false REGRESSION**. Both directions are corrupt. No real
-two-server trajectory cases exist (the mint's 11 TPs were never bankable — no-backfill),
-so the fix is forward-looking and changes only constructed fixtures, never real data.
+3. **Flag-parity guard** (`tests/test_cli_flag_parity.py:45-57,62-148,173-198`): any new
+   flag must be declared in `EXPECTED` or the discovery test fails.
 
-## Design decisions to surface at the review gate
+4. **UNVERIFIED-by-budget needs a named cause** in the closed vocabulary
+   (`replay/report.py:69-138,152-172` + the guard pattern of
+   `test_interop_attach.py:476-494`). In shadow mode the cause exists but is never emitted
+   (nothing is skipped); the honest rule: a skipped turn is UNVERIFIED-by-budget, never PASS.
 
-- **D1 — the flag:** `--shell-server CMD`, single string, shlex-split at use, fail-closed on
-  un-lexable — the exact `phase0 run` shape (cli.py:3598-3610). No REMAINDER ordering hazard
-  on this parser.
-- **D2 — the honest no-flag behavior:** today a two-server trajectory case recomputes
-  silently wrong. Options: keep byte-identical (the existing pin
-  `test_trajectory_recompute_without_a_shell_command_is_byte_for_byte_today`) vs introduce a
-  named-cause SKIP when the trace needs a boundary the operator didn't supply (the
-  `CLAIM_AXIS_DISABLED` operator-omission precedent, not the `_SKIP_CAUSES` substrate
-  class). Recommendation: named-cause SKIP — fail-closed, no real data affected.
-- **D3 — the final-turn-is-`run_process` edge (S5):** the stored command IS the shell
-  command then, and the fs turns have no expressible boundary (the flag can only supply the
-  shell side). Faithful recompute is impossible for that shape → decide: always SKIP, or
-  document as an accepted residual.
-- **D4 — `corpus add --shell-server`:** `corpus add` today banks a `run_process` turn with
-  the fs command (wrong); `phase0 run --shell-server` banks correctly. Include the flag in
-  this unit (same parity row) or declare out? Recommendation: include — same one-line wiring,
-  closes the manual-add path.
-- **D5 — `corpus show`:** its trajectory recompute (cli.py:2385, 2417) shares the gap but is
-  outside the parity guard (the guard's "corpus show replays nothing" comment is stale).
-  Include the flag and correct the comment, or declare out by name.
+5. **The identity test mirrors `tests/test_refutation_no_claim_axis.py`** — same input,
+   axis on vs off, byte-identical PASS/FAIL, named SKIP (never REGRESSION), plus an
+   anti-vacuity spy proving triage really engaged.
 
-## Scoping corrections from the dig
+6. **Manual live test conventions**: `@pytest.mark.manual`, excluded via
+   `addopts = "-m 'not manual and not install'"` (pyproject.toml:86-94); owner-run env
+   (e.g. `BELAY_REFERENCE_AUTHOR_MODEL`); FAIL-with-instructions when unset
+   (`test_reference_claim_author_live.py:118-125`). The owner's PS: API key for local test
+   only — provided by the owner, never for users, never committed.
 
-- **Claim half (S2):** `_recompute_claim_case` does not thread `shell_server_command`, but is
-  self-consistent — the claim evaluator replays only the LAST turn and the stored command is
-  that turn's resolved command. The brief's "trajectory/claim-case recompute" reduces to
-  **trajectory only**. State in the PRD.
-- **`interop correlate`/`export`** stay single-boundary (S9) — the documented default.
+7. **Derived-feature whitelist** (no raw state/trace bytes): tool name, annotation tri-state
+   per hint, annotations_object presence, toolset offered, reply size, hashes
+   (`hash_raw`/`hash_canonical`), turn index/seq, ordering, truncated flag, state_handle
+   status, trace context (traceId/spanId), protocol version, run_process command_line —
+   from `trace.py:391-437,546-565`, `turn.py:119-140`, `annotations.py:60-81,103-257`,
+   `index.py:113-229`.
 
-## Guardrails
+## Contradictions / ambiguities flagged
 
-Harness machinery only (corpus). No agent framework, no LLM judge. UNVERIFIED-never-PASS
-holds. No verdict axis, schema, or published number moves — `11/60 = 18.3%`, `precision
-0.00`, `1/15`, `4/16` stand unedited. The corpus is moat #2: this unit makes its highest-
-value case class recompute faithfully.
+- **The proposed PRD is Jev-named throughout** (`JevTriage`, `BELAY_JEV_KEY`). The owner's
+  PS demands a **model-agnostic seam** (jev, laya, ...). Resolution: the seam is
+  provider-neutral (subprocess command + protocol); Jev is the *first reference author*;
+  `BELAY_JEV_KEY` is read only by that reference author, never by the engine. The PRD must
+  be rewritten to this shape before planning.
+- The A3 precedent scrubs `ANTHROPIC_*` from the child env; a triage reference author
+  instead *needs* its key — the honest line: the engine neither reads nor passes any key;
+  the operator's command owns its credentials. Must be stated, not assumed.
+- Shadow mode "logs triage alongside" — where? Precedent: the approval-gate additive
+  `approval` section in verify output (absent-never-zero). Proposal: additive `triage`
+  section in `--json` + text line, absent-never-zero.
+
+## Open questions for the owner (Phase 3)
+
+1. Jev API surface for the reference author: REST endpoint + key header? OpenAI-compatible?
+   A CLI? (Determines the reference author shape + the manual live test.)
+2. Slice-1 reference author: Jev only (seam proven model-agnostic by a stub), or also a
+   Laya reference author now?
+3. Budget knob: confidence threshold, top-N-least-confident, or both?

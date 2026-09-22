@@ -1,0 +1,26 @@
+# JEV LIVE PROOF — observed outcome (owner checkpoint, 2026-09-22)
+
+Read as **"the path works at n=1"** — never a quality claim about the model's scores.
+One representative `run_process` turn through the shipped seam: whitelisted features →
+`python -m belay.verify.reference_triage_author` → Jev REST → `{"score", "confidence"}`.
+
+```
+=== JEV LIVE PROOF — observed outcome ===
+command:  /Users/aliz/dev/at/belay/.claude/worktrees/feat-jev-triage/.venv/bin/python -m belay.verify.reference_triage_author
+model:    jev-1.13.0
+endpoint: https://api.typesafe.ai/v1/systemone
+wall:     0.9 s
+exit:     0
+stdout:   '{"score": 0.82, "confidence": 0.63}'
+stderr:   ''
+```
+
+`1 passed in 0.96s` (tests/test_reference_triage_author_live.py, `-m manual`).
+
+- Endpoint verified live before use: `api.typesafe.ai/v1/systemone` answered 200 with the
+  key; `tokenra.io/v1/decisions` rejected the same key (401).
+- The owner's key was passed via env only, never committed, never echoed into the record.
+- The endpoint contract is now pinned by execution, not assumption: POST
+  `/v1/systemone`, `Authorization: Bearer`, body `{model, state, questions}`,
+  response `answers.<name>.score/.confidence` — the reference author speaks it
+  (adaptation commits `9e5cc89`/`d0c3c00`/`c9a8253`).
