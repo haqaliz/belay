@@ -66,6 +66,7 @@ from eval.minting_driver.resilience import (
 from eval.minting_driver.servers import (
     filesystem_server_command,
     resolve_server_entrypoint,
+    shell_server_command,
 )
 from eval.minting_driver.session import TransportFactory
 from eval.minting_driver.workspace import WorkspaceLayout, prepare_workspace
@@ -661,6 +662,19 @@ def verify_server_command(entrypoint: StrPath) -> list[str]:
     return ["node", str(entrypoint), WORKSPACE_PLACEHOLDER]
 
 
+def verify_shell_server_command(cfg: MintConfig) -> list[str] | None:
+    """The replay `--shell-server` argv for the shell toolset, or `None` without one.
+
+    The in-process twin of `verify_command`'s branch at :696-698: exactly the argv the
+    printed `--shell-server "node <abs entrypoint>"` shlex-splits to, so `--verify` and
+    the printed command route `run_process` turns to the same server. `None` (the
+    filesystem-only toolset) is the byte-identical-to-today default.
+    """
+    if "shell" not in toolset_names(cfg.toolset):
+        return None
+    return shell_server_command(root=cfg.server_root)
+
+
 def verify_command(
     cfg: MintConfig,
     *,
@@ -996,6 +1010,7 @@ def run_verify(
     report: MintReport,
     *,
     server_command: Sequence[str],
+    shell_server_command: Sequence[str] | None = None,
     ledger_path: StrPath = DEFAULT_LEDGER_PATH,
     corpus_dir: StrPath = DEFAULT_CORPUS_DIR,
 ) -> int:
@@ -1006,6 +1021,15 @@ def run_verify(
     re-execution, ingest each flagged turn into the corpus, write the ledger, print the
     Phase-0 report. It is a MEASUREMENT, not a gate — violations present still returns 0;
     only a hard error (a missing batch dir) returns 2.
+
+    `shell_server_command` (optional) is the dual-server axis, resolved by the caller
+    exactly as `verify_command` emits it (`verify_shell_server_command`): `None` (the
+    default) keeps the filesystem-only shape byte-identical; a list routes every
+    `run_process` turn to the shell server instead of the filesystem one — without it,
+    `--toolset filesystem+shell --verify` replayed shell turns against the filesystem
+    server (`Tool run_process not found` -> DIVERGED -> abstention, the 2026-08-12
+    "171 per-turn FAILs are A2 replay artifacts" shape), while the printed command did
+    not.
 
     `belay` is imported HERE, lazily, and nowhere else in `eval/`: the mint driver must
     import and run with `belay` absent from the environment, and `eval/` must never grow
@@ -1031,6 +1055,9 @@ def run_verify(
         batch_dir,
         corpus_dir=Path(corpus_dir),
         server_command=list(server_command),
+        shell_server_command=(
+            list(shell_server_command) if shell_server_command is not None else None
+        ),
         invariants=default_invariants(),
         # A3 exactly as `belay phase0 run` resolves it (`cli.py`): env-only
         # (`BELAY_CLAIM_AUTHOR`), built at this boundary so the runner stays
@@ -1093,4 +1120,5 @@ __all__ = [
     "select_record",
     "verify_command",
     "verify_server_command",
+    "verify_shell_server_command",
 ]

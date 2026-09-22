@@ -53,6 +53,7 @@ from eval.minting_driver.entrypoint import (
     preflight_servers,
     run_verify,
     verify_server_command,
+    verify_shell_server_command,
 )
 from eval.minting_driver.resilience import (
     DEFAULT_BASE_DELAY_SECONDS,
@@ -298,6 +299,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return run_verify(
             report,
             server_command=verify_server_command(entrypoint),
+            # The shell half of the same resolution `verify_command` prints: `None` for
+            # the filesystem-only toolset, the shell argv for `filesystem+shell` — so
+            # `--verify` routes `run_process` turns to the same server the printed line
+            # names, never the filesystem one.
+            shell_server_command=verify_shell_server_command(cfg),
             # Absolute, like every path in `MintConfig`: these name where the verify
             # output lands, and a relative path is only unambiguous from one CWD.
             ledger_path=Path(args.ledger).resolve(),
