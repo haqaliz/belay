@@ -51,9 +51,22 @@
 > configured author; triage is a router, **never a verdict** (on/off identity is the
 > refutation); a skipped turn is UNVERIFIED-by-budget, never PASS; **no published number
 > moves** (`11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16`, `recall 0.00`, `3/93`
-> stand unedited). **Open, owner's:** the real Jev REST contract (endpoint/schema) before
-> the live manual test can run; the **calibration ledger** slice is downstream of the
-> S-1 mint decision (decided per-turn cases at volume — the `effect-conformance-coverage`
+> stand unedited).
+> **CLOSED, owner-run 2026-09-22 — the Jev REST contract is pinned by execution, and
+> the live proof passed at n=1.** The documented placeholder shape met the real service
+> and was adapted (commits `9e5cc89`/`d0c3c00`/`c9a8253`, suite 2714 → 2721): endpoint
+> `https://api.typesafe.ai/v1/systemone` (the owner's key answers 200 there and 401 at
+> `tokenra.io`), request envelope `{model, state, questions}` with one `score` question
+> (two ordered levels, so the score lands in [0,1]), response mapped fail-closed from
+> `answers.<name>.score/.confidence`. **Observed outcome, verbatim:** `python -m
+> belay.verify.reference_triage_author` · model `jev-1.13.0` · wall 0.9 s · exit 0 ·
+> stdout `'{"score": 0.82, "confidence": 0.63}'` — `1 passed in 0.96s`
+> (`tests/test_reference_triage_author_live.py`, `-m manual`; the owner's key traveled
+> by env only, never committed). Read as **"the path works at n=1"**, never a quality
+> claim about the scores; the calibration-ledger slice is what measures whether
+> 0.82/0.63 predicts a real violation.
+> **Still open, owner's:** the **calibration ledger** slice is downstream of the S-1
+> mint decision (decided per-turn cases at volume — the `effect-conformance-coverage`
 > fix closed its named gate; the mint re-run supplies the data); the section omits
 > skipped turns' scores in budgeted mode (coherent today — scores pair with verdicts;
 > the ledger slice will extend the section). See `docs/planning/jev-triage/`.
