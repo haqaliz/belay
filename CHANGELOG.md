@@ -5,6 +5,37 @@ All notable changes to Belay are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0 — until then,
 `0.x` minor bumps may include changes that would be breaking under strict semver.
 
+## [0.36.0] - 2026-09-22
+
+**The calibrated-triage seam ships (C10 slice 1, PR #41)** — a provider-neutral, BYOK,
+off-by-default way to spend the replay budget on the turns most likely to hide a
+violation. A model may triage; only execution may decide. Triage is a **router, never a
+verdict**: a skipped turn is UNVERIFIED-by-budget, never PASS.
+
+### Added
+
+- **The triage seam** (`belay verify --triage-author CMD` / `BELAY_TRIAGE_AUTHOR`): any
+  triage model = any subprocess command — the engine never knows the model and never
+  reads or forwards an API key. Jev ships as the first reference author
+  (`python -m belay.verify.reference_triage_author`, the real `/v1/systemone` contract,
+  `BELAY_JEV_KEY` author-only); laya or any other model later is another reference
+  author, never an engine adapter.
+- **Whitelisted egress only**: the triage command receives derived features (tool name,
+  annotation hints, hashes, sizes, ordering) — never raw state or trace bytes, asserted
+  on the constructed payload.
+- **Budget knobs**: `--triage-threshold` and `--triage-top-n` (union), shadow mode by
+  default (replay everything, record scores alongside); a broken or absent triage
+  command never shrinks the replay budget.
+- **Honest surfaces**: skipped turns render `UNVERIFIED` with the cause *"skipped by the
+  triage budget"* on text and `--json`; an additive `triage` section (absent-never-zero).
+- **The refutation**: triage on vs off produce identical verdicts on the turns replayed,
+  enforced by test; the owner-run live proof passed at n=1 (`jev-1.13.0`, wall 0.9 s,
+  `{"score": 0.82, "confidence": 0.63}`).
+- Honesty lines: this slice banks no calibration ledger and saves no cost yet (shadow
+  mode is the default; the ledger is downstream of the S-1 mint decision). No published
+  number moves — `11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16`, `recall 0.00` stand
+  unedited. Suite 2575 → 2721.
+
 ## [0.35.0] - 2026-09-21
 
 **An absent contract is no longer a failed check** (PR #40). The instrument the 2026-09-19
