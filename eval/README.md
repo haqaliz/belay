@@ -741,11 +741,20 @@ printed line is what makes that second half true.
 > report says `claim unrecorded`. A reference author ships:
 > `python -m belay.verify.reference_claim_author --model <full-id>`.
 >
-> **This equivalence was false until 2026-09-19.** `run_verify` called `run_batch()`
-> without `claim_author=`, whose default is `None`, and A3 engages only when it is not
-> None — so `--verify` could never fill the claim column whatever the environment said,
-> while the printed command could. Fixed in `phase0-corpus-mint`; the two are now the same
-> measurement on this axis, and two tests pin both directions.
+> **This equivalence was false until 2026-09-19, and only half-fixed then; it now holds
+> on BOTH halves (2026-09-23).** First half — the A3 claim axis: `run_verify` called
+> `run_batch()` without `claim_author=`, whose default is `None`, and A3 engages only
+> when it is not None — so `--verify` could never fill the claim column whatever the
+> environment said, while the printed command could. Fixed in `phase0-corpus-mint`
+> (2026-09-19); two tests pin both directions. Second half — the shell server: the
+> printed command emits `--shell-server` for the `filesystem+shell` toolset, but
+> `run_verify` did not thread `shell_server_command`, so `--verify` replayed every
+> `run_process` turn against the FILESYSTEM server — `Tool run_process not found` →
+> DIVERGED → abstention, the 2026-08-12 "171 per-turn FAILs are A2 replay artifacts"
+> shape — while the printed line did not. Fixed in `corpus-mint-second-run`
+> (2026-09-23): `run_verify` resolves the shell command exactly as the printed branch
+> does, so the two agree on the A3 author AND the dual-server routing; four tests pin
+> the parameter and the resolver.
 
 ### The dual-server mint (`--toolset filesystem+shell`)
 
