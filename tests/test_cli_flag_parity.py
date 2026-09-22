@@ -21,11 +21,13 @@ verdict on a real run. So the parity is asserted here, declaratively.
 
 **What is pinned, and what deliberately is not.** Not a full cross-product of every
 subcommand's options — that would fail on every unrelated flag and teach the next reader
-to edit the table without thinking. The scope is the five **replay-bearing** surfaces
-(the ones that restore a pre-state and re-invoke a server), and the rule is: every flag
-carried by two or more of them is declared here with its exact surface set, so dropping
-one, or adding a flag to only one of a pair, is a red test that names the surfaces. Each
-row's exclusions are stated in a comment: an exclusion is a decision, not an oversight.
+to edit the table without thinking. The scope is the **replay-bearing** surfaces (the
+ones that restore a pre-state and re-invoke a server) plus the **document re-renderers**
+(`triage-ledger` — not replay-bearing, but declared because it shares the machine-surface
+flag; see `DOCUMENT_SURFACES`), and the rule is: every flag carried by two or more of
+them is declared here with its exact surface set, so dropping one, or adding a flag to
+only one of a pair, is a red test that names the surfaces. Each row's exclusions are
+stated in a comment: an exclusion is a decision, not an oversight.
 """
 
 from __future__ import annotations
@@ -55,6 +57,19 @@ REPLAY_BEARING = (
     "gate check",
     "invariant infer",
 )
+
+#: The document re-render surfaces: they read ONE stored document and render it —
+#: never restoring a pre-state, never re-invoking a server. `triage-ledger` mirrors
+#: `phase0 report`'s pure-re-render discipline (`cli.py:2995-3031`); it is NOT
+#: replay-bearing, but it shares the machine-surface flag (`--json`) with the
+#: replay-bearing surfaces, so the parity table must declare it too — the `--json`
+#: row would otherwise read as a lie the moment the command shipped.
+DOCUMENT_SURFACES = ("triage-ledger",)
+
+#: The surfaces whose shared flags the parity table governs: the replay-bearing
+#: ones plus the document re-renderers. Guard 2's discovery loop scans this
+#: universe, so a new shared flag on a document surface is declared too.
+PARITY_SURFACES = REPLAY_BEARING + DOCUMENT_SURFACES
 
 _ALL = frozenset(REPLAY_BEARING)
 
@@ -111,7 +126,7 @@ EXPECTED: dict[str, frozenset[str]] = {
     # --json` prints the gate report (gate.json schema 1); `invariant infer
     # --json` prints the infer result (candidates, rejections, calibration,
     # artifact path).
-    "--json": frozenset({"verify", "interop correlate", "interop export", "gate baseline", "gate check", "invariant infer"}),
+    "--json": frozenset({"verify", "interop correlate", "interop export", "gate baseline", "gate check", "invariant infer", "triage-ledger"}),
     # Where a document is written. `interop export` writes the OTLP document back
     # out; `invariant infer` writes the authored invariant artifact. Both are
     # operator-named output files with the same never-partial contract, so the two
@@ -177,7 +192,7 @@ def _options(surface: str) -> frozenset[str]:
 
 
 def _surfaces_carrying(flag: str) -> frozenset[str]:
-    return frozenset(name for name in REPLAY_BEARING if flag in _options(name))
+    return frozenset(name for name in PARITY_SURFACES if flag in _options(name))
 
 
 def test_every_declared_flag_is_carried_by_exactly_the_declared_surfaces():
@@ -201,7 +216,7 @@ def test_every_flag_shared_by_two_replay_bearing_surfaces_is_declared():
     """
     shared = {
         flag
-        for surface in REPLAY_BEARING
+        for surface in PARITY_SURFACES
         for flag in _options(surface)
         if len(_surfaces_carrying(flag)) >= 2
     }
