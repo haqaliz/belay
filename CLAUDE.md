@@ -2,6 +2,42 @@
 
 This file orients a coding agent working in this repository. Read it first.
 
+> **C10 SLICE 2 SHIPS — THE CALIBRATION LEDGER: THE VENDOR'S "CALIBRATED CONFIDENCE"
+> MEETS EXECUTION-GROUNDED VERDICTS** (2026-09-22, `calibration-ledger`, PR #42,
+> v0.37.0). The moat half of C10 (the slice-1 PRD's "Eval data captured" promise, now
+> built): a **pure re-render** measurement — `belay triage-ledger <verify-json>
+> [--json]` — pairing each triaged turn's `{score, confidence}` with the verdict replay
+> produced, rendering the reliability curve (equal-width deciles, pinned at the review
+> gate), ECE, and the decision-relevant number (**violations-skipped × budget-saved at
+> each candidate threshold and top-N**). Three aspects, strict TDD, suite 2721 → **2743**.
+> **`section-extension`:** the named v0.36.0 follow-up — budgeted-mode `triage` section
+> carries skipped turns' scores marked `"skipped": true` (shadow mode **byte-unchanged**;
+> the on/off identity refutation and the JSON snapshot pass unmodified — enforced by
+> test). **`calibration-math`** (`src/belay/verify/calibration.py`): `LedgerRow`,
+> `reliability_curve` (empty bins `no_data`, never 0), `ece` (Σ n_bin/N × |rate − conf|
+> over non-empty bins), `threshold_sweep`/`top_n_sweep`; stdlib only, deterministic,
+> `None`-for-0-denominator, `EmptyRowsError` rather than a fabricated 0.
+> **`ledger-command`:** the `phase0 report` pure-re-render shape — FAIL → violated,
+> PASS/WARN → not, **UNVERIFIED excluded with the count stated**, skipped/unscored
+> excluded and counted, `total == decided + sum(excluded)` by construction; refusals:
+> no `triage` section / malformed ⇒ exit 2 named, **zero decided rows ⇒ named refusal
+> with NO rates and exit 0** (the INSTRUMENT SUSPECT shape — a measurement, never a
+> gate); byte-stable `--json`; the flag-parity `--json` row widened via `DOCUMENT_SURFACES`
+> (a pure re-render cannot join `REPLAY_BEARING`).
+> **Honesty lines:** the ledger measures **prediction of violations on the turns
+> actually replayed** — calibrated ≠ caused; the demo capture (all-PASS) proves the
+> mechanics and contributes zero violation rows — **the first real positive rows come
+> from the mint's second run** (the owner's S-1 decision), until then synthetic
+> fixtures carry the FAIL rows and the denominator is always stated; small n is never a
+> base rate; **no published number moves** (`11/60 = 18.3%`, `precision 0.00`, `1/15`,
+> `4/16`, `recall 0.00`, `3/93` stand unedited). **NOT built, by name:** multi-document
+> aggregation, budget auto-tuning (the ledger *informs* the budget; the operator sets
+> the knobs), the mint re-run. Two defects found by RUNNING the command rather than its
+> tests: the top-N sweep once rendered `skipped 5/2 (150.0%)` (capped at the decided
+> total now) and an exclusion-count off-by-one — both fixed with pins. See
+> `docs/planning/calibration-ledger/`.
+>
+
 > **C10 SLICE 1 SHIPS — THE CALIBRATED-TRIAGE SEAM: A MODEL MAY TRIAGE, ONLY EXECUTION
 > MAY DECIDE** (2026-09-21, `jev-triage`, PR #41, v0.36.0). Owner demand-pull 2026-09-19;
 > rewritten to a **provider-neutral** seam per the owner's PS (laya / any model later):

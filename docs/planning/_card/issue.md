@@ -1,47 +1,62 @@
-# C10 first slice — the calibrated-triage seam (shadow mode)
+# C10 slice 2 — the calibration ledger
 
-> Inline brief (no GitHub issue). Source: belay-next handoff (2026-09-21) + owner additions (same day).
+> Inline brief (no GitHub issue). Source: the merged C10 PRD
+> (`docs/planning/jev-triage/prd.md`) + the belay-next/owner handoff 2026-09-22.
 
 ## Brief
 
-C10 first slice: the calibrated-triage seam, shadow mode (owner demand-pull 2026-09-19).
-A cheap calibrated decision model (Jev — TypeSafe's "System One") orders and samples the
-replay queue behind a budget knob; execution alone decides every verdict. Triage is a
-router, never a verdict.
+Build the **calibration ledger** — the moat-compounding half of C10. It measures whether
+a triage model's "calibrated confidence" actually predicts a real violation on real
+Belay verdicts: reliability curve, ECE, and the decision-relevant number — at the chosen
+triage threshold, how many true violations would have been skipped.
 
-The PRD for the full capability lives on the local branch `proposal/jev-triage`
-(previously `feat/jev-triage`, renamed to free the ref namespace) at
-`docs/planning/jev-triage/PRD.md`; port it into this worktree before planning.
+The PRD's sequencing condition is met: *"build the ledger after the instrument can
+produce a decided per-turn verdict"* — the `effect-conformance-coverage` fix shipped
+(v0.35.0), so decided per-turn verdicts are reachable (VERIFIED_CLEAN no longer
+structurally impossible).
 
-## Guardrails (from the handoff)
+## What the PRD already promises (quote)
 
-- `BELAY_JEV_KEY` opt-in only; absent key ⇒ triage is a no-op with no network call
-  (asserted on the constructed request/env, scrubbed by absence, never `""`).
-- Egress limited to whitelisted derived features — never raw state or trace bytes
-  (asserted on the constructed payload).
-- A skipped turn is UNVERIFIED-by-budget, named, never PASS.
-- Triage on vs off ⇒ identical verdicts on the turns replayed — the
-  `--no-claim-axis`-style refutation, never weakened.
+- "The **calibration ledger** — Jev's confidence on each triaged turn vs the
+  execution-grounded verdict replay later produced. This is the moat-compounding piece
+  and it is pure Belay: it measures whether Jev's 'calibrated confidence' is actually
+  calibrated *on real agent traces* (reliability curve, ECE, and the decision-relevant
+  number — at the chosen triage threshold, how many true violations were skipped)."
+- "Shadow mode is the default... record the triage scores alongside, until the
+  calibration ledger earns a tighter budget." — the ledger's whole purpose is to earn
+  (or refuse) a tighter budget.
+- Named follow-up from the shipped unit: "skipped turns' scores in budgeted mode
+  (coherent today — scores pair with verdicts; **the ledger slice will extend the
+  section**)."
 
-## Acceptance tests (written first; repo is test-first)
+## Already shipped (what the ledger consumes)
 
-1. Triage on vs off ⇒ identical verdicts on the turns replayed.
-2. Absent key ⇒ no-op, no network call.
-3. Payload carries only whitelisted derived features.
-4. Model stubbed — deterministic, no network in CI; live call `manual`-marked and owner-run.
+- `belay verify` shadow mode records per-turn `{score, confidence}` in the additive
+  `triage` JSON section, paired with the `turns` verdicts — the raw ledger rows exist
+  today when a triage author is configured.
+- The Jev reference author + live proof (v0.36.0): `jev-1.13.0`, `{"score": 0.82,
+  "confidence": 0.63}` at n=1 — a vendor claim until this ledger measures it.
+- Decided verdicts are reachable on existing captures (s1p: 0/11 UNVERIFIED; the demo
+  capture) — small-data validation without a new mint.
 
-## Owner additions (PS, 2026-09-21)
+## Honesty constraints (the house contract)
 
-1. **BYOK local test key:** the owner can supply an API key for *local manual testing only*
-   — it is never for users; users always provide their own key.
-2. **Model-agnostic seam (laya):** there is a second model, **laya**
-   (https://huggingface.co/convaiinnovations/laya), and the design must let users connect
-   any triage model (jev, laya, …) later. The seam must be **provider-neutral** — not a
-   Jev-specific implementation baked into the engine. This is a requirements change to the
-   proposed PRD, which is Jev-named throughout.
+- The ledger measures *prediction of violations on the turns actually replayed* —
+  calibrated ≠ caused. UNVERIFIED turns must be excluded from the calibration column
+  (the corpus precedent: UNVERIFIED excluded, the engine never labels its own cases).
+- Small n is a recorded state, never a base rate: the ledger prints its denominator; the
+  mint re-run (owner's S-1 declaration) supplies volume later.
+- No published number moves from earlier units (`11/60 = 18.3%`, `precision 0.00`,
+  `1/15`, `4/16`, `recall 0.00`).
+- The ledger must never be built against a 100%-UNVERIFIED column (the false-zero
+  failure the PRD named).
 
-## Caveat (recorded, do not paper over)
+## Open questions for the owner (Phase 3)
 
-This slice is shadow mode: it banks no calibration ledger and saves no cost yet. The
-ledger half is downstream of the owner declaring the second corpus-mint run (S-1) — do
-not build it against a 100%-UNVERIFIED column.
+1. Surface: a `belay triage-ledger` command consuming the verify `--json` (score+verdict
+   pairs already in it) vs a `--triage-ledger FILE` flag on verify writing while
+   verifying?
+2. "True violation" definition for the calibration column: per-turn reduced FAIL, with
+   UNVERIFIED excluded?
+3. The ledger's budget-earning output: threshold sweep (violations-skipped vs budget
+   saved at each threshold) — the shape of the decision number?

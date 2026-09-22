@@ -3031,6 +3031,43 @@ def _cmd_phase0_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_triage_ledger(args: argparse.Namespace) -> int:
+    """`belay triage-ledger <verify-json>` — re-render the calibration measurement. No replay.
+
+    Loads a stored `belay verify --json` document, joins the `triage.scores` rows to the
+    per-turn reduced verdicts by ordinal, and prints the calibration ledger
+    `belay.verify.triage_ledger` renders — a pure re-render: no replay, no re-verification,
+    no clock read. A missing, malformed, or triage-less document is fail-closed (exit 2),
+    never a silently empty ledger; a document with zero decided rows renders the named
+    refusal with no rates and exits 0 (the INSTRUMENT SUSPECT shape — a measurement,
+    not a gate).
+    """
+    from belay.verify.triage_ledger import render_json, render_text, rows_from_document
+
+    document_path = Path(args.verify_json)
+    if not document_path.is_file():
+        _emit(f"belay: verify document not found: {document_path}")
+        return 2
+
+    try:
+        data = json.loads(document_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        _emit(f"belay: could not read verify document {document_path}: {exc}")
+        return 2
+
+    try:
+        ledger = rows_from_document(data)
+    except ValueError as exc:
+        _emit(f"belay: {exc}")
+        return 2
+
+    if args.json:
+        _emit(render_json(ledger))
+    else:
+        _emit(render_text(ledger))
+    return 0
+
+
 def _parse_labeled_ledger_arg(arg: str) -> tuple[str, Path]:
     """`LABEL=PATH` -> `(label, path)`, or raise `ValueError` naming the bad argument.
 
@@ -4484,6 +4521,42 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     gate_check.set_defaults(func=_cmd_gate_check)
+
+    triage_ledger = subcommands.add_parser(
+        "triage-ledger",
+        help="re-render the calibration measurement from a stored verify --json document (no replay)",
+        description=(
+            "Read ONE stored `belay verify --json` document and render the C10 "
+            "calibration ledger: the reliability curve (confidence deciles vs the "
+            "observed violation rate), the expected calibration error, and the "
+            "decision-relevant sweep — at each candidate threshold, how many true "
+            "violations would have been skipped and how much of the replay budget "
+            "saved. A PURE RE-RENDER: no replay, no re-verification, no clock read.\n\n"
+            "The violation column is the per-turn reduced FAIL (WARN folded with "
+            "PASS); UNVERIFIED turns and skipped turns (\"skipped\": true rows) are "
+            "excluded from the column and their counts stated. A document with no "
+            "triage section is a fail-closed error (exit 2); a document with zero "
+            "decided rows renders the named refusal (NO_DECIDED_ROWS) with NO rates "
+            "and exits 0 — the INSTRUMENT SUSPECT shape, never a fabricated 0%."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    triage_ledger.add_argument(
+        "verify_json",
+        metavar="verify-json",
+        help="a stored `belay verify --json` document (schema 1) to re-render",
+    )
+    triage_ledger.add_argument(
+        "--json",
+        action="store_true",
+        help=(
+            "emit ONE JSON document to stdout instead of the human report — the "
+            "same measurement (reliability, ECE, both sweeps, the excluded counts), "
+            "byte-stable; exit codes are unchanged, and the zero-denominator "
+            "refusal emits the refusal document with no rates"
+        ),
+    )
+    triage_ledger.set_defaults(func=_cmd_triage_ledger)
 
     invariant = subcommands.add_parser(
         "invariant",

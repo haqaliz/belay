@@ -214,6 +214,11 @@ NO_STATUS_SUBCOMMANDS: dict[str, str] = {
     # turn's status. An uncalibrated artifact's cost lands on `verify`, which is registered.
     "invariant infer": "emits authoring/calibration outcomes, not a turn's verdict status",
     "invariant-library list": "lists the named policy presets; renders no verdict",
+    # The C10 calibration ledger. Re-renders stored verdicts as the CALIBRATION
+    # column — violation counts and rates only; it renders no per-turn status, and
+    # the source document's coverage boundary was disclosed by `verify`, which is
+    # registered.
+    "triage-ledger": "re-renders verdicts as a calibration column (counts/rates only); no per-turn status rendered",
 }
 
 #: qualified function name -> the surface whose rendering it is part of.

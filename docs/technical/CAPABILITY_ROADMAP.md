@@ -948,18 +948,30 @@ exactly the named turns; fail-open (timeout / non-zero exit / malformed reply �
 replay); bounded subprocess (60 s timeout, 1 MiB stdout cap); flag-parity guard
 registration.
 
-**Eval data captured:** none yet — nothing is skipped by default and nothing is banked.
-What ships is the instrumentation the future ledger will need: per-turn triage scores in
-the additive `triage` section, ready to be compared against the verdicts replay produced.
+**Eval data captured:** the calibration ledger itself — `belay triage-ledger <verify.json>`
+re-renders ONE stored `belay verify --json` document as the measurement (reliability
+curve, ECE, threshold and top-N sweeps; UNVERIFIED and budget-skipped turns excluded
+with their counts stated; a zero-denominator column renders the named `NO_DECIDED_ROWS`
+refusal with no rates — the R6 false-zero defense). It is a **pure re-render**: no
+replay, no re-verification — the same document re-renders byte-identically, `--json`
+included. It measures **prediction of violations on the turns actually replayed**
+(calibrated ≠ caused), never decides the budget: it informs the operator who sets the
+knobs. Real volume arrives with the mint's second run; until then the denominator is
+stated and small n is never a base rate.
 
 **Dependencies:** C1 (the derived features), C4 (a replay verdict to triage toward), C6
 (the corpus, where the future ledger lives). **As built (slice 1, aspect `surfaces`,
-2026-09-21):** the verify surface above, end-to-end. **Not built, by name (slice 2+):**
-the calibration ledger (Jev's confidence vs the replay verdict that followed — gated on
-the S-1 mint decision; it needs corpus-banked decided per-turn cases, which the second
-corpus-mint run supplies), other reference authors (laya etc. — provider-neutrality is
-proven by a stub, not a second vendor integration), budget knobs on other surfaces, the
-live Jev REST contract pin (owner-supplied before the manual live test runs).
+2026-09-21):** the verify surface above, end-to-end. **As built (slice 2, aspects
+`section-extension` + `calibration-math` + `ledger-command`, 2026-09-22):** skipped
+turns' scores in the budgeted triage section (`"skipped": true`, shadow byte-unchanged),
+the stdlib calibration math, and the `belay triage-ledger` command. **Not built, by
+name (slice 2+):** multi-document aggregation (one document per invocation; a
+directory-level aggregate ledger is a follow-on), budget auto-tuning (the ledger earns a
+tighter budget by human decision on this measurement, never by itself), other reference
+authors (laya etc. — provider-neutrality is proven by a stub, not a second vendor
+integration), budget knobs on other surfaces, the live Jev REST contract pin
+(owner-supplied before the manual live test runs). The mint's second run (the owner's
+S-1 decision) supplies the ledger's real volume.
 
 ---
 
@@ -999,4 +1011,4 @@ built.
 | C7 | Live console | Wk 5–6 | 1 | No — the launch surface |
 | C8 | Claim re-derivation (A3) | Wk 7 | 1 | **Yes — cut first** · ✅ **SHIPPED** (PR #28, v0.27.0; the A3 WARN vocabulary is empty in v0 and the evaluator's caller-supplied-workspace short-circuit is a follow-on) |
 | C9 | Observability interop | Wk 8 | 1 | ✅ **SHIPPED** (ingest+correlate+attach + export-back fixture-collector round-trip; live-collector export deferred) |
-| C10 | Calibrated triage seam (BYOK, optional) | Wk 9+ | 1 | ✅ **SHIPPED** (slice 1: verify surface — shadow mode + threshold/top-N, UNVERIFIED-by-budget, additive `triage` section; calibration ledger deferred to slice 2, gated on the S-1 mint decision) |
+| C10 | Calibrated triage seam (BYOK, optional) | Wk 9+ | 1 | ✅ **SHIPPED** (slice 1: verify surface — shadow mode + threshold/top-N, UNVERIFIED-by-budget, additive `triage` section; slice 2: the calibration ledger — `belay triage-ledger`, the pure re-render of the measurement; aggregation + budget auto-tuning deferred by name; the mint's second run supplies volume) |
