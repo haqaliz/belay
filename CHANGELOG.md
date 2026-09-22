@@ -5,6 +5,36 @@ All notable changes to Belay are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0 — until then,
 `0.x` minor bumps may include changes that would be breaking under strict semver.
 
+## [0.37.0] - 2026-09-22
+
+**The calibration ledger ships (C10 slice 2, PR #42)** — a pure-Belay measurement that
+pairs each triaged turn's score and confidence with the execution-grounded verdict
+replay produced, and renders the reliability curve, ECE, and the decision-relevant
+number: violations-skipped × budget-saved at each candidate threshold. Jev's
+"calibrated confidence" is a vendor claim until this ledger measures it.
+
+### Added
+
+- **`belay triage-ledger <verify-json>`** — a pure re-render (no replay, no
+  re-verification): reads the `triage` scores and the per-turn verdicts from a stored
+  `belay verify --json` document and reports the reliability curve (equal-width
+  deciles), the expected calibration error, and the threshold / top-N sweeps.
+  Deterministic and byte-stable (`--json` output available).
+- **The violation column is execution-grounded**: per-turn reduced FAIL; UNVERIFIED
+  turns are excluded with the count stated; a document with zero decided rows renders a
+  named refusal with no rates (a measurement, never a gate); a document with no triage
+  section is refused with exit 2.
+- **Budgeted-mode transparency**: skipped turns' scores now appear in the verify
+  `triage` JSON section, marked `"skipped": true` — shadow mode is unchanged, and
+  triage on/off still produce byte-identical verdicts (the refutation, enforced by
+  test).
+- Honesty lines: the ledger measures prediction of violations on the turns actually
+  replayed (calibrated ≠ caused); the demo capture proves the mechanics and contributes
+  zero violation rows — the first real positive rows come from the next mint run, and
+  until then the denominator is always stated. No published number moves — `11/60 =
+  18.3%`, `precision 0.00`, `1/15`, `4/16`, `recall 0.00` stand unedited. Suite 2721 →
+  2743.
+
 ## [0.36.0] - 2026-09-22
 
 **The calibrated-triage seam ships (C10 slice 1, PR #41)** — a provider-neutral, BYOK,
