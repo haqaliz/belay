@@ -2,6 +2,56 @@
 
 This file orients a coding agent working in this repository. Read it first.
 
+> **C10 SLICE 1 SHIPS — THE CALIBRATED-TRIAGE SEAM: A MODEL MAY TRIAGE, ONLY EXECUTION
+> MAY DECIDE** (2026-09-21, `jev-triage`, PR #41, v0.36.0). Owner demand-pull 2026-09-19;
+> rewritten to a **provider-neutral** seam per the owner's PS (laya / any model later):
+> the engine never knows the model — triage is a **subprocess command** (the A3
+> `SubprocessAuthor` pattern), so **any model = any command**; Jev is the first
+> **reference author**, laya would be another reference author, never an engine adapter.
+> Five aspects, strict TDD, suite 2575 → **2721** (the PRD predicted +40–60; the honest
+> actual is +139 — a low estimate, not a surprise to hide).
+> **`triage-seam`** (`src/belay/verify/triage.py`): `Triage` protocol, `TriageFeatures`
+> (whitelisted derived features only — raw state/trace bytes **structurally
+> unrepresentable**, payload key set asserted against `WHITELISTED_KEYS`), `TriageScore`
+> (fail-closed, ranges validated at parse), `NullTriage` (default), `SubprocessTriage`
+> (60 s timeout + 1 MiB stdout cap; **every** failure — exit ≠ 0, malformed stdout,
+> timeout, cap — is an abstention, never a raise, never a fabricated score),
+> `triage_from_env` (`BELAY_TRIAGE_AUTHOR`, unset/blank/un-lexable ⇒ absent, never a
+> crash). **`budget`** (`triage_budget.py`): `decide_replays` — threshold ∪ top-N, shadow
+> default, all-abstain ⇒ full replay (**fail-open — a broken triage command never shrinks
+> the budget**, the review-gate amendment); skip cause `"skipped by the triage budget"`
+> registered in the closed vocabulary (`replay/report.py` `_PREFIX_LABELS`) with its
+> guard. **`surfaces`**: `verify`-only flags `--triage-author CMD` (shlex, exit 2
+> un-lexable, env fallback), `--triage-threshold`, `--triage-top-n`, `--no-triage` (wins
+> over env); flag-parity guard registered; a skipped turn is a `TurnVerdict` UNVERIFIED
+> with the triage cause, **never replayed, never PASS**; additive `triage` section in
+> `--json` + text line, absent-never-zero. **`reference-author`**
+> (`reference_triage_author.py`): the Jev REST author — the documented placeholder shape
+> **met the real service and was adapted by execution, not assumption** (owner key
+> verified live 2026-09-22: `api.typesafe.ai/v1/systemone` answers 200, `tokenra.io`
+> 401): request `{model, state, questions}` with one `score` question (two ordered
+> levels ⇒ score lands in [0,1]), response mapped fail-closed from
+> `answers.<name>.score/.confidence`; `BELAY_JEV_KEY` read **by the author only, the
+> engine never reads or passes a key** (pinned); stdlib urllib, zero-LLM guard green.
+> **`refutation`** (`tests/test_refutation_triage.py`): identity — triage on/off verdicts
+> byte-identical on the demo capture with an anti-vacuity spy (proven on disk), absent ⇒
+> no subprocess/no network, whitelist at the surface; the owner-run live proof is
+> `manual`-marked and **PASSED at n=1** (`jev-1.13.0`, wall 0.9 s, exit 0, stdout
+> `'{"score": 0.82, "confidence": 0.63}'` — verbatim at
+> `docs/planning/jev-triage/reference-author/live-proof.out`; the owner's key traveled by
+> env only, never committed).
+> **Honesty lines:** this slice **banks no calibration ledger and saves no cost yet** —
+> shadow mode is the default; triage is a router, **never a verdict** (on/off identity is
+> the refutation); a skipped turn is UNVERIFIED-by-budget, never PASS; **no published
+> number moves** (`11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16`, `recall 0.00`, `3/93`
+> stand unedited). **NOT built, by name:** the calibration ledger (downstream of the S-1
+> mint decision — decided per-turn cases at volume; the `effect-conformance-coverage`
+> fix closed its named gate, the mint re-run supplies the data); per-model reference
+> authors beyond Jev (laya etc. — the seam is provider-neutral by construction); budget
+> knobs beyond `verify` (phase0/corpus follow the pinned `--claim-author` decision);
+> skipped turns' scores in budgeted mode (coherent today — scores pair with verdicts).
+> See `docs/planning/jev-triage/`.
+>
 > **THE CORPUS-FILLING MINT STOPPED AT ITS OWN PRE-REGISTERED GATE, AND THE CAUSES ARE
 > PRE-EXISTING** (2026-09-19, `phase0-corpus-mint`, v-next; not released). **NOT a gate run;
 > produces NO Phase-0 number.** Two aspects shipped, the third stopped.
