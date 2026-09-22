@@ -224,14 +224,15 @@ def _synthetic_document() -> dict:
 
 
 #: The full text render of the synthetic document, computed by hand:
-#: 11 turns total, 8 decided, 2 excluded (1 UNVERIFIED, 1 skipped), 1 unscored;
+#: 11 turns total, 8 decided, 3 excluded (1 UNVERIFIED, 1 skipped, 1 unscored —
+#: the count is `total - decided`, so the breakdown sums to it exactly);
 #: violations 5/8; ECE 0.375; the reliability curve of the calibration-math
 #: fixture (deciles 1/3/7 "no data"); the threshold sweep (score < threshold) and
 #: the top-N sweep (N lowest scores, ties by lowest ordinal) — skipped counts
 #: against the 8 decided rows, budget saved as the percentage of rows skipped.
 _EXPECTED_TEXT = (
     "belay triage ledger: demo/trace-0.jsonl\n"
-    "turns: 11 total, 8 decided, 2 excluded (1 UNVERIFIED, 1 skipped, 1 unscored)\n"
+    "turns: 11 total, 8 decided, 3 excluded (1 UNVERIFIED, 1 skipped, 1 unscored)\n"
     "violations: 5/8 = 62.5%\n"
     "ece: 0.375\n"
     "reliability:\n"
