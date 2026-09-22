@@ -238,9 +238,11 @@ def triage_section(
     Present iff a triage command was configured for the run — absent-never-zero,
     the `approval` precedent. `mode` is `budgeted` when either knob was set and
     `shadow` otherwise; `skipped` counts the scope turns the budget skipped;
-    `scores` records the score of every turn the budget REPLAYED (a skipped turn
-    has no replay verdict for the future calibration ledger to pair its score
-    with, and an abstention is NOT a score of 0 — both are absent); and
+    `scores` records the score of every SCORED turn in scope — replayed rows
+    unchanged, skipped rows marked `"skipped": true` (so the future calibration
+    ledger can audit what the budget skipped) — and an abstention (None) is NOT
+    a score of 0 and stays absent. Shadow mode has no skipped turns, so no row
+    gains a marker: the shadow section is byte-identical to v0.36.0's.
     `threshold`/`top_n` appear only when set.
     """
     if replay_indices is None:
@@ -251,9 +253,14 @@ def triage_section(
         "mode": mode,
         "skipped": skipped,
         "scores": [
-            {"ordinal": n, "score": score.score, "confidence": score.confidence}
+            {
+                "ordinal": n,
+                "score": score.score,
+                "confidence": score.confidence,
+                **({"skipped": True} if n not in replay_indices else {}),
+            }
             for n in scope
-            if n in replay_indices and (score := score_by_turn.get(n)) is not None
+            if (score := score_by_turn.get(n)) is not None
         ],
     }
     if threshold is not None:
