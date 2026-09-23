@@ -5,6 +5,29 @@ All notable changes to Belay are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0 — until then,
 `0.x` minor bumps may include changes that would be breaking under strict semver.
 
+## [0.38.0] - 2026-09-23
+
+**The composite-snapshot fix ships, and the corpus grows for the first time since
+2026-08-12 (PR #43).** Under a composite transport (a filesystem and a shell server behind
+one pipe), a single broadcast `tools/list` is answered twice. Effect-conformance used to
+read only the last answer, so every filesystem tool read as absent and abstained. It now
+reads the latest snapshot together with its broadcast twins: same id, same origin, in
+flight together, an exact grouping and never a time window. A tool the twins describe
+differently abstains with a new named producer, `tool-ambiguous`. Single-server traces are
+unchanged. This is a coverage gain, not improved detection.
+
+- **The mint's `--verify` now threads the shell server**, so it is equivalent to the
+  `belay phase0 run` command it prints.
+- **The declared second corpus-filling mint ran.** Run 2 stopped at its own gate, and the
+  cause is the defect above. Run 3, after the fix, cleared its gate: 10/10 captured, 8
+  clean, 2 trajectory FAILs banked as pending corpus cases, and `corpus run` 9/9 MATCH.
+  **This is not a gate run and produces no Phase-0 number** (8 real instances).
+- **A correction by measurement:** the 2026-09-19 record said the pinned npm filesystem
+  server declares no annotations. It declares `readOnlyHint` on all 14 tools; only the
+  shell server's `run_process` declares nothing.
+- No published number moves (`11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16`,
+  `recall 0.00`, `3/93` stand unedited).
+
 ## [0.37.0] - 2026-09-22
 
 **The calibration ledger ships (C10 slice 2, PR #42)** — a pure-Belay measurement that
