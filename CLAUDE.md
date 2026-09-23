@@ -2,41 +2,43 @@
 
 This file orients a coding agent working in this repository. Read it first.
 
-> **THE DECLARED SECOND MINT STOPPED AT ITS OWN GATE AGAIN, AND THE RUN REFUTED THE
-> WARRANT, NOT THE BRANCH** (2026-09-23, `corpus-mint-second-run`, branch
-> `feat/corpus-mint-second-run/aliz`; not merged, not released). **NOT a gate run; produces
-> NO Phase-0 number; NOT a result about agents.** Four aspects.
-> **`verify-parity`:** the mint's `--verify` now threads the shell server into
-> `run_verify`, so `--verify` ≡ the printed `phase0 run` command (the run-1 `a3-author`
-> defect class, second instance). TDD: RED `4915341` → `b6195dd`.
-> **`mint-run` — RUN ONCE, GATE SAID STOP.** Freeze `2ef2e09` (no result), verbatim
-> `77dc4bf`, engine v0.37.0, root `cm3`, registries reused verbatim, controls re-driven
-> as the owner's declared decision: **2 captured, 0 failed**, 34.4 s, 7 requests →
-> **`NO_VERIFIABLE_TURNS: 2`, UNVERIFIED 5/5, `INSTRUMENT SUSPECT` → STOP; stage 2 never
-> launched.** Not a D-3 void (no control FAILed), not a zero. **The PRD's warrant ("turns
-> now reduce to decided") is refuted.** NOT_COVERED never fired. An offline derivation
-> (not re-execution, not yet adjudicated) finds a **composite-transport correlation
-> artifact**: two `tools/list` responses interleave on the merged pipe,
-> `annotation_for_turn` takes `live[-1]` (the shell list), and filesystem tools read as
-> `tool-absent` → UNVERIFIED. The v0.35.0 fix was **necessary, not sufficient**. The 5th
-> turn is `UNRESTORABLE_SNAPSHOT_FAILED`, which predates this run.
-> **`corpus-banking`:** recompute scripts frozen and **pinned against the real parser**
-> (`a3a4147`; the plan's `--corpus-dir`/`--server` flags do not exist on `corpus run`,
-> and the plan is corrected). **Zero cases banked** (nothing flagged). The 7 pre-existing
-> cases recompute **7/7 MATCH, 0 REGRESSION, 0 SKIP**. `corpus score` shows TN 7, precision/recall
-> **n/a**. The freeze landed after stage 1's verify, not before it. The deviation is recorded,
-> and the run-once rule held.
-> **`audit-and-publish`:** evidence pack (FLAGS / AUDIT / HAND_REPLAY / REPRODUCIBILITY).
-> Zero flags, so none dropped and none judged. Both stage-1 ledgers are now committed and
-> **re-render byte-identically** from a clean checkout, run 1's (written by 0.33.0)
-> included. HAND_REPLAY says plainly that no FAIL exists to replay.
-> **Honesty lines:** UNVERIFIED 3/3 (run 1, 0.33.0) and 5/5 (run 2, 0.37.0) are **NOT
-> comparable** because they sit across the v0.35.0 NOT_COVERED boundary. The calibration ledger
-> still has **zero decided rows** from real data. **No published number moves**
+> **THE COMPOSITE-SNAPSHOT FIX LANDS AND THE THIRD PROBE CLEARS ITS GATE — THE CORPUS
+> GROWS FOR THE FIRST TIME SINCE 2026-08-12** (2026-09-23, `corpus-mint-second-run`).
+> **NOT a gate run; produces NO Phase-0 number** (n = 8 real, under 50 by construction). The
+> stage-2 output line `violation rate = 2/10 = 20.0%` is unadjudicated arithmetic over
+> records that include controls, and **it must never be quoted.** Five aspects.
+> **`verify-parity`:** the mint's `--verify` threads the shell server into `run_verify`,
+> so `--verify` ≡ the printed `phase0 run` command (RED `4915341` → `b6195dd`).
+> **Run 2 (`cm3`) stopped at its own gate:** `NO_VERIFIABLE_TURNS: 2`, UNVERIFIED 5/5,
+> `INSTRUMENT SUSPECT` → STOP. The PRD's warrant (*"turns now reduce"*) was refuted.
+> **Root cause, measured: a composite-transport correlation artifact.** One broadcast
+> `tools/list` is answered by two servers on one pipe, and `annotation_for_turn` read only
+> `live[-1]` (the shell list), so every filesystem tool read `tool-absent`.
+> **The fix** (`0292cbb` RED → `aad775f`): `annotations.contract_in_force` reads the latest
+> snapshot **with its broadcast twins**. Twins are exact, never a time window: same id,
+> same origin, in flight together. A sequential re-snapshot still replaces the contract. A
+> tool that two twins describe differently abstains with a new producer, `tool-ambiguous`
+> (UNVERIFIED, never a pick). Single-server traces are byte-unchanged. Suite 2755 →
+> **2764**. **A correction by measurement:** the run-1 root cause (*"the npm filesystem
+> server declares NO annotations"*) is **wrong**. The filesystem list declares
+> `readOnlyHint` on all 14 tools, and only `run_process` declares nothing. Annotated in
+> place.
+> **Run 3, once, under the freeze** (`4cd08a3`), owner's S-1 *continue*. **Stage 1 (`cm5`):
+> VERIFIED_CLEAN 2**, 4/5 PASS, gate clears. **Stage 2 (`cm6`): 10/10 captured, 8 CLEAN /
+> 2 FLAGGED**, 0/45 per-turn FAIL, no control FAILed (not void), 855 s, 55 requests. The
+> two flags are **trajectory FAILs** (`django-11422`, `django-14382`: VERIFICATION claim,
+> `run_process` offered, 0 command turns). Both claims say *"verified by reading the file
+> back"*, the coarse vocabulary edge the gate record already names as caveat (3).
+> **Listed, not judged.** Hand-replay of `11422` reproduces the FAIL (**MATCH**). Both
+> **banked `pending`**, the first corpus growth since 2026-08-12. `corpus run` **9/9 MATCH,
+> 0 REGRESSION, 0 SKIP**. `corpus score` precision/recall **n/a**. A3 on the two FAILs is
+> `NO_CHECK_AUTHOR` (the author abstained; the reason was not observed). All five stage
+> ledgers are committed, and every one re-renders **byte-identically** from a clean checkout.
+> **Honesty lines:** the fix is a **coverage gain, not improved detection**, and UNVERIFIED
+> shares across runs 1/2/3 are **NOT comparable**. **No published number moves**
 > (`11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16`, `recall 0.00`, `3/93` stand
-> unedited). **Open, the owner's by S-1** (`AUDIT.md`, unsigned): continue (fix the
-> correlation to use the latest snapshot *containing* the tool, then a third probe; the
-> preparer's recommendation) / re-scope / stop. Suite 2743 → **2755**. See
+> unedited). **Open, the owner's by S-1:** label the two pending cases (`belay corpus
+> label`), with evidence in `audit-and-publish/AUDIT.md`. See
 > `docs/planning/phase0-corpus-mint/`.
 >
 > **C10 SLICE 2 SHIPS — THE CALIBRATION LEDGER: THE VENDOR'S "CALIBRATED CONFIDENCE"
