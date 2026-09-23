@@ -193,6 +193,59 @@ def _staleness(records: list[dict], derived: list[dict]) -> list[dict]:
     return out
 
 
+def contract_in_force(
+    index: list[dict], snapshots: list[dict], request_seq: int
+) -> list[dict]:
+    """The snapshots in force for a call at `request_seq`: the latest one AND its twins.
+
+    One pipe normally carries one server, and the latest `tools/list` answer is the
+    whole contract. A composite transport broadcasts one `tools/list` — one JSON-RPC id —
+    to several servers, so the trace holds several requests with that id IN FLIGHT
+    TOGETHER, each answered by a different server. Those answers are one contract split
+    across servers; reading only the last would correlate a tool against a server that
+    never offered it, and which tool lost would depend on arrival order.
+
+    Twins are exact, never a time window: same id, same origin, and each request sent
+    before the other was answered. A single server cannot hold two in-flight requests
+    with one id, so a single-pipe trace always yields one snapshot here, and a sequential
+    re-snapshot (a new id, or an id reused after completion) replaces the contract
+    exactly as before. `[]` when no snapshot precedes the call.
+    """
+    live = [s for s in snapshots if s["source_seq"] < request_seq]
+    if not live:
+        return []
+    by_response = {
+        e["response_seq"]: e
+        for e in index
+        if e["kind"] == "correlation"
+        and e.get("method") == "tools/list"
+        and e["request_seq"] is not None
+    }
+    anchor = by_response.get(live[-1]["source_seq"])
+    if anchor is None:
+        return [live[-1]]
+
+    def twin(entry: Optional[dict]) -> bool:
+        return (
+            entry is not None
+            and entry["origin"] == anchor["origin"]
+            and entry["id"] == anchor["id"]
+            and entry["request_seq"] < anchor["response_seq"]
+            and anchor["request_seq"] < entry["response_seq"]
+        )
+
+    return [s for s in live if twin(by_response.get(s["source_seq"]))]
+
+
+def _twins_note(live: list[dict]) -> str:
+    """` and its broadcast twin(s) (seq …)` — empty for a single-server contract, so
+    that cause stays byte-identical to what it has always said."""
+    if len(live) < 2:
+        return ""
+    seqs = ", ".join(str(s["source_seq"]) for s in live[:-1])
+    return f" and its broadcast twin(s) (seq {seqs})"
+
+
 def _uncovered_calls(
     records: list[dict], index: list[dict], frames: dict[int, dict], derived: list[dict]
 ) -> list[dict]:
@@ -229,7 +282,7 @@ def _uncovered_calls(
             )
             continue
         name = params.get("name")
-        live = [s for s in snapshots if s["source_seq"] < entry["request_seq"]]
+        live = contract_in_force(index, snapshots, entry["request_seq"])
         if not live:
             out.append(
                 {
@@ -243,7 +296,7 @@ def _uncovered_calls(
                     ),
                 }
             )
-        elif not any(t["name"] == name for t in live[-1]["tools"]):
+        elif not any(t["name"] == name for s in live for t in s["tools"]):
             out.append(
                 {
                     "kind": "annotation_gap",
@@ -252,6 +305,7 @@ def _uncovered_calls(
                     "cause": (
                         "the tool is absent from the most recent tools/list snapshot "
                         f"(seq {live[-1]['source_seq']})"
+                        + _twins_note(live)
                     ),
                 }
             )

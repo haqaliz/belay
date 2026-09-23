@@ -78,11 +78,12 @@ re-executed diff, never a judge.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Optional, Sequence
 
-from belay.annotations import derive_annotations
+from belay.annotations import contract_in_force, derive_annotations
 from belay.declared import (
     DECLARED_FALSE,
     DECLARED_NON_BOOLEAN,
@@ -151,6 +152,7 @@ Producer = Literal[
     "unreadable-request",
     "no-snapshot",
     "tool-absent",
+    "tool-ambiguous",
     "server-declared-nothing",
 ]
 
@@ -161,6 +163,11 @@ PRODUCER_UNREADABLE_REQUEST: Producer = "unreadable-request"
 PRODUCER_NO_SNAPSHOT: Producer = "no-snapshot"
 #: ii — a snapshot WAS observed, and this tool is absent from it.
 PRODUCER_TOOL_ABSENT: Producer = "tool-absent"
+#: ii′ — the contract in force spans broadcast twins (a composite transport: one
+#: `tools/list`, several servers), and two of them describe this tool DIFFERENTLY. The
+#: trace carries no server provenance, so which description the call reached is not
+#: observable — an abstention, never a pick.
+PRODUCER_TOOL_AMBIGUOUS: Producer = "tool-ambiguous"
 #: iv — a snapshot WAS observed, the tool IS in it, and the server declared no `readOnlyHint`.
 #: The one producer that is not a failed attempt: a complete observation of a server that
 #: promised nothing.
@@ -226,7 +233,8 @@ def annotation_for_turn(records: Sequence[dict], n: int) -> TurnAnnotation:
 
     Picks the turn by `method == "tools/call"` (index `n`), reads its tool name, and
     correlates it against the MOST RECENT snapshot whose `source_seq` precedes the call's
-    `request_seq`. A missing snapshot, an absent tool, or an unreadable request all yield
+    `request_seq` — together with that snapshot's broadcast twins, when a composite
+    transport split one `tools/list` across servers (`annotations.contract_in_force`). A missing snapshot, an absent tool, or an unreadable request all yield
     a not-declared contract WITH a named cause — never a manufactured default.
 
     **Every return site names its `producer` explicitly**, including the one that needs no
@@ -269,7 +277,7 @@ def annotation_for_turn(records: Sequence[dict], n: int) -> TurnAnnotation:
     # The contract in force WHEN the call happened: the latest snapshot that PRECEDES it.
     # `>= request_seq` snapshots are a later re-snapshot and must not be read back over
     # a call that predates them — that is the correlation bug the test guards.
-    live = [s for s in snapshots if s["source_seq"] < request_seq]
+    live = contract_in_force(index, snapshots, request_seq)
     if not live:
         return TurnAnnotation(
             tool=name,
@@ -283,7 +291,21 @@ def annotation_for_turn(records: Sequence[dict], n: int) -> TurnAnnotation:
         )
 
     snapshot = live[-1]
-    facts = next((t for t in snapshot["tools"] if t["name"] == name), None)
+    found = [(s, t) for s in live for t in s["tools"] if t["name"] == name]
+    if len({json.dumps(t, sort_keys=True) for _, t in found}) > 1:
+        return TurnAnnotation(
+            tool=name,
+            readonly=declared_state(None, False),
+            snapshot_seq=snapshot["source_seq"],
+            cause=(
+                "the tool is described differently by broadcast-twin tools/list snapshots "
+                f"(seq {', '.join(str(s['source_seq']) for s, _ in found)}) and the trace "
+                "does not record which server the call reached, so its readOnlyHint is "
+                "not-declared"
+            ),
+            producer=PRODUCER_TOOL_AMBIGUOUS,
+        )
+    snapshot, facts = found[-1] if found else (snapshot, None)
     if facts is None:
         return TurnAnnotation(
             tool=name,
@@ -698,6 +720,7 @@ __all__ = [
     "PRODUCER_NO_SNAPSHOT",
     "PRODUCER_SERVER_DECLARED_NOTHING",
     "PRODUCER_TOOL_ABSENT",
+    "PRODUCER_TOOL_AMBIGUOUS",
     "PRODUCER_UNNAMED",
     "PRODUCER_UNREADABLE_REQUEST",
     "Producer",
