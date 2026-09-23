@@ -1,8 +1,37 @@
 # Aspect — `mint-run`
 
 **Grade: MEASURED.** A live, stochastic, **unrepeatable** run. Not TDD-able: the
-deterministic aspects (`a3-author`, `mint-registry`) carry the test-first weight and are
-complete and green.
+deterministic aspects (`a3-author`, `mint-registry`, `verify-parity`) carry the
+test-first weight and are complete and green.
+
+> **AMENDMENT — RUN 2 DECLARED (2026-09-22, owner S-1).** Run 1 ran once
+> (`acceptance-cm-stage1.sh` → `acceptance-cm-stage1.out`) and its pre-registered gate
+> said STOP (`STAGE1_FINDINGS.md`). This is the **declared** second run (Rule D: "a
+> second run only if declared"). What changes:
+> - **Fresh roots under the holder: `cm3` (stage 1), `cm4` (stage 2).** `cm1` holds
+>   run-1's batch + checkpoint (never reused); `cm2` was never touched and stays
+>   reserved. New frozen scripts `acceptance-cm3-stage1.sh` / `acceptance-cm4-stage2.sh`
+>   (or run-2-named), committed **containing no result** before the run.
+> - **Registries reused verbatim:** `eval/instances/cm-stage1.json` (CTL-1 + CTL-4) and
+>   `cm-stage2.json` (CTL-2 + CTL-3 + 8 fresh reals, controls first). No regeneration,
+>   no seed change (`SEED_HISTORY` stays empty; byte-identical regeneration remains the
+>   reproducibility check — run it, do not change it).
+> - **Controls re-driven as a declared decision** (owner-confirmed 2026-09-22): run-1's
+>   CTL-1/CTL-4 produced observations, and the anti-re-roll letter reads "an instance
+>   that produced an observation is never re-armable" — controls are the run's own
+>   calibration instruments, not population draws; run 1's stage-1 gate never cleared;
+>   per-stage fresh controls are the gate-mint pattern. Recorded, not silent.
+> - **The instrument the probe died on is fixed:** `effect-conformance-coverage`
+>   (v0.35.0) — not-declared `readOnlyHint` is now an `effect` `NOT_COVERED` sub-verdict
+>   that `reduce` drops before ranking, so replayed turns against the annotation-less
+>   npm server reduce via their other sub-verdicts and `VERIFIED_CLEAN` is reachable.
+>   The `UNVERIFIED` rate across this boundary is **not comparable** to run 1's — a
+>   reclassification, never improved detection. Residuals: `UNRESTORABLE_SNAPSHOT_FAILED`
+>   untouched (run 1 lost 1/3 probe turns to it) and the three observation-failure
+>   producers remain UNVERIFIED.
+> - **Verify via stock `belay phase0 run`** (the frozen scripts' shape) — NOT the mint's
+>   `--verify` (the shell-threading parity gap is fixed by the `verify-parity` aspect,
+>   but the scripts' direct form remains authoritative).
 
 ## Problem slice
 
@@ -23,11 +52,19 @@ so that trajectory / per-turn / A3 FAILs **bank as corpus cases**.
 
 ## In scope
 
-1. Frozen invocation scripts, committed before the run, containing **no result**.
-2. **Stage 1** (probe): `cm-stage1.json` — CTL-1 + CTL-4, 2 records.
-3. **Stage 1 gate**, evaluated before stage 2 is launched.
-4. **Stage 2**: `cm-stage2.json` — CTL-2 + CTL-3 + 8 fresh real, controls first.
-5. Verify each stage through **stock `belay phase0 run`**, ingesting into the corpus.
+1. **Run-2 frozen invocation scripts**, committed before the run, containing **no result**
+   (grep-checked; the freeze is itself a committed test — the `test(mint-run)` RED that
+   pins the scripts' shape: fresh absolute roots under the holder, committed registries
+   referenced verbatim, `--shell-server` before `--server`, `BELAY_CLAIM_AUTHOR`
+   exported, no result shapes).
+2. **Stage 1** (probe): `cm-stage1.json` — CTL-1 + CTL-4, re-driven as declared
+   (amendment above), root `cm3`.
+3. **Stage 1 gate**, evaluated before stage 2 is launched: a capture must be produced,
+   ≥1 turn genuinely verifiable, both controls clean (D-3: a FAILing control VOIDS).
+4. **Stage 2**: `cm-stage2.json` — CTL-2 + CTL-3 + 8 fresh real (never driven), controls
+   first, root `cm4`.
+5. Verify each stage through **stock `belay phase0 run`**, ingesting into the corpus
+   (with `--shell-server` before `--server`, `BELAY_CLAIM_AUTHOR` exported).
 6. Verbatim outputs committed, whatever they say.
 
 ## The invocation, and the two things it must get right
@@ -56,7 +93,9 @@ that can fill it — `run_verify`'s missing `claim_author=` was fixed in this un
 - **Any violation rate** (Q1). Dispositions and banked-case counts only.
 - **Owner labeling / adjudication** (Q3, S-1). Cases bank as `pending`.
 - **Stage 3 / the ≥50 denominator.** Not safely reachable, not attempted.
-- Re-driving any instance that produced an observation.
+- Re-driving any **real instance** that produced an observation (the 8 cm-stage2 reals
+  were never driven and are eligible; run-1's stage-1 reals are not in these registries).
+  Controls re-drive is in scope, as declared in the amendment above.
 - Tuning any rule, prompt or threshold to change what the mint finds.
 
 ## Acceptance — measured, never asserted

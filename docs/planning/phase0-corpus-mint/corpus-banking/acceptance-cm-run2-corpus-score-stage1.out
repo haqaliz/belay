@@ -1,0 +1,33 @@
+=== corpus score — /Users/aliz/dev/at/holder/belay/corpus-local ===
+belay corpus score /Users/aliz/dev/at/holder/belay/corpus-local
+
+  7 case(s) scored against HUMAN labels (no replay — stored verdicts only).
+
+confusion matrix (positive = engine FAIL; over decided verdict x adjudicable label)
+  TP                    0
+  FP                    0
+  FN                    0
+  TN                    7
+
+independent findings (the gate counts INDEPENDENT true positives, not raw TPs)
+  independent           0   distinct root-cause keys
+  independent, strict   0   distinct instance+tool
+
+metrics
+  precision             n/a   TP/(TP+FP)
+  recall                n/a   TP/(TP+FN)
+  coverage              1.00   decided / adjudicable
+
+excluded (not scored in precision/recall — never folded in as PASS)
+  UNVERIFIED verdict    0   engine could not decide; lowers coverage
+  pending label         0   not yet adjudicated by a human
+  unverifiable label    0   no ground truth to score against
+
+  Precision/recall are reported ONLY with coverage: a corpus can look perfect on the
+  cases it decided while shrugging on the rest. An n/a rate means a 0 denominator —
+  it is NOT a 1.00. UNVERIFIED and unadjudicated labels are excluded, never a PASS.
+
+  coverage (NOT_COVERED — outside what Belay observes; never a PASS)
+    effect:network      NOT observed for 7/7 scored case(s)
+    This is the NOT_COVERED boundary of the verdicts scored above. It is NOT the same thing as the `coverage` rate, which is decided / adjudicable labels — a scoring denominator, not a statement about what Belay observes.
+exit 0

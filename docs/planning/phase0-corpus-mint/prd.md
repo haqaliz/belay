@@ -12,9 +12,63 @@
 > **Status: DRAFT — six scope decisions are PROVISIONAL** (§7). They were taken by the
 > implementer on a "GTG" and are listed for confirmation at the review gate. Nothing
 > irreversible happens before that gate.
-
+>
+> **AMENDMENT — SECOND RUN DECLARED (2026-09-22, owner S-1, `corpus-mint-second-run`).**
+> The provisional status above is superseded: all six scope decisions were confirmed at
+> the 2026-09-19 review gate (§7), aspects 1–2 shipped, and the stage-1 probe ran once
+> and its pre-registered gate said STOP (`mint-run/STAGE1_FINDINGS.md`). The owner's
+> open S-1 branch — *fix the instrument / re-scope the probe / declare a second run /
+> stop* — is answered by **declare a second run**, the recommendation the record made
+> (`docs/STATUS.md:117-119`). The instrument fix the recommendation asked for has
+> **shipped**: `effect-conformance-coverage` (v0.35.0) moved the *observed-but-
+> not-declared* producer to a `NOT_COVERED` sub-verdict that `verdict.reduce` drops
+> before ranking, so a replaying turn against the annotation-less npm filesystem
+> server reduces to PASS-with-NOT_COVERED and `VERIFIED_CLEAN` is reachable — the
+> `NO_VERIFIABLE_TURNS` / `INSTRUMENT SUSPECT` stop is closed for that cause
+> (`src/belay/verify/effect.py:640-657`, `verdict.py:99-114`).
+> **This run reuses the committed registries verbatim** (`cm-stage1.json`,
+> `cm-stage2.json`, seed 20260919, `SEED_HISTORY` empty — byte-identical
+> regeneration remains the reproducibility check). The 8 fresh reals were **never
+> driven** (stage 2 never launched) and are eligible. **The four controls are
+> re-driven in fresh roots as a declared decision** (owner-confirmed 2026-09-22):
+> the anti-re-roll contract's letter reads "an instance that produced an observation
+> is never re-armable" (`checkpoint.py:15-21`), and CTL-1/CTL-4 produced observations
+> in run 1 — but controls are the run's own calibration instruments, not population
+> draws, run 1's stage-1 gate never cleared, and per-stage fresh controls are the
+> gate-mint pattern. The re-drive is recorded, not silent. **Fresh roots under the
+> holder**: `cm3` (stage 1) and `cm4` (stage 2) — `cm1` holds run-1's batch and
+> checkpoint; `cm2` was never touched and stays reserved. n≈12 staged per Rule A,
+> controls first, stop-loss by stage — all unchanged from §7.
+> **One deterministic aspect is added to this unit** (`verify-parity`): the dig found
+> `run_verify` threads `claim_author` but **not** `shell_server_command`
+> (`eval/minting_driver/entrypoint.py:995-1063`), while the printed command emits
+> `--shell-server` (`entrypoint.py:696-698`) — the same defect class the a3-author
+> aspect fixed for A3, and `eval/README.md:727-729` still calls them equivalent.
+> Owner-confirmed 2026-09-22: **fix it here** (eval-only, TDD, before any spend).
+> Not blocking the run — the frozen scripts verify via stock `belay phase0 run`.
+> **Unchanged honesty lines:** this is NOT a gate run and produces NO Phase-0 number;
+> no violation rate (Q1 — the fresh residue is ~100% django+sympy); `precision` stays
+> `n/a` (cases bank `pending`; only the owner labels, S-1); **no published number
+> moves** (`11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16`, `recall 0.00`, `3/93`
+> stand unedited); R-A stands (the A3 column may stay empty — a recorded result,
+> never a red test).
+> **Pre-registered branch — a second stage-1 STOP (2026-09-22, before the run).** If
+> run-2 stage-1 again yields `NO_VERIFIABLE_TURNS` / `INSTRUMENT SUSPECT`, the run
+> stops as always (MH-5) and **stage 2 does not launch**; the finding is recorded as
+> **probe-scale inviability against a pre-existing abstention rate** — the instrument
+> fix is validated by the verify pass itself (turns now reduce to decided,
+> `VERIFIED_CLEAN` reachable), so the blocker is probe size, not the instrument, and
+> any probe re-scope is a new declared owner decision. Decided now so the post-run
+> reading is not improvised.
+> **Ledger-consumption precision:** this run does not itself produce calibration-ledger
+> rows — the ledger needs `(score, confidence, verdict)` pairs and the mint verifies
+> via `phase0 run`, which carries no triage. What the run supplies is the first real
+> **decided per-turn verdict volume**; a triage-configured `belay verify` pass over
+> these traces is a later unit, named not built (`corpus-banking` spec, follow-on
+> note).
+>
 Source: `docs/planning/_card/issue.md` (brief + measured substrate state),
-`docs/planning/_card/understanding.md` (Phase-2 dig, four agents, all cited).
+`docs/planning/_card/understanding.md` (Phase-2 dig, two agents, all cited).
 
 ---
 
@@ -331,15 +385,17 @@ script will exist and be reviewable at that moment.
 Sequenced; each buildable by one agent. **The live run is one aspect and is gated behind
 the deterministic ones** — nothing spends until the instrument is proven.
 
-| # | Aspect | Boundary | Grade |
-|---|---|---|---|
-| 1 | `a3-author` | An A3 reference author + the `run_verify` threading, so A3 is reachable at all. Offline tests, scrub-by-absence | deterministic |
-| 2 | `mint-registry` | The fresh-instance registry from the 30, reproducible, seed in `SEED_HISTORY`, controls included | deterministic |
-| 3 | `mint-run` | Frozen scripts (no result), staged live drive under Rule A + D-3, verbatim outputs | **measured** |
-| 4 | `corpus-banking` | Verify → bank → `corpus run` recompute; unaddable causes named | **measured** |
-| 5 | `audit-and-publish` | Evidence pack for owner adjudication (S-1: evidence, never judgments), `PHASE0_RESULTS.md` entry opening with the not-a-gate-run paragraph, STATUS/CLAUDE blocks | docs |
+| # | Aspect | Boundary | Grade | Status |
+|---|---|---|---|---|
+| 1 | `a3-author` | An A3 reference author + the `run_verify` threading, so A3 is reachable at all. Offline tests, scrub-by-absence | deterministic | ✅ **SHIPPED** (2026-09-19, v0.34.0) |
+| 2 | `mint-registry` | The fresh-instance registry from the 30, reproducible, seed in `SEED_HISTORY`, controls included | deterministic | ✅ **SHIPPED** (2026-09-19, v0.34.0) |
+| 3 | `mint-run` | Frozen scripts (no result), staged live drive under Rule A + D-3, verbatim outputs | **measured** | ⏸️ run 1 STOPPED at its gate; **re-declared for run 2** (2026-09-22) |
+| 4 | `verify-parity` | `run_verify` threads `shell_server_command` so `--verify` ≡ the printed CLI command (eval-only; the a3-author defect class) | deterministic | **added 2026-09-22** — not started |
+| 5 | `corpus-banking` | Verify → bank → `corpus run` recompute; unaddable causes named | **measured** | not started |
+| 6 | `audit-and-publish` | Evidence pack for owner adjudication (S-1: evidence, never judgments), `PHASE0_RESULTS.md` entry opening with the not-a-gate-run paragraph, STATUS/CLAUDE blocks | docs | not started |
 
-Aspects 1–2 can run in parallel. Aspect 3 must not start until 1, 2 and D4 are green.
+Aspects 4 must land before aspect 3 (the run). Aspects 5–6 follow the run; 6 depends on
+5's banking outcomes.
 
 ---
 

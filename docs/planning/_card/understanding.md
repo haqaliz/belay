@@ -1,78 +1,87 @@
-# Understanding — C10 triage seam (shadow mode)
+# Understanding — second corpus-filling mint (`feat/corpus-mint-second-run`)
 
-## What this work is really asking
+Source: `docs/planning/_card/issue.md` (inline brief, 2026-09-22) · dig agents 2026-09-22.
 
-A BYOK, off-by-default triage/router seam that orders and samples which recorded turns get
-the expensive replay verification, using a cheap external decision model. Execution alone
-decides every verdict. Slice 1 is **shadow mode**: the seam exists, triage runs and logs
-alongside, the replay budget is untouched, nothing is skipped, and triage on/off produce
-identical verdicts on the turns replayed.
+## What this work really is
 
-## Key findings from the dig
+The owner's S-1 decision, taken in the affirmative: **declare a second corpus-filling
+mint run** (the recommendation the record already makes — `docs/STATUS.md:117-119`).
+The first run STOPPED at its pre-registered gate (`NO_VERIFIABLE_TURNS: 2`,
+`INSTRUMENT SUSPECT`, UNVERIFIED 3/3 = 100%) for a cause the engine has since fixed.
+The remaining scope of `phase0-corpus-mint` is exactly `mint-run` (re-declared),
+`corpus-banking`, `audit-and-publish` — the two deterministic aspects already shipped.
 
-1. **The seam mirrors the A3 `SubprocessAuthor` pattern exactly** — and that pattern is
-   already model-agnostic:
-   - `BELAY_CLAIM_AUTHOR` env / `--claim-author` flag, unset/blank/un-lexable => `None`
-     (axis absent, never a crash): `src/belay/verify/author.py:45,56-74`.
-   - `SubprocessAuthor` (BYOK, stdlib-only, JSON-in/JSON-out, fail-closed parse):
-     `author.py:77-143`; protocols `CheckAuthor`/`CheckRunner`: `verify/claims.py:120-145`.
-   - Engine never reads or forwards any key; the operator's command handles its own
-     credentials. Reference author scrubs `ANTHROPIC_*` by absence, never `""`:
-     `verify/reference_claim_author.py:72-76,209-224`.
-   - **This satisfies the owner's PS (laya / any model) by construction**: any triage model
-     = any subprocess command. Jev and Laya are reference authors, not engine providers.
-     The engine must NOT grow vendor adapters or an HTTP client (would break the
-     zero-LLM guard `tests/test_verify_zero_llm.py`).
+It is a **measured** unit (live, stochastic, unrepeatable, freeze-protocol) with
+deterministic seams, not a feature build. Its deliverables: the first real corpus
+growth since 2026-08-12 (moat #2 — trajectory FAILs bank, per-turn FAILs bank), the
+A3 claim column's first real verdicts, and the real volume the calibration ledger
+(v0.37.0) explicitly waits on.
 
-2. **The per-turn loop lives above `verify_turn`** — the only place ordering/sampling can
-   happen: `phase0/runner.py:303-319` (mint loop), `cli.py:1034-1040` (verify CLI),
-   `corpus/run.py:870-878` (per-turn cases). Replay itself is inside `verify_turn` at
-   `turn.py:369-373`. Slice 1 scopes to the **verify CLI** (mirroring the pinned
-   `--claim-author`-on-verify-only decision: `tests/test_verify_claim_surfaces.py:202-219`).
+## The instrument blocker is closed (verified at v0.37.0)
 
-3. **Flag-parity guard** (`tests/test_cli_flag_parity.py:45-57,62-148,173-198`): any new
-   flag must be declared in `EXPECTED` or the discovery test fails.
+- `effect-conformance-coverage` (v0.35.0): the *observed-but-not-declared* producer
+  now yields `effect NOT_COVERED`, `verdict.reduce` drops it before ranking
+  (`src/belay/verify/effect.py:640-657`, `verdict.py:99-114`), so a replaying turn
+  against the annotation-less npm filesystem server reduces to PASS-with-NOT_COVERED,
+  `replayed_any` is set, `VERIFIED_CLEAN` is reachable, the denominator is non-zero.
+- Residuals, stated not hidden: `UNRESTORABLE_SNAPSHOT_FAILED` is untouched by
+  v0.35–v0.37 (run 1 lost 1/3 probe turns to it; pre-existing, absorbed at volume by
+  the 2026-08-12 run) and the three *observation-failure* effect producers remain
+  UNVERIFIED (`effect.py:659-670`).
 
-4. **UNVERIFIED-by-budget needs a named cause** in the closed vocabulary
-   (`replay/report.py:69-138,152-172` + the guard pattern of
-   `test_interop_attach.py:476-494`). In shadow mode the cause exists but is never emitted
-   (nothing is skipped); the honest rule: a skipped turn is UNVERIFIED-by-budget, never PASS.
+## The code paths are mapped and ready
 
-5. **The identity test mirrors `tests/test_refutation_no_claim_axis.py`** — same input,
-   axis on vs off, byte-identical PASS/FAIL, named SKIP (never REGRESSION), plus an
-   anti-vacuity spy proving triage really engaged.
+- Frozen run-1 scripts remain the authoritative invocation shape: mint via
+  `python -m eval.minting_driver batch` (`--root` absolute under
+  `~/dev/at/holder/belay/`, `--registry eval/instances/cm-stageN.json`,
+  `--toolset filesystem+shell`, `--provider claude-cli --model claude-opus-5`),
+  verify via **stock `belay phase0 run`** with `--shell-server` **before** `--server`
+  (`nargs=REMAINDER`), `BELAY_CLAIM_AUTHOR` exported. MH-1 roots verified working in
+  run 1 (`mint-run/STAGE1_FINDINGS.md:81-87`).
+- A3 on the phase0 path is env-only and threaded: `author_from_env()` →
+  `cli.py:2938` → `run_batch(claim_author=…)` (`cli.py:2950`) → engagement gate
+  `src/belay/phase0/runner.py:419`. Live-proven at n=1 (184.5 s, exit 0 = D3 silence).
+- Banking: per-turn FAILs ingest per turn (`runner.py:445-466`); trajectory FAILs
+  bank `trace-<instance>-trajectory` (`runner.py:480-549`); A3 FAILs bank
+  `trace-<instance>-claim` (`runner.py:560-599`). `corpus run` over the grown corpus
+  needs `--shell-server` for shell-bearing cases or SKIPs with a named cause
+  (v0.36.0 `corpus-shell-routing`; `src/belay/corpus/run.py:524-562`).
+- Registry: committed `cm-stage1.json` (CTL-1 + CTL-4) and `cm-stage2.json`
+  (CTL-2 + CTL-3 + 8 fresh reals, controls first); seed 20260919, `SEED_HISTORY`
+  empty; regeneration byte-identical is the reproducibility check; the 8 reals were
+  **never driven** (stage 2 never launched) so they are eligible.
 
-6. **Manual live test conventions**: `@pytest.mark.manual`, excluded via
-   `addopts = "-m 'not manual and not install'"` (pyproject.toml:86-94); owner-run env
-   (e.g. `BELAY_REFERENCE_AUTHOR_MODEL`); FAIL-with-instructions when unset
-   (`test_reference_claim_author_live.py:118-125`). The owner's PS: API key for local test
-   only — provided by the owner, never for users, never committed.
+## Decisions this unit must make (open questions for the interview)
 
-7. **Derived-feature whitelist** (no raw state/trace bytes): tool name, annotation tri-state
-   per hint, annotations_object presence, toolset offered, reply size, hashes
-   (`hash_raw`/`hash_canonical`), turn index/seq, ordering, truncated flag, state_handle
-   status, trace context (traceId/spanId), protocol version, run_process command_line —
-   from `trace.py:391-437,546-565`, `turn.py:119-140`, `annotations.py:60-81,103-257`,
-   `index.py:113-229`.
+1. **Re-driving the four controls.** Run-1 stage-1 controls (CTL-1, CTL-4) produced
+   observations; the anti-re-roll contract's letter reads "an instance that produced
+   an observation is never re-armable" (`checkpoint.py:15-21`). Controls are the
+   run's own calibration instruments, not population draws, and run 1's stage-1 gate
+   never cleared — but the letter does not distinguish. Recommended: re-drive the
+   committed controls in fresh roots, recorded as a declared decision (same as the
+   gate mints' per-stage fresh controls).
+2. **Fresh roots.** Run-1 roots `cm1`/`cm2` under the holder are taken (cm1 holds
+   run-1's batch + checkpoint; cm2 was never touched). New frozen scripts, roots
+   `cm3`/`cm4`, reusing the committed registries verbatim.
+3. **The `--verify` shell-threading parity gap** (found by this dig, unfixed):
+   `run_verify` threads `claim_author` but not `shell_server_command`
+   (`eval/minting_driver/entrypoint.py:995-1063`), while the printed command emits
+   `--shell-server` (`entrypoint.py:696-698`) — the same defect class the a3-author
+   aspect fixed for A3, and `eval/README.md:727-729` still calls them equivalent.
+   Not blocking (the run uses `phase0 run` directly). Decide: fix it here as a small
+   deterministic eval-only aspect, or record it as out of scope.
+4. **n.** Q2 of the prior PRD confirmed n≈12 staged; unchanged. Stop-loss by stage.
 
-## Contradictions / ambiguities flagged
+## Guardrail check
 
-- **The proposed PRD is Jev-named throughout** (`JevTriage`, `BELAY_JEV_KEY`). The owner's
-  PS demands a **model-agnostic seam** (jev, laya, ...). Resolution: the seam is
-  provider-neutral (subprocess command + protocol); Jev is the *first reference author*;
-  `BELAY_JEV_KEY` is read only by that reference author, never by the engine. The PRD must
-  be rewritten to this shape before planning.
-- The A3 precedent scrubs `ANTHROPIC_*` from the child env; a triage reference author
-  instead *needs* its key — the honest line: the engine neither reads nor passes any key;
-  the operator's command owns its credentials. Must be stated, not assumed.
-- Shadow mode "logs triage alongside" — where? Precedent: the approval-gate additive
-  `approval` section in verify output (absent-never-zero). Proposal: additive `triage`
-  section in `--json` + text line, absent-never-zero.
+Corpus (moat #2) work only — no agent framework, no LLM judge (A3's check is
+execution-decided, exit code only), no egress (roots under the local holder), no
+published number moves, no violation rate (Q1 — the fresh residue is ~100%
+django+sympy). UNVERIFIED never PASS (INSTRUMENT SUSPECT ⇒ STOP, MH-5). The verdict
+axes touched: A1 (trajectory), A3 (claim) — both observed, never modified.
 
-## Open questions for the owner (Phase 3)
+## Suite baseline
 
-1. Jev API surface for the reference author: REST endpoint + key header? OpenAI-compatible?
-   A CLI? (Determines the reference author shape + the manual live test.)
-2. Slice-1 reference author: Jev only (seam proven model-agnostic by a stub), or also a
-   Laya reference author now?
-3. Budget knob: confidence threshold, top-N-least-confident, or both?
+2743 passing (v0.37.0). Deterministic acceptance before any spend: registry
+regenerates byte-identically, frozen scripts carry no result shapes (grep-checked),
+suite green.

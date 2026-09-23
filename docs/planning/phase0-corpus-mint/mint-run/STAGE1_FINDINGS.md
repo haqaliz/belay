@@ -60,6 +60,14 @@ probe had **3 turns**, and the same pre-existing abstention rate consumed all of
 
 ### 2. `replayed but effect unverified` — the pinned servers declare no annotations
 
+> **[Corrected 2026-09-23 (`STAGE1_FINDINGS_RUN3.md`) — this measurement is WRONG, and
+> the cause below is superseded.** Re-derived from this run's own capture
+> (`$HOLDER/mint/cm1/batch/`, both traces): the filesystem `tools/list` (seq 12) declares
+> `readOnlyHint` on **all 14 tools**. Only the shell server's list (seq 13, `run_process`)
+> declares nothing. The effect abstentions come from the composite-transport correlation:
+> `annotation_for_turn` read the latest snapshot (the shell list), so filesystem tools read
+> as `tool-absent`. Fixed at `aad775f`. The text below is kept as it was written.]**
+
 **Measured:** the capture contains **no `readOnlyHint` / `annotations` anywhere**.
 Effect-conformance therefore abstains by its own rule — *not-declared → UNVERIFIED, no
 contract to check against* (`effect.py:22-25`).

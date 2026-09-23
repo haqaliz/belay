@@ -1,62 +1,63 @@
-# C10 slice 2 — the calibration ledger
+# C10's missing data, and moat #2's first real cases — the second corpus-filling mint
 
-> Inline brief (no GitHub issue). Source: the merged C10 PRD
-> (`docs/planning/jev-triage/prd.md`) + the belay-next/owner handoff 2026-09-22.
+> Inline brief (no GitHub issue). Source: belay-next handoff 2026-09-22 → the owner's
+> S-1 decision to declare a second run. Continuation of `docs/planning/phase0-corpus-mint/`
+> (aspects 1–2 shipped; aspect 3 ran once and its pre-registered gate said STOP).
 
 ## Brief
 
-Build the **calibration ledger** — the moat-compounding half of C10. It measures whether
-a triage model's "calibrated confidence" actually predicts a real violation on real
-Belay verdicts: reliability curve, ECE, and the decision-relevant number — at the chosen
-triage threshold, how many true violations would have been skipped.
+Execute the **second corpus-filling mint**: `phase0-corpus-mint` aspects 3–5
+(`mint-run` → `corpus-banking` → `audit-and-publish`) under the freeze protocol, on the
+existing committed registry of **30 conservative-fresh instances** (never-drawn, prior
+registries + ledgers excluded) with controls first.
 
-The PRD's sequencing condition is met: *"build the ledger after the instrument can
-produce a decided per-turn verdict"* — the `effect-conformance-coverage` fix shipped
-(v0.35.0), so decided per-turn verdicts are reachable (VERIFIED_CLEAN no longer
-structurally impossible).
+**The instrument blocker is closed, not papered over.** The first run stopped at
+`NO_VERIFIABLE_TURNS: 2` / `INSTRUMENT SUSPECT` / UNVERIFIED 3/3 = 100% because the
+pinned npm filesystem server declares no annotations, so effect-conformance abstained
+and worst-status-wins dragged every turn to UNVERIFIED. `effect-conformance-coverage`
+(2026-09-21) moved the *not-declared* producer to `NOT_COVERED` (dropped before
+ranking), closing the named gate. This unit is the measured run, not another fix.
 
-## What the PRD already promises (quote)
+**This is the owner's S-1 decision.** Live `claude-opus-5` spend must be authorized;
+no spend happens before the frozen invocation scripts are committed in a commit
+containing **no result** (grep-checked). Stages run once; verbatim outputs committed
+next; a second run only if declared. D-3 void rule enforced (a FAILing control voids
+the run — it killed the 2026-08-09 re-mint); `INSTRUMENT SUSPECT` ⇒ STOP.
 
-- "The **calibration ledger** — Jev's confidence on each triaged turn vs the
-  execution-grounded verdict replay later produced. This is the moat-compounding piece
-  and it is pure Belay: it measures whether Jev's 'calibrated confidence' is actually
-  calibrated *on real agent traces* (reliability curve, ECE, and the decision-relevant
-  number — at the chosen triage threshold, how many true violations were skipped)."
-- "Shadow mode is the default... record the triage scores alongside, until the
-  calibration ledger earns a tighter budget." — the ledger's whole purpose is to earn
-  (or refuse) a tighter budget.
-- Named follow-up from the shipped unit: "skipped turns' scores in budgeted mode
-  (coherent today — scores pair with verdicts; **the ledger slice will extend the
-  section**)."
+## What the run produces (the acceptance, measured — reported whatever it says)
 
-## Already shipped (what the ledger consumes)
+- Captures produced, with the capture rate and its denominator stated.
+- Every trajectory FAIL banks as `trace-<instance>-trajectory` and recomputes MATCH
+  under `corpus run` (the first real corrupt-success cases — moat #2 has not grown
+  since 2026-08-12).
+- Per-turn FAILs bank, or are reported `flagged-but-unaddable` **with named causes**.
+- The A3 claim column is filled — a verdict or a named UNVERIFIED cause, never
+  "claim unrecorded" (the `a3-author` aspect made this reachable).
+- `corpus run` over the grown corpus is 0 REGRESSION.
 
-- `belay verify` shadow mode records per-turn `{score, confidence}` in the additive
-  `triage` JSON section, paired with the `turns` verdicts — the raw ledger rows exist
-  today when a triage author is configured.
-- The Jev reference author + live proof (v0.36.0): `jev-1.13.0`, `{"score": 0.82,
-  "confidence": 0.63}` at n=1 — a vendor claim until this ledger measures it.
-- Decided verdicts are reachable on existing captures (s1p: 0/11 UNVERIFIED; the demo
-  capture) — small-data validation without a new mint.
+## Deterministic acceptance (test-first, before any spend)
+
+- The registry regenerates byte-identically (reproducibility check).
+- The frozen scripts carry no result shapes (grep-checked).
+- Full suite stays green at the 2743 baseline.
 
 ## Honesty constraints (the house contract)
 
-- The ledger measures *prediction of violations on the turns actually replayed* —
-  calibrated ≠ caused. UNVERIFIED turns must be excluded from the calibration column
-  (the corpus precedent: UNVERIFIED excluded, the engine never labels its own cases).
-- Small n is a recorded state, never a base rate: the ledger prints its denominator; the
-  mint re-run (owner's S-1 declaration) supplies volume later.
-- No published number moves from earlier units (`11/60 = 18.3%`, `precision 0.00`,
-  `1/15`, `4/16`, `recall 0.00`).
-- The ledger must never be built against a 100%-UNVERIFIED column (the false-zero
-  failure the PRD named).
+- **Publish no violation rate** — the fresh residue is ~100% django+sympy, the exact
+  monoculture the stratified draw exists to prevent.
+- `precision` will still read `n/a` (cases bank `pending`; only a human may label, and
+  S-1 makes that the owner's work — the evidence pack is prepared here, never judged).
+- **No published number moves** (`11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16`,
+  `recall 0.00`, `3/93` stand unedited).
+- R-A stands: a real intent-drift (A3) case may not be producible — 18 launch-demo
+  drives produced zero corrupt successes — an empty A3 column is a **recorded result**,
+  not a red test.
 
 ## Open questions for the owner (Phase 3)
 
-1. Surface: a `belay triage-ledger` command consuming the verify `--json` (score+verdict
-   pairs already in it) vs a `--triage-ledger FILE` flag on verify writing while
-   verifying?
-2. "True violation" definition for the calibration column: per-turn reduced FAIL, with
-   UNVERIFIED excluded?
-3. The ledger's budget-earning output: threshold sweep (violations-skipped vs budget
-   saved at each threshold) — the shape of the decision number?
+1. S-1 confirmed: declare the second run (this unit) — not stop, not re-scope?
+2. Live spend authorized (Q6 of the prior PRD, re-confirmed for this unit) — n≈12
+   staged per Rule A, stop-loss by stage?
+3. Environment deltas to state, not hide: local `claude` version vs the 2026-08-12
+   gate run's 2.1.228; engine now v0.37.0 (the run will use the shipped engine, not
+   the U9-era composition).

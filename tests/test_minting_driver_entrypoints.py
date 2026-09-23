@@ -1916,3 +1916,145 @@ def test_accounting_flows_from_a_real_client_through_the_real_breaker_to_the_led
     # `tests/test_minting_driver_batch.py::test_wall_clock_is_measured_with_the_injected_clock`.
     assert accounting["wall_clock_seconds"] >= 0.0
     assert "2600 in / 55 out" in report.render()
+
+
+# --------------------------------------------------------------------------------------
+# `verify-parity` Phase 1 — `run_verify` must thread the shell server command
+#
+# `run_verify` threaded `claim_author` but not `shell_server_command`, while the printed
+# `verify_command()` emits `--shell-server` for the shell toolset (`entrypoint.py:696-698`)
+# — so with `--toolset filesystem+shell --verify`, every `run_process` turn replayed
+# against the FILESYSTEM server (`Tool run_process not found` -> DIVERGED -> abstention:
+# the 2026-08-12 "171 per-turn FAILs are A2 replay artifacts" shape). These tests pin the
+# parameter parity (`src/belay/phase0/runner.py:137-238` takes `list[str] | None`, never a
+# string, never an empty list) and the `verify_shell_server_command(cfg)` resolver that
+# must land beside `verify_server_command`.
+# --------------------------------------------------------------------------------------
+
+
+def test_run_verify_threads_the_shell_server_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`run_verify` hands `run_batch` the shell server command it was given.
+
+    The spy captures the actual kwargs of `belay.phase0.runner.run_batch`, so what is
+    asserted is the WIRING — the same shape the dual-server routing
+    (`src/belay/verify/turn.py:351-368`) consumes at replay time.
+    """
+    from belay.phase0 import runner as phase0_runner
+    from belay.phase0.ledger import RunLedger
+
+    batch_dir = tmp_path / "mint" / "batch"
+    batch_dir.mkdir(parents=True)
+    report = MintReport(
+        batch_dir=batch_dir,
+        checkpoint_path=tmp_path / "mint" / "checkpoint.json",
+        checkpoint=Checkpoint(),
+        instance_ids=(),
+        counts={"captured": 0, "failed": 0},
+        verify_command="belay phase0 run ...",
+    )
+
+    captured: dict[str, object] = {}
+
+    def spy_run_batch(*args: object, **kwargs: object) -> RunLedger:
+        captured.update(kwargs)
+        return RunLedger(instances=[])
+
+    monkeypatch.setattr(phase0_runner, "run_batch", spy_run_batch)
+    code = run_verify(
+        report,
+        server_command=["node", "server.js", WORKSPACE_PLACEHOLDER],
+        shell_server_command=["node", "/abs/shell"],
+        ledger_path=tmp_path / "runs" / "phase0.json",
+        corpus_dir=tmp_path / "corpus",
+    )
+
+    assert code == 0
+    assert captured["shell_server_command"] == ["node", "/abs/shell"]
+
+
+def test_run_verify_defaults_shell_server_to_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without the parameter, `run_batch` receives `shell_server_command=None` — never an
+    empty list, never an absent key.
+
+    The engine's contract (`runner.py:104-122`) is `list[str] | None`, and `None` is the
+    byte-identical-to-today default: the filesystem-only toolset must replay exactly as it
+    does now.
+    """
+    from belay.phase0 import runner as phase0_runner
+    from belay.phase0.ledger import RunLedger
+
+    batch_dir = tmp_path / "mint" / "batch"
+    batch_dir.mkdir(parents=True)
+    report = MintReport(
+        batch_dir=batch_dir,
+        checkpoint_path=tmp_path / "mint" / "checkpoint.json",
+        checkpoint=Checkpoint(),
+        instance_ids=(),
+        counts={"captured": 0, "failed": 0},
+        verify_command="belay phase0 run ...",
+    )
+
+    captured: dict[str, object] = {}
+
+    def spy_run_batch(*args: object, **kwargs: object) -> RunLedger:
+        captured.update(kwargs)
+        return RunLedger(instances=[])
+
+    monkeypatch.setattr(phase0_runner, "run_batch", spy_run_batch)
+    code = run_verify(
+        report,
+        server_command=["node", "server.js", WORKSPACE_PLACEHOLDER],
+        ledger_path=tmp_path / "runs" / "phase0.json",
+        corpus_dir=tmp_path / "corpus",
+    )
+
+    assert code == 0
+    assert "shell_server_command" in captured
+    assert captured["shell_server_command"] is None
+
+
+def test_verify_shell_server_command_resolves_for_the_shell_toolset(
+    tmp_path: Path,
+) -> None:
+    """`verify_shell_server_command(cfg)` returns the shell argv for `filesystem+shell`.
+
+    Exactly the argv `verify_command`'s branch emits as the printed
+    `--shell-server "node <abs entrypoint>"` (`entrypoint.py:696-698`): the shlex-split
+    form, string-equal token for token.
+    """
+    from eval.minting_driver.entrypoint import verify_shell_server_command
+
+    server_root = tmp_path / "servers"
+    shell_entrypoint = _install_stub_server(server_root, "shell")
+    cfg = MintConfig(
+        root=tmp_path / "mint",
+        server_root=server_root,
+        toolset="filesystem+shell",
+        model=TEST_MODEL,
+    )
+
+    resolved = verify_shell_server_command(cfg)
+
+    assert resolved == ["node", str(shell_entrypoint.resolve())]
+
+
+def test_verify_shell_server_command_is_none_for_filesystem_only(
+    tmp_path: Path,
+) -> None:
+    """Toolset `filesystem` (no shell): `None` — parity with `verify_command`'s branch."""
+    from eval.minting_driver.entrypoint import verify_shell_server_command
+
+    server_root = tmp_path / "servers"
+    _install_stub_server(server_root)
+    cfg = MintConfig(
+        root=tmp_path / "mint",
+        server_root=server_root,
+        toolset="filesystem",
+        model=TEST_MODEL,
+    )
+
+    assert verify_shell_server_command(cfg) is None

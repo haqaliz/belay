@@ -2,6 +2,45 @@
 
 This file orients a coding agent working in this repository. Read it first.
 
+> **THE COMPOSITE-SNAPSHOT FIX LANDS AND THE THIRD PROBE CLEARS ITS GATE — THE CORPUS
+> GROWS FOR THE FIRST TIME SINCE 2026-08-12** (2026-09-23, `corpus-mint-second-run`).
+> **NOT a gate run; produces NO Phase-0 number** (n = 8 real, under 50 by construction). The
+> stage-2 output line `violation rate = 2/10 = 20.0%` is unadjudicated arithmetic over
+> records that include controls, and **it must never be quoted.** Five aspects.
+> **`verify-parity`:** the mint's `--verify` threads the shell server into `run_verify`,
+> so `--verify` ≡ the printed `phase0 run` command (RED `4915341` → `b6195dd`).
+> **Run 2 (`cm3`) stopped at its own gate:** `NO_VERIFIABLE_TURNS: 2`, UNVERIFIED 5/5,
+> `INSTRUMENT SUSPECT` → STOP. The PRD's warrant (*"turns now reduce"*) was refuted.
+> **Root cause, measured: a composite-transport correlation artifact.** One broadcast
+> `tools/list` is answered by two servers on one pipe, and `annotation_for_turn` read only
+> `live[-1]` (the shell list), so every filesystem tool read `tool-absent`.
+> **The fix** (`0292cbb` RED → `aad775f`): `annotations.contract_in_force` reads the latest
+> snapshot **with its broadcast twins**. Twins are exact, never a time window: same id,
+> same origin, in flight together. A sequential re-snapshot still replaces the contract. A
+> tool that two twins describe differently abstains with a new producer, `tool-ambiguous`
+> (UNVERIFIED, never a pick). Single-server traces are byte-unchanged. Suite 2755 →
+> **2764**. **A correction by measurement:** the run-1 root cause (*"the npm filesystem
+> server declares NO annotations"*) is **wrong**. The filesystem list declares
+> `readOnlyHint` on all 14 tools, and only `run_process` declares nothing. Annotated in
+> place.
+> **Run 3, once, under the freeze** (`4cd08a3`), owner's S-1 *continue*. **Stage 1 (`cm5`):
+> VERIFIED_CLEAN 2**, 4/5 PASS, gate clears. **Stage 2 (`cm6`): 10/10 captured, 8 CLEAN /
+> 2 FLAGGED**, 0/45 per-turn FAIL, no control FAILed (not void), 855 s, 55 requests. The
+> two flags are **trajectory FAILs** (`django-11422`, `django-14382`: VERIFICATION claim,
+> `run_process` offered, 0 command turns). Both claims say *"verified by reading the file
+> back"*, the coarse vocabulary edge the gate record already names as caveat (3).
+> **Listed, not judged.** Hand-replay of `11422` reproduces the FAIL (**MATCH**). Both
+> **banked `pending`**, the first corpus growth since 2026-08-12. `corpus run` **9/9 MATCH,
+> 0 REGRESSION, 0 SKIP**. `corpus score` precision/recall **n/a**. A3 on the two FAILs is
+> `NO_CHECK_AUTHOR` (the author abstained; the reason was not observed). All five stage
+> ledgers are committed, and every one re-renders **byte-identically** from a clean checkout.
+> **Honesty lines:** the fix is a **coverage gain, not improved detection**, and UNVERIFIED
+> shares across runs 1/2/3 are **NOT comparable**. **No published number moves**
+> (`11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16`, `recall 0.00`, `3/93` stand
+> unedited). **Open, the owner's by S-1:** label the two pending cases (`belay corpus
+> label`), with evidence in `audit-and-publish/AUDIT.md`. See
+> `docs/planning/phase0-corpus-mint/`.
+>
 > **C10 SLICE 2 SHIPS — THE CALIBRATION LEDGER: THE VENDOR'S "CALIBRATED CONFIDENCE"
 > MEETS EXECUTION-GROUNDED VERDICTS** (2026-09-22, `calibration-ledger`, PR #42,
 > v0.37.0). The moat half of C10 (the slice-1 PRD's "Eval data captured" promise, now
@@ -128,7 +167,12 @@ This file orients a coding agent working in this repository. Read it first.
 > effect-conformance abstains by its own rule (*not-declared → UNVERIFIED*, `effect.py:22-25`)
 > — honest, not broken, but worst-status-wins then drags every turn to UNVERIFIED, so **a
 > corpus-filling mint can never bank a per-turn case against annotation-less servers.** That is
-> worth more than the mint. **MH-1 worked:** manifests record `source_root` in the holder,
+> worth more than the mint. **[Corrected 2026-09-23 (`corpus-mint-second-run`) — that
+> root cause is WRONG, measured on this run's own capture: the filesystem server declares
+> `readOnlyHint` on all 14 tools; only the shell server's `run_process` declares nothing.
+> The abstentions were a composite-transport correlation artifact (a filesystem tool read
+> against the shell `tools/list`), fixed at `aad775f`. The rest of this block stands.]**
+> **MH-1 worked:** manifests record `source_root` in the holder,
 > outside any worktree — the defect repaired at this unit's start (**1,344** dead recorded
 > paths from three missing symlinks; fixed and proven by `corpus run` 7/7 MATCH and `s1p`
 > `VERIFIED_CLEAN` 0/11 UNVERIFIED) **cannot recur for these captures**.
