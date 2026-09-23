@@ -45,3 +45,21 @@ recorded a NOT_COVERED dimension, because every turn died before reaching one.
 
 Stage 1 → `INSTRUMENT SUSPECT` → STOP. Stage 2 (`acceptance-cm-run2-stage2.sh`, root
 `cm4`) was **never run**, so there is no stage-2 ledger to reproduce.
+
+---
+
+## Run 3 — clean-checkout renders (2026-09-23)
+
+Both run-3 ledgers were re-rendered from a clean checkout of `b6707ec` (`git worktree add
+--detach`, fresh `uv sync`) with `belay phase0 report`, and each was diffed against the
+verify section of its committed `.out`, using the same method as above.
+
+| Ledger | Committed output | Byte-identical |
+|---|---|---|
+| `mint-run/ledgers/cm-run3-stage1.json` | `acceptance-cm-run3-stage1.out` | ✅ |
+| `mint-run/ledgers/cm-run3-stage2.json` | `acceptance-cm-run3-stage2.out` | ✅ |
+
+**Engine delta:** run 3 ran v0.37.0 **plus** the composite-snapshot fix (`aad775f`).
+UNVERIFIED shares across runs 1 / 2 / 3 (3/3, 5/5, stage 1 1/5, stage 2 4/45) are **NOT
+comparable**. The captures differ, and runs 2 → 3 cross a correlation change (a coverage
+gain: effect now decides where it used to abstain, which is not improved detection).

@@ -66,3 +66,30 @@ The calibration ledger (v0.37.0) is still waiting for decided per-turn volume. T
 supplied **none**: 0 of 5 turns decided. A triage-configured `belay verify` pass over
 these traces would give the ledger only excluded rows, so it is not worth running
 until the correlation fix lands (S-1 option 1 in `STAGE1_FINDINGS_RUN2.md`).
+
+---
+
+# Run 3 (2026-09-23) — the first corpus growth since 2026-08-12
+
+Sources: `mint-run/acceptance-cm-run3-stage{1,2}.out` and ledgers, and
+`acceptance-cm-run3-corpus-{run,score}-stage2.out`. The recompute was produced by the same
+frozen scripts (`a3a4147`), run once after stage 2. Stage 1 banked nothing, so a single
+recompute covers both stages.
+
+| Criterion | Reading |
+|---|---|
+| B1 — trajectory FAILs bank and recompute MATCH | **2 of 2 banked** (`trace-django__django-11422-trajectory`, `trace-django__django-14382-trajectory`), **both MATCH** |
+| B2 — per-turn FAILs bank or are named unaddable | **0 per-turn FAILs** (0/5, 0/45); `flagged-but-unaddable: 0` |
+| B3 — `corpus run`: 0 REGRESSION, every SKIP named | **9 cases, 9 MATCH, 0 REGRESSION, 0 SKIP** (7 pre-existing + 2 new) |
+| B4 — A3 column filled per instance | Filled on all 12: `CLAIM_UNCLASSIFIABLE` 10, `NO_CHECK_AUTHOR` 2 (the two FAILs; the author abstained, and the reason was not observed) |
+| B5 — `corpus score` honest | TN 7, **pending 2** (excluded), **precision n/a, recall n/a**. Only the owner labels |
+| B6 — no published number moves | Held |
+
+The two new cases are **pending**. They are evidence for the owner's adjudication
+(`audit-and-publish/AUDIT.md`, run 3). The engine has not labelled them.
+
+**Calibration-ledger follow-on (named, not built):** run 3 supplies decided per-turn
+volume for the first time (stage 2: 41/45 turns decided, all PASS). That is PASS rows
+only. The two FAILs are instance-level trajectory verdicts, not per-turn rows, so a
+triage-configured `belay verify` over these traces would still contribute zero violation
+rows to the ledger.

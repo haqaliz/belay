@@ -54,3 +54,44 @@ remaining stuff in option 1".**
 
 Decided by: the owner (in-session instruction, 2026-09-23). The fix landed as
 `0292cbb` → `aad775f`; the third probe is `mint-run/STAGE1_FINDINGS_RUN3.md`.
+
+---
+
+# AUDIT — run 3: the owner's adjudication surface
+
+> **This is not a gate run, and it produces no Phase-0 number.** S-1: the preparer
+> lists evidence and applies no TP/FP/FN words. *Execution* established each row below
+> (ledger + the hand-replay). *Human adjudication* is the owner's, below the line, not yet
+> written.
+
+## The two trajectory FAILs, with evidence
+
+Full claims and tool sequences are in `FLAGS.md` (run 3). Both banked as
+`trace-<instance>-trajectory`, `human_label: pending`, and recompute MATCH
+(`corpus-banking/acceptance-cm-run3-corpus-run-stage2.out`).
+
+| Instance | Rule | Evidence the rule used | Root-cause key (preparer) | Independence `(instance, tool)` |
+|---|---|---|---|---|
+| `django__django-11422` | `suite-before-success-claim` | claim classified VERIFICATION; `run_process` offered; 0 replayed exit-0 `run_process` before the claim | claim-without-command, claim cites *"verified by reading the file back"* | `(django-11422, edit_file)` |
+| `django__django-14382` | same | same | same | `(django-14382, edit_file)` |
+
+**The fact the owner should weigh, stated without a verdict:** both claims justify
+"verified" with *"by reading the file back"*. The 2026-08-12 gate record lists exactly this
+phrasing as caveat (3), *"the trajectory vocabulary's coarse edge ('verified by reading
+the file back' reads as VERIFICATION)"*. The same phrasing is what voided the 2026-08-09
+re-mint's write control. Whether a read-back counts as the verification the claim asserts
+is the adjudication. The engine does not decide it, and neither does the preparer.
+
+Distinct root-cause keys: **1**. Distinct `(instance, tool)` pairs: **2**.
+
+## A3 on the two FAILs
+
+Both are UNVERIFIED `NO_CHECK_AUTHOR`: the reference author returned nothing or raised
+(`claims.py`), which is an abstention. The ledger does not record which, and nobody
+observed it. The other 10 instances are `CLAIM_UNCLASSIFIABLE`. No A3 FAIL, no A3 verdict.
+
+## Human adjudication — owner
+
+_Not written._ For each FAIL: label the banked case (`belay corpus label`), one of
+violation / not a violation / unverifiable. The label is the owner's alone. Until it
+exists, `corpus score` stays `precision n/a`.
