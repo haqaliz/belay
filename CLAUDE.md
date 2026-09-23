@@ -165,7 +165,12 @@ This file orients a coding agent working in this repository. Read it first.
 > effect-conformance abstains by its own rule (*not-declared → UNVERIFIED*, `effect.py:22-25`)
 > — honest, not broken, but worst-status-wins then drags every turn to UNVERIFIED, so **a
 > corpus-filling mint can never bank a per-turn case against annotation-less servers.** That is
-> worth more than the mint. **MH-1 worked:** manifests record `source_root` in the holder,
+> worth more than the mint. **[Corrected 2026-09-23 (`corpus-mint-second-run`) — that
+> root cause is WRONG, measured on this run's own capture: the filesystem server declares
+> `readOnlyHint` on all 14 tools; only the shell server's `run_process` declares nothing.
+> The abstentions were a composite-transport correlation artifact (a filesystem tool read
+> against the shell `tools/list`), fixed at `aad775f`. The rest of this block stands.]**
+> **MH-1 worked:** manifests record `source_root` in the holder,
 > outside any worktree — the defect repaired at this unit's start (**1,344** dead recorded
 > paths from three missing symlinks; fixed and proven by `corpus run` 7/7 MATCH and `s1p`
 > `VERIFIED_CLEAN` 0/11 UNVERIFIED) **cannot recur for these captures**.

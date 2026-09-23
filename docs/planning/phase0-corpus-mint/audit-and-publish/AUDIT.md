@@ -42,14 +42,15 @@ it. It is execution-adjacent and has not been adjudicated.
 
 ## Human adjudication — owner
 
-_Not written. The owner confirms or rejects the root-cause keys above and signs the
-decision line._
+_Root-cause keys not separately adjudicated; the owner chose on the pack as prepared._
 
-**Decision (S-1), unsigned:**
-- [ ] **continue** — fix the composite-transport correlation (`annotation_for_turn`:
+**Decision (S-1) — recorded 2026-09-23, the owner's instruction in session: "go for the
+remaining stuff in option 1".**
+- [x] **continue** — fix the composite-transport correlation (`annotation_for_turn`:
   latest snapshot *containing* the tool), then a third probe. The preparer's
   recommendation, as in `STAGE1_FINDINGS_RUN2.md`.
 - [ ] **re-scope** — accept trajectory/A3-only banking
 - [ ] **stop** — end the corpus-filling-mint line
 
-Signed: ________ Date: ________
+Decided by: the owner (in-session instruction, 2026-09-23). The fix landed as
+`0292cbb` → `aad775f`; the third probe is `mint-run/STAGE1_FINDINGS_RUN3.md`.
