@@ -1,63 +1,36 @@
-# C10's missing data, and moat #2's first real cases — the second corpus-filling mint
+# The claim axis cannot say what it did — A3 coverage legibility
 
-> Inline brief (no GitHub issue). Source: belay-next handoff 2026-09-22 → the owner's
-> S-1 decision to declare a second run. Continuation of `docs/planning/phase0-corpus-mint/`
-> (aspects 1–2 shipped; aspect 3 ran once and its pre-registered gate said STOP).
+> Inline brief (no GitHub issue). Source: belay-next handoff 2026-09-25, picked after
+> v0.38.0 (`corpus-mint-second-run`). A follow-on slice of shipped C8 (A3, v0.27.0).
 
 ## Brief
 
-Execute the **second corpus-filling mint**: `phase0-corpus-mint` aspects 3–5
-(`mint-run` → `corpus-banking` → `audit-and-publish`) under the freeze protocol, on the
-existing committed registry of **30 conservative-fresh instances** (never-drawn, prior
-registries + ledgers excluded) with controls first.
+Make the A3 claim axis legible on every surface **without changing any verdict**.
 
-**The instrument blocker is closed, not papered over.** The first run stopped at
-`NO_VERIFIABLE_TURNS: 2` / `INSTRUMENT SUSPECT` / UNVERIFIED 3/3 = 100% because the
-pinned npm filesystem server declares no annotations, so effect-conformance abstained
-and worst-status-wins dragged every turn to UNVERIFIED. `effect-conformance-coverage`
-(2026-09-21) moved the *not-declared* producer to `NOT_COVERED` (dropped before
-ranking), closing the named gate. This unit is the measured run, not another fix.
+1. **`--json` must separate "axis never ran" from "check executed and exited 0".** Today
+   both are an absent `claim` key (`docs/STATUS.md:259-263`, recorded as a finding by
+   `phase0-corpus-mint/a3-author`, never fixed): `evaluate_claim` returns `None` both when
+   no author is configured and when the check exited 0 (D3 silence, confirmed). A reader
+   cannot tell *checked* from *never checked* — the collapse `NOT_COVERED` was introduced
+   to fix on A2. "Confirmed" must **never** render as, or next to, PASS: A3 never
+   promotes, and the coverage line travels with it.
+2. **`NO_CHECK_AUTHOR` gains a recorded sub-cause** — returned-none / raised:<ExcType> /
+   timeout / non-zero exit / malformed reply / stdout cap — that lands in the phase0
+   ledger and the corpus case. Run 3's `phase0-corpus-mint/audit-and-publish/AUDIT.md:89`
+   could not say which happened: *"The ledger does not record which, and nobody observed
+   it."*
 
-**This is the owner's S-1 decision.** Live `claude-opus-5` spend must be authorized;
-no spend happens before the frozen invocation scripts are committed in a commit
-containing **no result** (grep-checked). Stages run once; verbatim outputs committed
-next; a second run only if declared. D-3 void rule enforced (a FAILing control voids
-the run — it killed the 2026-08-09 re-mint); `INSTRUMENT SUSPECT` ⇒ STOP.
+## Acceptance tests (written first)
 
-## What the run produces (the acceptance, measured — reported whatever it says)
+- The two states differ in `--json` (byte-stable snapshot).
+- Each abstention sub-cause is pinned through a fake author.
+- The `--no-claim-axis` identity refutation still passes **unmodified**.
+- Old ledgers re-render byte-identically (additive field, absent-never-zero).
+- Closed-vocabulary guard on the new sub-causes.
 
-- Captures produced, with the capture rate and its denominator stated.
-- Every trajectory FAIL banks as `trace-<instance>-trajectory` and recomputes MATCH
-  under `corpus run` (the first real corrupt-success cases — moat #2 has not grown
-  since 2026-08-12).
-- Per-turn FAILs bank, or are reported `flagged-but-unaddable` **with named causes**.
-- The A3 claim column is filled — a verdict or a named UNVERIFIED cause, never
-  "claim unrecorded" (the `a3-author` aspect made this reachable).
-- `corpus run` over the grown corpus is 0 REGRESSION.
+## Caveat
 
-## Deterministic acceptance (test-first, before any spend)
-
-- The registry regenerates byte-identically (reproducibility check).
-- The frozen scripts carry no result shapes (grep-checked).
-- Full suite stays green at the 2743 baseline.
-
-## Honesty constraints (the house contract)
-
-- **Publish no violation rate** — the fresh residue is ~100% django+sympy, the exact
-  monoculture the stratified draw exists to prevent.
-- `precision` will still read `n/a` (cases bank `pending`; only a human may label, and
-  S-1 makes that the owner's work — the evidence pack is prepared here, never judged).
-- **No published number moves** (`11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16`,
-  `recall 0.00`, `3/93` stand unedited).
-- R-A stands: a real intent-drift (A3) case may not be producible — 18 launch-demo
-  drives produced zero corrupt successes — an empty A3 column is a **recorded result**,
-  not a red test.
-
-## Open questions for the owner (Phase 3)
-
-1. S-1 confirmed: declare the second run (this unit) — not stop, not re-scope?
-2. Live spend authorized (Q6 of the prior PRD, re-confirmed for this unit) — n≈12
-   staged per Rule A, stop-loss by stage?
-3. Environment deltas to state, not hide: local `claude` version vs the 2026-08-12
-   gate run's 2.1.228; engine now v0.37.0 (the run will use the shipped engine, not
-   the U9-era composition).
+C8 is cuttable and last by design, so this is **legibility only**: no classifier change,
+no new A3 firing, no verdict semantics change. The 10/12 `CLAIM_UNCLASSIFIABLE` in run 3
+is a separate, named alternate — not this unit. No published number moves (`11/60 =
+18.3%`, `precision 0.00`, `1/15`, `4/16`, `recall 0.00`, `3/93`).
