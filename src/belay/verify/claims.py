@@ -38,7 +38,7 @@ The decision table (each row a test in `tests/test_verify_claims.py`):
 | no claim record | UNVERIFIED `NO_CLAIM_RECORDED` |
 | classification != VERIFICATION | UNVERIFIED `CLAIM_UNCLASSIFIABLE` |
 | final state unobservable | UNVERIFIED `FINAL_STATE_UNOBSERVABLE` |
-| author returns None / raises | UNVERIFIED `NO_CHECK_AUTHOR` |
+| author returns None / raises | UNVERIFIED `NO_CHECK_AUTHOR`, with its `sub_cause` |
 | runner `exit_code=None` (launch failure / timeout) | UNVERIFIED `CHECK_DID_NOT_EXECUTE` |
 | exit non-zero | FAIL |
 | exit 0 | None (silence) |
@@ -272,12 +272,17 @@ class RecordingAuthor:
     last wrote is exactly the check the returned verdict was decided by. `last_check`
     is `None` when the author abstained (returned `None`) or raised (the evaluator
     files `NO_CHECK_AUTHOR`; the wrapper resets before re-raising so it never
-    remembers a check from a different invocation).
+    remembers a check from a different invocation). `last_abstention` forwards the inner
+    author's reason, read live so it always describes the latest call.
     """
 
     def __init__(self, inner: CheckAuthor):
         self._inner = inner
         self.last_check: Optional[Check] = None
+
+    @property
+    def last_abstention(self) -> Optional[Abstention]:
+        return getattr(self._inner, "last_abstention", None)
 
     def author_check(
         self,
@@ -399,13 +404,22 @@ def evaluate_claim(
             claim_seq=claim_seq,
             classification=classification,
             detail=f"the check author raised {type(exc).__name__}",
+            abstention=Abstention(SUB_CAUSE_AUTHOR_RAISED, type(exc).__name__),
         )
     if check is None:
+        # The reason is read by attribute, so the protocol stays `Optional[Check]`: an
+        # author that exposes none (or one of the wrong type) is recorded as DECLINED.
+        reported = getattr(author, "last_abstention", None)
         return _unverified(
             CAUSE_NO_CHECK_AUTHOR,
             claim_seq=claim_seq,
             classification=classification,
             detail="the check author returned no executable check",
+            abstention=(
+                reported
+                if isinstance(reported, Abstention)
+                else Abstention(SUB_CAUSE_AUTHOR_DECLINED, "")
+            ),
         )
 
     try:
@@ -508,12 +522,15 @@ def _unverified(
     claim_seq: Optional[int] = None,
     classification: Optional[ClaimClassification] = None,
     check: Optional[Check] = None,
+    abstention: Optional[Abstention] = None,
 ) -> Verdict:
     """One named abstention: UNVERIFIED with its cause — never PASS, never FAIL.
 
     `expected` carries the cause plus whatever the evaluator reached before abstaining
     (the claim's seq and classification, the check's source), so a reader of a stored
-    verdict can bucket on the cause without re-reading the trace.
+    verdict can bucket on the cause without re-reading the trace. Only `NO_CHECK_AUTHOR`
+    passes an `abstention`: its `sub_cause` / `sub_cause_detail` refine the cause and
+    never appear on any other.
     """
     expected: dict[str, Any] = {"axis": "A3", "kind": "claim", "cause": cause}
     if claim_seq is not None:
@@ -522,6 +539,14 @@ def _unverified(
         expected["classification"] = classification.name
     if check is not None:
         expected["check_source"] = check.source
+    if abstention is not None:
+        expected["sub_cause"] = abstention.sub_cause
+        expected["sub_cause_detail"] = abstention.detail
+        detail += (
+            f" ({abstention.sub_cause}: {abstention.detail})"
+            if abstention.detail
+            else f" ({abstention.sub_cause})"
+        )
     return Verdict(
         "A3", "claim", Status.UNVERIFIED,
         observed=None, expected=expected,
