@@ -290,6 +290,64 @@ The reduction is worst-status-wins across A1 and A2. **A1 and A2 are not redunda
 
 ---
 
+## Integrations
+
+Every integration is a **command you choose**, not code Belay links against. Belay writes JSON to the command's stdin and reads JSON from its stdout. The engine never imports a model SDK, never reads or forwards an API key, and never decides a verdict from what a model says. Any failure of the command (non-zero exit, timeout, malformed or oversized output) is an abstention with a named cause, never a crash and never a PASS.
+
+| Integration | What the model does | How to turn it on | Verdict authority |
+|---|---|---|---|
+| **[Jev](#jev-calibrated-triage-for-the-replay-budget)** (triage) | Scores each turn's suspicion, to order which turns get replayed | `--triage-author` / `BELAY_TRIAGE_AUTHOR` | None. A skipped turn is `UNVERIFIED`, never PASS |
+| **Claude CLI** (A3 claim author) | Writes an executable check for the agent's final claim | `--claim-author` / `BELAY_CLAIM_AUTHOR` | None. The check's **exit code** decides, and A3 never PASSes |
+| **Claude CLI** (invariant author) | Proposes A1 invariants from a task spec | `belay invariant infer --author` | None until a clean control replay calibrates them |
+| **Your own command** | Anything that speaks the same JSON | the same flags | Same rules as above |
+| **OpenTelemetry / OTLP** | (no model) Correlates spans to turns, writes verdicts back | `belay interop correlate` / `export` | Carries existing verdicts; computes none |
+
+### Jev: calibrated triage for the replay budget
+
+Replaying every turn is the expensive part of verification: a test-suite turn in the committed demo capture takes about 44 s to re-run. Jev (TypeSafe's hosted decision model) is the first reference **triage author**. It gives each recorded turn a suspicion score and a stated confidence, so you can spend the replay budget on the turns most likely to be wrong.
+
+**Setup** (your key, your account; Belay ships no key):
+
+```bash
+export BELAY_JEV_KEY=...                # read by the author only; the engine never sees it
+export BELAY_JEV_MODEL=jev-1.13.0       # a full model id; aliases are refused
+# optional: export BELAY_JEV_ENDPOINT=... (default https://api.typesafe.ai/v1/systemone)
+
+belay verify ./traces/<run>.jsonl --manifest-dir ./traces.manifests --server my-mcp-server \
+  --triage-author "python -m belay.verify.reference_triage_author" \
+  --json > verify.json
+```
+
+**Start in shadow mode, which is the default.** With no `--triage-threshold` or `--triage-top-n`, every turn is still replayed, and Jev's scores are recorded next to the verdicts replay actually produced. Then measure before you trust it:
+
+```bash
+belay triage-ledger verify.json
+```
+
+The ledger pairs each score and confidence with the re-executed verdict. It renders a reliability curve, ECE, and for each candidate threshold or top-N, **how many real violations it would have skipped against how much replay it would have saved**. Only then set a budget:
+
+```bash
+belay verify ... --triage-author "python -m belay.verify.reference_triage_author" \
+  --triage-threshold 0.6      # or --triage-top-n 5; both together replay the union
+```
+
+**What is sent to Jev,** per turn, is a fixed whitelist of derived features: the tool name, its declared annotation hints, the offered toolset, reply size, content hashes, turn position and ordering, trace-context ids, the protocol version, and **for shell turns, the `run_process` command line**. File contents, tool replies and trace bytes are never sent. The payload is checked against the whitelist before any network call. If your agent's shell commands can carry secrets, don't route them through a hosted triage author.
+
+**What Jev can and cannot change:**
+
+- It can change **which turns are replayed**. It cannot change the verdict of a turn that was replayed.
+- A turn skipped by the budget is `UNVERIFIED` with the cause `skipped by the triage budget`. It is never PASS.
+- If Jev is unreachable, times out (10 s per call), returns an error, or returns a score outside `[0, 1]`, that turn is simply replayed. A broken triage author can never shrink the check.
+- `--no-triage` turns it off regardless of the environment. `tests/test_refutation_triage.py` asserts that every verdict is byte-identical with triage on and off.
+
+**Where it stands today:** the live Jev call has been proven once (n=1), and the ledger's mechanics are tested. The ledger has not yet been run on a real population with violations in it, so there is no measured savings or calibration number for Jev yet. Treat the first ledger on your own traces as that measurement.
+
+**Writing your own triage author.** Any command works: a local model, another vendor, a heuristic script. It receives one JSON object of whitelisted features on stdin, per turn, and must print `{"score": <0..1>, "confidence": <0..1>}` (or `{"error": "..."}`) on stdout within 60 s. `src/belay/verify/reference_triage_author.py` is the reference to copy.
+
+### Claude CLI: the A3 claim author
+
+`python -m belay.verify.reference_claim_author --model <full-id>` drives the `claude` CLI with **no tools** granted (`--tools ""` and `--strict-mcp-config`) and your own subscription (no API key read or passed). It writes one executable check for the agent's final claim, and Belay runs that check contained against the replayed final state. When it abstains, the verdict names why (for example `NO_CHECK_AUTHOR/AUTHOR_TIMED_OUT`). See the A3 section under *Verify the run by re-execution* above.
+
 ## Coverage & limits, stated exactly
 
 Belay's entire value is an honest verdict, so its limits are documented as precisely as its claims. **Read this before trusting any output.**
