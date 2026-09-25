@@ -88,6 +88,50 @@ CAUSE_NO_CHECK_AUTHOR = "NO_CHECK_AUTHOR"
 CAUSE_CHECK_DID_NOT_EXECUTE = "CHECK_DID_NOT_EXECUTE"
 CAUSE_FINAL_STATE_UNOBSERVABLE = "FINAL_STATE_UNOBSERVABLE"
 
+#: WHY an author abstained — the sub-cause a `NO_CHECK_AUTHOR` verdict carries in its
+#: `expected` dict (a CLOSED vocabulary, pinned by `tests/test_claim_vocabulary_guard.py`).
+#: A sub-cause refines the reason, never the status: every one is still UNVERIFIED.
+#: `RAISED`/`DECLINED` are all an in-process author can show; the rest are recorded by
+#: `SubprocessAuthor`, which alone sees the process. Timeout is split from launch failure
+#: because they call for different operator fixes.
+SUB_CAUSE_AUTHOR_RAISED = "AUTHOR_RAISED"
+SUB_CAUSE_AUTHOR_DECLINED = "AUTHOR_DECLINED"
+SUB_CAUSE_AUTHOR_NOT_LAUNCHED = "AUTHOR_NOT_LAUNCHED"
+SUB_CAUSE_AUTHOR_TIMED_OUT = "AUTHOR_TIMED_OUT"
+SUB_CAUSE_AUTHOR_EXITED_NONZERO = "AUTHOR_EXITED_NONZERO"
+SUB_CAUSE_AUTHOR_OUTPUT_OVER_CAP = "AUTHOR_OUTPUT_OVER_CAP"
+SUB_CAUSE_AUTHOR_OUTPUT_MALFORMED = "AUTHOR_OUTPUT_MALFORMED"
+SUB_CAUSE_AUTHOR_REPORTED_ERROR = "AUTHOR_REPORTED_ERROR"
+SUB_CAUSES = frozenset(
+    {
+        SUB_CAUSE_AUTHOR_RAISED,
+        SUB_CAUSE_AUTHOR_DECLINED,
+        SUB_CAUSE_AUTHOR_NOT_LAUNCHED,
+        SUB_CAUSE_AUTHOR_TIMED_OUT,
+        SUB_CAUSE_AUTHOR_EXITED_NONZERO,
+        SUB_CAUSE_AUTHOR_OUTPUT_OVER_CAP,
+        SUB_CAUSE_AUTHOR_OUTPUT_MALFORMED,
+        SUB_CAUSE_AUTHOR_REPORTED_ERROR,
+    }
+)
+
+
+@dataclass(frozen=True)
+class Abstention:
+    """Why one author call produced no check: a sub-cause plus a bounded one-line detail.
+
+    A side channel, never a return value — the `CheckAuthor` protocol still returns
+    `Optional[Check]`. A sub-cause outside `SUB_CAUSES` is refused at construction, so
+    the vocabulary cannot widen by accident.
+    """
+
+    sub_cause: str
+    detail: str
+
+    def __post_init__(self) -> None:
+        if self.sub_cause not in SUB_CAUSES:
+            raise ValueError(f"unknown A3 author sub-cause {self.sub_cause!r}")
+
 
 @dataclass(frozen=True)
 class Check:
@@ -521,12 +565,22 @@ def claim_case(verdict: Verdict, *, check: Optional[Check] = None) -> Optional[d
 
 
 __all__ = [
+    "Abstention",
     "CAUSE_CHECK_DID_NOT_EXECUTE",
     "CAUSE_CLAIM_UNCLASSIFIABLE",
     "CAUSE_FINAL_STATE_UNOBSERVABLE",
     "CAUSE_NO_CHECK_AUTHOR",
     "CAUSE_NO_CLAIM_RECORDED",
     "CHECK_TIMEOUT",
+    "SUB_CAUSES",
+    "SUB_CAUSE_AUTHOR_DECLINED",
+    "SUB_CAUSE_AUTHOR_EXITED_NONZERO",
+    "SUB_CAUSE_AUTHOR_NOT_LAUNCHED",
+    "SUB_CAUSE_AUTHOR_OUTPUT_MALFORMED",
+    "SUB_CAUSE_AUTHOR_OUTPUT_OVER_CAP",
+    "SUB_CAUSE_AUTHOR_RAISED",
+    "SUB_CAUSE_AUTHOR_REPORTED_ERROR",
+    "SUB_CAUSE_AUTHOR_TIMED_OUT",
     "Check",
     "CheckAuthor",
     "CheckResult",
