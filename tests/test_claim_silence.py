@@ -316,3 +316,115 @@ def test_run_batch_disabled_axis_records_no_silence(tmp_path, monkeypatch):
     )
 
     assert ledger.instances[0].claim_silence is None
+
+
+# --- (5) phase0 report: silence is named, never attributed to a missing author (AC 6) --
+
+from belay.corpus.metrics import Metrics  # noqa: E402
+from belay.phase0.report import (  # noqa: E402
+    _CLAIM_UNRECORDED_SENTENCE,
+    _claim_line,
+    render_report,
+)
+
+
+def _metrics() -> Metrics:
+    return Metrics(
+        tp=0, fp=0, fn=0, tn=0, precision=None, recall=None, coverage=None,
+        unverified=0, pending=0, unverifiable=0, total=0,
+    )
+
+
+def test_report_names_a_silent_instance_never_a_pass() -> None:
+    """A silent instance says the check ran and exited 0 — no A3 verdict, never a
+    PASS — and is NOT rendered with the unrecorded sentence."""
+    line = _claim_line(_instance("trace-silent", claim_silence=dict(SILENCE)))
+
+    assert line == (
+        "  trace-silent: claim silence — the check 'pytest -q' exited 0 (D3): "
+        "no A3 verdict, never a PASS"
+    )
+    assert "unrecorded" not in line
+
+
+def test_report_aggregate_counts_silence_only_when_present() -> None:
+    """The aggregate appends the silent count only when n > 0, and prints even when no
+    instance carries a verdict but one was silent."""
+    only_silent = RunLedger(instances=[_instance("trace-s", claim_silence=dict(SILENCE))])
+    report = render_report(only_silent, _metrics())
+    assert "aggregate: 0 FAIL / 0 UNVERIFIED / 1 silent (never PASS)" in report, report
+
+    mixed = RunLedger(
+        instances=[
+            _instance(
+                "trace-f",
+                disposition=Disposition.VERIFIED_FLAGGED,
+                claim={"status": "FAIL", "cause": None,
+                       "check": {"source": "pytest -q", "exit_code": 1}},
+            ),
+            _instance("trace-s", claim_silence=dict(SILENCE)),
+        ]
+    )
+    assert "aggregate: 1 FAIL / 0 UNVERIFIED / 1 silent (never PASS)" in render_report(
+        mixed, _metrics()
+    )
+
+    verdict_only = RunLedger(
+        instances=[
+            _instance(
+                "trace-f",
+                disposition=Disposition.VERIFIED_FLAGGED,
+                claim={"status": "FAIL", "cause": None,
+                       "check": {"source": "pytest -q", "exit_code": 1}},
+            )
+        ]
+    )
+    report = render_report(verdict_only, _metrics())
+    assert "aggregate: 1 FAIL / 0 UNVERIFIED\n" in report + "\n", report
+    assert "silent" not in report.split("claim (A3")[1], report
+
+    nothing = RunLedger(instances=[_instance("trace-u")])
+    assert "aggregate:" not in render_report(nothing, _metrics()).split("claim (A3")[1]
+
+
+def test_unrecorded_sentence_no_longer_omits_silence() -> None:
+    """The sentence names every reading — including a pre-field ledger's D3 silence —
+    and keeps its NOT-a-claim disclaimer."""
+    assert _CLAIM_UNRECORDED_SENTENCE == (
+        "claim unrecorded — no A3 verdict was recorded here (no claim author was "
+        "configured for this run, the claim axis was disabled, or this ledger predates "
+        "the field — a ledger written before `claim_silence` existed also records D3 "
+        "silence this way); this is NOT a claim that the intent drift was clean"
+    )
+    line = _claim_line(_instance("trace-u"))
+    assert line == f"  trace-u: {_CLAIM_UNRECORDED_SENTENCE}"
+
+
+def test_a_verdict_wins_over_a_hand_edited_silence() -> None:
+    """A ledger hand-edited to carry both: the loader accepts, the report renders the
+    `claim` verdict (silence is a non-verdict) and does not count the instance silent."""
+    both = _instance(
+        "trace-b",
+        disposition=Disposition.VERIFIED_FLAGGED,
+        claim={"status": "FAIL", "cause": None,
+               "check": {"source": "pytest -q", "exit_code": 1}},
+        claim_silence=dict(SILENCE),
+    )
+    rebuilt = from_json(to_json(RunLedger(instances=[both])))
+    assert rebuilt.instances[0].claim_silence == SILENCE
+
+    assert "claim FAIL" in _claim_line(rebuilt.instances[0])
+    report = render_report(rebuilt, _metrics())
+    assert "aggregate: 1 FAIL / 0 UNVERIFIED" in report
+    assert "silent" not in report.split("claim (A3")[1]
+
+
+def test_every_silence_rendering_says_never_a_pass() -> None:
+    """R-A: every rendered silence line carries the no-PASS wording, on the surfaces
+    the coverage guard attributes (`_claim_line`, `_claim_section`)."""
+    ledger = RunLedger(instances=[_instance("trace-s", claim_silence=dict(SILENCE))])
+    section = render_report(ledger, _metrics()).split("claim (A3")[1]
+    silence_lines = [ln for ln in section.splitlines() if "silen" in ln]
+    assert silence_lines, section
+    for ln in silence_lines:
+        assert "never a PASS" in ln or "never PASS" in ln, ln

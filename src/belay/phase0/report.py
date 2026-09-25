@@ -394,15 +394,19 @@ def _trajectory_line(inst) -> str:
     return f"  {inst.trace_id}: trajectory UNVERIFIED [{named}] — never PASS"
 
 
-#: What an instance WITHOUT a claim verdict must SAY. `claim is None` means the A3 axis
-#: produced no verdict for the run — no claim author was configured, the axis was
-#: disabled, the check exited 0 (D3 silence), or the ledger predates the field — NOT
-#: that the claim was clean. The word "unrecorded" and the "NOT a claim" disclaimer
-#: are the load-bearing half, exactly as in `_TRAJECTORY_UNRECORDED_SENTENCE`.
+#: What an instance with NEITHER a claim verdict NOR a silence record must SAY. Since
+#: `claim_silence` exists, a ledger records D3 silence (the check exited 0) by name, so
+#: `claim is None` with no silence means no claim author was configured, the axis was
+#: disabled, or the ledger predates the field — and a ledger written before
+#: `claim_silence` existed recorded silence this same way, so the sentence names that
+#: reading too rather than attributing it to a missing author. NOT that the claim was
+#: clean. The word "unrecorded" and the "NOT a claim" disclaimer are the load-bearing
+#: half, exactly as in `_TRAJECTORY_UNRECORDED_SENTENCE`.
 _CLAIM_UNRECORDED_SENTENCE = (
     "claim unrecorded — no A3 verdict was recorded here (no claim author was "
     "configured for this run, the claim axis was disabled, or this ledger predates "
-    "the field); this is NOT a claim that the intent drift was clean"
+    "the field — a ledger written before `claim_silence` existed also records D3 "
+    "silence this way); this is NOT a claim that the intent drift was clean"
 )
 
 
@@ -414,8 +418,16 @@ def _claim_line(inst) -> str:
     exactly what the ledger holds and no more. FAIL names the check source and the
     OBSERVED exit code (the artifacts A3 surfaces) and the disposition the verdict
     produced; UNVERIFIED names its cause and says never PASS. There is no PASS
-    sentence: A3 never emits PASS, so no branch for it exists.
+    sentence: A3 never emits PASS, so no branch for it exists. D3 silence (a recorded
+    `claim_silence`, the check exited 0) says the check ran and that an exit 0 is no
+    verdict — never a PASS; a verdict, when one is also present, wins.
     """
+    if inst.claim is None and inst.claim_silence is not None:
+        source = (inst.claim_silence.get("check") or {}).get("source")
+        return (
+            f"  {inst.trace_id}: claim silence — the check {source!r} exited 0 (D3): "
+            "no A3 verdict, never a PASS"
+        )
     if inst.claim is None:
         return f"  {inst.trace_id}: {_CLAIM_UNRECORDED_SENTENCE}"
     status = inst.claim.get("status")
@@ -444,7 +456,9 @@ def _claim_section(ledger: RunLedger) -> list[str]:
     FAIL / UNVERIFIED counts, with the UNVERIFIED causes named beside them. There is
     no PASS count: A3 never emits PASS, so the aggregate has no PASS line. An instance
     without a verdict contributes nothing to the aggregate — its absence is rendered,
-    never counted.
+    never counted. Silent instances (the check ran and exited 0) are counted beside it
+    as `/ n silent (never PASS)` only when there is at least one — silence is not a
+    verdict, so it is never folded into FAIL or UNVERIFIED.
     """
     lines = [
         "claim (A3 — claim re-derivation: a model wrote an executable check, "
@@ -456,7 +470,12 @@ def _claim_section(ledger: RunLedger) -> list[str]:
     for inst in sorted(ledger.instances, key=lambda inst: inst.trace_id):
         lines.append(_claim_line(inst))
     carried = [inst.claim for inst in ledger.instances if inst.claim is not None]
-    if not carried:
+    silent = sum(
+        1
+        for inst in ledger.instances
+        if inst.claim is None and inst.claim_silence is not None
+    )
+    if not carried and not silent:
         return lines
     fails = sum(1 for c in carried if c.get("status") == "FAIL")
     unverified = len(carried) - fails
@@ -470,7 +489,10 @@ def _claim_section(ledger: RunLedger) -> list[str]:
         cause_note = " (by cause: " + ", ".join(
             f"{cause}: {count}" for cause, count in sorted(by_cause.items())
         ) + ")"
-    lines.append(f"  aggregate: {fails} FAIL / {unverified} UNVERIFIED{cause_note}")
+    silent_note = f" / {silent} silent (never PASS)" if silent else ""
+    lines.append(
+        f"  aggregate: {fails} FAIL / {unverified} UNVERIFIED{silent_note}{cause_note}"
+    )
     return lines
 
 
