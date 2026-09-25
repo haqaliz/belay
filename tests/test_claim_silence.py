@@ -204,3 +204,115 @@ def test_verify_json_a_verdict_carries_no_silence(
 
     assert doc["claim"]["status"] == status, doc
     assert "claim_silence" not in doc, doc
+
+
+# --- (4) the phase0 ledger records D3 silence (AC 5) -----------------------------------
+
+from belay.phase0.ledger import (  # noqa: E402
+    Disposition,
+    InstanceRecord,
+    RunLedger,
+    _REQUIRED_INSTANCE_FIELDS,
+    from_json,
+    to_json,
+)
+from belay.trace import append_claim_record  # noqa: E402
+
+from test_phase0_claim import (  # noqa: E402
+    CHECK as PHASE0_CHECK,
+    FixedAuthor,
+    FixedRunner,
+    _batch,
+    _stub_replay as _stub_phase0_replay,
+    _write_gated_trace,
+)
+
+SILENCE = {"axis": "A3", "kind": "claim", "check": {"source": "pytest -q", "exit_code": 0}}
+
+
+def _instance(trace_id: str, **kwargs) -> InstanceRecord:
+    return InstanceRecord(
+        trace_id=trace_id,
+        disposition=kwargs.pop("disposition", Disposition.VERIFIED_CLEAN),
+        turn_status_counts=kwargs.pop("turn_status_counts", {"PASS": 2}),
+        flagged_turns=[],
+        flagged_addable=[],
+        flagged_unaddable=[],
+        unverified_causes={},
+        error=None,
+        **kwargs,
+    )
+
+
+def test_ledger_round_trips_claim_silence() -> None:
+    """A recorded silence survives `to_json` / `from_json` exactly, and `claim` stays
+    `None` beside it — the two are mutually exclusive."""
+    ledger = RunLedger(instances=[_instance("trace-silent", claim_silence=dict(SILENCE))])
+
+    rebuilt = from_json(json.loads(json.dumps(to_json(ledger))))
+
+    inst = rebuilt.instances[0]
+    assert inst.claim_silence == SILENCE
+    assert inst.claim is None
+    assert "claim_silence" not in _REQUIRED_INSTANCE_FIELDS
+
+
+def test_ledger_without_claim_silence_is_byte_identical() -> None:
+    """An old-shaped instance (no key) loads with `None` and re-serializes to the SAME
+    bytes — old ledgers re-render byte-identically."""
+    old = {
+        "instances": [
+            {
+                "trace_id": "trace-x",
+                "disposition": "VERIFIED_CLEAN",
+                "turn_status_counts": {"PASS": 2},
+                "flagged_turns": [],
+                "flagged_addable": [],
+                "flagged_unaddable": [],
+                "unverified_causes": {},
+                "error": None,
+                "not_covered_turns": {},
+            }
+        ]
+    }
+
+    rebuilt = from_json(old)
+
+    assert rebuilt.instances[0].claim_silence is None
+    assert json.dumps(to_json(rebuilt), sort_keys=False) == json.dumps(old)
+
+
+def test_run_batch_records_silence_with_the_no_author_disposition(tmp_path, monkeypatch):
+    """The check exits 0 through the REAL `run_batch` path: `claim` stays `None`,
+    `claim_silence` names the check, and the disposition and counts equal a no-author
+    run's — silence never flags, never counts."""
+    _stub_phase0_replay(monkeypatch, tmp_path=tmp_path)
+    monkeypatch.setattr(claims, "runner", FixedRunner(0))
+    trace_path = _write_gated_trace(tmp_path / "traces", "edit_file", 2)
+    append_claim_record(trace_path, text="all tests pass")
+
+    silent = _batch(tmp_path, trace_path, claim_author=FixedAuthor(PHASE0_CHECK))
+    absent = _batch(tmp_path, trace_path, claim_author=None)
+
+    s, a = silent.instances[0], absent.instances[0]
+    assert s.claim is None
+    assert s.claim_silence == SILENCE
+    assert a.claim_silence is None
+    assert s.disposition is a.disposition is Disposition.VERIFIED_CLEAN
+    assert s.turn_status_counts == a.turn_status_counts
+    assert silent.violating_instances() == absent.violating_instances() == 0
+
+
+def test_run_batch_disabled_axis_records_no_silence(tmp_path, monkeypatch):
+    """`disable_claim_axis` with an exit-0 author: the axis never ran — no record."""
+    _stub_phase0_replay(monkeypatch, tmp_path=tmp_path)
+    monkeypatch.setattr(claims, "runner", FixedRunner(0))
+    trace_path = _write_gated_trace(tmp_path / "traces", "edit_file", 2)
+    append_claim_record(trace_path, text="all tests pass")
+
+    ledger = _batch(
+        tmp_path, trace_path,
+        claim_author=FixedAuthor(PHASE0_CHECK), disable_claim_axis=True,
+    )
+
+    assert ledger.instances[0].claim_silence is None

@@ -199,6 +199,16 @@ class InstanceRecord:
     #: Why the A3 claim FAIL could not be ingested as a corpus case, shape `{"cause":
     #: <str>}` — the same bucketed-fact discipline as `trajectory_unaddable`.
     claim_unaddable: Optional[dict] = None
+    #: D3 silence, NAMED: `{"axis": "A3", "kind": "claim", "check": {"source": <str>,
+    #: "exit_code": 0}}` when the claim axis RAN and its authored check exited 0 — the
+    #: sibling of `claim`, never a variant of it. It carries no `status`: an exit 0 is
+    #: no A3 verdict at all (*a re-derived claim is not a certification*), so it never
+    #: flags, never counts, and must never be read as (or rendered as) a PASS. It exists
+    #: so an absent `claim` stops meaning both "never checked" and "checked and silent".
+    #: `None` whenever the axis did not run or produced a verdict (`claim` is set) — the
+    #: two are mutually exclusive by construction. Serialized additively (omitted when
+    #: `None`), so old ledgers re-render byte-identically.
+    claim_silence: Optional[dict] = None
 
 
 @dataclass(frozen=True)
@@ -274,7 +284,8 @@ def _instance_to_json(inst: InstanceRecord) -> dict:
     that the key never existed. `"trajectory"` follows the identical rule: an unrecorded
     instance-level verdict stays absent, never `null` and never a fabricated clean.
     `"claim"` follows `trajectory` exactly — the A3 instance-level verdict, absent
-    when unrecorded for the identical reason.
+    when unrecorded for the identical reason; `"claim_silence"`, its non-verdict
+    sibling, is absent unless the axis ran and its check exited 0.
     """
     payload: dict[str, object] = {
         "trace_id": inst.trace_id,
@@ -301,6 +312,8 @@ def _instance_to_json(inst: InstanceRecord) -> dict:
         payload["claim_addable"] = True
     if inst.claim_unaddable is not None:
         payload["claim_unaddable"] = dict(inst.claim_unaddable)
+    if inst.claim_silence is not None:
+        payload["claim_silence"] = dict(inst.claim_silence)
     return payload
 
 
@@ -402,6 +415,14 @@ def _instance_from_json(raw: object) -> InstanceRecord:
             dict(raw["claim_unaddable"])
             if isinstance(raw.get("claim_unaddable"), dict)
             else raw.get("claim_unaddable")
+        ),
+        # `claim_silence` follows the same additive pattern: absent resolves to `None`
+        # (the axis did not run, it produced a verdict, or the ledger predates the
+        # field — a pre-field ledger records D3 silence as an absent `claim`).
+        claim_silence=(
+            dict(raw["claim_silence"])
+            if isinstance(raw.get("claim_silence"), dict)
+            else raw.get("claim_silence")
         ),
     )
 

@@ -87,6 +87,7 @@ from belay.verify.claims import (
     evaluate_claim,
 )
 from belay.verify.invariants import INSTANCE_LEVEL_RULES, Invariant, trajectory_case
+from belay.verify.json import claim_silence_record
 from belay.verify.trajectory import (
     _EVIDENCE_TOOL,
     evaluate_trajectory_rules,
@@ -416,6 +417,7 @@ def _verify_one_trace(
     # verdict was decided by (its source is what `corpus run` later re-executes).
     claim = None
     claim_check = None
+    claim_silence = None
     if not disable_claim_axis and claim_author is not None:
         recorder = RecordingAuthor(claim_author)
         claim = evaluate_claim(
@@ -430,6 +432,11 @@ def _verify_one_trace(
             replays=replays,
         )
         claim_check = recorder.last_check
+        # D3 silence, named — the `belay verify --json` derivation exactly: with an
+        # author configured, `None` means the check exited 0, and the recorder holds
+        # the check that ran. A sibling record, never a status: it flags nothing.
+        if claim is None and claim_check is not None:
+            claim_silence = claim_silence_record(claim_check)
 
     flagged_addable: list[int] = []
     flagged_unaddable: list[dict] = []
@@ -632,6 +639,7 @@ def _verify_one_trace(
         claim=_claim_summary(claim, claim_check),
         claim_addable=claim_addable,
         claim_unaddable=claim_unaddable,
+        claim_silence=claim_silence,
     )
 
 
