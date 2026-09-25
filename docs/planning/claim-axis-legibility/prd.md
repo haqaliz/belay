@@ -147,6 +147,11 @@ The first real-data A3 measurement came back uninterpretable for this reason.
 
 ## 6. Decisions for the owner (review gate)
 
+> **DECIDED 2026-09-25 — the owner approved the PRD at the review gate** ("approve", no
+> branch named), which adopts the stated recommendations: **D-1 (a)** — the refutation
+> assertion becomes *identical except exactly `claim_silence`*, stronger, spy kept;
+> **D-2** sibling key; **OQ-1** no interop/console; **OQ-2** ≤200-char one-line detail.
+
 - **D-1 — the refutation test must change, and this is the decision to make.**
   `tests/test_refutation_no_claim_axis.py:474` asserts the axis-on and axis-off `verify
   --json` documents are **equal**, under *"Do not weaken this module … If a surface change
