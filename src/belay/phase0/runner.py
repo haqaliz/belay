@@ -87,7 +87,7 @@ from belay.verify.claims import (
     evaluate_claim,
 )
 from belay.verify.invariants import INSTANCE_LEVEL_RULES, Invariant, trajectory_case
-from belay.verify.json import claim_silence_record
+from belay.verify.json import claim_silence_record, sub_cause_fields
 from belay.verify.trajectory import (
     _EVIDENCE_TOOL,
     evaluate_trajectory_rules,
@@ -652,12 +652,14 @@ def _claim_summary(claim: Optional[Verdict], check: Optional[Check]) -> Optional
     none: the check ran and decided), and the check's source plus the OBSERVED exit
     code (`None` when the check did not execute). `None` when no verdict exists at
     all — the axis was absent or disabled, or the check exited 0 (D3 silence) — and
-    `None` must never be read as (or rendered as) "the claim was clean".
+    `None` must never be read as (or rendered as) "the claim was clean". A
+    `NO_CHECK_AUTHOR` abstention appends the author's `sub_cause` / `sub_cause_detail`
+    (`sub_cause_fields`), so a ledger says WHY the author produced no check.
     """
     if claim is None:
         return None
     expected = claim.expected if isinstance(claim.expected, dict) else {}
-    return {
+    summary = {
         "status": claim.status.value,
         "cause": expected.get("cause"),
         "check": {
@@ -667,6 +669,8 @@ def _claim_summary(claim: Optional[Verdict], check: Optional[Check]) -> Optional
             "exit_code": claim.observed,
         },
     }
+    summary.update(sub_cause_fields(expected))
+    return summary
 
 
 __all__ = ["run_batch", "default_manifest_dir_for"]

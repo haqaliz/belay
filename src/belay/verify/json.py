@@ -294,7 +294,8 @@ def claim_record(claim, *, check=None) -> Optional[dict]:
     author configured, the axis disabled, or D3 silence: the check exited 0) carries
     NO claim record at all, never a fabricated clean and never `null` — the
     absent-never-zero rule that keeps the pinned `--json` snapshot green for every
-    trace without a claim/author.
+    trace without a claim/author. A `NO_CHECK_AUTHOR` abstention appends
+    `sub_cause` / `sub_cause_detail` (`sub_cause_fields`); no other record changes.
     """
     if claim is None:
         return None
@@ -304,12 +305,32 @@ def claim_record(claim, *, check=None) -> Optional[dict]:
         if check is not None
         else expected.get("check_source", "")
     )
-    return {
+    record = {
         "axis": claim.axis,
         "kind": claim.kind,
         "status": claim.status.value,
         "cause": expected.get("cause"),
         "check": {"source": source, "exit_code": claim.observed},
+    }
+    record.update(sub_cause_fields(expected))
+    return record
+
+
+def sub_cause_fields(expected) -> dict:
+    """The author's sub-cause keys for a claim record, or `{}` — additive, never inferred.
+
+    `{"sub_cause", "sub_cause_detail"}` copied from a verdict's `expected` dict exactly
+    when it carries `sub_cause` (only a `NO_CHECK_AUTHOR` abstention does), so a FAIL,
+    every other cause, and a verdict stored before the sub-cause existed shape exactly as
+    they did. The one rule for every claim record — `claim_record`, the phase0 ledger's
+    summary, the corpus `claim_case` — each of which appends these LAST, after the keys
+    it already carried. A sub-cause refines the reason, never the status.
+    """
+    if not isinstance(expected, dict) or "sub_cause" not in expected:
+        return {}
+    return {
+        "sub_cause": expected["sub_cause"],
+        "sub_cause_detail": expected.get("sub_cause_detail", ""),
     }
 
 
@@ -341,6 +362,7 @@ __all__ = [
     "coverage_record",
     "error_report",
     "exposure_record",
+    "sub_cause_fields",
     "render_json",
     "trajectory_record",
     "turn_record",

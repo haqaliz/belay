@@ -66,6 +66,7 @@ from belay.verify.trajectory import (
     extract_claim,
 )
 from belay.verify.trajectory import _EVIDENCE_TOOL  # noqa: PLC2701  (routing, as turn.py)
+from belay.verify.json import sub_cause_fields
 from belay.verify.verdict import Status, Verdict
 
 if TYPE_CHECKING:
@@ -571,7 +572,9 @@ def claim_case(verdict: Verdict, *, check: Optional[Check] = None) -> Optional[d
     verdict's `expected` dict) and a `check` entry whose `exit_code` is `null` — did
     not execute, the CheckResult contract — with the authored check's source when one
     was produced (`check=`, or `expected["check_source"]`), `""` when none was (the
-    no-author abstention has no check to quote).
+    no-author abstention has no check to quote). A `NO_CHECK_AUTHOR` abstention also
+    carries the author's `sub_cause` / `sub_cause_detail`, last (`sub_cause_fields`) —
+    an optional detail the v5 loader type-checks and `corpus run` never decides on.
     """
     if verdict.axis != "A3" or verdict.kind != "claim":
         return None
@@ -586,7 +589,7 @@ def claim_case(verdict: Verdict, *, check: Optional[Check] = None) -> Optional[d
         }
     if verdict.status is Status.UNVERIFIED:
         expected = verdict.expected if isinstance(verdict.expected, dict) else {}
-        return {
+        case = {
             "status": "UNVERIFIED",
             "cause": expected.get("cause"),
             "check": {
@@ -598,6 +601,8 @@ def claim_case(verdict: Verdict, *, check: Optional[Check] = None) -> Optional[d
                 "exit_code": None,
             },
         }
+        case.update(sub_cause_fields(expected))
+        return case
     return None
 
 
