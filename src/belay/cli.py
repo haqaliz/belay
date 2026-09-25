@@ -2773,6 +2773,12 @@ def _cmd_corpus_show(args: argparse.Namespace) -> int:
         check = case.claim["check"]
         exit_code = check["exit_code"]
         _emit(f"  claim expected        {status}  (cause: {cause or 'none'})")
+        # Why the author produced no check, when the case banked it — a stored detail,
+        # rendered as stored, never inferred; it decides nothing on recompute.
+        sub_cause = case.claim.get("sub_cause")
+        if sub_cause:
+            detail = case.claim.get("sub_cause_detail")
+            _emit(f"      sub-cause: {sub_cause}" + (f" ({detail})" if detail else ""))
         _emit(
             f"      check: {check['source']}"
             f"  (exit {exit_code if exit_code is not None else 'n/a'})"
