@@ -68,6 +68,13 @@ class VerifyReport:
     zero, never an empty section). A skipped turn is UNVERIFIED-by-budget in the
     `turns` records; the section reports the budget's decisions and no verdict
     axis reads them.
+
+    `claim_silence` is the SIBLING of `claim`, never a variant of it: present iff the
+    claim axis ran and the authored check exited 0 (D3 silence), OMITTED otherwise —
+    no author, the axis disabled, `--turn N`, and whenever `claim` is present (the two
+    are mutually exclusive by construction). It lives outside `claim` so every reader
+    that treats `claim` as a verdict record is untouched, and it carries no `status`
+    key, so it can never be counted, compared or rendered as one.
     """
 
     trace: Optional[str]
@@ -80,6 +87,7 @@ class VerifyReport:
     error: Optional[dict]
     approval: Optional[dict] = None
     triage: Optional[dict] = None
+    claim_silence: Optional[dict] = None
 
     def as_dict(self) -> dict:
         """The document, in the contract's key order."""
@@ -98,6 +106,8 @@ class VerifyReport:
             payload["triage"] = self.triage
         if self.claim is not None:
             payload["claim"] = self.claim
+        if self.claim_silence is not None:
+            payload["claim_silence"] = self.claim_silence
         payload["error"] = self.error
         return payload
 
@@ -284,7 +294,8 @@ def claim_record(claim, *, check=None) -> Optional[dict]:
     author configured, the axis disabled, or D3 silence: the check exited 0) carries
     NO claim record at all, never a fabricated clean and never `null` — the
     absent-never-zero rule that keeps the pinned `--json` snapshot green for every
-    trace without a claim/author.
+    trace without a claim/author. A `NO_CHECK_AUTHOR` abstention appends
+    `sub_cause` / `sub_cause_detail` (`sub_cause_fields`); no other record changes.
     """
     if claim is None:
         return None
@@ -294,12 +305,50 @@ def claim_record(claim, *, check=None) -> Optional[dict]:
         if check is not None
         else expected.get("check_source", "")
     )
-    return {
+    record = {
         "axis": claim.axis,
         "kind": claim.kind,
         "status": claim.status.value,
         "cause": expected.get("cause"),
         "check": {"source": source, "exit_code": claim.observed},
+    }
+    record.update(sub_cause_fields(expected))
+    return record
+
+
+def sub_cause_fields(expected) -> dict:
+    """The author's sub-cause keys for a claim record, or `{}` — additive, never inferred.
+
+    `{"sub_cause", "sub_cause_detail"}` copied from a verdict's `expected` dict exactly
+    when it carries `sub_cause` (only a `NO_CHECK_AUTHOR` abstention does), so a FAIL,
+    every other cause, and a verdict stored before the sub-cause existed shape exactly as
+    they did. The one rule for every claim record — `claim_record`, the phase0 ledger's
+    summary, the corpus `claim_case` — each of which appends these LAST, after the keys
+    it already carried. A sub-cause refines the reason, never the status.
+    """
+    if not isinstance(expected, dict) or "sub_cause" not in expected:
+        return {}
+    return {
+        "sub_cause": expected["sub_cause"],
+        "sub_cause_detail": expected.get("sub_cause_detail", ""),
+    }
+
+
+def claim_silence_record(check) -> dict:
+    """The additive `claim_silence` record: the axis RAN and its check exited 0 (D3).
+
+    `{"axis": "A3", "kind": "claim", "check": {"source", "exit_code": 0}}` — the check
+    that ran and the exit code it was observed to return. Silence is not a PASS: *a
+    re-derived claim is not a certification* (`CAPABILITY_ROADMAP.md:819`), so an exit
+    0 is no verdict at all. The record therefore carries NO `status` (and no `cause`)
+    by construction — it says only that the check was run, which is exactly what an
+    absent `claim` could not say: *checked and silent* is no longer indistinguishable
+    from *never checked*.
+    """
+    return {
+        "axis": "A3",
+        "kind": "claim",
+        "check": {"source": check.source, "exit_code": 0},
     }
 
 
@@ -309,9 +358,11 @@ __all__ = [
     "aggregate_record",
     "approval_record",
     "claim_record",
+    "claim_silence_record",
     "coverage_record",
     "error_report",
     "exposure_record",
+    "sub_cause_fields",
     "render_json",
     "trajectory_record",
     "turn_record",

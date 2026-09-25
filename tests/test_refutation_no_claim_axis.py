@@ -24,8 +24,9 @@ Two surfaces, both through the REAL CLI:
 2. **`belay verify`** on the committed demo capture: the same trace verified twice —
    once with the claim axis live (a deterministic fake author; the check runs in the
    materialized final state and exits 0, D3 silence) and once with `--no-claim-axis`.
-   Every PASS and every FAIL is identical; the two JSON documents are equal, byte for
-   byte.
+   Every PASS and every FAIL is identical; the two JSON documents are equal except
+   exactly the `claim_silence` record, which the axis-on run must carry — the artifact
+   now proves the axis ran; the spy stays as the second proof.
 
 The refutation runs with a FAKE author — deterministic, no model in CI (acceptance 5).
 The corpus half needs no sandbox (the replay and the check-runner seams are stubbed);
@@ -487,10 +488,12 @@ def test_verify_verdicts_are_identical_with_and_without_the_claim_axis(
     )
 
     assert rc_on == rc_off == 0, (rc_on, rc_off)
-    assert doc_on == doc_off, (
+    assert {k: v for k, v in doc_on.items() if k != "claim_silence"} == doc_off, (
         "the claim axis must leave every PASS and every FAIL identical — a surface "
         "that lets A3 leak into the deterministic spine breaks this test"
     )
+    assert doc_on["claim_silence"]["check"]["exit_code"] == 0, doc_on
+    assert "claim_silence" not in doc_off, doc_off
     assert doc_on["turns"], doc_on
     assert all(turn["status"] == "PASS" for turn in doc_on["turns"]), doc_on["turns"]
     assert doc_on["trajectory"]["status"] == "PASS", doc_on["trajectory"]

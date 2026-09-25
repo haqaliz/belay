@@ -346,10 +346,13 @@ def test_claim_unverified_never_flags_the_instance(tmp_path, monkeypatch) -> Non
     ledger = _batch(tmp_path, trace_path, claim_author=NoCheckAuthor())
 
     inst = ledger.instances[0]
+    # claim-axis-legibility M4: a NO_CHECK_AUTHOR record carries its sub-cause.
     assert inst.claim == {
         "status": "UNVERIFIED",
         "cause": "NO_CHECK_AUTHOR",
         "check": {"source": "", "exit_code": None},
+        "sub_cause": "AUTHOR_DECLINED",
+        "sub_cause_detail": "",
     }
     assert inst.disposition is Disposition.VERIFIED_CLEAN, inst.disposition
     assert inst.claim_addable is False

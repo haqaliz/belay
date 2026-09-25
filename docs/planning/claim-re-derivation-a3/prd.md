@@ -119,6 +119,13 @@ requires: *"no shipped PASS is ever produced by A3, verified by test"* (`docs/RO
   closed cause vocabulary `NO_CLAIM_RECORDED` / `CLAIM_UNCLASSIFIABLE` / `NO_CHECK_AUTHOR` /
   `CHECK_DID_NOT_EXECUTE` / `CHECK_TIMED_OUT` / `FINAL_STATE_UNOBSERVABLE` (final set at spec time,
   following `trajectory.py:136-147` conventions).
+  **[Corrected 2026-09-25 (`claim-axis-legibility`) — the shipped vocabulary has FIVE causes,
+  not six. It replaces "`CHECK_DID_NOT_EXECUTE` / `CHECK_TIMED_OUT`": no `CHECK_TIMED_OUT`
+  exists; a check that times out has `exit_code=None` and is folded into
+  `CHECK_DID_NOT_EXECUTE` (`claims.py` decision table: "runner `exit_code=None` (launch
+  failure / timeout)"). The closed set is pinned by `tests/test_claim_vocabulary_guard.py`.
+  A timed-out AUTHOR (not the check) is a different fact: `NO_CHECK_AUTHOR` with sub-cause
+  `AUTHOR_TIMED_OUT`. The rest of this bullet stands.]**
 
 ## Risks & Open Questions
 

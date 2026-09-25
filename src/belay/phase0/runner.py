@@ -87,6 +87,7 @@ from belay.verify.claims import (
     evaluate_claim,
 )
 from belay.verify.invariants import INSTANCE_LEVEL_RULES, Invariant, trajectory_case
+from belay.verify.json import claim_silence_record, sub_cause_fields
 from belay.verify.trajectory import (
     _EVIDENCE_TOOL,
     evaluate_trajectory_rules,
@@ -416,6 +417,7 @@ def _verify_one_trace(
     # verdict was decided by (its source is what `corpus run` later re-executes).
     claim = None
     claim_check = None
+    claim_silence = None
     if not disable_claim_axis and claim_author is not None:
         recorder = RecordingAuthor(claim_author)
         claim = evaluate_claim(
@@ -430,6 +432,11 @@ def _verify_one_trace(
             replays=replays,
         )
         claim_check = recorder.last_check
+        # D3 silence, named — the `belay verify --json` derivation exactly: with an
+        # author configured, `None` means the check exited 0, and the recorder holds
+        # the check that ran. A sibling record, never a status: it flags nothing.
+        if claim is None and claim_check is not None:
+            claim_silence = claim_silence_record(claim_check)
 
     flagged_addable: list[int] = []
     flagged_unaddable: list[dict] = []
@@ -632,6 +639,7 @@ def _verify_one_trace(
         claim=_claim_summary(claim, claim_check),
         claim_addable=claim_addable,
         claim_unaddable=claim_unaddable,
+        claim_silence=claim_silence,
     )
 
 
@@ -644,12 +652,14 @@ def _claim_summary(claim: Optional[Verdict], check: Optional[Check]) -> Optional
     none: the check ran and decided), and the check's source plus the OBSERVED exit
     code (`None` when the check did not execute). `None` when no verdict exists at
     all — the axis was absent or disabled, or the check exited 0 (D3 silence) — and
-    `None` must never be read as (or rendered as) "the claim was clean".
+    `None` must never be read as (or rendered as) "the claim was clean". A
+    `NO_CHECK_AUTHOR` abstention appends the author's `sub_cause` / `sub_cause_detail`
+    (`sub_cause_fields`), so a ledger says WHY the author produced no check.
     """
     if claim is None:
         return None
     expected = claim.expected if isinstance(claim.expected, dict) else {}
-    return {
+    summary = {
         "status": claim.status.value,
         "cause": expected.get("cause"),
         "check": {
@@ -659,6 +669,8 @@ def _claim_summary(claim: Optional[Verdict], check: Optional[Check]) -> Optional
             "exit_code": claim.observed,
         },
     }
+    summary.update(sub_cause_fields(expected))
+    return summary
 
 
 __all__ = ["run_batch", "default_manifest_dir_for"]

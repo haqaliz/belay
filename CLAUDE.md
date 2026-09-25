@@ -2,6 +2,36 @@
 
 This file orients a coding agent working in this repository. Read it first.
 
+> **THE CLAIM AXIS NOW SAYS WHAT IT DID — SILENCE IS NOT ABSENCE, AND AN ABSTAINING
+> AUTHOR SAYS WHY** (2026-09-25, `claim-axis-legibility`). **Legibility only: no verdict,
+> status, reduction, exit code, gate or corpus outcome moves.** A follow-on slice of C8
+> answering two recorded gaps. **`silence-record`:** `evaluate_claim` returned `None` both
+> for *no author* and for *the check exited 0* (D3), so `verify --json` and the phase0
+> ledger could not tell **checked** from **never checked**; a sibling **`claim_silence`**
+> record (`{axis, kind, check: {source, exit_code: 0}}`, **no status key by construction**,
+> never inside `claim`) now names silence, and `phase0 report` stops telling an exit-0
+> instance *"no claim author was configured"*. The `--no-claim-axis` refutation was
+> **amended per the owner's D-1 (a)**: the documents must be equal **except exactly**
+> `claim_silence`, which the axis-on run must carry (the artifact now proves the axis ran;
+> the spy stays). **`author-abstention`:** `SubprocessAuthor` collapsed eight failures into
+> one `None`; `last_abstention` now records one of a **closed vocabulary of 8 sub-causes**
+> (`AUTHOR_RAISED`, `AUTHOR_DECLINED`, `AUTHOR_NOT_LAUNCHED`, `AUTHOR_TIMED_OUT`,
+> `AUTHOR_EXITED_NONZERO`, `AUTHOR_OUTPUT_OVER_CAP`, `AUTHOR_OUTPUT_MALFORMED`,
+> `AUTHOR_REPORTED_ERROR`) with a ≤200-char one-line detail; return values unchanged; every
+> case is still UNVERIFIED `NO_CHECK_AUTHOR`. **`surface-threading`:** the sub-cause rides
+> the `--json` claim record, ledger, corpus case (schema stays v5), `verify` text,
+> `phase0 report` and `corpus show`; two exact-record pins amended additively (M4). Proven
+> through the real CLI with five stub authors (291 s). **Honesty lines:** run 3's two
+> `NO_CHECK_AUTHOR` reasons were never recorded and **cannot be recovered** — the next
+> A3-enabled run answers it, including whether Belay's own 60 s `AUTHOR_TIMEOUT` (vs the
+> reference author's 600 s) is the cause, **a hypothesis, not a finding**; the committed
+> `cm-*.json` ledgers hold 0 claim-less instances, so their golden pin cannot observe the
+> sentence fix (unit tests pin it). **No published number moves** (`11/60 = 18.3%`,
+> `precision 0.00`, `1/15`, `4/16`, `recall 0.00`, `3/93` stand unedited). Suite 2764 →
+> **2868** (PRD predicted +35–55; actual +104). **NOT built, by name:** the 10/12
+> `CLAIM_UNCLASSIFIABLE` classifier coverage; `FINAL_STATE_UNOBSERVABLE`'s four collapsed
+> reasons; interop/console surfaces. See `docs/planning/claim-axis-legibility/`.
+>
 > **THE COMPOSITE-SNAPSHOT FIX LANDS AND THE THIRD PROBE CLEARS ITS GATE — THE CORPUS
 > GROWS FOR THE FIRST TIME SINCE 2026-08-12** (2026-09-23, `corpus-mint-second-run`).
 > **NOT a gate run; produces NO Phase-0 number** (n = 8 real, under 50 by construction). The

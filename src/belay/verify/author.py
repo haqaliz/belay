@@ -18,6 +18,10 @@ The honesty contract, stated once here (spec acceptance 1-4):
   malformed stdout, a timeout, output past the 1 MiB cap — returns `None`, which the
   evaluator reads as `NO_CHECK_AUTHOR` (UNVERIFIED). A check is only ever produced from a
   stdout JSON object that carried `{"source": str, "argv": [str, ...]}`.
+- **Why it abstained is recorded, beside the return value — never instead of it.**
+  `last_abstention` names the failure from the closed sub-cause vocabulary
+  (`claims.SUB_CAUSES`) with a bounded one-line detail, reset at the start of every call;
+  the evaluator reads it by attribute, so the `CheckAuthor` protocol is unchanged.
 - **Unset is ABSENT, not a failure.** `author_from_env` returns `None` for an
   unset/blank/un-lexable `BELAY_CLAIM_AUTHOR` — the axis is simply not configured, so the
   evaluator returns `None` and surfaces render the coverage note; never UNVERIFIED, never
@@ -37,7 +41,17 @@ import shlex
 import subprocess
 from typing import Mapping, Optional, Sequence
 
-from belay.verify.claims import Check
+from belay.verify.claims import (
+    SUB_CAUSE_AUTHOR_EXITED_NONZERO,
+    SUB_CAUSE_AUTHOR_NOT_LAUNCHED,
+    SUB_CAUSE_AUTHOR_OUTPUT_MALFORMED,
+    SUB_CAUSE_AUTHOR_OUTPUT_OVER_CAP,
+    SUB_CAUSE_AUTHOR_REPORTED_ERROR,
+    SUB_CAUSE_AUTHOR_TIMED_OUT,
+    Abstention,
+    Check,
+)
+from belay.verify.claims import _one_line  # noqa: PLC2701  (one sanitation rule for both)
 from belay.verify.trajectory import TurnFact
 
 #: The env var naming the author command line, shlex-split: e.g. "claude -p ..." or
@@ -79,12 +93,14 @@ class SubprocessAuthor:
 
     The command runs with the JSON prompt on stdin and its stdout parsed fail-closed:
     `{"source", "argv"}` becomes the `Check` verbatim; `{"error"}` and every other
-    failure shape return `None`. Never raises — every failure path is an abstention.
+    failure shape return `None`. Never raises — every failure path is an abstention, and
+    `last_abstention` says which one (`None` after a call that produced a check).
     """
 
     def __init__(self, command: tuple[str, ...], timeout: float = AUTHOR_TIMEOUT):
         self.command = command
         self.timeout = timeout
+        self.last_abstention: Optional[Abstention] = None
 
     def author_check(
         self,
@@ -94,6 +110,7 @@ class SubprocessAuthor:
         turns: Sequence[TurnFact],
         final_state_files: Sequence[str],
     ) -> Optional[Check]:
+        self.last_abstention = None
         prompt = json.dumps(
             {
                 "claim": claim_text,
@@ -111,12 +128,34 @@ class SubprocessAuthor:
                 timeout=self.timeout,
                 check=False,
             )
-        except Exception:  # noqa: BLE001  (timeout or launch failure is an abstention, never a crash)
-            return None
+        except subprocess.TimeoutExpired:
+            return self._abstain(
+                SUB_CAUSE_AUTHOR_TIMED_OUT, f"no reply within {self.timeout:g}s"
+            )
+        except Exception as exc:  # noqa: BLE001  (a launch failure is an abstention, never a crash)
+            return self._abstain(SUB_CAUSE_AUTHOR_NOT_LAUNCHED, type(exc).__name__)
         if proc.returncode != 0:
-            return None
+            stderr = proc.stderr.decode("utf-8", errors="replace").splitlines()
+            last = next((line for line in reversed(stderr) if line.strip()), "")
+            detail = f"exit {proc.returncode}: {last}" if last else f"exit {proc.returncode}"
+            return self._abstain(SUB_CAUSE_AUTHOR_EXITED_NONZERO, _one_line(detail))
         stdout = proc.stdout[:_MAX_OUTPUT].decode("utf-8", errors="replace")
-        return _parse_check(stdout)
+        parsed = _parse_check_reason(stdout)
+        if isinstance(parsed, Check):
+            return parsed
+        if len(proc.stdout) > _MAX_OUTPUT:
+            # Named only when the cut payload fails to parse: a check whose first MiB
+            # parses is still returned, exactly as before the sub-cause existed.
+            return self._abstain(
+                SUB_CAUSE_AUTHOR_OUTPUT_OVER_CAP, f"stdout exceeded {_MAX_OUTPUT} bytes"
+            )
+        self.last_abstention = parsed
+        return None
+
+    def _abstain(self, sub_cause: str, detail: str) -> Optional[Check]:
+        """Record why this call produced no check; always returns `None` (no check)."""
+        self.last_abstention = Abstention(sub_cause, detail)
+        return None
 
 
 def _parse_check(stdout: str) -> Optional[Check]:
@@ -126,20 +165,31 @@ def _parse_check(stdout: str) -> Optional[Check]:
     `source`, or a non-`[str, ...]` `argv` are all failures — a check is never guessed
     from a shape the contract does not name.
     """
+    parsed = _parse_check_reason(stdout)
+    return parsed if isinstance(parsed, Check) else None
+
+
+def _parse_check_reason(stdout: str) -> Check | Abstention:
+    """`_parse_check`, plus the failing shape: the `Check`, or the `Abstention` naming why.
+
+    The detail names which shape check failed (`invalid JSON`, `not an object`,
+    `bad source`, `bad argv`), or carries the author's own `{"error": ...}` reason as one
+    bounded line — never the payload itself.
+    """
     try:
         payload = json.loads(stdout)
     except ValueError:
-        return None
+        return Abstention(SUB_CAUSE_AUTHOR_OUTPUT_MALFORMED, "invalid JSON")
     if not isinstance(payload, dict):
-        return None
+        return Abstention(SUB_CAUSE_AUTHOR_OUTPUT_MALFORMED, "not an object")
     if "error" in payload:
-        return None
+        return Abstention(SUB_CAUSE_AUTHOR_REPORTED_ERROR, _one_line(str(payload["error"])))
     source = payload.get("source")
     argv = payload.get("argv")
-    if not isinstance(source, str) or not isinstance(argv, list):
-        return None
-    if not all(isinstance(token, str) for token in argv):
-        return None
+    if not isinstance(source, str):
+        return Abstention(SUB_CAUSE_AUTHOR_OUTPUT_MALFORMED, "bad source")
+    if not isinstance(argv, list) or not all(isinstance(token, str) for token in argv):
+        return Abstention(SUB_CAUSE_AUTHOR_OUTPUT_MALFORMED, "bad argv")
     return Check(source=source, argv=tuple(argv))
 
 

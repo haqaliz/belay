@@ -371,7 +371,11 @@ def _validate_claim(raw: object, path: Path) -> Optional[dict]:
     no check to quote), `exit_code` the observed process exit, `null` meaning the check
     did NOT execute (the CheckResult contract) — never a fabricated 0. Every key is
     required: a shape this loader had to guess at is a case whose expected verdict is
-    unknown, and the recompute would be grounded on a guess.
+    unknown, and the recompute would be grounded on a guess. The OPTIONAL
+    `sub_cause` / `sub_cause_detail` (why a `NO_CHECK_AUTHOR` author produced no check)
+    are type-checked when present — null or a string — and never decide anything:
+    `corpus run` classifies on the status alone, so they need no schema bump (an older
+    loader drops a detail, it does not misread a verdict).
     """
     if raw is None:
         return None
@@ -418,6 +422,12 @@ def _validate_claim(raw: object, path: Path) -> Optional[dict]:
             f"case file {path!r} field 'claim.check.exit_code' is {exit_code!r}; "
             f"must be an integer or null"
         )
+    for key in ("sub_cause", "sub_cause_detail"):
+        if raw.get(key) is not None and not isinstance(raw[key], str):
+            raise ValueError(
+                f"case file {path!r} field 'claim.{key}' is {raw[key]!r}; "
+                f"must be null or a string"
+            )
     return raw
 
 

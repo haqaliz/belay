@@ -905,6 +905,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
             aggregate_record,
             approval_record,
             claim_record,
+            claim_silence_record,
             coverage_record,
             error_report,
             exposure_record,
@@ -1141,6 +1142,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         trajectory = None
         claim = None
         claim_check = None
+        claim_silence = None
         if args.turn is None:
             trajectory = evaluate_trajectory_rules(
                 invariants,
@@ -1169,6 +1171,14 @@ def _cmd_verify(args: argparse.Namespace) -> int:
                     replays=args.replays,
                 )
                 claim_check = recorder.last_check
+                # D3 silence, named: with an author configured the evaluator returns
+                # None ONLY when the check exited 0 (pinned by
+                # `test_evaluator_returns_none_only_on_exit_zero`), and the recorder
+                # holds the check that ran. The sibling record says the axis RAN — it
+                # is never a status and never lives inside `claim`. Only the JSON
+                # document carries it; the text line already says silence.
+                if json_mode and claim is None and claim_check is not None:
+                    claim_silence = claim_silence_record(claim_check)
 
         if json_mode:
             # One document, rendered from the SAME objects the text renderers consumed:
@@ -1188,6 +1198,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
                 approval=approval_record(derive_approval_events(records)),
                 triage=triage_section_record,
                 claim=claim_record(claim, check=claim_check),
+                claim_silence=claim_silence,
                 error=None,
             )
             _emit(render_json(report))
@@ -1557,7 +1568,15 @@ def _emit_claim(claim, Status) -> None:
         return
     expected = claim.expected if isinstance(claim.expected, dict) else {}
     named = expected.get("cause") or "unrecorded"
+    # A `NO_CHECK_AUTHOR` abstention names the author's sub-cause beside the cause and
+    # its bounded detail on the next line; every other record renders exactly as before.
+    sub_cause = expected.get("sub_cause")
+    if sub_cause:
+        named = f"{named}/{sub_cause}"
     _emit(f"    UNVERIFIED [{named}] — never PASS")
+    detail = expected.get("sub_cause_detail")
+    if sub_cause and detail:
+        _emit(f"      ({detail})")
 
 
 def _axes_in_order(sub_verdicts) -> list[str]:
@@ -2754,6 +2773,12 @@ def _cmd_corpus_show(args: argparse.Namespace) -> int:
         check = case.claim["check"]
         exit_code = check["exit_code"]
         _emit(f"  claim expected        {status}  (cause: {cause or 'none'})")
+        # Why the author produced no check, when the case banked it — a stored detail,
+        # rendered as stored, never inferred; it decides nothing on recompute.
+        sub_cause = case.claim.get("sub_cause")
+        if sub_cause:
+            detail = case.claim.get("sub_cause_detail")
+            _emit(f"      sub-cause: {sub_cause}" + (f" ({detail})" if detail else ""))
         _emit(
             f"      check: {check['source']}"
             f"  (exit {exit_code if exit_code is not None else 'n/a'})"

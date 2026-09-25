@@ -410,12 +410,15 @@ def test_verify_renders_a3_unverified_with_its_named_cause(tmp_path, monkeypatch
     doc = json.loads(out)
 
     assert rc == 0
+    # claim-axis-legibility M4: a NO_CHECK_AUTHOR record carries its sub-cause.
     assert doc["claim"] == {
         "axis": "A3",
         "kind": "claim",
         "status": "UNVERIFIED",
         "cause": "NO_CHECK_AUTHOR",
         "check": {"source": "", "exit_code": None},
+        "sub_cause": "AUTHOR_REPORTED_ERROR",
+        "sub_cause_detail": "no check this run",
     }
 
 

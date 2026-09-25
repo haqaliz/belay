@@ -38,7 +38,7 @@ The decision table (each row a test in `tests/test_verify_claims.py`):
 | no claim record | UNVERIFIED `NO_CLAIM_RECORDED` |
 | classification != VERIFICATION | UNVERIFIED `CLAIM_UNCLASSIFIABLE` |
 | final state unobservable | UNVERIFIED `FINAL_STATE_UNOBSERVABLE` |
-| author returns None / raises | UNVERIFIED `NO_CHECK_AUTHOR` |
+| author returns None / raises | UNVERIFIED `NO_CHECK_AUTHOR`, with its `sub_cause` |
 | runner `exit_code=None` (launch failure / timeout) | UNVERIFIED `CHECK_DID_NOT_EXECUTE` |
 | exit non-zero | FAIL |
 | exit 0 | None (silence) |
@@ -66,6 +66,7 @@ from belay.verify.trajectory import (
     extract_claim,
 )
 from belay.verify.trajectory import _EVIDENCE_TOOL  # noqa: PLC2701  (routing, as turn.py)
+from belay.verify.json import sub_cause_fields
 from belay.verify.verdict import Status, Verdict
 
 if TYPE_CHECKING:
@@ -87,6 +88,62 @@ CAUSE_NO_CHECK_AUTHOR = "NO_CHECK_AUTHOR"
 #: plan time).
 CAUSE_CHECK_DID_NOT_EXECUTE = "CHECK_DID_NOT_EXECUTE"
 CAUSE_FINAL_STATE_UNOBSERVABLE = "FINAL_STATE_UNOBSERVABLE"
+
+#: WHY an author abstained — the sub-cause a `NO_CHECK_AUTHOR` verdict carries in its
+#: `expected` dict (a CLOSED vocabulary, pinned by `tests/test_claim_vocabulary_guard.py`).
+#: A sub-cause refines the reason, never the status: every one is still UNVERIFIED.
+#: `RAISED`/`DECLINED` are all an in-process author can show; the rest are recorded by
+#: `SubprocessAuthor`, which alone sees the process. Timeout is split from launch failure
+#: because they call for different operator fixes.
+SUB_CAUSE_AUTHOR_RAISED = "AUTHOR_RAISED"
+SUB_CAUSE_AUTHOR_DECLINED = "AUTHOR_DECLINED"
+SUB_CAUSE_AUTHOR_NOT_LAUNCHED = "AUTHOR_NOT_LAUNCHED"
+SUB_CAUSE_AUTHOR_TIMED_OUT = "AUTHOR_TIMED_OUT"
+SUB_CAUSE_AUTHOR_EXITED_NONZERO = "AUTHOR_EXITED_NONZERO"
+SUB_CAUSE_AUTHOR_OUTPUT_OVER_CAP = "AUTHOR_OUTPUT_OVER_CAP"
+SUB_CAUSE_AUTHOR_OUTPUT_MALFORMED = "AUTHOR_OUTPUT_MALFORMED"
+SUB_CAUSE_AUTHOR_REPORTED_ERROR = "AUTHOR_REPORTED_ERROR"
+SUB_CAUSES = frozenset(
+    {
+        SUB_CAUSE_AUTHOR_RAISED,
+        SUB_CAUSE_AUTHOR_DECLINED,
+        SUB_CAUSE_AUTHOR_NOT_LAUNCHED,
+        SUB_CAUSE_AUTHOR_TIMED_OUT,
+        SUB_CAUSE_AUTHOR_EXITED_NONZERO,
+        SUB_CAUSE_AUTHOR_OUTPUT_OVER_CAP,
+        SUB_CAUSE_AUTHOR_OUTPUT_MALFORMED,
+        SUB_CAUSE_AUTHOR_REPORTED_ERROR,
+    }
+)
+
+
+@dataclass(frozen=True)
+class Abstention:
+    """Why one author call produced no check: a sub-cause plus a bounded one-line detail.
+
+    A side channel, never a return value — the `CheckAuthor` protocol still returns
+    `Optional[Check]`. A sub-cause outside `SUB_CAUSES` is refused at construction, so
+    the vocabulary cannot widen by accident.
+    """
+
+    sub_cause: str
+    detail: str
+
+    def __post_init__(self) -> None:
+        if self.sub_cause not in SUB_CAUSES:
+            raise ValueError(f"unknown A3 author sub-cause {self.sub_cause!r}")
+
+
+def _one_line(text: str, limit: int = 200) -> str:
+    """An abstention detail as one printable line of at most `limit` chars (`…` when cut).
+
+    Author stderr and `{"error": ...}` strings are untrusted text headed for a one-line
+    verdict message: control characters are dropped, whitespace runs (newlines included)
+    collapse to one space, and an over-long line is cut rather than carried whole.
+    """
+    printable = "".join(ch for ch in text if ch.isprintable() or ch.isspace())
+    line = " ".join(printable.split())
+    return line if len(line) <= limit else line[: limit - 1] + "…"
 
 
 @dataclass(frozen=True)
@@ -216,12 +273,17 @@ class RecordingAuthor:
     last wrote is exactly the check the returned verdict was decided by. `last_check`
     is `None` when the author abstained (returned `None`) or raised (the evaluator
     files `NO_CHECK_AUTHOR`; the wrapper resets before re-raising so it never
-    remembers a check from a different invocation).
+    remembers a check from a different invocation). `last_abstention` forwards the inner
+    author's reason, read live so it always describes the latest call.
     """
 
     def __init__(self, inner: CheckAuthor):
         self._inner = inner
         self.last_check: Optional[Check] = None
+
+    @property
+    def last_abstention(self) -> Optional[Abstention]:
+        return getattr(self._inner, "last_abstention", None)
 
     def author_check(
         self,
@@ -343,13 +405,22 @@ def evaluate_claim(
             claim_seq=claim_seq,
             classification=classification,
             detail=f"the check author raised {type(exc).__name__}",
+            abstention=Abstention(SUB_CAUSE_AUTHOR_RAISED, type(exc).__name__),
         )
     if check is None:
+        # The reason is read by attribute, so the protocol stays `Optional[Check]`: an
+        # author that exposes none (or one of the wrong type) is recorded as DECLINED.
+        reported = getattr(author, "last_abstention", None)
         return _unverified(
             CAUSE_NO_CHECK_AUTHOR,
             claim_seq=claim_seq,
             classification=classification,
             detail="the check author returned no executable check",
+            abstention=(
+                reported
+                if isinstance(reported, Abstention)
+                else Abstention(SUB_CAUSE_AUTHOR_DECLINED, "")
+            ),
         )
 
     try:
@@ -452,12 +523,15 @@ def _unverified(
     claim_seq: Optional[int] = None,
     classification: Optional[ClaimClassification] = None,
     check: Optional[Check] = None,
+    abstention: Optional[Abstention] = None,
 ) -> Verdict:
     """One named abstention: UNVERIFIED with its cause — never PASS, never FAIL.
 
     `expected` carries the cause plus whatever the evaluator reached before abstaining
     (the claim's seq and classification, the check's source), so a reader of a stored
-    verdict can bucket on the cause without re-reading the trace.
+    verdict can bucket on the cause without re-reading the trace. Only `NO_CHECK_AUTHOR`
+    passes an `abstention`: its `sub_cause` / `sub_cause_detail` refine the cause and
+    never appear on any other.
     """
     expected: dict[str, Any] = {"axis": "A3", "kind": "claim", "cause": cause}
     if claim_seq is not None:
@@ -466,6 +540,14 @@ def _unverified(
         expected["classification"] = classification.name
     if check is not None:
         expected["check_source"] = check.source
+    if abstention is not None:
+        expected["sub_cause"] = abstention.sub_cause
+        expected["sub_cause_detail"] = abstention.detail
+        detail += (
+            f" ({abstention.sub_cause}: {abstention.detail})"
+            if abstention.detail
+            else f" ({abstention.sub_cause})"
+        )
     return Verdict(
         "A3", "claim", Status.UNVERIFIED,
         observed=None, expected=expected,
@@ -490,7 +572,9 @@ def claim_case(verdict: Verdict, *, check: Optional[Check] = None) -> Optional[d
     verdict's `expected` dict) and a `check` entry whose `exit_code` is `null` — did
     not execute, the CheckResult contract — with the authored check's source when one
     was produced (`check=`, or `expected["check_source"]`), `""` when none was (the
-    no-author abstention has no check to quote).
+    no-author abstention has no check to quote). A `NO_CHECK_AUTHOR` abstention also
+    carries the author's `sub_cause` / `sub_cause_detail`, last (`sub_cause_fields`) —
+    an optional detail the v5 loader type-checks and `corpus run` never decides on.
     """
     if verdict.axis != "A3" or verdict.kind != "claim":
         return None
@@ -505,7 +589,7 @@ def claim_case(verdict: Verdict, *, check: Optional[Check] = None) -> Optional[d
         }
     if verdict.status is Status.UNVERIFIED:
         expected = verdict.expected if isinstance(verdict.expected, dict) else {}
-        return {
+        case = {
             "status": "UNVERIFIED",
             "cause": expected.get("cause"),
             "check": {
@@ -517,16 +601,28 @@ def claim_case(verdict: Verdict, *, check: Optional[Check] = None) -> Optional[d
                 "exit_code": None,
             },
         }
+        case.update(sub_cause_fields(expected))
+        return case
     return None
 
 
 __all__ = [
+    "Abstention",
     "CAUSE_CHECK_DID_NOT_EXECUTE",
     "CAUSE_CLAIM_UNCLASSIFIABLE",
     "CAUSE_FINAL_STATE_UNOBSERVABLE",
     "CAUSE_NO_CHECK_AUTHOR",
     "CAUSE_NO_CLAIM_RECORDED",
     "CHECK_TIMEOUT",
+    "SUB_CAUSES",
+    "SUB_CAUSE_AUTHOR_DECLINED",
+    "SUB_CAUSE_AUTHOR_EXITED_NONZERO",
+    "SUB_CAUSE_AUTHOR_NOT_LAUNCHED",
+    "SUB_CAUSE_AUTHOR_OUTPUT_MALFORMED",
+    "SUB_CAUSE_AUTHOR_OUTPUT_OVER_CAP",
+    "SUB_CAUSE_AUTHOR_RAISED",
+    "SUB_CAUSE_AUTHOR_REPORTED_ERROR",
+    "SUB_CAUSE_AUTHOR_TIMED_OUT",
     "Check",
     "CheckAuthor",
     "CheckResult",
