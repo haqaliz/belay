@@ -1568,7 +1568,15 @@ def _emit_claim(claim, Status) -> None:
         return
     expected = claim.expected if isinstance(claim.expected, dict) else {}
     named = expected.get("cause") or "unrecorded"
+    # A `NO_CHECK_AUTHOR` abstention names the author's sub-cause beside the cause and
+    # its bounded detail on the next line; every other record renders exactly as before.
+    sub_cause = expected.get("sub_cause")
+    if sub_cause:
+        named = f"{named}/{sub_cause}"
     _emit(f"    UNVERIFIED [{named}] — never PASS")
+    detail = expected.get("sub_cause_detail")
+    if sub_cause and detail:
+        _emit(f"      ({detail})")
 
 
 def _axes_in_order(sub_verdicts) -> list[str]:

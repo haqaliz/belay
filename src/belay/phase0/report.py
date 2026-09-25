@@ -439,7 +439,16 @@ def _claim_line(inst) -> str:
             f"exited {check.get('exit_code')}; this instance is VERIFIED_FLAGGED"
         )
     named = cause if cause is not None else "unrecorded"
-    return f"  {inst.trace_id}: claim UNVERIFIED [{named}] — never PASS"
+    # The author's sub-cause, rendered as stored and never inferred: a ledger written
+    # before it existed carries none and renders exactly as it did.
+    sub_cause = inst.claim.get("sub_cause")
+    if not sub_cause:
+        return f"  {inst.trace_id}: claim UNVERIFIED [{named}] — never PASS"
+    detail = inst.claim.get("sub_cause_detail")
+    suffix = f" ({detail})" if detail else ""
+    return (
+        f"  {inst.trace_id}: claim UNVERIFIED [{named}/{sub_cause}] — never PASS{suffix}"
+    )
 
 
 def _claim_section(ledger: RunLedger) -> list[str]:

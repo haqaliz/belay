@@ -154,3 +154,89 @@ def test_a_pre_sub_cause_no_check_author_verdict_is_byte_identical() -> None:
     assert _claim_summary(verdict, None) == old
     assert claim_case(verdict) == old
 
+
+# --- (2) the text renderers (AC 2) -----------------------------------------------------
+
+
+def _emitted(verdict, capsys) -> list[str]:
+    from belay import cli
+
+    cli._emit_claim(verdict, Status)
+    return capsys.readouterr().out.splitlines()
+
+
+def test_verify_text_names_the_sub_cause_and_its_detail(capsys) -> None:
+    verdict = _no_author(Abstention(SUB_CAUSE_AUTHOR_TIMED_OUT, "no reply within 60s"))
+    lines = _emitted(verdict, capsys)
+    assert lines[-2] == "    UNVERIFIED [NO_CHECK_AUTHOR/AUTHOR_TIMED_OUT] — never PASS"
+    assert lines[-1] == "      (no reply within 60s)"
+
+
+def test_verify_text_omits_an_empty_detail(capsys) -> None:
+    lines = _emitted(_no_author(Abstention(SUB_CAUSE_AUTHOR_DECLINED, "")), capsys)
+    assert lines[-1] == "    UNVERIFIED [NO_CHECK_AUTHOR/AUTHOR_DECLINED] — never PASS"
+
+
+def test_verify_text_without_a_sub_cause_is_byte_identical(capsys) -> None:
+    verdict = claims._unverified(CAUSE_NO_CHECK_AUTHOR, claim_seq=3, detail="x")
+    lines = _emitted(verdict, capsys)
+    assert lines[-1] == "    UNVERIFIED [NO_CHECK_AUTHOR] — never PASS"
+    other = claims._unverified(CAUSE_CLAIM_UNCLASSIFIABLE, claim_seq=3, detail="x")
+    assert _emitted(other, capsys)[-1] == "    UNVERIFIED [CLAIM_UNCLASSIFIABLE] — never PASS"
+
+
+def _inst(claim):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(trace_id="trace-a", claim=claim, claim_silence=None)
+
+
+_BASE = {"status": "UNVERIFIED", "cause": "NO_CHECK_AUTHOR",
+         "check": {"source": "", "exit_code": None}}
+
+
+def test_report_line_names_the_sub_cause_and_its_detail() -> None:
+    from belay.phase0.report import _claim_line
+
+    claim = dict(_BASE, sub_cause="AUTHOR_EXITED_NONZERO",
+                 sub_cause_detail="exit 1: AuthorTimeoutError: boom")
+    assert _claim_line(_inst(claim)) == (
+        "  trace-a: claim UNVERIFIED [NO_CHECK_AUTHOR/AUTHOR_EXITED_NONZERO] — never PASS"
+        " (exit 1: AuthorTimeoutError: boom)"
+    )
+
+
+def test_report_line_omits_an_empty_detail() -> None:
+    from belay.phase0.report import _claim_line
+
+    claim = dict(_BASE, sub_cause="AUTHOR_DECLINED", sub_cause_detail="")
+    assert _claim_line(_inst(claim)) == (
+        "  trace-a: claim UNVERIFIED [NO_CHECK_AUTHOR/AUTHOR_DECLINED] — never PASS"
+    )
+
+
+def test_report_line_without_a_sub_cause_is_byte_identical() -> None:
+    from belay.phase0.report import _claim_line
+
+    assert _claim_line(_inst(dict(_BASE))) == (
+        "  trace-a: claim UNVERIFIED [NO_CHECK_AUTHOR] — never PASS"
+    )
+
+
+def test_report_aggregate_still_groups_on_the_cause_alone() -> None:
+    """The by-cause note buckets on `cause`, never on `cause/sub_cause`."""
+    from belay.phase0.ledger import Disposition, InstanceRecord, RunLedger
+    from belay.phase0.report import _claim_section
+
+    def inst(tid, sub):
+        return InstanceRecord(
+            trace_id=tid, disposition=Disposition.VERIFIED_CLEAN,
+            turn_status_counts={}, flagged_turns=[], flagged_addable=[],
+            flagged_unaddable=[], unverified_causes={}, error=None,
+            claim=dict(_BASE, sub_cause=sub, sub_cause_detail=""),
+        )
+
+    lines = _claim_section(RunLedger(instances=[
+        inst("t1", "AUTHOR_DECLINED"), inst("t2", "AUTHOR_TIMED_OUT"),
+    ]))
+    assert lines[-1] == "  aggregate: 0 FAIL / 2 UNVERIFIED (by cause: NO_CHECK_AUTHOR: 2)"
