@@ -5,6 +5,27 @@ All notable changes to Belay are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0 — until then,
 `0.x` minor bumps may include changes that would be breaking under strict semver.
 
+## [0.39.0] - 2026-09-25
+
+**The A3 claim axis now says what it did (PR #44).** Legibility only: no verdict, status,
+exit code, gate or corpus outcome moves.
+
+- **Silence is no longer read as absence.** When an authored check exits 0 (D3 silence),
+  `belay verify --json` and the `phase0` ledger now carry a sibling `claim_silence`
+  record. It has no status and never sits inside `claim`, so a missing `claim` now means
+  only that the axis never ran. `belay phase0 report` no longer tells such an instance
+  "no claim author was configured".
+- **`NO_CHECK_AUTHOR` names its reason.** The subprocess author records one of eight
+  closed sub-causes (`AUTHOR_TIMED_OUT`, `AUTHOR_EXITED_NONZERO`, `AUTHOR_REPORTED_ERROR`,
+  `AUTHOR_OUTPUT_MALFORMED`, `AUTHOR_OUTPUT_OVER_CAP`, `AUTHOR_NOT_LAUNCHED`,
+  `AUTHOR_RAISED`, `AUTHOR_DECLINED`) with a one-line detail of at most 200 characters.
+  It shows on the `--json` record, the ledger, the corpus case (schema stays v5), `verify`
+  text, `phase0 report` and `corpus show`. Every case is still UNVERIFIED.
+- The `--no-claim-axis` refutation now proves from the output itself that the axis ran:
+  the two documents must be equal except exactly `claim_silence`.
+
+No published number moves. Suite 2764 to 2868.
+
 ## [0.38.0] - 2026-09-23
 
 **The composite-snapshot fix ships, and the corpus grows for the first time since

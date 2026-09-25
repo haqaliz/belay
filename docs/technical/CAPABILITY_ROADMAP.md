@@ -839,7 +839,10 @@ and **dark by default** — no author configured means the axis is **absent**, n
 coverage line, never UNVERIFIED and never PASS. A3 emits only WARN / FAIL / UNVERIFIED
 from a closed cause vocabulary (`NO_CLAIM_RECORDED`, `CLAIM_UNCLASSIFIABLE`,
 `NO_CHECK_AUTHOR`, `CHECK_DID_NOT_EXECUTE`, `FINAL_STATE_UNOBSERVABLE`); a check that
-exits 0 is **silence** (D3 — a re-derived claim is not a certification). **The refutation
+exits 0 is **silence** (D3 — a re-derived claim is not a certification). *(Since
+2026-09-25, `claim-axis-legibility`: silence is recorded as a sibling `claim_silence`
+record — no status, never inside `claim` — and `NO_CHECK_AUTHOR` carries one of 8 closed
+sub-causes; legibility only, no verdict moves.)* **The refutation
 ships as a test, not a doc line:** `tests/test_refutation_no_claim_axis.py` runs the
 corpus with and without `--no-claim-axis` and asserts identical PASS/FAIL everywhere (the
 claim case SKIPs `CLAIM_AXIS_DISABLED`, never REGRESSES). Corpus case schema **v5**

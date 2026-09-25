@@ -165,7 +165,7 @@ belay verify ./traces/<run>.jsonl --manifest-dir ./traces.manifests --server my-
 # or, one run at a time:  belay verify ... --claim-author "your-command ..."
 ```
 
-The command receives the claim plus the observed facts on stdin and answers with an executable check; Belay runs that check **contained** against the materialized final state, and the **exit code is the verdict** — a model writes the check, execution decides (A3 never PASSes: an exit 0 is silence). Disable the axis with `--no-claim-axis` (on `verify`, `phase0 run` and `corpus run`); the refutation — every PASS/FAIL verdict identical with the axis off — is enforced by `tests/test_refutation_no_claim_axis.py`.
+The command receives the claim plus the observed facts on stdin and answers with an executable check; Belay runs that check **contained** against the materialized final state, and the **exit code is the verdict** — a model writes the check, execution decides (A3 never PASSes: an exit 0 is silence). Silence is not absence: with an author configured, `verify --json` and the `phase0` ledger carry a `claim_silence` record (no status, never a PASS) when the check exited 0, so a missing `claim` means the axis never ran; and a `NO_CHECK_AUTHOR` abstention names why (a closed sub-cause such as `AUTHOR_TIMED_OUT`, `AUTHOR_EXITED_NONZERO` or `AUTHOR_REPORTED_ERROR`, with a one-line detail). Disable the axis with `--no-claim-axis` (on `verify`, `phase0 run` and `corpus run`); the refutation — every PASS/FAIL verdict identical with the axis off — is enforced by `tests/test_refutation_no_claim_axis.py`.
 
 ### 3 · Grow the corpus
 
