@@ -905,6 +905,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
             aggregate_record,
             approval_record,
             claim_record,
+            claim_silence_record,
             coverage_record,
             error_report,
             exposure_record,
@@ -1141,6 +1142,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         trajectory = None
         claim = None
         claim_check = None
+        claim_silence = None
         if args.turn is None:
             trajectory = evaluate_trajectory_rules(
                 invariants,
@@ -1169,6 +1171,14 @@ def _cmd_verify(args: argparse.Namespace) -> int:
                     replays=args.replays,
                 )
                 claim_check = recorder.last_check
+                # D3 silence, named: with an author configured the evaluator returns
+                # None ONLY when the check exited 0 (pinned by
+                # `test_evaluator_returns_none_only_on_exit_zero`), and the recorder
+                # holds the check that ran. The sibling record says the axis RAN — it
+                # is never a status and never lives inside `claim`. Only the JSON
+                # document carries it; the text line already says silence.
+                if json_mode and claim is None and claim_check is not None:
+                    claim_silence = claim_silence_record(claim_check)
 
         if json_mode:
             # One document, rendered from the SAME objects the text renderers consumed:
@@ -1188,6 +1198,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
                 approval=approval_record(derive_approval_events(records)),
                 triage=triage_section_record,
                 claim=claim_record(claim, check=claim_check),
+                claim_silence=claim_silence,
                 error=None,
             )
             _emit(render_json(report))
