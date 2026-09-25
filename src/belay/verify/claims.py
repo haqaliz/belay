@@ -133,6 +133,18 @@ class Abstention:
             raise ValueError(f"unknown A3 author sub-cause {self.sub_cause!r}")
 
 
+def _one_line(text: str, limit: int = 200) -> str:
+    """An abstention detail as one printable line of at most `limit` chars (`…` when cut).
+
+    Author stderr and `{"error": ...}` strings are untrusted text headed for a one-line
+    verdict message: control characters are dropped, whitespace runs (newlines included)
+    collapse to one space, and an over-long line is cut rather than carried whole.
+    """
+    printable = "".join(ch for ch in text if ch.isprintable() or ch.isspace())
+    line = " ".join(printable.split())
+    return line if len(line) <= limit else line[: limit - 1] + "…"
+
+
 @dataclass(frozen=True)
 class Check:
     """One executable check, the artifact A3 surfaces — verbatim, nothing rewritten.
