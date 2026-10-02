@@ -14,9 +14,9 @@ pinned cause-to-sub-cause map; `_unverified` rejecting a sub-cause under the wro
 - Each of 4 reasons, driven through the real `evaluate_claim`, yields its sub-cause (a: no
   calls; b: `replay_turn` raising; c: non-REPLAYED status; d: REPLAYED with no workspace).
 - Cause is still `FINAL_STATE_UNOBSERVABLE`, status UNVERIFIED, message ends "never PASS".
-- Guard pins 12 sub-causes and the map; `Abstention` rejects `AUTHOR_*` under
-  `FINAL_STATE_UNOBSERVABLE` and vice versa.
-- Detail is one line, <=200 chars, with a multi-line exception message and an over-long one.
+- Guard pins 12 sub-causes and the map; `_unverified` raises on `AUTHOR_*` under
+  `FINAL_STATE_UNOBSERVABLE` and vice versa; the reworded docstrings and error text no longer say author-only.
+- (b) detail is the exception TYPE name only (a multi-line message never appears); (c) detail is one line <=200 chars even for a long multi-line `reply.cause`.
 - Caller-supplied `workspace=` still bypasses (no sub-cause, no cause).
 - `--no-claim-axis` identity unchanged.
 
