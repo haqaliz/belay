@@ -27,7 +27,7 @@
 > sentence fix (unit tests pin it). **No published number moves** (`11/60 = 18.3%`,
 > `precision 0.00`, `1/15`, `4/16`, `recall 0.00`, `3/93` stand unedited). Suite 2764 →
 > **2868** (PRD predicted +35–55; actual +104). **NOT built, by name:** the 10/12
-> `CLAIM_UNCLASSIFIABLE` classifier coverage; `FINAL_STATE_UNOBSERVABLE`'s four collapsed
+> `CLAIM_UNCLASSIFIABLE` classifier coverage **[Corrected 2026-10-02 (`trajectory-claim-coverage` dig) — "classifier coverage" mis-framed it: of run 3's 12 claims, 8 were correct abstentions or genuine non-claims (4 controls that ran nothing or ran a command, 4 wrong-repo refusals), 2 were already VERIFICATION (the trajectory FAILs), and only 2 ("confirmed ... by reading the file back") are a vocabulary gap, which the 2026-08-12 decision declined to close. See `docs/planning/trajectory-claim-coverage/understanding.md`.]**; `FINAL_STATE_UNOBSERVABLE`'s four collapsed
 > reasons; interop/console surfaces. See `docs/planning/claim-axis-legibility/`.
 >
 > **THE COMPOSITE-SNAPSHOT FIX LANDS AND THE THIRD PROBE CLEARS ITS GATE — THE CORPUS

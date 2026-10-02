@@ -33,3 +33,8 @@ detection change with FP risk, not a pure coverage gain.
 
 ## Axis
 A1-adjacent trajectory rule only (deterministic). No A3 change, no status change.
+
+## Outcome (2026-10-02, owner: "gtg based on your recommendations")
+Option 3 taken: no classifier change. The "10/12 = classifier coverage" framing is annotated
+in place (CLAUDE.md, docs/STATUS.md, claim-axis-legibility prd + understanding). Vocabulary
+decision of 2026-08-12 stands. No number, verdict, status or test moves.

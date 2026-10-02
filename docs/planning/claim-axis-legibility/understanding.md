@@ -65,6 +65,6 @@ never enters `claim`), interop, triage-ledger, console (none read the claim).
 
 ## Out of scope (named)
 
-The 10/12 `CLAIM_UNCLASSIFIABLE` (classifier coverage — the belay-next alternate);
+**[Corrected 2026-10-02 (`trajectory-claim-coverage` dig) — "classifier coverage" mis-framed it: of run 3's 12 claims, 8 were correct abstentions or genuine non-claims (4 controls that ran nothing or ran a command, 4 wrong-repo refusals), 2 were already VERIFICATION (the trajectory FAILs), and only 2 ("confirmed ... by reading the file back") are a vocabulary gap, which the 2026-08-12 decision declined to close. See `docs/planning/trajectory-claim-coverage/understanding.md`.]** The 10/12 `CLAIM_UNCLASSIFIABLE` (classifier coverage — the belay-next alternate);
 `FINAL_STATE_UNOBSERVABLE`'s four collapsed reasons (`claims.py:403-421`, same shape,
 different producer — a candidate follow-up); any verdict, status, reduction, or number.
