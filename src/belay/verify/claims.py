@@ -139,11 +139,12 @@ SUB_CAUSES: frozenset[str] = frozenset().union(*SUB_CAUSES_BY_CAUSE.values())
 
 @dataclass(frozen=True)
 class Abstention:
-    """Why one author call produced no check: a sub-cause plus a bounded one-line detail.
+    """Why an A3 verdict abstained: a sub-cause plus a bounded one-line detail.
 
     A side channel, never a return value — the `CheckAuthor` protocol still returns
     `Optional[Check]`. A sub-cause outside `SUB_CAUSES` is refused at construction, so
-    the vocabulary cannot widen by accident.
+    the vocabulary cannot widen by accident. Which cause a sub-cause may ride is not
+    checked here (an `Abstention` has no cause): `_unverified` does that.
     """
 
     sub_cause: str
@@ -151,7 +152,7 @@ class Abstention:
 
     def __post_init__(self) -> None:
         if self.sub_cause not in SUB_CAUSES:
-            raise ValueError(f"unknown A3 author sub-cause {self.sub_cause!r}")
+            raise ValueError(f"unknown A3 sub-cause {self.sub_cause!r}")
 
 
 def _one_line(text: str, limit: int = 200) -> str:
@@ -550,9 +551,14 @@ def _unverified(
     `expected` carries the cause plus whatever the evaluator reached before abstaining
     (the claim's seq and classification, the check's source), so a reader of a stored
     verdict can bucket on the cause without re-reading the trace. Only `NO_CHECK_AUTHOR`
-    passes an `abstention`: its `sub_cause` / `sub_cause_detail` refine the cause and
-    never appear on any other.
+    and `FINAL_STATE_UNOBSERVABLE` pass an `abstention`: its `sub_cause` /
+    `sub_cause_detail` refine the cause and never appear on any other. A sub-cause under a
+    cause that does not own it (`SUB_CAUSES_BY_CAUSE`) is a programmer error: `ValueError`.
     """
+    if abstention is not None and abstention.sub_cause not in SUB_CAUSES_BY_CAUSE.get(
+        cause, frozenset()
+    ):
+        raise ValueError(f"sub-cause {abstention.sub_cause!r} does not belong to cause {cause!r}")
     expected: dict[str, Any] = {"axis": "A3", "kind": "claim", "cause": cause}
     if claim_seq is not None:
         expected["claim_seq"] = claim_seq
