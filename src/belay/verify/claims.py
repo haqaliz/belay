@@ -89,12 +89,15 @@ CAUSE_NO_CHECK_AUTHOR = "NO_CHECK_AUTHOR"
 CAUSE_CHECK_DID_NOT_EXECUTE = "CHECK_DID_NOT_EXECUTE"
 CAUSE_FINAL_STATE_UNOBSERVABLE = "FINAL_STATE_UNOBSERVABLE"
 
-#: WHY an author abstained — the sub-cause a `NO_CHECK_AUTHOR` verdict carries in its
-#: `expected` dict (a CLOSED vocabulary, pinned by `tests/test_claim_vocabulary_guard.py`).
+#: WHY an A3 verdict abstained — the sub-cause a `NO_CHECK_AUTHOR` or
+#: `FINAL_STATE_UNOBSERVABLE` verdict carries in its `expected` dict (a CLOSED vocabulary,
+#: pinned by `tests/test_claim_vocabulary_guard.py`).
 #: A sub-cause refines the reason, never the status: every one is still UNVERIFIED.
 #: `RAISED`/`DECLINED` are all an in-process author can show; the rest are recorded by
 #: `SubprocessAuthor`, which alone sees the process. Timeout is split from launch failure
-#: because they call for different operator fixes.
+#: because they call for different operator fixes. The `FINAL_STATE_*` four name which of
+#: the four reasons left no final state to run a check against (no turn, the replay
+#: raised, the last turn did not replay, it replayed with no workspace).
 SUB_CAUSE_AUTHOR_RAISED = "AUTHOR_RAISED"
 SUB_CAUSE_AUTHOR_DECLINED = "AUTHOR_DECLINED"
 SUB_CAUSE_AUTHOR_NOT_LAUNCHED = "AUTHOR_NOT_LAUNCHED"
@@ -103,18 +106,35 @@ SUB_CAUSE_AUTHOR_EXITED_NONZERO = "AUTHOR_EXITED_NONZERO"
 SUB_CAUSE_AUTHOR_OUTPUT_OVER_CAP = "AUTHOR_OUTPUT_OVER_CAP"
 SUB_CAUSE_AUTHOR_OUTPUT_MALFORMED = "AUTHOR_OUTPUT_MALFORMED"
 SUB_CAUSE_AUTHOR_REPORTED_ERROR = "AUTHOR_REPORTED_ERROR"
-SUB_CAUSES = frozenset(
-    {
-        SUB_CAUSE_AUTHOR_RAISED,
-        SUB_CAUSE_AUTHOR_DECLINED,
-        SUB_CAUSE_AUTHOR_NOT_LAUNCHED,
-        SUB_CAUSE_AUTHOR_TIMED_OUT,
-        SUB_CAUSE_AUTHOR_EXITED_NONZERO,
-        SUB_CAUSE_AUTHOR_OUTPUT_OVER_CAP,
-        SUB_CAUSE_AUTHOR_OUTPUT_MALFORMED,
-        SUB_CAUSE_AUTHOR_REPORTED_ERROR,
-    }
-)
+SUB_CAUSE_FINAL_STATE_NO_TURN = "FINAL_STATE_NO_TURN"
+SUB_CAUSE_FINAL_STATE_REPLAY_RAISED = "FINAL_STATE_REPLAY_RAISED"
+SUB_CAUSE_FINAL_STATE_NOT_REPLAYED = "FINAL_STATE_NOT_REPLAYED"
+SUB_CAUSE_FINAL_STATE_NO_WORKSPACE = "FINAL_STATE_NO_WORKSPACE"
+#: Which sub-causes may ride which cause — the single source `SUB_CAUSES` derives from, so
+#: the two cannot drift. `_unverified` refuses a sub-cause under any other cause.
+SUB_CAUSES_BY_CAUSE: dict[str, frozenset[str]] = {
+    CAUSE_NO_CHECK_AUTHOR: frozenset(
+        {
+            SUB_CAUSE_AUTHOR_RAISED,
+            SUB_CAUSE_AUTHOR_DECLINED,
+            SUB_CAUSE_AUTHOR_NOT_LAUNCHED,
+            SUB_CAUSE_AUTHOR_TIMED_OUT,
+            SUB_CAUSE_AUTHOR_EXITED_NONZERO,
+            SUB_CAUSE_AUTHOR_OUTPUT_OVER_CAP,
+            SUB_CAUSE_AUTHOR_OUTPUT_MALFORMED,
+            SUB_CAUSE_AUTHOR_REPORTED_ERROR,
+        }
+    ),
+    CAUSE_FINAL_STATE_UNOBSERVABLE: frozenset(
+        {
+            SUB_CAUSE_FINAL_STATE_NO_TURN,
+            SUB_CAUSE_FINAL_STATE_REPLAY_RAISED,
+            SUB_CAUSE_FINAL_STATE_NOT_REPLAYED,
+            SUB_CAUSE_FINAL_STATE_NO_WORKSPACE,
+        }
+    ),
+}
+SUB_CAUSES: frozenset[str] = frozenset().union(*SUB_CAUSES_BY_CAUSE.values())
 
 
 @dataclass(frozen=True)
@@ -615,6 +635,7 @@ __all__ = [
     "CAUSE_NO_CLAIM_RECORDED",
     "CHECK_TIMEOUT",
     "SUB_CAUSES",
+    "SUB_CAUSES_BY_CAUSE",
     "SUB_CAUSE_AUTHOR_DECLINED",
     "SUB_CAUSE_AUTHOR_EXITED_NONZERO",
     "SUB_CAUSE_AUTHOR_NOT_LAUNCHED",
@@ -623,6 +644,10 @@ __all__ = [
     "SUB_CAUSE_AUTHOR_RAISED",
     "SUB_CAUSE_AUTHOR_REPORTED_ERROR",
     "SUB_CAUSE_AUTHOR_TIMED_OUT",
+    "SUB_CAUSE_FINAL_STATE_NO_TURN",
+    "SUB_CAUSE_FINAL_STATE_NO_WORKSPACE",
+    "SUB_CAUSE_FINAL_STATE_NOT_REPLAYED",
+    "SUB_CAUSE_FINAL_STATE_REPLAY_RAISED",
     "Check",
     "CheckAuthor",
     "CheckResult",
