@@ -387,27 +387,27 @@ def evaluate_claim(
         )
 
     turn_facts = assemble_turn_facts(records, verdicts)
-    final_workspace = (
-        workspace
-        if workspace is not None
-        else _materialize_final_state(
+    final_abstention: Optional[Abstention] = None
+    if workspace is not None:
+        final_workspace: Optional[Path] = workspace
+    else:
+        final_workspace, final_abstention = _materialize_final_state(
             records,
             manifest_dir=manifest_dir,
             server_command=server_command,
             shell_server_command=shell_server_command,
             timeout=timeout,
         )
-    )
     if final_workspace is None:
         return _unverified(
             CAUSE_FINAL_STATE_UNOBSERVABLE,
             claim_seq=claim_seq,
             classification=classification,
             detail=(
-                "the final turn's workspace could not be materialized — the last "
-                "tools/call turn did not replay to a replayed workspace (or no turn "
-                "exists), so the check has no final state to run against"
+                "the final turn's workspace could not be materialized, so the check "
+                "has no final state to run against"
             ),
+            abstention=final_abstention,
         )
     final_state_files = [
         os.fsdecode(record.path) for record in scan_tree(final_workspace) if record.path != b"."
@@ -483,18 +483,19 @@ def _materialize_final_state(
     server_command: Sequence[str],
     shell_server_command: Optional[Sequence[str]],
     timeout: float,
-) -> Optional[Path]:
+) -> tuple[Optional[Path], Optional[Abstention]]:
     """The final state: the LAST `tools/call` turn replayed into a scratch workspace.
 
-    `None` when there is no turn to replay, the replay did not reach REPLAYED, the
-    replayed workspace was never observed, or the replay raised: the final state is
-    genuinely unobservable (the caller files `FINAL_STATE_UNOBSERVABLE`) — never a
-    guessed workspace. Shell routing is honored exactly like `verify_turn`: a final
-    `run_process` turn replays against `shell_server_command` when one is given.
+    Exactly one of the pair is set: the workspace, or an `Abstention` naming which of four
+    reasons left the final state genuinely unobservable (no turn, the replay raised, the
+    last turn did not replay, it replayed with no workspace). The caller files
+    `FINAL_STATE_UNOBSERVABLE` — never a guessed workspace. Shell routing is honored
+    exactly like `verify_turn`: a final `run_process` turn replays against
+    `shell_server_command` when one is given.
     """
     calls = tool_calls(derive_correlation(list(records)))
     if not calls:
-        return None
+        return None, Abstention(SUB_CAUSE_FINAL_STATE_NO_TURN, "")
     n = len(calls) - 1
     resolved = (
         shell_server_command
@@ -506,11 +507,14 @@ def _materialize_final_state(
             records, n,
             server_command=resolved, manifest_dir=manifest_dir, timeout=timeout,
         )
-    except Exception:  # noqa: BLE001  (a substrate failure is an abstention, never a crash)
-        return None
-    if reply.status != REPLAYED or reply.workspace is None:
-        return None
-    return Path(reply.workspace)
+    except Exception as exc:  # noqa: BLE001  (a substrate failure is an abstention, never a crash)
+        return None, Abstention(SUB_CAUSE_FINAL_STATE_REPLAY_RAISED, type(exc).__name__)
+    if reply.status != REPLAYED:
+        detail = f"{reply.status}: {reply.cause}" if reply.cause else reply.status
+        return None, Abstention(SUB_CAUSE_FINAL_STATE_NOT_REPLAYED, _one_line(detail))
+    if reply.workspace is None:
+        return None, Abstention(SUB_CAUSE_FINAL_STATE_NO_WORKSPACE, "")
+    return Path(reply.workspace), None
 
 
 def _tool_name(records: Sequence[dict], n: int) -> Optional[str]:

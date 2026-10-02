@@ -27,6 +27,7 @@ from belay.verify.claims import (
     SUB_CAUSE_AUTHOR_RAISED,
     SUB_CAUSE_AUTHOR_REPORTED_ERROR,
     SUB_CAUSE_AUTHOR_TIMED_OUT,
+    SUB_CAUSES_BY_CAUSE,
     Abstention,
     RecordingAuthor,
 )
@@ -136,18 +137,22 @@ def test_recording_author_reads_the_inner_reason_live():
     assert RecordingAuthor(DecliningAuthor()).last_abstention is None
 
 
-# --- the keys live on NO_CHECK_AUTHOR only (spec AC 7) ----------------------------------
+# --- the keys live only on a cause that owns a sub-cause (spec AC 7) ----------------------------------
 
 
 @pytest.mark.parametrize("row", sorted(ROWS))
-def test_sub_cause_appears_only_on_no_check_author(row, tmp_path, monkeypatch):
+def test_sub_cause_appears_only_on_a_cause_that_owns_it(row, tmp_path, monkeypatch):
     kwargs = _use_runner(monkeypatch, dict(ROWS[row](tmp_path)))
     verdict = claims.evaluate_claim(**kwargs)
     if verdict is None:
         return
     expected = verdict.expected if isinstance(verdict.expected, dict) else {}
-    is_no_author = expected.get("cause") == CAUSE_NO_CHECK_AUTHOR
-    assert ("sub_cause" in expected) is is_no_author
-    assert ("sub_cause_detail" in expected) is is_no_author
-    if not is_no_author:
+    cause = expected.get("cause")
+    owns_sub_cause = cause in SUB_CAUSES_BY_CAUSE
+    assert ("sub_cause" in expected) is owns_sub_cause
+    assert ("sub_cause_detail" in expected) is owns_sub_cause
+    if owns_sub_cause:
+        assert expected["sub_cause"] in SUB_CAUSES_BY_CAUSE[cause]
+    else:
         assert "AUTHOR_" not in verdict.message
+        assert "FINAL_STATE_NO_" not in verdict.message
