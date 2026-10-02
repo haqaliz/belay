@@ -40,10 +40,16 @@ replay `--server`, or file an engine bug.
   `FINAL_STATE_NO_TURN`, `FINAL_STATE_REPLAY_RAISED`, `FINAL_STATE_NOT_REPLAYED`,
   `FINAL_STATE_NO_WORKSPACE`. Each unambiguously maps to one reason in `claims.py:474-490`.
 - M2. A pinned cause-to-sub-cause map: a sub-cause can only appear under its own cause
-  (`AUTHOR_*` under `NO_CHECK_AUTHOR`, `FINAL_STATE_*` under `FINAL_STATE_UNOBSERVABLE`);
-  `Abstention` construction rejects a mismatch.
-- M3. One-line detail, at most 200 chars, never raw state or trace bytes. Reason (c) carries
-  `reply.status` / `reply.cause` in the detail, not as extra vocabulary.
+  (`AUTHOR_*` under `NO_CHECK_AUTHOR`, `FINAL_STATE_*` under `FINAL_STATE_UNOBSERVABLE`).
+  **Enforced in `_unverified(cause, abstention=)`, not in `Abstention`**: `Abstention` holds
+  only `(sub_cause, detail)` and has no cause (`claims.py:120-133`); `_unverified` is the one
+  place that sees both (`claims.py:520-554`). A mismatch raises `ValueError`.
+- M3. One-line detail, at most 200 chars (`_one_line`), never raw state or trace bytes.
+  (b) records `type(exc).__name__` only, never the message: the `AUTHOR_RAISED` precedent
+  (`claims.py:408`). (c) records `reply.status` plus `reply.cause` through `_one_line`;
+  `TurnReply.cause` is a free-form `Optional[str]` (`replay/engine.py:192-213`), not a closed
+  vocabulary, and it is the same string the per-turn surface already renders. (a) and (d)
+  carry no detail. Reasons stay vocabulary-free of `reply.status`.
 - M4. Threaded through the existing six surfaces via `sub_cause_fields`
   (`verify/json.py:319-334`): verify `--json`, phase0 ledger, corpus case, verify text,
   phase0 report, corpus show. Corpus schema stays v5.
@@ -73,10 +79,19 @@ Corpus recompute: a different sub-cause must never decide MATCH/REGRESSION (as f
 
 ## Risks & Open Questions
 
-- Q1. `test_verify_claims_subcause.py:143-151` parametrization was not read in the dig; read it
-  in planning before amending.
-- Q2. Reason (b) exception text can be long or multi-line; `_one_line` bounds it. The detail
-  must not embed a path that leaks workspace content; state what is recorded.
+- Q1 (resolved). `test_verify_claims_subcause.py:143-151` asserts `sub_cause` present iff
+  `NO_CHECK_AUTHOR`; it breaks for the final-state rows by design and is amended to
+  "present iff the cause is in the cause-to-sub-cause map, and the sub-cause belongs to it".
+- Q2 (resolved). (b) records the exception type only (M3). (c)'s cause string is free-form
+  and may embed paths; it is already rendered per turn, but confirm in planning that the
+  200-char cut cannot split a multi-byte character.
+- Q4. `_materialize_final_state` is private with one call site and no test stubs
+  (`grep`: `claims.py:372,458` only), so its return type may change. The `Abstention`
+  class docstring, its `ValueError` text ("unknown A3 author sub-cause") and the
+  `_unverified` docstring ("Only NO_CHECK_AUTHOR passes an abstention") all say
+  author-only and must be reworded, not just the vocabulary widened.
+- Q5. The existing long detail already hedges "(or no turn exists)". Once the sub-cause
+  names the reason, that sentence is redundant; reword it (no test or code pins the text).
 - Q3. Sharing `SUB_CAUSES` widens a guard that was "pinned at eight"; M2's map is what keeps
   the sharing honest. Declined alternative: a separate vocabulary and type (leaves the 8
   untouched, needs a second guard and per-surface branching).

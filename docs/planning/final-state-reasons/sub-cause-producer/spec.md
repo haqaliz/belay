@@ -4,7 +4,7 @@
 reasons applied, on the claim record's `expected`, and nothing else changes.
 
 **In scope:** four `SUB_CAUSE_FINAL_STATE_*` constants joining `SUB_CAUSES` and `__all__`; a
-pinned cause-to-sub-cause map; `Abstention` rejecting a sub-cause under the wrong cause;
+pinned cause-to-sub-cause map; `_unverified` rejecting a sub-cause under the wrong cause (`Abstention` has no cause);
 `_materialize_final_state` surfacing its reason; one-line <=200-char detail (reason c includes
 `reply.status`/`reply.cause`).
 
