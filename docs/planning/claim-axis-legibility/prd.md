@@ -207,7 +207,7 @@ The first real-data A3 measurement came back uninterpretable for this reason.
 
 ## 8. Out of Scope
 
-- The 10/12 `CLAIM_UNCLASSIFIABLE` in run 3 — classifier coverage, the belay-next
+- **[Corrected 2026-10-02 (`trajectory-claim-coverage` dig) — "classifier coverage" mis-framed it: of run 3's 12 claims, 8 were correct abstentions or genuine non-claims (4 controls that ran nothing or ran a command, 4 wrong-repo refusals), 2 were already VERIFICATION (the trajectory FAILs), and only 2 ("confirmed ... by reading the file back") are a vocabulary gap, which the 2026-08-12 decision declined to close. See `docs/planning/trajectory-claim-coverage/understanding.md`.]** The 10/12 `CLAIM_UNCLASSIFIABLE` in run 3 — classifier coverage, the belay-next
   alternate. No classifier change, no new A3 firing.
 - `FINAL_STATE_UNOBSERVABLE`'s four collapsed reasons (`claims.py:403-421`) — same shape,
   different producer; a named follow-up.
