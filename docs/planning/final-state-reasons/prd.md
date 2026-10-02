@@ -1,7 +1,7 @@
 # PRD: final-state-reasons
 
 **Phase:** 1 follow-on (C8, A3 claim axis) · **Capability:** follow-on slice of C8 (no new C-id)
-**Status:** draft for review gate · **Slug confirmed by owner:** 2026-10-02
+**Status:** APPROVED at the review gate (2026-10-02), S1 cut · **Slug confirmed by owner:** 2026-10-02
 
 ## Problem Statement
 
@@ -61,10 +61,6 @@ replay `--server`, or file an engine bug.
   `test_claim_subcause_surfaces.py:113-127`, `test_verify_claims_subcause.py:143-151`,
   `test_claim_vocabulary_guard.py` (8 -> 12 plus the map).
 
-**Should**
-- S1. `FINAL_STATE_UNOBSERVABLE` per-sub-cause tally in `phase0 report` only if it falls out of
-  the shared rendering for free; otherwise out of scope.
-
 ## Technical Considerations
 
 Axis: A3 only. Replay determinism is untouched: no replay behaviour changes, only what is
@@ -101,7 +97,7 @@ Corpus recompute: a different sub-cause must never decide MATCH/REGRESSION (as f
 
 Classifier coverage and the 2026-08-12 vocabulary decision; `AUTHOR_TIMEOUT`; interop,
 triage-ledger and console surfaces; re-deriving or back-filling any past run's reasons;
-splitting reason (c) into per-replay-status vocabulary (the engine owns that vocabulary);
+a per-sub-cause tally in `phase0 report` (S1, cut at the review gate; the `by cause:` tally and the `cm-stage1` golden stay unchanged); splitting reason (c) into per-replay-status vocabulary (the engine owns that vocabulary);
 any new A3 firing.
 
 ## Aspects
