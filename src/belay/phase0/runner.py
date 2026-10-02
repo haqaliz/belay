@@ -653,8 +653,8 @@ def _claim_summary(claim: Optional[Verdict], check: Optional[Check]) -> Optional
     code (`None` when the check did not execute). `None` when no verdict exists at
     all — the axis was absent or disabled, or the check exited 0 (D3 silence) — and
     `None` must never be read as (or rendered as) "the claim was clean". A
-    `NO_CHECK_AUTHOR` abstention appends the author's `sub_cause` / `sub_cause_detail`
-    (`sub_cause_fields`), so a ledger says WHY the author produced no check.
+    abstention that carries a sub-cause (`NO_CHECK_AUTHOR` or `FINAL_STATE_UNOBSERVABLE`)
+    appends `sub_cause` / `sub_cause_detail` (`sub_cause_fields`), so a ledger says WHY.
     """
     if claim is None:
         return None

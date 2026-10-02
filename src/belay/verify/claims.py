@@ -602,8 +602,9 @@ def claim_case(verdict: Verdict, *, check: Optional[Check] = None) -> Optional[d
     verdict's `expected` dict) and a `check` entry whose `exit_code` is `null` — did
     not execute, the CheckResult contract — with the authored check's source when one
     was produced (`check=`, or `expected["check_source"]`), `""` when none was (the
-    no-author abstention has no check to quote). A `NO_CHECK_AUTHOR` abstention also
-    carries the author's `sub_cause` / `sub_cause_detail`, last (`sub_cause_fields`) —
+    no-author abstention has no check to quote). An abstention that carries a sub-cause
+    (`NO_CHECK_AUTHOR` or `FINAL_STATE_UNOBSERVABLE`) also carries `sub_cause` /
+    `sub_cause_detail`, last (`sub_cause_fields`) —
     an optional detail the v5 loader type-checks and `corpus run` never decides on.
     """
     if verdict.axis != "A3" or verdict.kind != "claim":

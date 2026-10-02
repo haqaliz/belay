@@ -1568,8 +1568,9 @@ def _emit_claim(claim, Status) -> None:
         return
     expected = claim.expected if isinstance(claim.expected, dict) else {}
     named = expected.get("cause") or "unrecorded"
-    # A `NO_CHECK_AUTHOR` abstention names the author's sub-cause beside the cause and
-    # its bounded detail on the next line; every other record renders exactly as before.
+    # An abstention that carries a sub-cause (`NO_CHECK_AUTHOR` or `FINAL_STATE_UNOBSERVABLE`)
+    # names it beside the cause and its bounded detail on the next line; every other
+    # record renders exactly as before.
     sub_cause = expected.get("sub_cause")
     if sub_cause:
         named = f"{named}/{sub_cause}"
@@ -2773,7 +2774,7 @@ def _cmd_corpus_show(args: argparse.Namespace) -> int:
         check = case.claim["check"]
         exit_code = check["exit_code"]
         _emit(f"  claim expected        {status}  (cause: {cause or 'none'})")
-        # Why the author produced no check, when the case banked it — a stored detail,
+        # Why the claim abstained, when the case banked it — a stored detail,
         # rendered as stored, never inferred; it decides nothing on recompute.
         sub_cause = case.claim.get("sub_cause")
         if sub_cause:

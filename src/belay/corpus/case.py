@@ -372,7 +372,8 @@ def _validate_claim(raw: object, path: Path) -> Optional[dict]:
     did NOT execute (the CheckResult contract) — never a fabricated 0. Every key is
     required: a shape this loader had to guess at is a case whose expected verdict is
     unknown, and the recompute would be grounded on a guess. The OPTIONAL
-    `sub_cause` / `sub_cause_detail` (why a `NO_CHECK_AUTHOR` author produced no check)
+    `sub_cause` / `sub_cause_detail` (why the claim abstained: a `NO_CHECK_AUTHOR` or
+    `FINAL_STATE_UNOBSERVABLE` sub-cause)
     are type-checked when present — null or a string — and never decide anything:
     `corpus run` classifies on the status alone, so they need no schema bump (an older
     loader drops a detail, it does not misread a verdict).

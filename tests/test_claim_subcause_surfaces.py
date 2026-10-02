@@ -1,4 +1,4 @@
-"""surface-threading: the author's sub-cause rides every surface that shows the cause.
+"""surface-threading: an abstention's sub-cause rides every surface that shows the cause.
 
 `author-abstention` put `sub_cause` / `sub_cause_detail` into a `NO_CHECK_AUTHOR`
 verdict's `expected` dict, but every serializer copied named keys only and every text

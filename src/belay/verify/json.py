@@ -294,8 +294,9 @@ def claim_record(claim, *, check=None) -> Optional[dict]:
     author configured, the axis disabled, or D3 silence: the check exited 0) carries
     NO claim record at all, never a fabricated clean and never `null` — the
     absent-never-zero rule that keeps the pinned `--json` snapshot green for every
-    trace without a claim/author. A `NO_CHECK_AUTHOR` abstention appends
-    `sub_cause` / `sub_cause_detail` (`sub_cause_fields`); no other record changes.
+    trace without a claim/author. An abstention that carries a sub-cause
+    (`NO_CHECK_AUTHOR` or `FINAL_STATE_UNOBSERVABLE`) appends `sub_cause` /
+    `sub_cause_detail` (`sub_cause_fields`); no other record changes.
     """
     if claim is None:
         return None
@@ -317,10 +318,11 @@ def claim_record(claim, *, check=None) -> Optional[dict]:
 
 
 def sub_cause_fields(expected) -> dict:
-    """The author's sub-cause keys for a claim record, or `{}` — additive, never inferred.
+    """The abstention's sub-cause keys for a claim record, or `{}` — additive, never inferred.
 
     `{"sub_cause", "sub_cause_detail"}` copied from a verdict's `expected` dict exactly
-    when it carries `sub_cause` (only a `NO_CHECK_AUTHOR` abstention does), so a FAIL,
+    when it carries `sub_cause` (an abstention does: `NO_CHECK_AUTHOR` or
+    `FINAL_STATE_UNOBSERVABLE`; the copy keys on presence, never on the cause), so a FAIL,
     every other cause, and a verdict stored before the sub-cause existed shape exactly as
     they did. The one rule for every claim record — `claim_record`, the phase0 ledger's
     summary, the corpus `claim_case` — each of which appends these LAST, after the keys
