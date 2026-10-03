@@ -2,6 +2,34 @@
 
 This file orients a coding agent working in this repository. Read it first.
 
+> **`FINAL_STATE_UNOBSERVABLE` NAMES WHICH OF ITS FOUR REASONS APPLIED — AND THE "10/12
+> CLASSIFIER COVERAGE" GAP WAS MOSTLY NOT A GAP** (2026-10-03, `final-state-reasons`,
+> PR #46; with the `trajectory-claim-coverage` dig, PR #45). **Legibility only: no verdict,
+> status, reduction, exit code, gate or corpus outcome moves, and no published number moves**
+> (`11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16`, `recall 0.00`, `3/93` stand unedited).
+> **The dig that preceded it (PR #45):** the belay-next pick `trajectory-claim-coverage` read
+> run 3's 10/12 `CLAIM_UNCLASSIFIABLE` as lost classifier coverage. The 12 claim strings,
+> recovered from gitignored traces (the committed ledgers carry only the cause), say
+> otherwise: 8 are correct abstentions or non-claims (4 controls, 4 wrong-repo refusals), 2
+> were already VERIFICATION (the two trajectory FAILs), and **only 2** (*"confirmed ... by
+> reading the file back"*) are a vocabulary gap, which the 2026-08-12 decision declined to
+> close because widening it turns UNVERIFIED into FAIL. **No classifier change was made.**
+> **`sub-cause-producer`:** `evaluate_claim` filed one cause for four situations; the shared
+> closed `SUB_CAUSES` set grows 8 to 12 (`FINAL_STATE_NO_TURN`, `_REPLAY_RAISED` (exception
+> type name only, never its message), `_NOT_REPLAYED` (status and cause in the detail),
+> `_NO_WORKSPACE`), derived from a pinned `SUB_CAUSES_BY_CAUSE` map, with the mismatch guard
+> in `_unverified` (an `Abstention` has no cause). **`surface-threading`:** the six surfaces
+> already copy and render `sub_cause` by presence, so no `src/` behaviour changed: this
+> aspect is characterization pins (each shown to fail when its surface is broken) plus comment
+> rewording. Corpus schema stays v5. **Honesty lines:** end-to-end through the real CLI
+> reaches only `FINAL_STATE_NOT_REPLAYED`; the other three reasons are pinned by unit tests,
+> not e2e. Old ledgers carry no sub-cause, render as before and are never back-filled. Suite
+> **2848 to 2895** (+47; the PRD predicted +20 to +35). **The documented baseline of 2868 was
+> already stale: master measured 2848 passed before this unit** (45 skipped, 14 deselected,
+> unchanged). **NOT built, by name:** a per-sub-cause tally in `phase0 report` (cut at the
+> review gate); e2e for three of the four reasons. See `docs/planning/final-state-reasons/`
+> and `docs/planning/trajectory-claim-coverage/`.
+>
 > **THE CLAIM AXIS NOW SAYS WHAT IT DID — SILENCE IS NOT ABSENCE, AND AN ABSTAINING
 > AUTHOR SAYS WHY** (2026-09-25, `claim-axis-legibility`). **Legibility only: no verdict,
 > status, reduction, exit code, gate or corpus outcome moves.** A follow-on slice of C8
