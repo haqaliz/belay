@@ -27,7 +27,12 @@ from belay.verify.claims import (
     SUB_CAUSE_AUTHOR_RAISED,
     SUB_CAUSE_AUTHOR_REPORTED_ERROR,
     SUB_CAUSE_AUTHOR_TIMED_OUT,
+    SUB_CAUSE_FINAL_STATE_NO_TURN,
+    SUB_CAUSE_FINAL_STATE_NO_WORKSPACE,
+    SUB_CAUSE_FINAL_STATE_NOT_REPLAYED,
+    SUB_CAUSE_FINAL_STATE_REPLAY_RAISED,
     SUB_CAUSES,
+    SUB_CAUSES_BY_CAUSE,
     Abstention,
 )
 
@@ -39,7 +44,7 @@ PINNED_CAUSES = {
     "CAUSE_NO_CLAIM_RECORDED",
 }
 
-PINNED_SUB_CAUSES = {
+PINNED_AUTHOR_SUB_CAUSES = {
     "AUTHOR_RAISED",
     "AUTHOR_DECLINED",
     "AUTHOR_NOT_LAUNCHED",
@@ -50,13 +55,22 @@ PINNED_SUB_CAUSES = {
     "AUTHOR_REPORTED_ERROR",
 }
 
+PINNED_FINAL_STATE_SUB_CAUSES = {
+    "FINAL_STATE_NO_TURN",
+    "FINAL_STATE_REPLAY_RAISED",
+    "FINAL_STATE_NOT_REPLAYED",
+    "FINAL_STATE_NO_WORKSPACE",
+}
+
+PINNED_SUB_CAUSES = PINNED_AUTHOR_SUB_CAUSES | PINNED_FINAL_STATE_SUB_CAUSES
+
 
 def test_claim_causes_are_the_pinned_five() -> None:
     exported = {name for name in claims.__all__ if name.startswith("CAUSE_")}
     assert exported == PINNED_CAUSES
 
 
-def test_sub_causes_are_the_pinned_eight() -> None:
+def test_sub_causes_are_the_pinned_twelve() -> None:
     assert set(SUB_CAUSES) == PINNED_SUB_CAUSES
     assert isinstance(SUB_CAUSES, frozenset)
 
@@ -71,12 +85,32 @@ def test_each_sub_cause_constant_names_its_own_value() -> None:
         SUB_CAUSE_AUTHOR_OUTPUT_OVER_CAP,
         SUB_CAUSE_AUTHOR_OUTPUT_MALFORMED,
         SUB_CAUSE_AUTHOR_REPORTED_ERROR,
+        SUB_CAUSE_FINAL_STATE_NO_TURN,
+        SUB_CAUSE_FINAL_STATE_REPLAY_RAISED,
+        SUB_CAUSE_FINAL_STATE_NOT_REPLAYED,
+        SUB_CAUSE_FINAL_STATE_NO_WORKSPACE,
     }
     assert constants == PINNED_SUB_CAUSES
     exported = {name for name in claims.__all__ if name.startswith("SUB_CAUSE_")}
     assert exported == {f"SUB_CAUSE_{value}" for value in PINNED_SUB_CAUSES}
     assert "SUB_CAUSES" in claims.__all__
     assert "Abstention" in claims.__all__
+
+
+def test_sub_causes_by_cause_is_pinned_and_is_the_source_of_sub_causes() -> None:
+    assert SUB_CAUSES_BY_CAUSE == {
+        "NO_CHECK_AUTHOR": frozenset(PINNED_AUTHOR_SUB_CAUSES),
+        "FINAL_STATE_UNOBSERVABLE": frozenset(PINNED_FINAL_STATE_SUB_CAUSES),
+    }
+    assert "SUB_CAUSES_BY_CAUSE" in claims.__all__
+    author, final_state = SUB_CAUSES_BY_CAUSE.values()
+    assert author.isdisjoint(final_state)
+    assert author | final_state == SUB_CAUSES
+
+
+@pytest.mark.parametrize("value", sorted(PINNED_FINAL_STATE_SUB_CAUSES))
+def test_abstention_accepts_each_final_state_sub_cause(value: str) -> None:
+    assert Abstention(value, "").sub_cause == value
 
 
 def test_abstention_is_frozen_with_two_fields() -> None:

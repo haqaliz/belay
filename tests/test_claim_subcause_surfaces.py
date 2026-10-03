@@ -1,4 +1,4 @@
-"""surface-threading: the author's sub-cause rides every surface that shows the cause.
+"""surface-threading: an abstention's sub-cause rides every surface that shows the cause.
 
 `author-abstention` put `sub_cause` / `sub_cause_detail` into a `NO_CHECK_AUTHOR`
 verdict's `expected` dict, but every serializer copied named keys only and every text
@@ -30,6 +30,7 @@ from belay.verify.claims import (
     CAUSE_NO_CLAIM_RECORDED,
     SUB_CAUSE_AUTHOR_DECLINED,
     SUB_CAUSE_AUTHOR_TIMED_OUT,
+    SUB_CAUSE_FINAL_STATE_NOT_REPLAYED,
     Abstention,
     Check,
     claim_case,
@@ -113,7 +114,6 @@ def _shapers(verdict):
 _OTHER_CAUSES = [
     CAUSE_NO_CLAIM_RECORDED,
     CAUSE_CLAIM_UNCLASSIFIABLE,
-    CAUSE_FINAL_STATE_UNOBSERVABLE,
     CAUSE_CHECK_DID_NOT_EXECUTE,
 ]
 
@@ -124,6 +124,17 @@ def test_other_causes_carry_no_sub_cause_keys(cause) -> None:
     for name, record in _shapers(verdict).items():
         assert "sub_cause" not in record, (name, record)
         assert "sub_cause_detail" not in record, (name, record)
+
+
+def test_final_state_shapers_carry_the_sub_cause_when_an_abstention_is_given() -> None:
+    verdict = claims._unverified(
+        CAUSE_FINAL_STATE_UNOBSERVABLE, claim_seq=3, detail="x",
+        abstention=Abstention(SUB_CAUSE_FINAL_STATE_NOT_REPLAYED, "unverified: boom"),
+    )
+    for name, record in _shapers(verdict).items():
+        assert record["sub_cause"] == "FINAL_STATE_NOT_REPLAYED", (name, record)
+        assert record["sub_cause_detail"] == "unverified: boom", (name, record)
+        assert list(record)[-2:] == ["sub_cause", "sub_cause_detail"], (name, record)
 
 
 def test_fail_carries_no_sub_cause_keys() -> None:

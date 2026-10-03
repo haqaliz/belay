@@ -439,7 +439,7 @@ def _claim_line(inst) -> str:
             f"exited {check.get('exit_code')}; this instance is VERIFIED_FLAGGED"
         )
     named = cause if cause is not None else "unrecorded"
-    # The author's sub-cause, rendered as stored and never inferred: a ledger written
+    # The abstention's sub-cause, rendered as stored and never inferred: a ledger written
     # before it existed carries none and renders exactly as it did.
     sub_cause = inst.claim.get("sub_cause")
     if not sub_cause:

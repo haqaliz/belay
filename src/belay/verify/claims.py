@@ -89,12 +89,15 @@ CAUSE_NO_CHECK_AUTHOR = "NO_CHECK_AUTHOR"
 CAUSE_CHECK_DID_NOT_EXECUTE = "CHECK_DID_NOT_EXECUTE"
 CAUSE_FINAL_STATE_UNOBSERVABLE = "FINAL_STATE_UNOBSERVABLE"
 
-#: WHY an author abstained — the sub-cause a `NO_CHECK_AUTHOR` verdict carries in its
-#: `expected` dict (a CLOSED vocabulary, pinned by `tests/test_claim_vocabulary_guard.py`).
+#: WHY an A3 verdict abstained — the sub-cause a `NO_CHECK_AUTHOR` or
+#: `FINAL_STATE_UNOBSERVABLE` verdict carries in its `expected` dict (a CLOSED vocabulary,
+#: pinned by `tests/test_claim_vocabulary_guard.py`).
 #: A sub-cause refines the reason, never the status: every one is still UNVERIFIED.
 #: `RAISED`/`DECLINED` are all an in-process author can show; the rest are recorded by
 #: `SubprocessAuthor`, which alone sees the process. Timeout is split from launch failure
-#: because they call for different operator fixes.
+#: because they call for different operator fixes. The `FINAL_STATE_*` four name which of
+#: the four reasons left no final state to run a check against (no turn, the replay
+#: raised, the last turn did not replay, it replayed with no workspace).
 SUB_CAUSE_AUTHOR_RAISED = "AUTHOR_RAISED"
 SUB_CAUSE_AUTHOR_DECLINED = "AUTHOR_DECLINED"
 SUB_CAUSE_AUTHOR_NOT_LAUNCHED = "AUTHOR_NOT_LAUNCHED"
@@ -103,27 +106,45 @@ SUB_CAUSE_AUTHOR_EXITED_NONZERO = "AUTHOR_EXITED_NONZERO"
 SUB_CAUSE_AUTHOR_OUTPUT_OVER_CAP = "AUTHOR_OUTPUT_OVER_CAP"
 SUB_CAUSE_AUTHOR_OUTPUT_MALFORMED = "AUTHOR_OUTPUT_MALFORMED"
 SUB_CAUSE_AUTHOR_REPORTED_ERROR = "AUTHOR_REPORTED_ERROR"
-SUB_CAUSES = frozenset(
-    {
-        SUB_CAUSE_AUTHOR_RAISED,
-        SUB_CAUSE_AUTHOR_DECLINED,
-        SUB_CAUSE_AUTHOR_NOT_LAUNCHED,
-        SUB_CAUSE_AUTHOR_TIMED_OUT,
-        SUB_CAUSE_AUTHOR_EXITED_NONZERO,
-        SUB_CAUSE_AUTHOR_OUTPUT_OVER_CAP,
-        SUB_CAUSE_AUTHOR_OUTPUT_MALFORMED,
-        SUB_CAUSE_AUTHOR_REPORTED_ERROR,
-    }
-)
+SUB_CAUSE_FINAL_STATE_NO_TURN = "FINAL_STATE_NO_TURN"
+SUB_CAUSE_FINAL_STATE_REPLAY_RAISED = "FINAL_STATE_REPLAY_RAISED"
+SUB_CAUSE_FINAL_STATE_NOT_REPLAYED = "FINAL_STATE_NOT_REPLAYED"
+SUB_CAUSE_FINAL_STATE_NO_WORKSPACE = "FINAL_STATE_NO_WORKSPACE"
+#: Which sub-causes may ride which cause — the single source `SUB_CAUSES` derives from, so
+#: the two cannot drift. `_unverified` refuses a sub-cause under any other cause.
+SUB_CAUSES_BY_CAUSE: dict[str, frozenset[str]] = {
+    CAUSE_NO_CHECK_AUTHOR: frozenset(
+        {
+            SUB_CAUSE_AUTHOR_RAISED,
+            SUB_CAUSE_AUTHOR_DECLINED,
+            SUB_CAUSE_AUTHOR_NOT_LAUNCHED,
+            SUB_CAUSE_AUTHOR_TIMED_OUT,
+            SUB_CAUSE_AUTHOR_EXITED_NONZERO,
+            SUB_CAUSE_AUTHOR_OUTPUT_OVER_CAP,
+            SUB_CAUSE_AUTHOR_OUTPUT_MALFORMED,
+            SUB_CAUSE_AUTHOR_REPORTED_ERROR,
+        }
+    ),
+    CAUSE_FINAL_STATE_UNOBSERVABLE: frozenset(
+        {
+            SUB_CAUSE_FINAL_STATE_NO_TURN,
+            SUB_CAUSE_FINAL_STATE_REPLAY_RAISED,
+            SUB_CAUSE_FINAL_STATE_NOT_REPLAYED,
+            SUB_CAUSE_FINAL_STATE_NO_WORKSPACE,
+        }
+    ),
+}
+SUB_CAUSES: frozenset[str] = frozenset().union(*SUB_CAUSES_BY_CAUSE.values())
 
 
 @dataclass(frozen=True)
 class Abstention:
-    """Why one author call produced no check: a sub-cause plus a bounded one-line detail.
+    """Why an A3 verdict abstained: a sub-cause plus a bounded one-line detail.
 
     A side channel, never a return value — the `CheckAuthor` protocol still returns
     `Optional[Check]`. A sub-cause outside `SUB_CAUSES` is refused at construction, so
-    the vocabulary cannot widen by accident.
+    the vocabulary cannot widen by accident. Which cause a sub-cause may ride is not
+    checked here (an `Abstention` has no cause): `_unverified` does that.
     """
 
     sub_cause: str
@@ -131,7 +152,7 @@ class Abstention:
 
     def __post_init__(self) -> None:
         if self.sub_cause not in SUB_CAUSES:
-            raise ValueError(f"unknown A3 author sub-cause {self.sub_cause!r}")
+            raise ValueError(f"unknown A3 sub-cause {self.sub_cause!r}")
 
 
 def _one_line(text: str, limit: int = 200) -> str:
@@ -366,27 +387,27 @@ def evaluate_claim(
         )
 
     turn_facts = assemble_turn_facts(records, verdicts)
-    final_workspace = (
-        workspace
-        if workspace is not None
-        else _materialize_final_state(
+    final_abstention: Optional[Abstention] = None
+    if workspace is not None:
+        final_workspace: Optional[Path] = workspace
+    else:
+        final_workspace, final_abstention = _materialize_final_state(
             records,
             manifest_dir=manifest_dir,
             server_command=server_command,
             shell_server_command=shell_server_command,
             timeout=timeout,
         )
-    )
     if final_workspace is None:
         return _unverified(
             CAUSE_FINAL_STATE_UNOBSERVABLE,
             claim_seq=claim_seq,
             classification=classification,
             detail=(
-                "the final turn's workspace could not be materialized — the last "
-                "tools/call turn did not replay to a replayed workspace (or no turn "
-                "exists), so the check has no final state to run against"
+                "the final turn's workspace could not be materialized, so the check "
+                "has no final state to run against"
             ),
+            abstention=final_abstention,
         )
     final_state_files = [
         os.fsdecode(record.path) for record in scan_tree(final_workspace) if record.path != b"."
@@ -462,18 +483,19 @@ def _materialize_final_state(
     server_command: Sequence[str],
     shell_server_command: Optional[Sequence[str]],
     timeout: float,
-) -> Optional[Path]:
+) -> tuple[Optional[Path], Optional[Abstention]]:
     """The final state: the LAST `tools/call` turn replayed into a scratch workspace.
 
-    `None` when there is no turn to replay, the replay did not reach REPLAYED, the
-    replayed workspace was never observed, or the replay raised: the final state is
-    genuinely unobservable (the caller files `FINAL_STATE_UNOBSERVABLE`) — never a
-    guessed workspace. Shell routing is honored exactly like `verify_turn`: a final
-    `run_process` turn replays against `shell_server_command` when one is given.
+    Exactly one of the pair is set: the workspace, or an `Abstention` naming which of four
+    reasons left the final state genuinely unobservable (no turn, the replay raised, the
+    last turn did not replay, it replayed with no workspace). The caller files
+    `FINAL_STATE_UNOBSERVABLE` — never a guessed workspace. Shell routing is honored
+    exactly like `verify_turn`: a final `run_process` turn replays against
+    `shell_server_command` when one is given.
     """
     calls = tool_calls(derive_correlation(list(records)))
     if not calls:
-        return None
+        return None, Abstention(SUB_CAUSE_FINAL_STATE_NO_TURN, "")
     n = len(calls) - 1
     resolved = (
         shell_server_command
@@ -485,11 +507,14 @@ def _materialize_final_state(
             records, n,
             server_command=resolved, manifest_dir=manifest_dir, timeout=timeout,
         )
-    except Exception:  # noqa: BLE001  (a substrate failure is an abstention, never a crash)
-        return None
-    if reply.status != REPLAYED or reply.workspace is None:
-        return None
-    return Path(reply.workspace)
+    except Exception as exc:  # noqa: BLE001  (a substrate failure is an abstention, never a crash)
+        return None, Abstention(SUB_CAUSE_FINAL_STATE_REPLAY_RAISED, type(exc).__name__)
+    if reply.status != REPLAYED:
+        detail = f"{reply.status}: {reply.cause}" if reply.cause else reply.status
+        return None, Abstention(SUB_CAUSE_FINAL_STATE_NOT_REPLAYED, _one_line(detail))
+    if reply.workspace is None:
+        return None, Abstention(SUB_CAUSE_FINAL_STATE_NO_WORKSPACE, "")
+    return Path(reply.workspace), None
 
 
 def _tool_name(records: Sequence[dict], n: int) -> Optional[str]:
@@ -530,9 +555,14 @@ def _unverified(
     `expected` carries the cause plus whatever the evaluator reached before abstaining
     (the claim's seq and classification, the check's source), so a reader of a stored
     verdict can bucket on the cause without re-reading the trace. Only `NO_CHECK_AUTHOR`
-    passes an `abstention`: its `sub_cause` / `sub_cause_detail` refine the cause and
-    never appear on any other.
+    and `FINAL_STATE_UNOBSERVABLE` pass an `abstention`: its `sub_cause` /
+    `sub_cause_detail` refine the cause and never appear on any other. A sub-cause under a
+    cause that does not own it (`SUB_CAUSES_BY_CAUSE`) is a programmer error: `ValueError`.
     """
+    if abstention is not None and abstention.sub_cause not in SUB_CAUSES_BY_CAUSE.get(
+        cause, frozenset()
+    ):
+        raise ValueError(f"sub-cause {abstention.sub_cause!r} does not belong to cause {cause!r}")
     expected: dict[str, Any] = {"axis": "A3", "kind": "claim", "cause": cause}
     if claim_seq is not None:
         expected["claim_seq"] = claim_seq
@@ -572,8 +602,9 @@ def claim_case(verdict: Verdict, *, check: Optional[Check] = None) -> Optional[d
     verdict's `expected` dict) and a `check` entry whose `exit_code` is `null` — did
     not execute, the CheckResult contract — with the authored check's source when one
     was produced (`check=`, or `expected["check_source"]`), `""` when none was (the
-    no-author abstention has no check to quote). A `NO_CHECK_AUTHOR` abstention also
-    carries the author's `sub_cause` / `sub_cause_detail`, last (`sub_cause_fields`) —
+    no-author abstention has no check to quote). An abstention that carries a sub-cause
+    (`NO_CHECK_AUTHOR` or `FINAL_STATE_UNOBSERVABLE`) also carries `sub_cause` /
+    `sub_cause_detail`, last (`sub_cause_fields`) —
     an optional detail the v5 loader type-checks and `corpus run` never decides on.
     """
     if verdict.axis != "A3" or verdict.kind != "claim":
@@ -615,6 +646,7 @@ __all__ = [
     "CAUSE_NO_CLAIM_RECORDED",
     "CHECK_TIMEOUT",
     "SUB_CAUSES",
+    "SUB_CAUSES_BY_CAUSE",
     "SUB_CAUSE_AUTHOR_DECLINED",
     "SUB_CAUSE_AUTHOR_EXITED_NONZERO",
     "SUB_CAUSE_AUTHOR_NOT_LAUNCHED",
@@ -623,6 +655,10 @@ __all__ = [
     "SUB_CAUSE_AUTHOR_RAISED",
     "SUB_CAUSE_AUTHOR_REPORTED_ERROR",
     "SUB_CAUSE_AUTHOR_TIMED_OUT",
+    "SUB_CAUSE_FINAL_STATE_NO_TURN",
+    "SUB_CAUSE_FINAL_STATE_NO_WORKSPACE",
+    "SUB_CAUSE_FINAL_STATE_NOT_REPLAYED",
+    "SUB_CAUSE_FINAL_STATE_REPLAY_RAISED",
     "Check",
     "CheckAuthor",
     "CheckResult",
