@@ -5,6 +5,28 @@ All notable changes to Belay are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0 — until then,
 `0.x` minor bumps may include changes that would be breaking under strict semver.
 
+## [0.40.0] - 2026-10-03
+
+**`FINAL_STATE_UNOBSERVABLE` names which of its four reasons applied (PR #46).** Legibility
+only: no verdict, status, exit code, gate or corpus outcome moves.
+
+- **A final-state abstention says why.** The A3 claim axis filed one cause when it could
+  not materialize the final workspace to run a check against. It now carries one of four
+  closed sub-causes with a one-line detail: `FINAL_STATE_NO_TURN` (the trace has no
+  `tools/call`), `FINAL_STATE_REPLAY_RAISED` (the replay raised; the exception type name
+  is recorded, never its message), `FINAL_STATE_NOT_REPLAYED` (the last turn did not
+  replay; its status and cause are in the detail) and `FINAL_STATE_NO_WORKSPACE`. It
+  shows on the same surfaces as the `NO_CHECK_AUTHOR` sub-cause: `verify --json`, the
+  `phase0` ledger, the corpus case (schema stays v5), `verify` text, `phase0 report` and
+  `corpus show`. Every case is still UNVERIFIED, never PASS. Old ledgers carry no
+  sub-cause and render as before.
+- **Docs:** the run-3 "10/12 `CLAIM_UNCLASSIFIABLE` is classifier coverage" framing is
+  corrected (PR #45): 8 of the 12 were correct abstentions or non-claims, 2 were already
+  classified, and only 2 are a vocabulary gap that the 2026-08-12 decision declined to
+  close. No classifier change.
+- End-to-end through the real CLI reaches only `FINAL_STATE_NOT_REPLAYED`; the other
+  three reasons are pinned by unit tests.
+
 ## [0.39.0] - 2026-09-25
 
 **The A3 claim axis now says what it did (PR #44).** Legibility only: no verdict, status,
