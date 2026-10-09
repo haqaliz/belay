@@ -1,87 +1,116 @@
-# Understanding — second corpus-filling mint (`feat/corpus-mint-second-run`)
+# Understanding: claim-author-live-probe (Phase 2 dig)
 
-Source: `docs/planning/_card/issue.md` (inline brief, 2026-09-22) · dig agents 2026-09-22.
+Source: `docs/planning/_card/issue.md` (inline brief, belay-next pick 2026-10-10).
+Two read-only agents mapped the code paths and the planning record; this note is their synthesis.
 
 ## What this work really is
 
-The owner's S-1 decision, taken in the affirmative: **declare a second corpus-filling
-mint run** (the recommendation the record already makes — `docs/STATUS.md:117-119`).
-The first run STOPPED at its pre-registered gate (`NO_VERIFIABLE_TURNS: 2`,
-`INSTRUMENT SUSPECT`, UNVERIFIED 3/3 = 100%) for a cause the engine has since fixed.
-The remaining scope of `phase0-corpus-mint` is exactly `mint-run` (re-declared),
-`corpus-banking`, `audit-and-publish` — the two deterministic aspects already shipped.
+R-D's deferred evidence run, made cheap: re-verify the two banked run-3 trajectory-FAIL
+traces (`django-11422`, `django-14382`) through the **real CLI** with the shipped reference
+claim author configured, and observe the `last_abstention` sub-cause that run 3 never
+recorded (`AUDIT.md:87-91`: *"the ledger does not record which, and nobody observed it"*).
+The question is one sentence from `claim-axis-legibility/prd.md:193-200`: Belay kills a
+subprocess author at `AUTHOR_TIMEOUT = 60.0` s (`src/belay/verify/author.py:63`) while the
+reference author allows its `claude -p` child 600 s (`reference_claim_author.py:65-67`) —
+**"Changing the timeout is out of scope (it changes A3 behavior); if the next A3-enabled run
+reads `AUTHOR_TIMED_OUT`, that is the next unit's evidence."** This unit is that run. If the
+evidence reads `AUTHOR_TIMED_OUT`, a conditional aspect ships an operator-settable author
+timeout; otherwise the unit stops at the finding.
 
-It is a **measured** unit (live, stochastic, unrepeatable, freeze-protocol) with
-deterministic seams, not a feature build. Its deliverables: the first real corpus
-growth since 2026-08-12 (moat #2 — trajectory FAILs bank, per-turn FAILs bank), the
-A3 claim column's first real verdicts, and the real volume the calibration ledger
-(v0.37.0) explicitly waits on.
+Second value, same run: if the author produces a check, this is **C8's first real A3
+verdict on real data** (exit 0 = silence D3, non-zero = FAIL — the first real intent-drift
+verdict; either way an observation, never a corpus mutation).
 
-## The instrument blocker is closed (verified at v0.37.0)
+## The probe surface (verified in code)
 
-- `effect-conformance-coverage` (v0.35.0): the *observed-but-not-declared* producer
-  now yields `effect NOT_COVERED`, `verdict.reduce` drops it before ranking
-  (`src/belay/verify/effect.py:640-657`, `verdict.py:99-114`), so a replaying turn
-  against the annotation-less npm filesystem server reduces to PASS-with-NOT_COVERED,
-  `replayed_any` is set, `VERIFIED_CLEAN` is reachable, the denominator is non-zero.
-- Residuals, stated not hidden: `UNRESTORABLE_SNAPSHOT_FAILED` is untouched by
-  v0.35–v0.37 (run 1 lost 1/3 probe turns to it; pre-existing, absorbed at volume by
-  the 2026-08-12 run) and the three *observation-failure* effect producers remain
-  UNVERIFIED (`effect.py:659-670`).
+- **`belay verify <trace> --manifest-dir <dir> --claim-author CMD --server node <fs> '{workspace}' --json`**
+  is the direct observation point: `--claim-author` at `cli.py:3613-3623`, A3 whole-trace-only
+  at `cli.py:1146-1181` via `RecordingAuthor`; `claim.sub_cause`/`sub_cause_detail` ride
+  `claim_record`/`sub_cause_fields` (`verify/json.py:301-336`). The e2e driver uses this exact
+  shape (`tests/test_claim_axis_e2e.py:91-108`).
+- **`corpus run` cannot drive an external author at all** — no `--claim-author` flag (refusal
+  pinned at `tests/test_verify_claim_surfaces.py:202-219`), `_StoredCheckAuthor` only
+  (`corpus/run.py:728-745`), and trajectory recompute passes `claim_author=None`
+  (`corpus/run.py:624-640`). The banked cases are observed, never re-driven.
+- **`phase0 run` is env-only** (`author_from_env()` at `cli.py:2964`; no `--claim-author` flag —
+  its absencse is pinned). `gate baseline`/`gate check` DO take `--claim-author` (`cli.py:4384-4394`,
+  `:4526-4537`).
+- **The traces are reachable**: `/Users/aliz/dev/at/holder/belay/mint/cm6/batch/trace-django__django-11422.jsonl`
+  (+ `.manifests` sibling), same for `14382`; each carries exactly one `claim` record (seq 24).
+  Banked cases at `/Users/aliz/dev/at/holder/belay/corpus-local/trace-django__*‑trajectory/`
+  (`human_label: pending`, schema v5, no `claim` expected key).
 
-## The code paths are mapped and ready
+## Contradiction the brief carries — flag, do not paper over
 
-- Frozen run-1 scripts remain the authoritative invocation shape: mint via
-  `python -m eval.minting_driver batch` (`--root` absolute under
-  `~/dev/at/holder/belay/`, `--registry eval/instances/cm-stageN.json`,
-  `--toolset filesystem+shell`, `--provider claude-cli --model claude-opus-5`),
-  verify via **stock `belay phase0 run`** with `--shell-server` **before** `--server`
-  (`nargs=REMAINDER`), `BELAY_CLAIM_AUTHOR` exported. MH-1 roots verified working in
-  run 1 (`mint-run/STAGE1_FINDINGS.md:81-87`).
-- A3 on the phase0 path is env-only and threaded: `author_from_env()` →
-  `cli.py:2938` → `run_batch(claim_author=…)` (`cli.py:2950`) → engagement gate
-  `src/belay/phase0/runner.py:419`. Live-proven at n=1 (184.5 s, exit 0 = D3 silence).
-- Banking: per-turn FAILs ingest per turn (`runner.py:445-466`); trajectory FAILs
-  bank `trace-<instance>-trajectory` (`runner.py:480-549`); A3 FAILs bank
-  `trace-<instance>-claim` (`runner.py:560-599`). `corpus run` over the grown corpus
-  needs `--shell-server` for shell-bearing cases or SKIPs with a named cause
-  (v0.36.0 `corpus-shell-routing`; `src/belay/corpus/run.py:524-562`).
-- Registry: committed `cm-stage1.json` (CTL-1 + CTL-4) and `cm-stage2.json`
-  (CTL-2 + CTL-3 + 8 fresh reals, controls first); seed 20260919, `SEED_HISTORY`
-  empty; regeneration byte-identical is the reproducibility check; the 8 reals were
-  **never driven** (stage 2 never launched) so they are eligible.
+The brief says "env + flag parity on **verify/phase0/corpus**". That is the
+`--no-claim-axis` surface set, not the author-construction set. Reality:
 
-## Decisions this unit must make (open questions for the interview)
+| Surface | `--claim-author` flag | Author constructed? |
+|---|---|---|
+| `verify` | yes | yes (`cli.py:971`) |
+| `gate baseline` / `gate check` | yes | yes (`cli.py:1990`, `:2145`) |
+| `phase0 run` | **no** (env-only, pinned) | yes (`cli.py:2964`) |
+| `corpus run` | no | **never** (`_StoredCheckAuthor`) |
 
-1. **Re-driving the four controls.** Run-1 stage-1 controls (CTL-1, CTL-4) produced
-   observations; the anti-re-roll contract's letter reads "an instance that produced
-   an observation is never re-armable" (`checkpoint.py:15-21`). Controls are the
-   run's own calibration instruments, not population draws, and run 1's stage-1 gate
-   never cleared — but the letter does not distinguish. Recommended: re-drive the
-   committed controls in fresh roots, recorded as a declared decision (same as the
-   gate mints' per-stage fresh controls).
-2. **Fresh roots.** Run-1 roots `cm1`/`cm2` under the holder are taken (cm1 holds
-   run-1's batch + checkpoint; cm2 was never touched). New frozen scripts, roots
-   `cm3`/`cm4`, reusing the committed registries verbatim.
-3. **The `--verify` shell-threading parity gap** (found by this dig, unfixed):
-   `run_verify` threads `claim_author` but not `shell_server_command`
-   (`eval/minting_driver/entrypoint.py:995-1063`), while the printed command emits
-   `--shell-server` (`entrypoint.py:696-698`) — the same defect class the a3-author
-   aspect fixed for A3, and `eval/README.md:727-729` still calls them equivalent.
-   Not blocking (the run uses `phase0 run` directly). Decide: fix it here as a small
-   deterministic eval-only aspect, or record it as out of scope.
-4. **n.** Q2 of the prior PRD confirmed n≈12 staged; unchanged. Stop-loss by stage.
+So the knob's flag set is `{verify, gate baseline, gate check}` (the `--claim-author` row in
+`tests/test_cli_flag_parity.py:152-158`, which is the registration site a new flag needs),
+plus an env fallback that also reaches `phase0 run`. "Corpus" gets nothing. The PRD decides
+and states this correction.
+
+## Affected areas (conditional knob, if evidence reads TIMED_OUT)
+
+`src/belay/verify/author.py` (a timeout source readable by `author_from_env` — note the
+def-time default-arg trap, `surface-threading/plan_20260925.md:58-61`), `src/belay/cli.py`
+(the three construction sites + new argparse + env), `tests/test_cli_flag_parity.py`
+(`EXPECTED` row), `tests/test_verify_author.py` (`:121` pins `configured.timeout ==
+AUTHOR_TIMEOUT` — keep the default unchanged and this pin survives), README (the operator
+learns the knob; today README states no timeout value, `README.md:295,349`), docs
+(CAPABILITY_ROADMAP C8 / STATUS "Not built" lines — additive only).
+
+**Not touched:** `verify/claims.py` (vocabulary, evaluator), verdict reduction, A1/A2,
+`authoring/protocol.py`'s separate `AUTHOR_TIMEOUT` copy (invariant-authoring path, out of
+scope), `TRIAGE_TIMEOUT` (mirror decided `jev-triage/triage-seam/spec.md:33`; Jev measured
+0.9 s — no evidence of starvation there in this unit).
+
+## Precedent shapes this unit must mirror
+
+- **Freeze protocol (Rule D, `phase0-mint-run/prd.md:97-101`)**: script committed first
+  containing **no result** (grep-checked); run **once**; verbatim `.out` committed next,
+  whatever it says; a second run only if declared. Freeze commit hash named in the findings.
+- **Wrapper-record trick** (`tests/test_reference_claim_author_live.py:136-150`,
+  `a3-author/live-run.md:80-84`): the `--claim-author` command is a wrapper that records each
+  invocation to disk (and may time it) then `exec`s the shipped module, so *"the author ran"*
+  is an observed fact. Assert `invocations >= 1` (a run where A3 never engaged must fail).
+- **`manual`-marked, owner-run, never CI** (`pyproject.toml:77-94`; the live test FAILS with
+  instructions rather than skipping when the model env is unset).
+- **Three operator-error hazards already documented** (`live-run.md:91-105`): `--manifest-dir`
+  required; `--server` needs the `{workspace}` token; the JSON key is `claim` (not
+  `claim_record`).
+
+## Open questions (for the PRD interview)
+
+1. **Non-TIMED_OUT evidence**: if the observed sub-cause is `AUTHOR_EXITED_NONZERO` (with the
+   reference author's one-line stderr) or `AUTHOR_DECLINED`/`AUTHOR_RAISED`, the unit stops at
+   the finding — confirm the knob does NOT ship (brief says conditional; R-D's letter agrees).
+2. **If TIMED_OUT**: keep the 60 s default and add the knob (`BELAY_AUTHOR_TIMEOUT` env +
+   `--author-timeout` on the three author surfaces), or align the default upward? The
+   conservative shape keeps the default (the `:121` pin and every existing behavior survive;
+   an operator with a slow author opts in). Decide and state.
+3. **Model + cost**: `claude-opus-5` (the live-run precedent), one author invocation per trace,
+   owner subscription, `manual`-marked. Each verify replays the trace to materialize the final
+   state before authoring (the expensive part).
+4. **What the wrapper records**: sub-cause is the verdict; wall-time of the author invocation
+   is a bonus fact the wrapper can observe (start/stop around the exec) — worth defining.
+5. **Deliverables placement**: `docs/planning/claim-author-live-probe/` (freeze script + `.out`
+   + findings); the manual test at `tests/test_claim_author_live_probe.py` (a new file, not an
+   edit of the invariant-authoring live test).
 
 ## Guardrail check
 
-Corpus (moat #2) work only — no agent framework, no LLM judge (A3's check is
-execution-decided, exit code only), no egress (roots under the local holder), no
-published number moves, no violation rate (Q1 — the fresh residue is ~100%
-django+sympy). UNVERIFIED never PASS (INSTRUMENT SUSPECT ⇒ STOP, MH-5). The verdict
-axes touched: A1 (trajectory), A3 (claim) — both observed, never modified.
-
-## Suite baseline
-
-2743 passing (v0.37.0). Deterministic acceptance before any spend: registry
-regenerates byte-identically, frozen scripts carry no result shapes (grep-checked),
-suite green.
+A3 only (downgrade-only axis; a timed-out author is UNVERIFIED `NO_CHECK_AUTHOR`, never PASS);
+BYOK, no egress (local `claude` CLI, owner subscription); no agent framework; no verdict
+reduction, exit-code or gate change; **no published number moves** (`11/60 = 18.3%`,
+`precision 0.00`, `1/15`, `4/16`, `recall 0.00`, `3/93` stand unedited); the two
+`belay corpus label` judgments remain the owner's alone (`AUDIT.md:93-97`). Not a gate run;
+produces no Phase-0 number. Suite baseline: **2895 passing** (45 skipped, 14 deselected;
+`STATUS.md:25-26`).
