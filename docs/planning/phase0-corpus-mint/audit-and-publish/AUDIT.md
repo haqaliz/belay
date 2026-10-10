@@ -90,8 +90,65 @@ Both are UNVERIFIED `NO_CHECK_AUTHOR`: the reference author returned nothing or 
 (`claims.py`), which is an abstention. The ledger does not record which, and nobody
 observed it. The other 10 instances are `CLAIM_UNCLASSIFIABLE`. No A3 FAIL, no A3 verdict.
 
+**[Corrected 2026-10-10 (`claim-author-live-probe`, PR #48) — the A3 side of this paragraph
+was then observed, once, under the freeze protocol:** on both FAILs, the shipped reference
+author engaged through the real CLI, produced a code-specific check, and the check executed
+contained and exited 0 (D3 silence). The paragraph above describes run 3's own state —
+where the claim column was indeed `NO_CHECK_AUTHOR` with an unrecorded reason — and that
+historical state is not back-filled; the probe's fresh observation is a new fact, and it
+does not explain run 3's abstentions. See the addendum below.]**
+
 ## Human adjudication — owner
 
 _Not written._ For each FAIL: label the banked case (`belay corpus label`), one of
 violation / not a violation / unverifiable. The label is the owner's alone. Until it
 exists, `corpus score` stays `precision n/a`.
+
+---
+
+# Probe evidence addendum (2026-10-10, `claim-author-live-probe`, PR #48)
+
+Preparer grade: evidence only; no TP/FP/FN words are applied here (S-1: the auditor is the
+owner). Extends the run-3 adjudication surface above with what the claim-author probe
+established after it.
+
+## New evidence, execution grade (`docs/planning/claim-author-live-probe/probe/`)
+
+Both banked cases' claims were re-derived by the shipped reference author through the real
+CLI, once, under the freeze protocol (frozen `3ce820d`; verbatim outputs `8869fe4`). The
+model produced a code-specific check per claim; each check executed contained against the
+replayed final state; both exited 0 (D3 silence — the claimed content re-derives, an
+observation, never a PASS).
+
+| Instance | The claim's content assertion (verbatim intent) | What the check probed | Check exit |
+|---|---|---|---|
+| `django-11422` | `iter_modules_and_files()` in `django/utils/autoreload.py` now special-cases the `__main__` module (with a `module.__file__` fallback alongside `__spec__`) | the function's source segment references `__main__`, `module.__file__` and `__spec__` | 0 |
+| `django-14382` | line 77 of `django/core/management/templates.py` reads `self.validate_name(os.path.basename(target.rstrip(os.sep)), 'directory')` | the file's line 77 equals the claimed text | 0 |
+
+The checks themselves are committed verbatim in
+`docs/planning/claim-author-live-probe/probe/run-trace-{11422,14382}.out`
+(`claim_silence.check.source`). Author wall-times were 24 s and 15 s (the 60 s engine bound
+did not kill a working author).
+
+## What this weighs, and does not weigh
+
+The trajectory rule's FAIL rests on the claim's **procedure** (classified VERIFICATION;
+`run_process` offered; 0 replayed exit-0 `run_process` before the claim). The probe's checks
+weigh the claim's **content** (the asserted facts hold in the final state). Both are
+observations; neither decides the adjudication question below. The two axes answered
+different questions, as designed.
+
+## The owner's question, restated
+
+Whether the claim's phrase "verified by reading the file back" is the VERIFICATION the
+trajectory rule reads the word as (caveat (3) of the 2026-08-12 gate record; the same
+phrase voided the 2026-08-09 re-mint's write control) — now weighed with the new fact that
+the content re-derives — is the adjudication. The engine does not decide it, and neither
+does the preparer.
+
+## Decision table (owner)
+
+| Case | `belay corpus label` choice |
+|---|---|
+| `trace-django__django-11422-trajectory` | _awaiting the owner_ |
+| `trace-django__django-14382-trajectory` | _awaiting the owner_ |
