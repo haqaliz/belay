@@ -5,7 +5,18 @@ All notable changes to Belay are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0 — until then,
 `0.x` minor bumps may include changes that would be breaking under strict semver.
 
-## [0.40.0] - 2026-10-03
+## [0.41.0] - 2026-10-10
+
+**R-D answered by measurement (PR #48): the A3 claim author completes inside the engine's
+60 s bound, so the timeout-knob trigger did not fire and no knob shipped.** A measured
+unit under the freeze protocol: the two banked run-3 trajectory-FAIL traces were
+re-verified through the real CLI with the shipped reference claim author. The model
+completed in 24 s and 15 s and produced real checks that executed contained and exited 0
+-- the first `claim_silence` records on real data. The engine's bound did not kill a
+working author; the timeout is not the cause of run 3's abstentions, whose causes remain
+unobserved. No engine change: no verdict, status, exit code, corpus or gate behavior
+moved, and no published number moves.
+
 
 **`FINAL_STATE_UNOBSERVABLE` names which of its four reasons applied (PR #46).** Legibility
 only: no verdict, status, exit code, gate or corpus outcome moves.
@@ -1858,7 +1869,7 @@ The first public release: the full **record → sandbox → replay → verdict**
 - **The A3 claim-re-derivation axis** (C8) is not built; the live console (C7) and observability interop
   (C9) are ahead on the roadmap.
 
-[Unreleased]: https://github.com/haqaliz/belay/compare/v0.31.0...HEAD
+[Unreleased]: https://github.com/haqaliz/belay/compare/v0.40.0...HEAD
 [0.30.1]: https://github.com/haqaliz/belay/compare/v0.30.0...v0.30.1
 [0.30.0]: https://github.com/haqaliz/belay/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/haqaliz/belay/compare/v0.28.0...v0.29.0
