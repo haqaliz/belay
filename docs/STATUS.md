@@ -96,7 +96,10 @@
 > shares across runs 1/2/3 are **NOT comparable**. **No published number moves**
 > (`11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16`, `recall 0.00`, `3/93` stand
 > unedited). **Open, the owner's by S-1:** label the two pending cases (`belay corpus
-> label`), with evidence in `audit-and-publish/AUDIT.md`. See
+> label`), with evidence in `audit-and-publish/AUDIT.md`. **[Both
+> judgments made 2026-10-10 (owner): true-positive each — the banked corpus carries its
+> first real trajectory TPs (precision 1.00, 2/2, one root-cause key; published numbers
+> stand unedited). See `AUDIT.md`'s addendum.]** See
 > `docs/planning/phase0-corpus-mint/`.
 >
 > **C10 SLICE 2 SHIPS ON A BRANCH — THE CALIBRATION LEDGER: THE VENDOR'S "CALIBRATED

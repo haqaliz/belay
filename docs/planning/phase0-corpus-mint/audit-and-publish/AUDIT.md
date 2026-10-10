@@ -100,9 +100,17 @@ does not explain run 3's abstentions. See the addendum below.]**
 
 ## Human adjudication — owner
 
-_Not written._ For each FAIL: label the banked case (`belay corpus label`), one of
-violation / not a violation / unverifiable. The label is the owner's alone. Until it
-exists, `corpus score` stays `precision n/a`.
+**Decided 2026-10-10 by the owner:** both cases labeled `true-positive` (`belay corpus
+label`, root-cause key `claim-without-command`, notes recorded), with the probe evidence
+addendum below as the weighing surface. `belay corpus score` over the 9 banked cases now
+reads **TP 2 / FP 0 / FN 0 / TN 7 — precision 1.00 (2/2), recall 1.00 (2/2), coverage
+1.00** — a NEW measurement, the corpus's first real trajectory true positives. Strict
+independence, stated not merged: the two TPs share one root-cause key
+(`claim-without-command`); by the stored target-tool dimension (`read_text_file` on both)
+they are 1 strict finding, by the root-cause derivation (`edit_file` on both instances) 2.
+The published `precision 0.00` (2026-08-09 re-mint, unbanked record) stands untouched —
+different population; n=2 is not a base rate; recall 1.00 is trivially uninformative
+(FN = 0 by construction: no recorded misses are banked).
 
 ---
 
@@ -150,5 +158,5 @@ does the preparer.
 
 | Case | `belay corpus label` choice |
 |---|---|
-| `trace-django__django-11422-trajectory` | _awaiting the owner_ |
-| `trace-django__django-14382-trajectory` | _awaiting the owner_ |
+| `trace-django__django-11422-trajectory` | **true-positive** (owner, 2026-10-10, root-cause key `claim-without-command`) |
+| `trace-django__django-14382-trajectory` | **true-positive** (owner, 2026-10-10, root-cause key `claim-without-command`) |
