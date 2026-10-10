@@ -52,7 +52,7 @@ This file orients a coding agent working in this repository. Read it first.
 > through the real CLI with five stub authors (291 s). **Honesty lines:** run 3's two
 > `NO_CHECK_AUTHOR` reasons were never recorded and **cannot be recovered** — the next
 > A3-enabled run answers it, including whether Belay's own 60 s `AUTHOR_TIMEOUT` (vs the
-> reference author's 600 s) is the cause, **a hypothesis, not a finding**; the committed
+> reference author's 600 s) is the cause, **a hypothesis, not a finding** — **[Corrected 2026-10-10 (`claim-author-live-probe`): answered by measurement — the probe re-verified both cm6 traces through the real CLI with the shipped reference author; the model completed in 24 s/15 s and produced checks that executed and exited 0 (D3 silence). The 60 s engine bound did not kill a working author; the timeout is NOT the cause of run 3's abstentions, whose causes remain unobserved. The timeout-knob trigger (≥1 AUTHOR_TIMED_OUT) did not fire — no knob ships. See `docs/planning/claim-author-live-probe/`.]**; the committed
 > `cm-*.json` ledgers hold 0 claim-less instances, so their golden pin cannot observe the
 > sentence fix (unit tests pin it). **No published number moves** (`11/60 = 18.3%`,
 > `precision 0.00`, `1/15`, `4/16`, `recall 0.00`, `3/93` stand unedited). Suite 2764 →

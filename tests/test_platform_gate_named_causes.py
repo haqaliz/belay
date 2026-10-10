@@ -46,6 +46,7 @@ SCAN_AREA: frozenset[str] = frozenset(
         "test_bth1.py",
         "test_a3_corrupt_success_fixture.py",
         "test_claim_axis_e2e.py",
+        "test_claim_author_live_probe.py",
         "test_cli_invariant_library.py",
         "test_containment.py",
         "test_corpus_add.py",
