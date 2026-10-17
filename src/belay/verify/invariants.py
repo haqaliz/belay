@@ -161,10 +161,35 @@ EGRESS_UNOBSERVABLE = "network-egress-unobservable"
 #: authored policy, PRD Goal 2).
 AUTHORED_INVARIANT_UNCALIBRATED = "authored-invariant-uncalibrated"
 AUTHORED_INVARIANT_ALTERED = "authored-invariant-altered"
+#: The named cause of an AUTHORED invariant whose scope carries a glob metacharacter. A1
+#: matches deltas as raw byte-prefixes and content rules as path-segment runs, and it NEVER
+#: expands a glob, so `tests/**` matches no real path and the invariant would silently PASS
+#: over zero files. Rejected with a cause rather than normalized (D1): normalizing would
+#: GUESS which paths the author meant and could over-scope (a fabricated FAIL) or
+#: under-scope (dead teeth again). UNVERIFIED on every turn via `Invariant.untrusted_cause`
+#: — never PASS, never a fabricated FAIL. Authored artifacts only (D2); the operator
+#: `--invariants` path never sets it.
+AUTHORED_INVARIANT_SCOPE_UNINTERPRETABLE = "authored-invariant-scope-uninterpretable"
+#: The glob metacharacters A1's scope engine never expands. A scope containing any of them
+#: can never match a real path and is therefore not interpretable.
+SCOPE_GLOB_METACHARACTERS = "*?[]"
 #: The authored-artifact schema this engine understands (invariant-authoring M4).
 #: Anything else — including a FUTURE version this engine does not know — is rejected at
 #: load, fail-closed, never a silent empty policy.
 AUTHORED_SCHEMA = "belay-authored-invariants/1"
+
+
+def scope_is_interpretable(scope: str) -> bool:
+    """Whether A1 can ever match a scope: it must carry no glob metacharacter A1 never expands.
+
+    A1 matches a delta as a raw byte-prefix (`read-only`/`no-create`/`no-delete`) or a path
+    segment (`no-assertion-weakening`), and it never expands a glob — so `tests/**` matches
+    no real path and the invariant would silently PASS over zero files. The empty scope
+    (the whole tree) and plain prefixes remain interpretable. Shared by the authored-artifact
+    loader and the author protocol so both authored seams agree on the shape; the operator
+    `--invariants` path never consults it (D2).
+    """
+    return not any(ch in scope for ch in SCOPE_GLOB_METACHARACTERS)
 
 #: How many in-scope files one turn may be judged over before the rule abstains. Every one
 #: of them is read twice and parsed twice, so an unbounded scope on a monorepo would turn a
@@ -1101,6 +1126,7 @@ def trajectory_case(
 
 __all__ = [
     "AUTHORED_INVARIANT_ALTERED",
+    "AUTHORED_INVARIANT_SCOPE_UNINTERPRETABLE",
     "AUTHORED_INVARIANT_UNCALIBRATED",
     "AUTHORED_SCHEMA",
     "CONTENT_GROUNDED_RULES",
@@ -1124,6 +1150,7 @@ __all__ = [
     "RULE_NO_DELETE",
     "RULE_READ_ONLY",
     "RULE_SUITE_BEFORE_SUCCESS_CLAIM",
+    "SCOPE_GLOB_METACHARACTERS",
     "UNDECIDABLE_WEAKENING",
     "UNREADABLE_IN_SCOPE_FILE",
     "canonical_policy_digest",
@@ -1133,5 +1160,6 @@ __all__ = [
     "load_invariants",
     "parse_authored_invariants",
     "resolve_library_entry",
+    "scope_is_interpretable",
     "trajectory_case",
 ]
