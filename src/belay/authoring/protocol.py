@@ -41,6 +41,7 @@ from belay.verify.invariants import (
     RULE_NETWORK_EGRESS,
     RULE_READ_ONLY,
     _KNOWN_RULES,
+    scope_is_interpretable,
 )
 
 #: The named causes the protocol can produce. Infer-side rejection causes — never
@@ -51,6 +52,7 @@ AUTHOR_FAILED = "AUTHOR_FAILED"
 AUTHOR_OUTPUT_UNPARSEABLE = "AUTHOR_OUTPUT_UNPARSEABLE"
 UNKNOWN_RULE = "UNKNOWN_RULE"
 CANDIDATE_MALFORMED = "CANDIDATE_MALFORMED"
+SCOPE_UNINTERPRETABLE = "SCOPE_UNINTERPRETABLE"
 NO_AUTHOR_CONFIGURED = "NO_AUTHOR_CONFIGURED"
 
 #: Default timeout for one author invocation, in seconds. A timeout kills the author
@@ -69,6 +71,19 @@ REPO_FILE_CAP = 5000
 #: relative paths; the actual directory basename is a property of the caller's
 #: `--repo` resolution, not of this builder, so the root is a fixed, honest label.
 DEFAULT_REPO_ROOT = "repo"
+
+#: The scope shape the author must use, stated in the payload so ANY BYOK author is
+#: told it, not just the shipped reference. It is rule-dependent, because A1's match
+#: is: a delta rule takes a repo-relative path prefix (a directory prefix ends with
+#: `/`), the content rule a path segment (a trailing slash is normalised). A scope is
+#: a path, never a pattern.
+SCOPE_CONTRACT = (
+    "`scope` is a path, not a pattern. The delta rules (`read-only`, `no-create`, "
+    "`no-delete`) take a repo-relative path prefix; a directory prefix ends with `/` "
+    "(e.g. `tests/`, `src/`). The content rule `no-assertion-weakening` takes a path "
+    "segment (e.g. `tests`, `testing`); a trailing slash is normalised, so `tests/` "
+    "also works."
+)
 
 
 @dataclass(frozen=True)
@@ -91,9 +106,9 @@ class Rejection:
     """One candidate the parser refused, carrying what it could recover plus the cause.
 
     `scope`/`rule`/`rationale` are the attempted candidate's fields (each `None` when
-    the payload shape prevented recovering them); `cause` is one of `UNKNOWN_RULE` or
-    `CANDIDATE_MALFORMED`. The `--json` surface renders these so the operator can fix
-    the task spec or the author.
+    the payload shape prevented recovering them); `cause` is one of `UNKNOWN_RULE`,
+    `CANDIDATE_MALFORMED` or `SCOPE_UNINTERPRETABLE`. The `--json` surface renders these
+    so the operator can fix the task spec or the author.
     """
 
     scope: Optional[str] = None
@@ -175,7 +190,7 @@ def build_author_input(
     `None` omits the repo entirely, an empty list carries an empty inventory; `rules`
     is every `_KNOWN_RULES` member plus `network-egress`, each with a `grounding`
     string and a one-line `semantics`; `library` is every `LIBRARY` entry's name and
-    description.
+    description; `scope_contract` is the rule-dependent scope shape (`SCOPE_CONTRACT`).
 
     **D-7 by construction:** no argument here can carry a control trace, its path, or a
     manifest — the function has nothing to leak. The test still asserts on the
@@ -183,6 +198,7 @@ def build_author_input(
     """
     payload: dict = {
         "task": task_text,
+        "scope_contract": SCOPE_CONTRACT,
         "rules": [
             {
                 "rule": rule,
@@ -276,6 +292,13 @@ def _validate_candidate(item: object) -> Candidate | Rejection:
             rationale=rationale,
             cause=CANDIDATE_MALFORMED,
         )
+    if not scope_is_interpretable(scope):
+        return Rejection(
+            scope=scope,
+            rule=rule,
+            rationale=rationale,
+            cause=SCOPE_UNINTERPRETABLE,
+        )
     return Candidate(scope=scope, rule=rule, rationale=rationale)
 
 
@@ -332,11 +355,13 @@ __all__ = [
     "AUTHOR_OUTPUT_UNPARSEABLE",
     "UNKNOWN_RULE",
     "CANDIDATE_MALFORMED",
+    "SCOPE_UNINTERPRETABLE",
     "NO_AUTHOR_CONFIGURED",
     "AUTHOR_TIMEOUT",
     "MAX_AUTHOR_OUTPUT",
     "REPO_FILE_CAP",
     "DEFAULT_REPO_ROOT",
+    "SCOPE_CONTRACT",
     "Candidate",
     "Rejection",
     "AuthorResponse",

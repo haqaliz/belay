@@ -325,3 +325,17 @@ the Phase-2 gate (external self-hosters), and no number moves here.
 Sequencing: `artifact-trust` and `authoring-protocol` are the spine and can land in
 either order (the loader's schema is the interface both need); `reference-author`
 depends on the protocol; `corpus-fixtures` depends on the protocol + trust.
+## Follow-on — the scope-shape gap is fixed (2026-10-17)
+
+The finding recorded in `reference-author/live-run.md` (the model emitted `tests/**`,
+which A1 never expands, so every authored invariant silently PASSed over zero files)
+is fixed by the `authored-invariant-scope-shape` unit
+(`docs/planning/authored-invariant-scope-shape/`). The fix rejects rather than
+normalizes: an authored artifact's glob-scoped invariant is UNVERIFIED with
+`authored-invariant-scope-uninterpretable`, the author protocol rejects a glob
+candidate as `SCOPE_UNINTERPRETABLE`, and the reference author asks for a path
+prefix/segment. The operator `--invariants` list is byte-unchanged, the artifact
+schema and calibration digest are untouched, and the frozen live-run artifact is
+not rewritten — its old all-PASS was the defect symptom and now reads UNVERIFIED.
+The guard is glob-only: a non-glob dead scope (absolute path, wrong root, typo) is
+still out of scope. No published number moves.

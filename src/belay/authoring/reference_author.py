@@ -96,11 +96,16 @@ AUTHOR_INSTRUCTIONS = (
     "\n"
     "Reply with ONE JSON object and nothing else. No prose before or after it, no "
     "explanation, no markdown code fences (no ```), no more than one object:\n"
-    '{"candidates": [{"scope": "<path glob>", "rule": "<vocabulary rule>", '
+    '{"candidates": [{"scope": "<path prefix>", "rule": "<vocabulary rule>", '
     '"rationale": "<why this invariant catches this task\'s failure>"}]}\n'
     "\n"
-    "`scope` names the path set the rule protects; `rule` must be spelled exactly as a "
-    "vocabulary entry's name; `rationale` explains the proposal in one sentence."
+    "`scope` is a path, not a pattern, and its shape depends on the rule. The delta "
+    "rules (`read-only`, `no-create`, `no-delete`) take a repo-relative path prefix, "
+    "where a directory prefix ends with `/` (e.g. `tests/`, `src/`). The content rule "
+    "`no-assertion-weakening` takes a path segment (e.g. `tests`, `testing`); a "
+    "trailing slash is normalised, so `tests/` also works. `rule` must be spelled "
+    "exactly as a vocabulary entry's name; `rationale` explains the proposal in one "
+    "sentence."
 )
 
 

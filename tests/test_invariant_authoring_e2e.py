@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -54,6 +55,7 @@ from belay.snapshot.substrate import present_handle, take_snapshot
 from belay.trace import TraceWriter
 from belay.verify.invariants import (
     AUTHORED_INVARIANT_ALTERED,
+    AUTHORED_INVARIANT_SCOPE_UNINTERPRETABLE,
     AUTHORED_SCHEMA,
     Invariant,
     canonical_policy_digest,
@@ -224,6 +226,41 @@ def _infer_artifact(
     return out, control, manifests
 
 
+def _glob_artifact(tmp_path: Path, capsys) -> Path:
+    """A CALIBRATED artifact whose first invariant carries the reference author's glob.
+
+    The emitted artifact is the fixture: its first invariant is re-scoped from the
+    interpretable `tests/` to the measured `tests/**`, and the calibration digest is
+    recomputed over the edited policy set and the artifact's own task/control hashes —
+    so the artifact is well-formed, calibrated, and reaches the scope guard rather than
+    the artifact-level `ALTERED`/`UNCALIBRATED` causes.
+    """
+    artifact, _control, _manifests = _infer_artifact(tmp_path, capsys)
+    payload = json.loads(artifact.read_text(encoding="utf-8"))
+    payload["invariants"][0]["scope"] = "tests/**"
+    payload["calibration"]["digest"] = canonical_policy_digest(
+        invariants=[
+            Invariant(scope=os.fsencode(i["scope"]), rule=i["rule"])
+            for i in payload["invariants"]
+        ],
+        task_sha256=payload["task"]["sha256"],
+        control_sha256=payload["control"]["sha256"],
+    )
+    glob_artifact = tmp_path / "glob-policy.json"
+    glob_artifact.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    return glob_artifact
+
+
+def _verify_with(capsys, *, trace_path: Path, manifest_dir: Path,
+                 artifact: Path, server) -> tuple[int, dict]:
+    rc = cli.main(
+        ["verify", str(trace_path), "--manifest-dir", str(manifest_dir),
+         "--no-default-invariants", "--invariants", str(artifact),
+         "--json", "--server", *server]
+    )
+    return rc, json.loads(capsys.readouterr().out)
+
+
 def test_artifact_fails_each_corrupt_fixture_at_the_exact_turn_with_a2_pass(
     tmp_path, capsys
 ):
@@ -293,6 +330,47 @@ def test_artifact_fails_each_corrupt_fixture_at_the_exact_turn_with_a2_pass(
         by_key = {(s["axis"], s["kind"]): s for s in turn["sub_verdicts"]}
         for kind in ("replay", "effect"):
             assert by_key[("A2", kind)]["status"] == "PASS", by_key[("A2", kind)]
+
+
+def test_authored_glob_scope_verifies_unverified_through_the_cli(tmp_path, capsys):
+    """An authored `tests/**` scope is UNVERIFIED with the named cause, never a silent PASS.
+
+    The measured defect, enforced end-to-end through the real trust path: the artifact
+    is calibrated (its digest matches the glob-scoped policy), so the scope guard — not
+    an artifact-level trust cause — is what answers. A1 matches no path against a glob it
+    never expands, so the glob invariant abstains by name instead of PASSing over zero
+    files. Per-invariant: the same artifact's interpretable `no-create` invariant stays
+    trusted and PASSes this delta, and both A2 sub-verdicts stay PASS, so the turn's
+    UNVERIFIED is driven SOLELY by the uninterpretable scope.
+    """
+    glob_artifact = _glob_artifact(tmp_path, capsys)
+    trace_path, manifest_dir = _weakening_fixture(tmp_path)
+
+    rc, doc = _verify_with(
+        capsys, trace_path=trace_path, manifest_dir=manifest_dir,
+        artifact=glob_artifact, server=EDITOR_CMD,
+    )
+
+    assert rc == 1, doc
+    assert len(doc["turns"]) == 1, doc
+    turn = doc["turns"][0]
+    assert turn["ordinal"] == 0, turn
+    assert turn["status"] == "UNVERIFIED", turn
+
+    a1s = [
+        s for s in turn["sub_verdicts"]
+        if (s["axis"], s["kind"]) == ("A1", "invariant")
+    ]
+    assert len(a1s) == 2, a1s
+    glob_a1 = next(s for s in a1s if s.get("rule") == "no-assertion-weakening")
+    assert glob_a1["status"] == "UNVERIFIED", glob_a1
+    assert AUTHORED_INVARIANT_SCOPE_UNINTERPRETABLE in glob_a1["message"], glob_a1
+    prefix_a1 = next(s for s in a1s if s.get("rule") == "no-create")
+    assert prefix_a1["status"] == "PASS", prefix_a1
+
+    by_key = {(s["axis"], s["kind"]): s for s in turn["sub_verdicts"]}
+    for kind in ("replay", "effect"):
+        assert by_key[("A2", kind)]["status"] == "PASS", by_key[("A2", kind)]
 
 
 # --- layer 2: no over-fire on the control ---------------------------------------------

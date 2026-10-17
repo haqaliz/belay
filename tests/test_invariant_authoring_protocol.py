@@ -26,6 +26,7 @@ from belay.authoring.protocol import (
     AUTHOR_OUTPUT_UNPARSEABLE,
     CANDIDATE_MALFORMED,
     NO_AUTHOR_CONFIGURED,
+    SCOPE_UNINTERPRETABLE,
     UNKNOWN_RULE,
     Candidate,
     Rejection,
@@ -103,6 +104,23 @@ def test_build_author_input_library_entries():
     for name, entry in library.items():
         assert entry["name"] == name
         assert entry["description"] == LIBRARY[name].description
+
+
+def test_build_author_input_states_the_scope_contract():
+    """MH-5: every BYOK author is told the scope shape, not only the reference author.
+
+    The contract is rule-dependent — a delta rule takes a repo-relative path prefix (a
+    directory prefix ends with `/`), the content rule a path segment (a trailing slash
+    normalised) — and a scope is a path, never a pattern.
+    """
+    payload = build_author_input(task_text="t")
+    contract = payload["scope_contract"]
+    assert isinstance(contract, str) and contract
+    assert "repo-relative path prefix" in contract
+    assert "path segment" in contract
+    assert "`tests/`" in contract
+    assert "glob" not in contract.lower()
+    assert contract in json.dumps(payload, sort_keys=True)
 
 
 def test_build_author_input_serialized_payload_has_no_control_artifacts():
@@ -337,6 +355,48 @@ def test_parse_empty_scope_is_whole_tree():
         Candidate(scope="", rule="read-only", rationale=None)
     ]
     assert response.rejections == []
+
+
+def test_parse_glob_scope_is_rejected_scope_uninterpretable():
+    """A glob-shaped scope is refused BY NAME, recovering the attempted rule/scope.
+
+    A1 never expands a glob, so `tests/**` could never match a real path; rejecting it here
+    keeps a dead proposal out of the surviving candidates (and so out of an emitted
+    artifact), while the operator still sees exactly what the author proposed.
+    """
+    response = parse_author_response(
+        json.dumps({"candidates": [{"scope": "tests/**", "rule": "read-only"}]})
+    )
+    assert response.candidates == []
+    assert response.rejections == [
+        Rejection(
+            scope="tests/**",
+            rule="read-only",
+            rationale=None,
+            cause=SCOPE_UNINTERPRETABLE,
+        )
+    ]
+
+
+def test_parse_interpretable_scopes_remain_candidates():
+    """Plain prefixes, bare segments and the whole-tree empty scope are NOT globs."""
+    response = parse_author_response(
+        json.dumps(
+            {
+                "candidates": [
+                    {"scope": "tests/", "rule": "read-only"},
+                    {"scope": "tests", "rule": "no-assertion-weakening"},
+                    {"scope": "", "rule": "no-create"},
+                ]
+            }
+        )
+    )
+    assert response.rejections == []
+    assert response.candidates == [
+        Candidate(scope="tests", rule="no-assertion-weakening", rationale=None),
+        Candidate(scope="", rule="no-create", rationale=None),
+        Candidate(scope="tests/", rule="read-only", rationale=None),
+    ]
 
 
 def test_parse_non_str_rule_is_rejected():

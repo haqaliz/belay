@@ -48,6 +48,8 @@ from pathlib import Path
 
 import pytest
 
+from belay.verify.invariants import scope_is_interpretable
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEMO = REPO_ROOT / "demo"
 CAPTURE = DEMO / "capture"
@@ -110,15 +112,8 @@ def _task_text() -> str:
     return match.group(1)
 
 
-def test_reference_author_infers_and_the_capture_stays_clean(tmp_path: Path) -> None:
-    """Infer → artifact → verify the launch capture → no FAIL.
-
-    One real end-to-end run: `belay invariant infer` with the reference author as the
-    `--author`, calibrated against the committed clean capture, then `belay verify
-    --invariants <artifact>` on the same capture asserting **no FAIL** — the plan's
-    phase 3 in one assertion. Nothing here asserts a quality claim about the model's
-    invariants; it proves the path works at n=1.
-    """
+def _model() -> str:
+    """The owner-named full model id; absent or an alias is a readable refusal."""
     model = (os.environ.get(MODEL_ENV) or "").strip()
     assert model, (
         f"{MODEL_ENV} is unset — set it to a full model id (e.g. claude-opus-5) and run "
@@ -128,7 +123,15 @@ def test_reference_author_infers_and_the_capture_stays_clean(tmp_path: Path) -> 
     assert model not in ("opus", "sonnet", "haiku"), (
         f"{MODEL_ENV} must name a full model id, never an alias (got {model!r})"
     )
+    return model
 
+
+def _infer_live(tmp_path: Path, model: str) -> tuple[Path, dict]:
+    """Run the REAL `invariant infer` with the reference author; return (artifact, payload).
+
+    The control is the committed launch capture, and a model that produces nothing
+    calibratable is a recorded result (PRD R-g), never a hidden one.
+    """
     task_spec = tmp_path / "task.md"
     task_spec.write_text(_task_text(), encoding="utf-8")
     artifact = tmp_path / "invariants.json"
@@ -172,7 +175,20 @@ def test_reference_author_infers_and_the_capture_stays_clean(tmp_path: Path) -> 
         f"stderr:\n{infer.stderr}"
     )
     assert artifact.is_file(), "infer exited 0 but emitted no artifact"
-    emitted = json.loads(artifact.read_text(encoding="utf-8"))
+    return artifact, json.loads(artifact.read_text(encoding="utf-8"))
+
+
+def test_reference_author_infers_and_the_capture_stays_clean(tmp_path: Path) -> None:
+    """Infer → artifact → verify the launch capture → no FAIL.
+
+    One real end-to-end run: `belay invariant infer` with the reference author as the
+    `--author`, calibrated against the committed clean capture, then `belay verify
+    --invariants <artifact>` on the same capture asserting **no FAIL** — the plan's
+    phase 3 in one assertion. Nothing here asserts a quality claim about the model's
+    invariants; it proves the path works at n=1.
+    """
+    model = _model()
+    artifact, emitted = _infer_live(tmp_path, model)
     assert emitted.get("invariants") or emitted.get("candidates"), (
         "the artifact carries no invariants — that is the R-g recorded result, not a pass"
     )
@@ -206,3 +222,27 @@ def test_reference_author_infers_and_the_capture_stays_clean(tmp_path: Path) -> 
     assert report["aggregate"]["FAIL"] == 0, report["aggregate"]
     trajectory = report.get("trajectory")
     assert trajectory is None or trajectory.get("status") != "FAIL", trajectory
+
+
+def test_reference_author_emits_only_interpretable_scopes(tmp_path: Path) -> None:
+    """Every scope on the live artifact is interpretable — A1 can actually match it.
+
+    The measured defect this pins shut: the first live run emitted `tests/**`, which A1
+    never expands, so every invariant PASSed over zero files. The artifact's scopes are
+    asserted through the shared predicate the authored loader uses (`scope_is_interpretable`)
+    rather than against a hard-coded shape, so this is the contract and not one example.
+    A model-driven run is `manual`-marked by the module `pytestmark`; CI proves the
+    offline path in `test_invariant_authoring_e2e.py`, never this.
+    """
+    artifact, emitted = _infer_live(tmp_path, _model())
+    assert artifact.is_file()
+    invariants = emitted.get("invariants") or []
+    assert invariants, (
+        "the artifact carries no invariants — that is the R-g recorded result, not a pass"
+    )
+    scopes = [inv["scope"] for inv in invariants]
+    uninterpretable = [s for s in scopes if not scope_is_interpretable(s)]
+    assert not uninterpretable, (
+        "the reference author emitted a scope A1 can never match (dead teeth): "
+        f"{uninterpretable!r}"
+    )
