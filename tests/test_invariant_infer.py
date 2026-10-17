@@ -56,6 +56,7 @@ from belay.authoring.protocol import (
     AUTHOR_FAILED,
     AUTHOR_OUTPUT_UNPARSEABLE,
     NO_AUTHOR_CONFIGURED,
+    SCOPE_UNINTERPRETABLE,
     UNKNOWN_RULE,
 )
 from belay.replay.persist import persist_snapshot
@@ -501,6 +502,55 @@ def test_empty_candidate_list_is_no_surviving_candidates(tmp_path):
     assert result.ok is False
     assert result.cause == NO_SURVIVING_CANDIDATES
     assert not out.exists()
+
+
+# ---------------------------------------------------------------------------
+# Criterion 3b — a glob scope is dropped before it can become a dead artifact
+# ---------------------------------------------------------------------------
+
+
+def test_only_glob_scopes_is_no_surviving_candidates(tmp_path):
+    """An author proposing ONLY glob scopes writes NO artifact; the cause is operator-visible.
+
+    This is the end of the defect the frozen live-run artifact embodies: `tests/**` can never
+    match, so it must not reach a survivor. `NO_SURVIVING_CANDIDATES` is the existing outcome
+    (no new exit path), and the rejection carries `SCOPE_UNINTERPRETABLE` so `--json` names
+    the fix (S4).
+    """
+    control, manifests = _control(tmp_path, name="glob1")
+    out = tmp_path / "policy.json"
+    result = _run(
+        tmp_path, control=control, manifest_dir=manifests, out=out,
+        runner=_FakeRunner(_author_stdout(
+            {"scope": "tests/**", "rule": "read-only", "rationale": "dead teeth"},
+        )),
+    )
+    assert result.ok is False
+    assert result.cause == NO_SURVIVING_CANDIDATES
+    assert result.rejections[0]["cause"] == SCOPE_UNINTERPRETABLE
+    assert result.rejections[0]["scope"] == "tests/**"
+    assert result.rejections[0]["rule"] == "read-only"
+    assert not out.exists()
+
+
+def test_glob_scope_is_dropped_and_the_prefix_candidate_still_survives(tmp_path, monkeypatch):
+    """A mixed proposal keeps only the interpretable scope; the glob never reaches the artifact."""
+    control, manifests = _control(tmp_path, name="glob2")
+    out = tmp_path / "policy.json"
+    _spy(monkeypatch)
+    result = _run(
+        tmp_path, control=control, manifest_dir=manifests, out=out,
+        runner=_FakeRunner(_author_stdout(
+            {"scope": "tests/**", "rule": "read-only", "rationale": "glob"},
+            {"scope": "tests/", "rule": "read-only", "rationale": "prefix"},
+        )),
+    )
+    assert result.ok is True, result
+    assert [r["cause"] for r in result.rejections] == [SCOPE_UNINTERPRETABLE]
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert payload["invariants"] == [
+        {"scope": "tests/", "rule": "read-only", "rationale": "prefix"}
+    ]
 
 
 # ---------------------------------------------------------------------------
