@@ -72,6 +72,19 @@ REPO_FILE_CAP = 5000
 #: `--repo` resolution, not of this builder, so the root is a fixed, honest label.
 DEFAULT_REPO_ROOT = "repo"
 
+#: The scope shape the author must use, stated in the payload so ANY BYOK author is
+#: told it, not just the shipped reference. It is rule-dependent, because A1's match
+#: is: a delta rule takes a repo-relative path prefix (a directory prefix ends with
+#: `/`), the content rule a path segment (a trailing slash is normalised). A scope is
+#: a path, never a pattern.
+SCOPE_CONTRACT = (
+    "`scope` is a path, not a pattern. The delta rules (`read-only`, `no-create`, "
+    "`no-delete`) take a repo-relative path prefix; a directory prefix ends with `/` "
+    "(e.g. `tests/`, `src/`). The content rule `no-assertion-weakening` takes a path "
+    "segment (e.g. `tests`, `testing`); a trailing slash is normalised, so `tests/` "
+    "also works."
+)
+
 
 @dataclass(frozen=True)
 class Candidate:
@@ -177,7 +190,7 @@ def build_author_input(
     `None` omits the repo entirely, an empty list carries an empty inventory; `rules`
     is every `_KNOWN_RULES` member plus `network-egress`, each with a `grounding`
     string and a one-line `semantics`; `library` is every `LIBRARY` entry's name and
-    description.
+    description; `scope_contract` is the rule-dependent scope shape (`SCOPE_CONTRACT`).
 
     **D-7 by construction:** no argument here can carry a control trace, its path, or a
     manifest — the function has nothing to leak. The test still asserts on the
@@ -185,6 +198,7 @@ def build_author_input(
     """
     payload: dict = {
         "task": task_text,
+        "scope_contract": SCOPE_CONTRACT,
         "rules": [
             {
                 "rule": rule,
@@ -347,6 +361,7 @@ __all__ = [
     "MAX_AUTHOR_OUTPUT",
     "REPO_FILE_CAP",
     "DEFAULT_REPO_ROOT",
+    "SCOPE_CONTRACT",
     "Candidate",
     "Rejection",
     "AuthorResponse",

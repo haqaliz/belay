@@ -106,6 +106,23 @@ def test_build_author_input_library_entries():
         assert entry["description"] == LIBRARY[name].description
 
 
+def test_build_author_input_states_the_scope_contract():
+    """MH-5: every BYOK author is told the scope shape, not only the reference author.
+
+    The contract is rule-dependent — a delta rule takes a repo-relative path prefix (a
+    directory prefix ends with `/`), the content rule a path segment (a trailing slash
+    normalised) — and a scope is a path, never a pattern.
+    """
+    payload = build_author_input(task_text="t")
+    contract = payload["scope_contract"]
+    assert isinstance(contract, str) and contract
+    assert "repo-relative path prefix" in contract
+    assert "path segment" in contract
+    assert "`tests/`" in contract
+    assert "glob" not in contract.lower()
+    assert contract in json.dumps(payload, sort_keys=True)
+
+
 def test_build_author_input_serialized_payload_has_no_control_artifacts():
     payload = build_author_input(
         task_text="make the failing test pass",
