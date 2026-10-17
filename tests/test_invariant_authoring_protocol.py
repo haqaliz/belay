@@ -26,6 +26,7 @@ from belay.authoring.protocol import (
     AUTHOR_OUTPUT_UNPARSEABLE,
     CANDIDATE_MALFORMED,
     NO_AUTHOR_CONFIGURED,
+    SCOPE_UNINTERPRETABLE,
     UNKNOWN_RULE,
     Candidate,
     Rejection,
@@ -337,6 +338,48 @@ def test_parse_empty_scope_is_whole_tree():
         Candidate(scope="", rule="read-only", rationale=None)
     ]
     assert response.rejections == []
+
+
+def test_parse_glob_scope_is_rejected_scope_uninterpretable():
+    """A glob-shaped scope is refused BY NAME, recovering the attempted rule/scope.
+
+    A1 never expands a glob, so `tests/**` could never match a real path; rejecting it here
+    keeps a dead proposal out of the surviving candidates (and so out of an emitted
+    artifact), while the operator still sees exactly what the author proposed.
+    """
+    response = parse_author_response(
+        json.dumps({"candidates": [{"scope": "tests/**", "rule": "read-only"}]})
+    )
+    assert response.candidates == []
+    assert response.rejections == [
+        Rejection(
+            scope="tests/**",
+            rule="read-only",
+            rationale=None,
+            cause=SCOPE_UNINTERPRETABLE,
+        )
+    ]
+
+
+def test_parse_interpretable_scopes_remain_candidates():
+    """Plain prefixes, bare segments and the whole-tree empty scope are NOT globs."""
+    response = parse_author_response(
+        json.dumps(
+            {
+                "candidates": [
+                    {"scope": "tests/", "rule": "read-only"},
+                    {"scope": "tests", "rule": "no-assertion-weakening"},
+                    {"scope": "", "rule": "no-create"},
+                ]
+            }
+        )
+    )
+    assert response.rejections == []
+    assert response.candidates == [
+        Candidate(scope="tests", rule="no-assertion-weakening", rationale=None),
+        Candidate(scope="", rule="no-create", rationale=None),
+        Candidate(scope="tests/", rule="read-only", rationale=None),
+    ]
 
 
 def test_parse_non_str_rule_is_rejected():

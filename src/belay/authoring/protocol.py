@@ -41,6 +41,7 @@ from belay.verify.invariants import (
     RULE_NETWORK_EGRESS,
     RULE_READ_ONLY,
     _KNOWN_RULES,
+    scope_is_interpretable,
 )
 
 #: The named causes the protocol can produce. Infer-side rejection causes — never
@@ -51,6 +52,7 @@ AUTHOR_FAILED = "AUTHOR_FAILED"
 AUTHOR_OUTPUT_UNPARSEABLE = "AUTHOR_OUTPUT_UNPARSEABLE"
 UNKNOWN_RULE = "UNKNOWN_RULE"
 CANDIDATE_MALFORMED = "CANDIDATE_MALFORMED"
+SCOPE_UNINTERPRETABLE = "SCOPE_UNINTERPRETABLE"
 NO_AUTHOR_CONFIGURED = "NO_AUTHOR_CONFIGURED"
 
 #: Default timeout for one author invocation, in seconds. A timeout kills the author
@@ -91,9 +93,9 @@ class Rejection:
     """One candidate the parser refused, carrying what it could recover plus the cause.
 
     `scope`/`rule`/`rationale` are the attempted candidate's fields (each `None` when
-    the payload shape prevented recovering them); `cause` is one of `UNKNOWN_RULE` or
-    `CANDIDATE_MALFORMED`. The `--json` surface renders these so the operator can fix
-    the task spec or the author.
+    the payload shape prevented recovering them); `cause` is one of `UNKNOWN_RULE`,
+    `CANDIDATE_MALFORMED` or `SCOPE_UNINTERPRETABLE`. The `--json` surface renders these
+    so the operator can fix the task spec or the author.
     """
 
     scope: Optional[str] = None
@@ -276,6 +278,13 @@ def _validate_candidate(item: object) -> Candidate | Rejection:
             rationale=rationale,
             cause=CANDIDATE_MALFORMED,
         )
+    if not scope_is_interpretable(scope):
+        return Rejection(
+            scope=scope,
+            rule=rule,
+            rationale=rationale,
+            cause=SCOPE_UNINTERPRETABLE,
+        )
     return Candidate(scope=scope, rule=rule, rationale=rationale)
 
 
@@ -332,6 +341,7 @@ __all__ = [
     "AUTHOR_OUTPUT_UNPARSEABLE",
     "UNKNOWN_RULE",
     "CANDIDATE_MALFORMED",
+    "SCOPE_UNINTERPRETABLE",
     "NO_AUTHOR_CONFIGURED",
     "AUTHOR_TIMEOUT",
     "MAX_AUTHOR_OUTPUT",
