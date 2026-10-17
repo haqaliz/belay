@@ -324,6 +324,14 @@ def test_build_prompt_instructs_and_carries_the_payload_as_data():
     assert "scope" in prompt and "rule" in prompt and "rationale" in prompt
     assert "ONE JSON object" in prompt
 
+    # The scope SHAPE is taught, per rule class, and the word "glob" is gone: A1
+    # matches a raw path prefix (delta rules) or a path segment (the content rule),
+    # never a pattern.
+    assert "path prefix" in prompt
+    assert "repo-relative" in prompt
+    assert "path segment" in prompt
+    assert "glob" not in prompt.lower()
+
     # The protocol payload is serialized as DATA — deterministic, verbatim — so the
     # model sees exactly the task text, vocabulary and library the operator granted.
     payload_json = json.dumps(PAYLOAD, indent=2, sort_keys=True)
