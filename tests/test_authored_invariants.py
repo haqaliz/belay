@@ -34,6 +34,7 @@ import pytest
 from belay.snapshot.bth1 import FieldDiff
 from belay.verify.invariants import (
     AUTHORED_INVARIANT_ALTERED,
+    AUTHORED_INVARIANT_SCOPE_UNINTERPRETABLE,
     AUTHORED_INVARIANT_UNCALIBRATED,
     AUTHORED_SCHEMA,
     Invariant,
@@ -89,6 +90,11 @@ def _write(tmp_path: Path, payload: object) -> Path:
 def _touch(*paths: bytes) -> list[FieldDiff]:
     """A non-empty BTH-1 delta: a content mutation at each of `paths` (raw bytes)."""
     return [FieldDiff(path=p, field="content", left=b"old", right=b"new") for p in paths]
+
+
+def _created(*paths: bytes) -> list[FieldDiff]:
+    """A BTH-1 delta where each `path` APPEARS (a creation: absent on the left)."""
+    return [FieldDiff(path=p, field=None, left=None, right=b"new") for p in paths]
 
 
 # --- Criterion 1: a calibrated artifact enforces like operator policy ----------
@@ -336,6 +342,53 @@ def test_altered_invariant_evaluates_unverified_with_altered_cause() -> None:
     assert verdict.status is Status.UNVERIFIED
     assert verdict.expected["cause"] == AUTHORED_INVARIANT_ALTERED
     assert AUTHORED_INVARIANT_ALTERED in verdict.message
+
+
+# --- Criterion 9: a glob scope is uninterpretable, never a silent PASS ----------
+
+
+def test_authored_glob_scope_is_uninterpretable_and_per_invariant() -> None:
+    """A glob scope parses but its invariant is UNVERIFIED, never a silent PASS (S1/S2).
+
+    Per-invariant, not all-or-nothing: the valid prefix-scoped invariant in the SAME
+    artifact stays trusted and enforces — it FAILs a creation under its byte-prefix scope —
+    which proves the digest still validated (a scope normalization would have made BOTH
+    read `AUTHORED_INVARIANT_ALTERED`, R-D). The glob invariant is never PASS and never
+    FAIL: the existing untrusted short-circuit abstains with the named cause on every turn.
+    """
+    payload = _artifact(
+        [
+            {
+                "scope": "tests/**",
+                "rule": "read-only",
+                "rationale": "the glob the reference author emitted",
+            },
+            {"scope": "tests/", "rule": "no-create", "rationale": "no new tests"},
+        ]
+    )
+    glob_inv, prefix_inv = parse_authored_invariants(payload)
+
+    assert glob_inv.untrusted_cause == AUTHORED_INVARIANT_SCOPE_UNINTERPRETABLE
+    assert prefix_inv.untrusted_cause is None
+
+    delta = _created(b"tests/test_auth.py")
+
+    glob_verdict = evaluate_invariant(glob_inv, delta, turn_index=0)
+    assert glob_verdict.status is Status.UNVERIFIED
+    assert glob_verdict.expected["cause"] == AUTHORED_INVARIANT_SCOPE_UNINTERPRETABLE
+    assert AUTHORED_INVARIANT_SCOPE_UNINTERPRETABLE in glob_verdict.message
+
+    prefix_verdict = evaluate_invariant(prefix_inv, delta, turn_index=0)
+    assert prefix_verdict.status is Status.FAIL
+
+
+def test_uncalibrated_artifact_takes_precedence_over_a_glob_scope() -> None:
+    """An artifact-level cause wins: uncalibrated + glob scope -> UNCALIBRATED (S2)."""
+    payload = _artifact([{"scope": "tests/**", "rule": "read-only"}], calibrated=False)
+
+    (inv,) = parse_authored_invariants(payload)
+
+    assert inv.untrusted_cause == AUTHORED_INVARIANT_UNCALIBRATED
 
 
 # --- Criterion 8: canonical_policy_digest determinism ---------------------------

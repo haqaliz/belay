@@ -375,7 +375,13 @@ def parse_authored_invariants(payload: Mapping[str, Any]) -> list[Invariant]:
       parsed invariants and the recorded hashes, else every invariant is untrusted with
       `AUTHORED_INVARIANT_ALTERED` (the policy set was edited after calibration);
     - otherwise `untrusted_cause=None` and the invariants enforce exactly like operator
-      policy.
+      policy;
+    - every scope must be INTERPRETABLE (`scope_is_interpretable`): an authored glob-shaped
+      scope (`tests/**`) is tagged per-invariant with
+      `AUTHORED_INVARIANT_SCOPE_UNINTERPRETABLE` — UNVERIFIED on every turn, never silently
+      PASSing over zero files. The scope BYTES are never mutated, so the digest above is
+      computed over the artifact exactly as written and D1's normalization hazard cannot
+      open. Artifact-level `UNCALIBRATED`/`ALTERED` causes take precedence.
     `evaluate_invariant` refuses to enforce any invariant with `untrusted_cause` set.
     """
     schema = payload.get("schema")
@@ -422,11 +428,13 @@ def parse_authored_invariants(payload: Mapping[str, Any]) -> list[Invariant]:
         if calibration["digest"] != recomputed:
             untrusted_cause = AUTHORED_INVARIANT_ALTERED
 
-    if untrusted_cause is not None:
-        invariants = [
-            replace(inv, untrusted_cause=untrusted_cause) for inv in invariants
-        ]
-    return invariants
+    out: list[Invariant] = []
+    for inv in invariants:
+        cause = untrusted_cause
+        if cause is None and not scope_is_interpretable(os.fsdecode(inv.scope)):
+            cause = AUTHORED_INVARIANT_SCOPE_UNINTERPRETABLE
+        out.append(inv if cause is None else replace(inv, untrusted_cause=cause))
+    return out
 
 
 @dataclass(frozen=True)

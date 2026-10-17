@@ -227,3 +227,19 @@ def test_empty_list_is_valid_and_yields_no_invariants(tmp_path: Path) -> None:
     path = _write(tmp_path, json.dumps([]))
 
     assert load_invariants(path) == []
+
+
+def test_operator_list_glob_scope_is_byte_unchanged(tmp_path: Path) -> None:
+    """The operator `--invariants` path is untouched: a glob scope loads trusted (S5/D2).
+
+    The scope-shape guard lives in `parse_authored_invariants` (the authored entry point),
+    never in the shared `_parse_invariant`. An operator JSON LIST is hand-written, TRUSTED
+    policy and stays byte-unchanged — a `tests/**` scope loads exactly as today, decoded to
+    raw bytes with `untrusted_cause` unset.
+    """
+    path = _write(tmp_path, json.dumps([{"scope": "tests/**", "rule": "read-only"}]))
+
+    (inv,) = load_invariants(path)
+
+    assert inv == Invariant(scope=b"tests/**", rule="read-only")
+    assert inv.untrusted_cause is None
