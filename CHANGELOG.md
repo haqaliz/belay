@@ -5,6 +5,33 @@ All notable changes to Belay are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0 — until then,
 `0.x` minor bumps may include changes that would be breaking under strict semver.
 
+## [0.42.0] - 2026-10-17
+
+**An authored invariant scope is a path prefix, never a glob (PR #49).** `belay invariant
+infer` shipped a reference author whose prompt asked for a `<path glob>` while A1 matches a
+scope as a raw byte-prefix (delta rules) or a path-segment run (the content rule), so
+`tests/**` matched no real path: the invariant silently PASSed over zero files and calibration
+could not see it (a clean control PASSes trivially). Measured, not hypothesized: the frozen
+live-run artifact carries four `tests/**` invariants whose sub-verdicts PASS with
+`files_compared: 0`.
+
+- **The authored seams refuse a glob by name.** `parse_authored_invariants` tags a glob-scoped
+  invariant `authored-invariant-scope-uninterpretable` -- UNVERIFIED on every turn, never PASS,
+  never a fabricated FAIL; the scope bytes are never mutated, so the policy digest is
+  unaffected and artifact-level `authored-invariant-uncalibrated`/`-altered` causes still take
+  precedence. The author protocol rejects a glob as `SCOPE_UNINTERPRETABLE`; an all-glob
+  proposal yields `NO_SURVIVING_CANDIDATES`. Rejected, never normalized: normalizing would
+  guess which paths the author meant and could over-scope (a fabricated FAIL) or under-scope
+  (dead teeth again).
+- **The author is told the shape.** The reference author asks for a path prefix (per rule
+  class) and the author payload carries the same contract, so any BYOK author is told.
+- **Honesty lines.** Authored artifacts only -- the operator `--invariants` path is
+  byte-unchanged. The guard is glob-only: a non-glob dead scope (absolute path, wrong root,
+  typo) is out of scope. The frozen `reference-author/live-run` artifact is not rewritten; its
+  old all-PASS was the symptom and now reads UNVERIFIED. No published number moves
+  (`11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16`, `recall 0.00`, `3/93` stand unedited),
+  and no A1 evaluation-semantics change.
+
 ## [0.41.0] - 2026-10-10
 
 **R-D answered by measurement (PR #48): the A3 claim author completes inside the engine's
