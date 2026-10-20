@@ -399,7 +399,8 @@ _NETWORK_UNOBSERVABLE = (
 
 
 def _openworld_verdict(ann: TurnAnnotation) -> Verdict:
-    """The network-dimension Verdict for one turn's `openWorldHint` — ALWAYS `NOT_COVERED`.
+    """The network-dimension Verdict for one turn's `openWorldHint` — `NOT_COVERED`, with one
+    exception: a stale contract abstains (see the `PRODUCER_STALE_SNAPSHOT` branch below).
 
     It NEVER emits PASS (we verified nothing about the network) and NEVER a fabricated FAIL
     (we observed no violation): a grounded network FAIL would require reliably identifying an
@@ -419,8 +420,12 @@ def _openworld_verdict(ann: TurnAnnotation) -> Verdict:
     (none) is the same whatever the tool said, so giving the same non-observation two
     different status names purely on the strength of the tool's own declaration would be
     incoherent — and it would let a server's self-declared hint change Belay's *coverage*,
-    which is a property of Belay, not of the server. The declaration still shows up where it
-    belongs: in the MESSAGE (see below) and in `network_subverdict`'s decision to fold or not.
+    which is a property of Belay, not of the server. The one state that is NOT a coverage
+    boundary is a contract a `list_changed` retracted before the call: there the promise is
+    unknown rather than absent, so the verdict abstains (UNVERIFIED) and names the
+    notification instead of claiming nothing was promised. The declaration still shows up
+    where it belongs: in the MESSAGE (see below) and in `network_subverdict`'s decision to
+    fold or not.
 
     **The declared-false vs not-declared distinction survives in the message**, which is the
     direct answer to the counter-argument this change builds over. A reader must still be able
@@ -431,6 +436,19 @@ def _openworld_verdict(ann: TurnAnnotation) -> Verdict:
     """
     state = ann.openworld["state"]
     contract = {"openWorldHint": ann.openworld}
+
+    # A retracted contract is the one state that is not a coverage boundary: a promise
+    # existed and was withdrawn, so nobody knows the network posture either. Abstain and
+    # name the notification, rather than asserting "nothing was promised".
+    if ann.producer == PRODUCER_STALE_SNAPSHOT:
+        return Verdict(
+            _AXIS, _KIND_NETWORK, Status.UNVERIFIED,
+            observed=None, expected=contract,
+            message=(
+                f"openWorldHint conformance UNVERIFIED: {ann.cause}; a retracted contract "
+                f"cannot be read for the network either — never PASS, never a fabricated FAIL"
+            ),
+        )
 
     if state == DECLARED_FALSE:
         detail = (
@@ -462,7 +480,7 @@ def _openworld_verdict(ann: TurnAnnotation) -> Verdict:
 
 
 def render_openworld_verdict(records: Sequence[dict], n: int) -> Verdict:
-    """The Nth turn's network-dimension verdict — always `NOT_COVERED`. See `_openworld_verdict`.
+    """The Nth turn's network-dimension verdict — `NOT_COVERED` unless the contract is stale.
 
     The standalone surface: it returns a Verdict for EVERY `openWorldHint` state (including
     not-declared and the permissive declared-true), which is the crisp "we never emit a
