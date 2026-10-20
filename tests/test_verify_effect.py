@@ -39,6 +39,7 @@ from fixtures.annotation_frames import (
 from belay.snapshot.bth1 import FieldDiff
 from belay.verify import effect as effect_module
 from belay.verify.effect import (
+    PRODUCER_STALE_SNAPSHOT,
     annotation_for_turn,
     render_effect_verdict,
     verify_effect,
@@ -232,6 +233,78 @@ def test_correlation_picks_the_snapshot_in_force_not_a_later_one(tmp_path):
 
     # And the verdict that rides on it: declared-true + mutation -> FAIL. The naive
     # latest-snapshot reading would see declared-false here and PASS.
+    verdict = render_effect_verdict(records, 0, _mutation("written.txt"))
+    assert verdict.status is Status.FAIL, verdict
+
+
+# --- 5b. The stale-contract gate: list_changed before the call -----------------
+
+
+def test_a_list_changed_before_the_call_abstains_never_fail(tmp_path):
+    """`read_file` declared `readOnlyHint: true`, then the server announced
+    `notifications/tools/list_changed` BEFORE the call, and nothing re-listed.
+
+    Under MCP that retracts the snapshot until the client re-lists, so nobody knows the
+    contract the call ran under. Scoring the old declared-true against the observed
+    mutation would be a grounded FAIL against a contract the server already withdrew —
+    the false verdict this gate exists to refuse. UNVERIFIED, with the notification named.
+    """
+    records = trace_of(
+        tmp_path,
+        LISTING + [("s2c", NOTIFICATION_LIST_CHANGED), ("c2s", _call(3, "read_file"))],
+    )
+    notification_seq = [r["seq"] for r in records if r.get("kind") == "frame"][2]
+
+    ann = annotation_for_turn(records, 0)
+    assert ann.producer == PRODUCER_STALE_SNAPSHOT, ann
+    assert ann.readonly["state"] == "not-declared", ann
+    assert ann.openworld["state"] == "not-declared", ann
+    assert str(notification_seq) in ann.cause, ann.cause
+
+    verdict = render_effect_verdict(records, 0, _mutation("written.txt"))
+    assert verdict.status is Status.UNVERIFIED, verdict
+    assert verdict.status is not Status.FAIL, verdict
+    assert verdict.status is not Status.PASS, verdict
+    assert verdict.axis == "A2" and verdict.kind == "effect", verdict
+
+
+def test_a_stale_contract_is_never_a_coverage_boundary(tmp_path):
+    """The producer is NOT `server-declared-nothing`: the server DID declare a contract and
+    then withdrew it, so this is an abstention about the run, never `NOT_COVERED`."""
+    records = trace_of(
+        tmp_path,
+        LISTING + [("s2c", NOTIFICATION_LIST_CHANGED), ("c2s", _call(3, "mystery"))],
+    )
+
+    verdict = render_effect_verdict(records, 0, [])
+
+    assert verdict.status is Status.UNVERIFIED, verdict
+    assert verdict.status is not Status.NOT_COVERED, verdict
+
+
+def test_a_resnapshot_after_list_changed_clears_the_gate(tmp_path):
+    """`list_changed` -> `tools/list` -> call: the re-list answers the change, so the new
+    snapshot IS the contract in force and the call is scored normally (declared-true +
+    mutation -> FAIL). The gate must read the snapshot's own seq, not the trace's history."""
+    records = trace_of(
+        tmp_path,
+        LISTING
+        + [
+            ("s2c", NOTIFICATION_LIST_CHANGED),
+            ("c2s", TOOLS_LIST_REQUEST_AGAIN),
+            (
+                "s2c",
+                b'{"jsonrpc":"2.0","id":4,"result":{"tools":['
+                b'{"name":"read_file","annotations":{"readOnlyHint":true}}]}}',
+            ),
+            ("c2s", _call(5, "read_file")),
+        ],
+    )
+
+    ann = annotation_for_turn(records, 0)
+    assert ann.producer != PRODUCER_STALE_SNAPSHOT, ann
+    assert ann.readonly["state"] == "declared-true", ann
+
     verdict = render_effect_verdict(records, 0, _mutation("written.txt"))
     assert verdict.status is Status.FAIL, verdict
 
