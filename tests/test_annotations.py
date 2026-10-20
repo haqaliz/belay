@@ -28,10 +28,21 @@ from fixtures.annotation_frames import (
     TOOLS_LIST_RESPONSE_CHANGED,
 )
 
-from belay.annotations import ANNOTATIONS, derive_annotations
+from belay.annotations import ANNOTATIONS, contract_invalidated, derive_annotations
 from belay.index import derive_correlation
 
 LISTING = [("c2s", TOOLS_LIST_REQUEST), ("s2c", TOOLS_LIST_RESPONSE)]
+
+
+def _call(msg_id: int, name: str) -> bytes:
+    return json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": msg_id,
+            "method": "tools/call",
+            "params": {"name": name, "arguments": {}},
+        }
+    ).encode()
 
 
 def snapshots(records: list[dict]) -> list[dict]:
@@ -270,3 +281,70 @@ def test_the_real_fixture_declares_nothing_end_to_end(tmp_path):
     echo = tool(snapshot, "echo")
     assert echo["annotations_object"] == "absent"
     assert echo["annotations"]["readOnlyHint"]["state"] == "not-declared"
+
+
+# --- the per-call window: a list_changed BETWEEN the snapshot and the call -------
+
+
+def frames(records: list[dict]) -> list[dict]:
+    """The wire records only — the trace also holds connection windows."""
+    return [r for r in records if r.get("kind") == "frame"]
+
+
+def test_contract_invalidated_names_the_notification_in_the_window(tmp_path):
+    """The notification the contract in force no longer survives: snapshot < it < call."""
+    records = trace_of(
+        tmp_path,
+        LISTING
+        + [("s2c", NOTIFICATION_LIST_CHANGED), ("c2s", _call(3, "read_file"))],
+    )
+    (snapshot,) = snapshots(records)
+    _, _, notification, call = frames(records)
+
+    assert contract_invalidated(
+        records, snapshot["source_seq"], call["seq"]
+    ) == notification["seq"]
+
+
+def test_a_notification_after_the_call_is_not_in_the_window(tmp_path):
+    """A re-list announced AFTER the call cannot make that call stale — the contract it
+    ran under was still in force when it ran."""
+    records = trace_of(
+        tmp_path,
+        LISTING
+        + [("c2s", _call(3, "read_file")), ("s2c", NOTIFICATION_LIST_CHANGED)],
+    )
+    (snapshot,) = snapshots(records)
+    _, _, call, _notification = frames(records)
+
+    assert contract_invalidated(records, snapshot["source_seq"], call["seq"]) is None
+
+
+def test_a_notification_before_the_snapshot_is_not_in_the_window(tmp_path):
+    """The snapshot was taken after the announcement, so it describes the post-change
+    contract: nothing is stale for a call that follows it."""
+    records = trace_of(
+        tmp_path,
+        [("s2c", NOTIFICATION_LIST_CHANGED)]
+        + LISTING
+        + [("c2s", _call(3, "read_file"))],
+    )
+    (snapshot,) = snapshots(records)
+    _notification, _, _, call = frames(records)
+
+    assert contract_invalidated(records, snapshot["source_seq"], call["seq"]) is None
+
+
+def test_an_unreadable_frame_in_the_window_invents_no_staleness(tmp_path):
+    """A frame we could not read is not an observed `list_changed`. Claiming one would
+    be the fabrication this layer exists to refuse."""
+    records = trace_of(
+        tmp_path,
+        LISTING
+        + [("s2c", b'{"jsonrpc":"2.0","method":"notifications/tools/list_changed"')]
+        + [("c2s", _call(3, "read_file"))],
+    )
+    (snapshot,) = snapshots(records)
+    _, _, _unreadable, call = frames(records)
+
+    assert contract_invalidated(records, snapshot["source_seq"], call["seq"]) is None
