@@ -35,10 +35,12 @@ from __future__ import annotations
 import json
 
 from conftest import trace_of
+from fixtures.annotation_frames import NOTIFICATION_LIST_CHANGED
 
 from belay.replay.engine import EQUAL, REPLAYED, TurnReplay
 from belay.verify import turn as turn_module
 from belay.verify.effect import (
+    PRODUCER_STALE_SNAPSHOT,
     annotation_for_turn,
     network_subverdict,
     render_effect_verdict,
@@ -269,6 +271,7 @@ def test_declared_true_openworld_adds_no_network_sub_verdict(tmp_path):
 # --- 4. The tri-state is read for openWorldHint too ------------------------------
 
 
+
 def test_annotation_for_turn_reads_the_openworld_tristate(tmp_path):
     """`annotation_for_turn` correlates openWorldHint the same way it correlates
     readOnlyHint — off the snapshot in force at the call's request_seq."""
@@ -277,3 +280,33 @@ def test_annotation_for_turn_reads_the_openworld_tristate(tmp_path):
     ann = annotation_for_turn(records, 0)
 
     assert ann.openworld["state"] == "declared-false", ann
+
+
+# --- 5. A retracted contract abstains here too, for the same cause ----------------
+
+
+def test_a_stale_contract_abstains_the_openworld_dimension(tmp_path):
+    """`phone_home` declared `openWorldHint: false`, then `list_changed` before the call.
+
+    The network dimension reads the SAME `TurnAnnotation` as the filesystem one, so it must
+    react to the retraction too: it is `not-declared` (nobody knows the contract), and the
+    verdict abstains naming the notification. `NOT_COVERED` would say "nothing was promised",
+    which is false — a promise existed and was withdrawn.
+    """
+    records = trace_of(
+        tmp_path,
+        _listing(_CLOSED)
+        + [("s2c", NOTIFICATION_LIST_CHANGED), ("c2s", _call(3, "phone_home"))],
+    )
+
+    ann = annotation_for_turn(records, 0)
+    assert ann.producer == PRODUCER_STALE_SNAPSHOT, ann
+    assert ann.openworld["state"] == "not-declared", ann
+
+    verdict = render_openworld_verdict(records, 0)
+    assert verdict.status is Status.UNVERIFIED, verdict
+    assert verdict.status is not Status.PASS, verdict
+    assert verdict.status is not Status.FAIL, verdict
+    assert verdict.status is not Status.NOT_COVERED, verdict
+    assert verdict.axis == "A2" and verdict.kind == _NETWORK_KIND, verdict
+    assert ann.cause and ann.cause in verdict.message, verdict.message
