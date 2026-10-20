@@ -83,7 +83,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Optional, Sequence
 
-from belay.annotations import contract_in_force, derive_annotations
+from belay.annotations import contract_in_force, contract_invalidated, derive_annotations
 from belay.declared import (
     DECLARED_FALSE,
     DECLARED_NON_BOOLEAN,
@@ -154,6 +154,7 @@ Producer = Literal[
     "tool-absent",
     "tool-ambiguous",
     "server-declared-nothing",
+    "stale-snapshot",
 ]
 
 PRODUCER_UNNAMED: Producer = "unnamed"
@@ -172,6 +173,10 @@ PRODUCER_TOOL_AMBIGUOUS: Producer = "tool-ambiguous"
 #: The one producer that is not a failed attempt: a complete observation of a server that
 #: promised nothing.
 PRODUCER_SERVER_DECLARED_NOTHING: Producer = "server-declared-nothing"
+#: v — a snapshot WAS observed and a `notifications/tools/list_changed` between it and the
+#: call retracted it, with no re-list before the call. The contract the call ran under is
+#: unknown: not absent, not stale-by-choice, and never a licence to score the old one.
+PRODUCER_STALE_SNAPSHOT: Producer = "stale-snapshot"
 
 
 @dataclass(frozen=True)
@@ -291,6 +296,28 @@ def annotation_for_turn(records: Sequence[dict], n: int) -> TurnAnnotation:
         )
 
     snapshot = live[-1]
+    # A `list_changed` strictly between the oldest snapshot in force and the call retracted
+    # it: under MCP the tools are unknown again until the client re-lists. Scoring the old
+    # declaration against the observed effect would be a FAIL (or PASS) against a contract
+    # the server already withdrew. The window starts at the OLDEST twin's seq so a composite
+    # broadcast is invalidated as one contract, and stops at the call so a change announced
+    # afterwards cannot reach back (test_correlation_picks_the_snapshot_in_force_not_a_later_one).
+    invalidated = contract_invalidated(
+        records, min(s["source_seq"] for s in live), request_seq
+    )
+    if invalidated is not None:
+        return TurnAnnotation(
+            tool=name,
+            readonly=declared_state(None, False),
+            snapshot_seq=snapshot["source_seq"],
+            cause=(
+                f"a notifications/tools/list_changed (seq {invalidated}) retracted the "
+                "tools/list snapshot before this call and no later tools/list response was "
+                "captured, so the contract in force when the call ran is unknown"
+            ),
+            producer=PRODUCER_STALE_SNAPSHOT,
+        )
+
     found = [(s, t) for s in live for t in s["tools"] if t["name"] == name]
     if len({json.dumps(t, sort_keys=True) for _, t in found}) > 1:
         return TurnAnnotation(
@@ -719,6 +746,7 @@ def verify_effect(
 __all__ = [
     "PRODUCER_NO_SNAPSHOT",
     "PRODUCER_SERVER_DECLARED_NOTHING",
+    "PRODUCER_STALE_SNAPSHOT",
     "PRODUCER_TOOL_ABSENT",
     "PRODUCER_TOOL_AMBIGUOUS",
     "PRODUCER_UNNAMED",
