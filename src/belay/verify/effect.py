@@ -25,6 +25,12 @@ The rule, over the turn's `readOnlyHint` state and the replay's `delta`:
     not-declared, CONTRACT NOT OBSERVED     -> UNVERIFIED (we tried to read one and could not)
     declared-non-boolean                    -> UNVERIFIED (no readable contract)
 
+A `notifications/tools/list_changed` between the snapshot in force and the call retracts
+that contract until the client re-lists: `annotation_for_turn` reports it not-declared with
+`producer="stale-snapshot"`, so the turn abstains (UNVERIFIED) instead of FAILing against a
+declaration the server already announced may be gone. Only a change strictly inside
+`(snapshot_seq, request_seq)` counts — one after the call never reaches back.
+
 **This replaces the flat rule this table stated until 2026-09-20 —** *"`not-declared` ->
 UNVERIFIED (no contract to check against)"* **— which collapsed four structurally different
 facts into one status.** Three of them are genuine abstentions: no `tools/list` was captured
@@ -133,8 +139,8 @@ _HINT = "readOnlyHint"
 _HINT_OPENWORLD = "openWorldHint"
 
 
-#: WHICH return site of `annotation_for_turn` built this annotation. Four of the five arrive
-#: at the same not-declared fall-through carrying four different claims, and the fall-through
+#: WHICH return site of `annotation_for_turn` built this annotation. Every named producer can
+#: arrive at the same not-declared fall-through carrying a different claim, and the fall-through
 #: must tell them apart to decide between an abstention and a coverage boundary.
 #:
 #: Plain strings rather than an `Enum`: this module is stdlib-only by contract, the values are
@@ -239,8 +245,10 @@ def annotation_for_turn(records: Sequence[dict], n: int) -> TurnAnnotation:
     Picks the turn by `method == "tools/call"` (index `n`), reads its tool name, and
     correlates it against the MOST RECENT snapshot whose `source_seq` precedes the call's
     `request_seq` — together with that snapshot's broadcast twins, when a composite
-    transport split one `tools/list` across servers (`annotations.contract_in_force`). A missing snapshot, an absent tool, or an unreadable request all yield
-    a not-declared contract WITH a named cause — never a manufactured default.
+    transport split one `tools/list` across servers (`annotations.contract_in_force`). A missing
+    snapshot, an absent tool, an unreadable request, or a `list_changed` that retracted the
+    snapshot before the call all yield a not-declared contract WITH a named cause — never a
+    manufactured default.
 
     **Every return site names its `producer` explicitly**, including the one that needs no
     `cause`. Downstream, `render_effect_verdict` decides between an abstention and a coverage
