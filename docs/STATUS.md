@@ -24,7 +24,9 @@
 > standing screenshot prohibition survives verbatim. Tests drive a local
 > `ThreadingHTTPServer` on 127.0.0.1 — never the internet. **Honesty lines:** the posted
 > bytes carry the coverage line and UNVERIFIED-never-PASS exactly as the fixture does; a
-> failed POST never changes a verdict. **Suite:** SUITE_COUNTS. See
+> failed POST never changes a verdict. **Suite:** **2933 → 2949** (+16: 7 transport,
+> 9 CLI/help) tests passing at this branch's head (25 named-cause skips, 16 deselected,
+> unchanged); the docs unit adds zero tests. See
 > `docs/planning/live-otlp-export/`; the flag-parity guard needs no new row (both flags
 > are `interop export`-only, verified).
 
