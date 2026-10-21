@@ -32,6 +32,9 @@ from __future__ import annotations
 import copy
 import json
 import os
+import socket
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -41,13 +44,16 @@ from fixtures.connection_frames import TRACE_CONTEXT_META
 from belay.interop.attach import (
     AMBIGUOUS_CORRELATION,
     NO_MATCHING_MCP_TURN,
+    CorrelatedSpan,
     correlate_and_attach,
 )
 from belay.interop.export import (
     VERDICT_ATTRIBUTE_PREFIX,
     VERDICT_EVENT_NAME,
+    ExportError,
     build_enriched_document,
     dumps,
+    post_document,
 )
 from belay.interop.otlp import Span, parse_otlp
 from belay.verify.turn import TurnVerdict
@@ -458,6 +464,162 @@ def test_ac6_exported_document_is_byte_identical_to_the_pinned_fixture(tmp_path)
     `exported_ok.json` — any deliberate contract change shows as a fixture diff,
     never a silent test edit (mirrors `verify --json`'s pinned machine contract)."""
     assert dumps(_canonical_export(tmp_path)) == EXPORTED_OK.read_text(encoding="utf-8")
+
+
+# --- Task 1 (#54): the opt-in transport — the only network code in this module ------
+
+
+class _CollectorHandler(BaseHTTPRequestHandler):
+    """One POST recorder + responder; the collector instance is pinned per test."""
+
+    collector: "_Collector"
+
+    def do_POST(self) -> None:
+        length = int(self.headers.get("Content-Length", 0))
+        self.collector.requests.append(
+            {
+                "path": self.path,
+                "headers": dict(self.headers.items()),
+                "body": self.rfile.read(length),
+            }
+        )
+        self.send_response(self.collector.status)
+        self.end_headers()
+
+    def log_message(self, *args) -> None:  # keep the test output clean
+        pass
+
+
+class _Collector:
+    """A local ThreadingHTTPServer collector: records every POST, answers `status`."""
+
+    def __init__(self, status: int = 200) -> None:
+        self.status = status
+        self.requests: list[dict] = []
+        _CollectorHandler.collector = self
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), _CollectorHandler)
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self.url = f"http://127.0.0.1:{self._server.server_address[1]}/v1/traces"
+
+    def __enter__(self) -> "_Collector":
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self._server.shutdown()
+        self._thread.join(timeout=5)
+        self._server.server_close()
+
+
+def _header(request: dict, name: str) -> str | None:
+    """A received header value, looked up case-insensitively (HTTP names are)."""
+    return next((v for k, v in request["headers"].items() if k.lower() == name.lower()), None)
+
+
+def _unused_local_url() -> str:
+    """A 127.0.0.1 URL with nothing listening: bind, read the port, close."""
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    return f"http://127.0.0.1:{port}/v1/traces"
+
+
+def test_post_document_posts_the_exact_dumps_bytes_with_the_json_content_type():
+    """AC1: the collector receives exactly `dumps(document)`, as `application/json`."""
+    doc = _doc([_otlp_span(TRACE_ID, SPAN_ID)])
+
+    with _Collector() as collector:
+        assert post_document(collector.url, doc) is None
+
+    [request] = collector.requests
+    assert request["path"] == "/v1/traces"
+    assert request["body"] == dumps(doc).encode("utf-8")
+    assert _header(request, "Content-Type") == "application/json"
+
+
+def test_post_document_headers_arrive_verbatim():
+    """AC7: every `--otlp-header` pair reaches the collector with its value intact."""
+    doc = _doc([_otlp_span(TRACE_ID, SPAN_ID)])
+    headers = [("x-api-key", "secret-value"), ("Authorization", "Bearer abc=123")]
+
+    with _Collector() as collector:
+        post_document(collector.url, doc, headers)
+
+    [request] = collector.requests
+    assert _header(request, "x-api-key") == "secret-value"
+    assert _header(request, "Authorization") == "Bearer abc=123"
+
+
+def test_post_document_does_not_mutate_the_document():
+    """The transport serializes; it never edits the builder's output."""
+    doc = _doc([_otlp_span(TRACE_ID, SPAN_ID)])
+    before = copy.deepcopy(doc)
+
+    with _Collector() as collector:
+        post_document(collector.url, doc)
+
+    assert doc == before
+
+
+def test_post_document_500_raises_export_error_naming_the_url_and_status():
+    """AC3: a non-2xx is a named failure — never a silent success."""
+    doc = _doc([_otlp_span(TRACE_ID, SPAN_ID)])
+
+    with _Collector(status=500) as collector:
+        with pytest.raises(ExportError) as exc:
+            post_document(collector.url, doc)
+
+    message = str(exc.value)
+    assert collector.url in message
+    assert "500" in message
+
+
+def test_post_document_connection_refused_raises_export_error():
+    """AC4: nothing listening is a named failure, not a traceback."""
+    url = _unused_local_url()
+
+    with pytest.raises(ExportError) as exc:
+        post_document(url, _doc([_otlp_span(TRACE_ID, SPAN_ID)]))
+
+    assert url in str(exc.value)
+
+
+def test_post_document_unreadable_url_raises_export_error():
+    """AC4: an unreadable URL is a named failure too."""
+    with pytest.raises(ExportError) as exc:
+        post_document("not-a-url", _doc([_otlp_span(TRACE_ID, SPAN_ID)]))
+
+    assert "not-a-url" in str(exc.value)
+
+
+def test_posted_body_keeps_the_coverage_attribute():
+    """AC8: a verdict-bearing span's coverage line survives the wire — `[]` present.
+
+    No collector-side re-export, no special casing: the posted bytes parse back with
+    `parse_otlp` and carry the coverage attribute the builder wrote.
+    """
+    doc = _doc([_otlp_span(TRACE_ID, SPAN_ID)])
+    [span] = parse_otlp(json.dumps(doc))
+    verdict = TurnVerdict(
+        turn_index=0, tool_name="echo", status=Status.PASS,
+        sub_verdicts=[
+            Verdict("A2", "result", Status.PASS, observed="ok", expected="ok",
+                    message="the reply reproduced"),
+        ],
+        cause=None,
+    )
+    enriched = build_enriched_document(
+        doc, [span],
+        [CorrelatedSpan(span_id=SPAN_ID, turn_index=0, verdict=verdict, cause=None)],
+    )
+
+    with _Collector() as collector:
+        post_document(collector.url, enriched)
+
+    [request] = collector.requests
+    assert request["body"] == dumps(enriched).encode("utf-8")
+    [posted] = parse_otlp(request["body"].decode("utf-8"))
+    assert posted.attributes[f"{VERDICT_ATTRIBUTE_PREFIX}.coverage"] == "[]"
 
 
 @pytest.mark.manual
