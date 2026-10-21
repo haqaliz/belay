@@ -1,7 +1,7 @@
 """Aspect `ledger-command` — the `belay triage-ledger` command contract, RED-first.
 
-The command is a PURE RE-RENDER: it reads ONE stored `belay verify --json`
-document (schema 1) and renders the C10 calibration measurement — the reliability
+The command is a PURE RE-RENDER: it reads one or more stored `belay verify --json`
+documents (schema 1) and renders the C10 calibration measurement — the reliability
 curve (confidence deciles vs the observed violation rate), the ECE, and the
 decision-relevant sweep (at each candidate threshold, how many true violations
 would have been skipped and how much budget saved). No replay, no re-verification,
@@ -9,6 +9,11 @@ no clock read — the same document must re-render byte-identically, and a docum
 built by the REAL CLI (the demo capture verified with a stub triage author in
 shadow mode) must render its honest denominator: 7 turns, 7 decided, 0 excluded,
 0 violations.
+
+Several documents merge in argument order: rows are concatenated in that order
+(so the top-N tie-break follows argv), the four counts are summed, and the header
+reads `"N documents"` — no paths. One document renders byte-identically to the
+single-document contract below.
 
 The honesty contract the tests pin:
 
@@ -42,6 +47,7 @@ import json
 import shlex
 import sys
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
@@ -555,3 +561,279 @@ def test_parity_json_row_declares_triage_ledger() -> None:
 
     assert "triage-ledger" in EXPECTED["--json"], EXPECTED["--json"]
     assert "triage-ledger" in _surfaces_carrying("--json"), _surfaces_carrying("--json")
+
+
+# --- (8) THE MERGE: many ledgers become one, in input order ---------------------------
+
+
+def _ledger(rows, turns_total, unverified=0, skipped=0, unscored=0, trace="t.jsonl"):
+    """A `Ledger` built directly — the merge is a pure function over them."""
+    from belay.verify.triage_ledger import Ledger
+
+    return Ledger(
+        trace=trace,
+        rows=tuple(rows),
+        turns_total=turns_total,
+        excluded_unverified=unverified,
+        excluded_skipped=skipped,
+        excluded_unscored=unscored,
+    )
+
+
+def test_merge_two_ledgers_sums_counts_and_concatenates_rows_in_order() -> None:
+    """Two ledgers -> the four counts summed, the decided rows concatenated in
+    input order, and a header that says how many documents there were — no paths."""
+    from belay.verify.calibration import LedgerRow
+    from belay.verify.triage_ledger import merge_ledgers
+
+    first = _ledger(
+        [LedgerRow(0, 0.2, 0.25, True), LedgerRow(1, 0.8, 0.75, False)],
+        turns_total=4,
+        unverified=1,
+        skipped=1,
+        trace="a.jsonl",
+    )
+    second = _ledger(
+        [LedgerRow(0, 0.4, 0.5, True)],
+        turns_total=2,
+        unverified=0,
+        skipped=0,
+        unscored=1,
+        trace="b.jsonl",
+    )
+
+    merged = merge_ledgers([first, second])
+
+    assert [(row.ordinal, row.violated) for row in merged.rows] == [
+        (0, True),
+        (1, False),
+        (0, True),
+    ]
+    assert merged.turns_total == 6
+    assert merged.turns_decided == 3
+    assert merged.excluded_unverified == 1
+    assert merged.excluded_skipped == 1
+    assert merged.excluded_unscored == 1
+    assert merged.trace == "2 documents"
+
+
+def test_merge_one_ledger_is_itself() -> None:
+    """A single-document merge changes nothing — the header stays the document's
+    own trace, the single-document byte contract's precondition."""
+    from belay.verify.calibration import LedgerRow
+    from belay.verify.triage_ledger import merge_ledgers
+
+    only = _ledger([LedgerRow(0, 0.5, 0.5, True)], turns_total=2, unverified=1)
+
+    assert merge_ledgers([only]) == only
+
+
+def test_merge_no_documents_is_a_named_error() -> None:
+    """Total, never partial: an empty sequence is a named `ValueError`, not an
+    `IndexError` (unreachable through the CLI's `nargs="+"`)."""
+    from belay.verify.triage_ledger import merge_ledgers
+
+    with pytest.raises(ValueError, match="no documents to merge"):
+        merge_ledgers([])
+
+
+# --- (9) MANY DOCUMENTS: one invocation, summed, in argument order -------------------
+
+
+def _aggregation_document(
+    trace: str,
+    statuses: list[str],
+    scores: list[float],
+    confidences: Optional[list[float]] = None,
+) -> dict:
+    """A minimal verify document whose decided rows are pinned by the test:
+    `statuses[i]` is turn i's verdict, `scores[i]`/`confidences[i]` its triage
+    inputs (confidence defaults to 0.5)."""
+    if confidences is None:
+        confidences = [0.5] * len(scores)
+    return {
+        "schema": 1,
+        "trace": trace,
+        "turns": [
+            {"ordinal": i, "tool": "edit", "status": status, "cause": None,
+             "sub_verdicts": []}
+            for i, status in enumerate(statuses)
+        ],
+        "triage": {
+            "mode": "shadow",
+            "skipped": 0,
+            "scores": [
+                {"ordinal": i, "score": score, "confidence": confidences[i]}
+                for i, score in enumerate(scores)
+            ],
+        },
+    }
+
+
+def _write_document(tmp_path, name: str, doc: dict) -> Path:
+    path = tmp_path / name
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    return path
+
+
+def test_two_documents_sum_the_counts_and_measure_the_merged_rows(tmp_path) -> None:
+    """Two distinct documents -> one ledger: `turns_total`/decided/exclusions
+    summed, violation rate and ECE over the merged rows, header `2 documents`."""
+    first = _write_document(
+        tmp_path,
+        "a.json",
+        _aggregation_document(
+            "a.jsonl", ["FAIL", "PASS", "UNVERIFIED"], [0.2, 0.8, 0.5], [0.25, 0.75, 0.5]
+        ),
+    )
+    second = _write_document(
+        tmp_path,
+        "b.json",
+        _aggregation_document("b.jsonl", ["FAIL", "PASS"], [0.4, 0.6], [0.5, 0.5]),
+    )
+
+    rc, text = _run_cli(["triage-ledger", str(first), str(second)])
+
+    assert rc == 0, text
+    assert text.startswith("belay triage ledger: 2 documents\n"), text
+    assert "turns: 5 total, 4 decided, 1 excluded (1 UNVERIFIED, 0 skipped)" in text, text
+    assert "violations: 2/4 = 50.0%" in text, text
+    assert "ece: 0.375" in text, text
+
+    rc, out = _run_cli(["triage-ledger", "--json", str(first), str(second)])
+    assert rc == 0, out
+    parsed = json.loads(out)
+    assert parsed["trace"] == "2 documents"
+    assert parsed["turns_total"] == 5
+    assert parsed["turns_decided"] == 4
+    assert parsed["excluded"] == {"unverified": 1, "skipped": 0, "unscored": 0}
+    assert parsed["violations"] == 2
+    assert parsed["violation_rate"] == 0.5
+    assert parsed["ece"] == 0.375
+
+
+def test_top_n_tie_break_follows_argument_order(tmp_path) -> None:
+    """Rows are concatenated in argv order, so a top-N tie is broken by argument
+    order: the two documents carry the same score, one failing and one clean."""
+    failing = _write_document(
+        tmp_path, "failing.json", _aggregation_document("f.jsonl", ["FAIL"], [0.5])
+    )
+    clean = _write_document(
+        tmp_path, "clean.json", _aggregation_document("c.jsonl", ["PASS"], [0.5])
+    )
+
+    rc, text = _run_cli(["triage-ledger", str(failing), str(clean)])
+    assert rc == 0, text
+    assert "  1: skipped 1/2 (50.0%), violations skipped 1" in text, text
+
+    rc, text = _run_cli(["triage-ledger", str(clean), str(failing)])
+    assert rc == 0, text
+    assert "  1: skipped 1/2 (50.0%), violations skipped 0" in text, text
+
+
+def test_duplicate_document_is_refused_by_name(tmp_path, monkeypatch) -> None:
+    """The same document by two spellings is one document: refused by name, exit
+    2, never double-counted into the denominator."""
+    doc_path = _write_document(
+        tmp_path, "verify.json", _aggregation_document("t.jsonl", ["PASS"], [0.5])
+    )
+    monkeypatch.chdir(tmp_path)
+
+    rc, text = _run_cli(["triage-ledger", "verify.json", str(doc_path)])
+
+    assert rc == 2, text
+    assert "duplicate verify document" in text, text
+    assert str(doc_path.resolve()) in text, text
+    assert "violations:" not in text, text
+
+
+def test_corrupt_document_among_two_names_that_path_and_renders_nothing(tmp_path) -> None:
+    """Fail closed, never partial: one malformed document refuses the whole
+    invocation, naming it, with no rates on stdout."""
+    good = _write_document(
+        tmp_path, "good.json", _aggregation_document("g.jsonl", ["PASS"], [0.5])
+    )
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not json", encoding="utf-8")
+
+    rc, text = _run_cli(["triage-ledger", str(good), str(bad)])
+
+    assert rc == 2, text
+    assert f"could not read verify document {bad.resolve()}" in text, text
+    assert "violations:" not in text, text
+
+
+def test_corrupt_triage_section_among_two_names_that_path(tmp_path) -> None:
+    """A document that parses but is internally corrupt names its own path — an
+    aggregation can never quietly contribute zero rows."""
+    good = _write_document(
+        tmp_path, "good.json", _aggregation_document("g.jsonl", ["PASS"], [0.5])
+    )
+    corrupt_doc = _aggregation_document("c.jsonl", ["FAIL"], [0.5])
+    corrupt_doc["triage"]["scores"].append(
+        {"ordinal": 99, "score": 0.5, "confidence": 0.5}
+    )
+    corrupt = _write_document(tmp_path, "corrupt.json", corrupt_doc)
+
+    rc, text = _run_cli(["triage-ledger", str(good), str(corrupt)])
+
+    assert rc == 2, text
+    assert str(corrupt.resolve()) in text, text
+    assert "matches no turn record" in text, text
+
+
+@pytest.mark.parametrize("payload", ["[1, 2, 3]", '"a string"', "null"])
+def test_non_object_json_exits_2_named_single_document(tmp_path, payload) -> None:
+    """A top-level JSON value that is not an object is a named error, exit 2 —
+    never an `AttributeError` traceback."""
+    doc_path = tmp_path / "verify.json"
+    doc_path.write_text(payload, encoding="utf-8")
+
+    rc, text = _run_cli(["triage-ledger", str(doc_path)])
+
+    assert rc == 2, text
+    assert "must be a JSON object" in text, text
+    assert "Traceback" not in text, text
+
+
+def test_non_object_json_exits_2_named_among_many(tmp_path) -> None:
+    """The same refusal when the bad document is one of several: the whole
+    invocation refuses and names the path."""
+    good = _write_document(
+        tmp_path, "good.json", _aggregation_document("g.jsonl", ["PASS"], [0.5])
+    )
+    bad = tmp_path / "array.json"
+    bad.write_text("[1, 2, 3]", encoding="utf-8")
+
+    rc, text = _run_cli(["triage-ledger", str(good), str(bad)])
+
+    assert rc == 2, text
+    assert str(bad.resolve()) in text, text
+    assert "must be a JSON object" in text, text
+
+
+def test_all_unverified_across_documents_refuses_rates_over_the_summed_counts(
+    tmp_path,
+) -> None:
+    """Zero decided rows across every document keeps the named refusal (exit 0)
+    over the SUMMED counts — a measurement refused, never a fabricated 0%."""
+    first = _all_unverified_document()
+    second = _all_unverified_document()
+    second["trace"] = "mint/s7.jsonl"
+    first_path = _write_document(tmp_path, "a.json", first)
+    second_path = _write_document(tmp_path, "b.json", second)
+
+    rc, text = _run_cli(["triage-ledger", str(first_path), str(second_path)])
+
+    assert rc == 0, text
+    assert "NO_DECIDED_ROWS" in text, text
+    assert "14 turns, 0 decided, 14 excluded (14 UNVERIFIED, 0 skipped)" in text, text
+    assert "violations:" not in text, text
+
+    rc, out = _run_cli(["triage-ledger", "--json", str(first_path), str(second_path)])
+    assert rc == 0, out
+    parsed = json.loads(out)
+    assert parsed["trace"] == "2 documents"
+    assert parsed["turns_total"] == 14
+    assert parsed["excluded"] == {"unverified": 14, "skipped": 0, "unscored": 0}
+    assert "violation_rate" not in parsed, out

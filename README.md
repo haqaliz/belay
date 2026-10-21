@@ -120,7 +120,7 @@ Both are decided by **re-execution and diffing. No model is consulted** — enfo
 
 **Triage is an optional, BYOK replay-budget, off by default.** `belay verify --triage-author CMD` (or `BELAY_TRIAGE_AUTHOR`) names a LOCAL command that reads whitelisted derived features per turn and answers a suspicion score — `--triage-threshold FLOAT` replays every turn at or above it, `--triage-top-n INT` the N highest-score turns, `--no-triage` turns it off entirely. A cheap model (or any script) can order the replay queue, but **it never emits a verdict**: a turn the budget skipped is `UNVERIFIED` with the named cause `skipped by the triage budget` — never PASS, never WARN, and not replayed. No knobs given is shadow mode: everything replays and the scores are recorded alongside. A broken triage command never shrinks the replay budget.
 
-**The calibration ledger measures whether the triage model's confidence actually predicts violations.** `belay triage-ledger <verify.json>` re-renders a stored `belay verify --json` document as the reliability curve, ECE, and the decision-relevant sweep (at each threshold, violations-skipped × budget-saved) — a **pure re-render: no replay, no re-verification**. The violation column is the per-turn reduced FAIL (UNVERIFIED and budget-skipped turns excluded, their counts stated); a zero-denominator document renders the named `NO_DECIDED_ROWS` refusal with no rates. It never decides the budget — it informs the operator who sets the knobs.
+**The calibration ledger measures whether the triage model's confidence actually predicts violations.** `belay triage-ledger <verify.json> [<verify.json> ...]` re-renders one or more stored `belay verify --json` documents — merged **in argument order** (rows concatenated, counts summed; more than one document and the header reads `N documents`) — as the reliability curve, ECE, and the decision-relevant sweep (at each threshold, violations-skipped × budget-saved). A **pure re-render: no replay, no re-verification**; a single document is byte-identical to the pre-aggregation render. The violation column is the per-turn reduced FAIL (UNVERIFIED and budget-skipped turns excluded, their counts stated); a column with zero decided rows across all documents renders the named `NO_DECIDED_ROWS` refusal with no rates, and any missing, malformed or corrupt document — or the same document passed twice — refuses the whole invocation (exit 2, naming the path). It never decides the budget — it informs the operator who sets the knobs.
 
 #### The invariant library: named presets, no JSON
 
@@ -334,6 +334,9 @@ belay verify ./traces/<run>.jsonl --manifest-dir ./traces.manifests --server my-
 
 ```bash
 belay triage-ledger verify.json
+# or a whole run set — merged in the order given (the shell's glob order is the
+# documented order); the same path twice is refused, never double-counted:
+belay triage-ledger runs/*.json
 ```
 
 The ledger pairs each score and confidence with the re-executed verdict. It renders a reliability curve, ECE, and for each candidate threshold or top-N, **how many real violations it would have skipped against how much replay it would have saved**. Only then set a budget:

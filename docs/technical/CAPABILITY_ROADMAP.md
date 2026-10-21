@@ -951,12 +951,14 @@ exactly the named turns; fail-open (timeout / non-zero exit / malformed reply �
 replay); bounded subprocess (60 s timeout, 1 MiB stdout cap); flag-parity guard
 registration.
 
-**Eval data captured:** the calibration ledger itself — `belay triage-ledger <verify.json>`
-re-renders ONE stored `belay verify --json` document as the measurement (reliability
+**Eval data captured:** the calibration ledger itself — `belay triage-ledger <verify.json>
+[<verify.json> ...]` — re-renders one or more stored `belay verify --json` documents,
+merged **in argument order** (rows concatenated, counts summed; one document is the
+single-document render byte for byte), as the measurement (reliability
 curve, ECE, threshold and top-N sweeps; UNVERIFIED and budget-skipped turns excluded
 with their counts stated; a zero-denominator column renders the named `NO_DECIDED_ROWS`
 refusal with no rates — the R6 false-zero defense). It is a **pure re-render**: no
-replay, no re-verification — the same document re-renders byte-identically, `--json`
+replay, no re-verification — the same argv re-renders byte-identically, `--json`
 included. It measures **prediction of violations on the turns actually replayed**
 (calibrated ≠ caused), never decides the budget: it informs the operator who sets the
 knobs. Real volume arrives with the mint's second run; until then the denominator is
@@ -967,12 +969,16 @@ stated and small n is never a base rate.
 2026-09-21):** the verify surface above, end-to-end. **As built (slice 2, aspects
 `section-extension` + `calibration-math` + `ledger-command`, 2026-09-22):** skipped
 turns' scores in the budgeted triage section (`"skipped": true`, shadow byte-unchanged),
-the stdlib calibration math, and the `belay triage-ledger` command. **Not built, by
-name (slice 2+):** multi-document aggregation (one document per invocation; a
-directory-level aggregate ledger is a follow-on), budget auto-tuning (the ledger earns a
-tighter budget by human decision on this measurement, never by itself), other reference
-authors (laya etc. — provider-neutrality is proven by a stub, not a second vendor
-integration), budget knobs on other surfaces, the live Jev REST contract pin
+the stdlib calibration math, and the `belay triage-ledger` command. **As built (slice 3,
+aspect `aggregation`, 2026-10-21, issue #52):** N documents per invocation, merged in
+argument order, with duplicate/corrupt input refused whole (exit 2, named) and the
+single-document render byte-identical — **no published number moves** (`11/60 = 18.3%`,
+`precision 0.00`, `1/15`, `4/16`, `recall 0.00`, `3/93` stand unedited). **Not built, by
+name (slice 3+):** budget
+auto-tuning (the ledger earns a tighter budget by human decision on this measurement,
+never by itself), directory input (the shell's glob is the documented input), other
+reference authors (laya etc. — provider-neutrality is proven by a stub, not a second
+vendor integration), budget knobs on other surfaces, the live Jev REST contract pin
 (owner-supplied before the manual live test runs). The mint's second run (the owner's
 S-1 decision) supplies the ledger's real volume.
 
@@ -1014,4 +1020,4 @@ built.
 | C7 | Live console | Wk 5–6 | 1 | No — the launch surface |
 | C8 | Claim re-derivation (A3) | Wk 7 | 1 | **Yes — cut first** · ✅ **SHIPPED** (PR #28, v0.27.0; the A3 WARN vocabulary is empty in v0 and the evaluator's caller-supplied-workspace short-circuit is a follow-on) |
 | C9 | Observability interop | Wk 8 | 1 | ✅ **SHIPPED** (ingest+correlate+attach + export-back fixture-collector round-trip; live-collector export deferred) |
-| C10 | Calibrated triage seam (BYOK, optional) | Wk 9+ | 1 | ✅ **SHIPPED** (slice 1: verify surface — shadow mode + threshold/top-N, UNVERIFIED-by-budget, additive `triage` section; slice 2: the calibration ledger — `belay triage-ledger`, the pure re-render of the measurement; aggregation + budget auto-tuning deferred by name; the mint's second run supplies volume) |
+| C10 | Calibrated triage seam (BYOK, optional) | Wk 9+ | 1 | ✅ **SHIPPED** (slice 1: verify surface — shadow mode + threshold/top-N, UNVERIFIED-by-budget, additive `triage` section; slice 2: the calibration ledger — `belay triage-ledger`, the pure re-render of the measurement; slice 3: N-document aggregation in argument order, single document byte-identical; budget auto-tuning deferred by name; the mint's second run supplies volume) |

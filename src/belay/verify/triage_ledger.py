@@ -1,12 +1,19 @@
 """Aspect `ledger-command` — the pure re-render of the calibration measurement.
 
-`belay triage-ledger <verify-json>` turns ONE stored `belay verify --json`
-document into the C10 calibration ledger: the per-turn triage scores paired with
-the execution-grounded reduced verdict, then the reliability curve (confidence
-deciles vs the observed violation rate), the ECE, and the decision-relevant sweep
-— at each candidate threshold, how many true violations would have been skipped
-and how much of the replay budget saved. A PURE RE-RENDER: no replay, no
-re-verification, no clock read — the same document re-renders byte-identically.
+`belay triage-ledger <verify-json> [<verify-json> ...]` turns one or more stored
+`belay verify --json` documents into the C10 calibration ledger: the per-turn
+triage scores paired with the execution-grounded reduced verdict, then the
+reliability curve (confidence deciles vs the observed violation rate), the ECE,
+and the decision-relevant sweep — at each candidate threshold, how many true
+violations would have been skipped and how much of the replay budget saved. A
+PURE RE-RENDER: no replay, no re-verification, no clock read — the same document
+re-renders byte-identically.
+
+Several documents merge in ARGUMENT ORDER (`merge_ledgers`): rows concatenated in
+that order, the four counts summed, so the only order-sensitive consumer — the
+top-N tie-break — follows argv. One document is byte-identical to the
+single-document render (its own `trace` header); N > 1 reads `"N documents"` and
+never carries a path.
 
 ## The mapping (the honesty contract, stated here once)
 
@@ -103,8 +110,13 @@ def rows_from_document(doc: dict) -> Ledger:
     budget skipped them, so there is nothing to calibrate against); turns with no
     score row -> absent (counted as unscored). Raises `NoTriageSectionError` when
     `triage` is absent and `ValueError` on any corrupt shape — a silently smaller
-    ledger would read as a correct one.
+    ledger would read as a correct one. A non-object top-level JSON value is that
+    same named `ValueError`, never an `AttributeError` traceback.
     """
+    if not isinstance(doc, dict):
+        raise ValueError(
+            f"the verify document must be a JSON object, not {type(doc).__name__}"
+        )
     triage = doc.get("triage")
     if triage is None:
         raise NoTriageSectionError(
@@ -174,6 +186,28 @@ def rows_from_document(doc: dict) -> Ledger:
         excluded_unverified=excluded_unverified,
         excluded_skipped=excluded_skipped,
         excluded_unscored=unscored,
+    )
+
+
+def merge_ledgers(ledgers: Sequence[Ledger]) -> Ledger:
+    """Many ledgers -> one, in input order: rows concatenated, the four counts
+    summed. A single ledger is returned unchanged (its own `trace` header — the
+    single-document byte contract); N > 1 carries `"N documents"`, never a path.
+
+    Total by construction: the empty sequence is a named `ValueError`, not an
+    `IndexError` (the CLI's `nargs="+"` cannot reach it).
+    """
+    if not ledgers:
+        raise ValueError("no documents to merge")
+    if len(ledgers) == 1:
+        return ledgers[0]
+    return Ledger(
+        trace=f"{len(ledgers)} documents",
+        rows=tuple(row for ledger in ledgers for row in ledger.rows),
+        turns_total=sum(ledger.turns_total for ledger in ledgers),
+        excluded_unverified=sum(ledger.excluded_unverified for ledger in ledgers),
+        excluded_skipped=sum(ledger.excluded_skipped for ledger in ledgers),
+        excluded_unscored=sum(ledger.excluded_unscored for ledger in ledgers),
     )
 
 
@@ -381,6 +415,7 @@ __all__ = [
     "SWEEP_THRESHOLDS",
     "Ledger",
     "NoTriageSectionError",
+    "merge_ledgers",
     "render_json",
     "render_text",
     "rows_from_document",
