@@ -130,12 +130,43 @@ def docker_available() -> bool:
 
 
 #: Set to a tag that already exists to make `built_image` ADOPT it: no build, and no
-#: removal afterwards. There is exactly one caller, and it is the reason the knob
-#: exists — `release.yml`'s `ghcr` job builds the image it is about to publish, has the
-#: suite measure THAT image, and then pushes it. Left to build its own copy, the fixture
-#: would measure an image it then deletes, and the job would publish an unmeasured one.
-#: Unset (every local run, every CI job but that one) the behaviour below is unchanged.
+#: removal afterwards. There is exactly one caller — `release.yml`'s `ghcr` job, which
+#: builds the image it is about to publish and has the suite measure THAT image before
+#: pushing it. (It now calls twice: once per architecture.) Left to build its own copy,
+#: the fixture would measure an image it then deletes, and the job would publish an
+#: unmeasured one. Unset (every local run, every CI job but that one) the behaviour below
+#: is unchanged.
 _ADOPT_IMAGE_ENV = "BELAY_TEST_IMAGE"
+
+#: Set to a platform (`linux/arm64`) by the release job's cross-platform measurement.
+#: The in-image runner then asks the daemon for that platform; unset, the argv is
+#: byte-identical to the native run. There is no other caller.
+_TEST_PLATFORM_ENV = "BELAY_TEST_PLATFORM"
+
+
+def docker_run_argv(
+    image: str, script: str, mounts: list[str], platform: str | None = None
+) -> list[str]:
+    """The `docker run` argv for the in-image acceptance.
+
+    Split out as a pure function because it is the one piece of the arm64 path that can
+    be asserted without a daemon: `tests/test_release_workflow.py` pins that unset is
+    byte-identical and set adds exactly `--platform <value>`.
+    """
+    asked = platform or os.environ.get(_TEST_PLATFORM_ENV)
+    return [
+        "docker",
+        "run",
+        "--rm",
+        *(["--platform", asked] if asked else []),
+        *mounts,
+        "--entrypoint",
+        "sh",
+        image,
+        "-c",
+        script,
+    ]
+
 
 
 @pytest.fixture(scope="session")

@@ -36,6 +36,11 @@ services:
       # contain: capture is lossless, so tool arguments — keys included — are in
       # it verbatim (README, "A trace is as sensitive as...").
       BELAY_TRACE_DIR: ${BELAY_TRACE_DIR:-/workspace/traces}
+      # The human's side of the approval gate: the engine writes
+      # requests/<hold_id>.json here and holds the call until a decisions/ file
+      # appears. The console service mounts the same dir, so its approval panel
+      # writes the decision the engine is waiting on.
+      BELAY_APPROVAL_DIR: ${BELAY_APPROVAL_DIR:-/workspace/approvals}
       # Where a turn's pre-state snapshots land; the manifests go to a SIBLING
       # directory (`<dir>.manifests`), which is what `belay verify --manifest-dir`
       # wants.
@@ -72,6 +77,10 @@ services:
       # The trace dir the console reads — the engine service's BELAY_TRACE_DIR
       # default, reached through the shared mount.
       BELAY_CONSOLE_TRACE_DIR: ${BELAY_CONSOLE_TRACE_DIR:-/workspace/traces}
+      # The engine's approval channel, reached through the shared mount: the
+      # panel lists requests/ and writes decisions/ here. Unset means the
+      # panel renders nothing (configured: false) — never an empty panel.
+      BELAY_APPROVAL_DIR: ${BELAY_APPROVAL_DIR:-/workspace/approvals}
       # The bundled engine's snapshot dir (verify/replay in-container).
       BELAY_SNAPSHOT_DIR: ${BELAY_SNAPSHOT_DIR:-/workspace/snapshots}
       # Per-replay verify timeout in seconds, passed to `belay verify

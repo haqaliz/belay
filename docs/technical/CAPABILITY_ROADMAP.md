@@ -718,6 +718,32 @@ corpus on day 1 rather than starting empty.
 > **State plainly: no real trajectory case exists yet** — no mint has run under the rule — so
 > this is a capability, not a result. No published number changed: `precision` still reads `n/a`
 > and recall stays unmeasured. See `docs/planning/trajectory-success-invariant/corpus-trajectory/`.
+>
+> ### Status, 2026-10-21 — the Phase-2 sharing path ships as a pattern catalog, never a case
+>
+> `shared-corpus-patterns` (issue #58) ships the opt-in, pattern-level sharing promised above,
+> with the whitelist **enforced by construction** rather than described. A case cannot travel
+> (it bundles the trace, the target turn's pre-state tree and the server command), so
+> `belay corpus share export --out FILE` reads labeled cases and writes
+> `belay-corpus-patterns/1`: only `pattern_id` (a sha256 over the canonical facts — not
+> recoverable to a case), `label`, `reduced_status`, `sub_verdicts` (axis/kind/status), tool
+> **names**, invariant **rule names** (never scope bytes), and the trajectory/claim **status**
+> (never a cause or a check's source). The trace, manifests, pre-state, server command, case id,
+> provenance, paths, arguments, content, cause strings and recorded-miss notes are never
+> exported; a byte-level test plants a sentinel in every one of them.
+>
+> `share import FILE` validates the bundle whole (malformed entry, unknown/absent schema or a
+> corrupt catalog → exit 2, **no write**) and merges by `pattern_id` (idempotent, sorted by id);
+> `share list [--json]` counts by label, rule and tool and carries `scored: false`.
+>
+> **Imported patterns are NOT cases.** They live in `<corpus-dir>/patterns.json`, a FILE beside
+> the case directories: `corpus run` iterates directories and `corpus score` reads `*/case.json`,
+> so a pattern is **never replayed and never scored**. Mixing a stranger's labels into a team's
+> own precision/recall would launder their provenance into the measurement, so the separation is
+> structural, not a flag. No published number moved (`11/60`, `precision 0.00`, `recall 0.00`
+> stand unedited); deterministic bytes, atomic replace, stdlib only, no network. See
+> `docs/planning/shared-corpus-patterns/`.
+
 
 **Dependencies:** C1–C5.
 
@@ -977,14 +1003,26 @@ the stdlib calibration math, and the `belay triage-ledger` command. **As built (
 aspect `aggregation`, 2026-10-21, issue #52):** N documents per invocation, merged in
 argument order, with duplicate/corrupt input refused whole (exit 2, named) and the
 single-document render byte-identical — **no published number moves** (`11/60 = 18.3%`,
-`precision 0.00`, `1/15`, `4/16`, `recall 0.00`, `3/93` stand unedited). **Not built, by
-name (slice 3+):** budget
-auto-tuning (the ledger earns a tighter budget by human decision on this measurement,
-never by itself), directory input (the shell's glob is the documented input), other
-reference authors (laya etc. — provider-neutrality is proven by a stub, not a second
-vendor integration), budget knobs on other surfaces, the live Jev REST contract pin
-(owner-supplied before the manual live test runs). The mint's second run (the owner's
-S-1 decision) supplies the ledger's real volume.
+`precision 0.00`, `1/15`, `4/16`, `recall 0.00`, `3/93` stand unedited). **As built
+(slice 4, aspect `suggestion`, 2026-10-21, issue #53):** `belay triage-ledger
+--suggest-budget` appends **one** recommendation line (one `suggestion` key under
+`--json`) naming the highest existing `SWEEP_THRESHOLDS` candidate that skips no
+violation, with its honest skipped/budget numbers; ties go to the higher threshold,
+and when every candidate skips a violation it recommends none and names the
+least-bad. It is a **recommendation only** — no flag/config write, no replay, no
+application, no new sweep grid, no top-N suggestion — the human still decides, and
+without the flag both renders are byte-identical (the two snapshots and the refusal
+pass unmodified); zero decided rows keeps `NO_DECIDED_ROWS` with no suggestion.
+**No published number moves** (`11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16`,
+`recall 0.00`, `3/93` stand unedited). **Not built, by name (slice 4+):** automatic
+budget tuning (the ledger earns a tighter budget by human decision on this
+measurement, never by itself — the shipped suggestion applies nothing), a top-N
+recommendation (the threshold is the budget's primary knob and the two have
+different failure shapes), directory input (the shell's glob is the documented
+input), other reference authors (laya etc. — provider-neutrality is proven by a stub,
+not a second vendor integration), budget knobs on other surfaces, the live Jev REST
+contract pin (owner-supplied before the manual live test runs). The mint's second run
+(the owner's S-1 decision) supplies the ledger's real volume.
 
 ---
 
@@ -1023,5 +1061,5 @@ built.
 | C6 | Failure corpus | Wk 5 | 1 | No — moat #2 |
 | C7 | Live console | Wk 5–6 | 1 | No — the launch surface |
 | C8 | Claim re-derivation (A3) | Wk 7 | 1 | **Yes — cut first** · ✅ **SHIPPED** (PR #28, v0.27.0; the A3 WARN vocabulary is empty in v0 and the evaluator's caller-supplied-workspace short-circuit is a follow-on) |
-| C10 | Calibrated triage seam (BYOK, optional) | Wk 9+ | 1 | ✅ **SHIPPED** (slice 1: verify surface — shadow mode + threshold/top-N, UNVERIFIED-by-budget, additive `triage` section; slice 2: the calibration ledger — `belay triage-ledger`, the pure re-render of the measurement; slice 3: N-document aggregation in argument order, single document byte-identical; budget auto-tuning deferred by name; the mint's second run supplies volume) |
 | C9 | Observability interop | Wk 8 | 1 | ✅ **SHIPPED** (ingest+correlate+attach + export-back fixture round-trip, plus an opt-in live OTLP/HTTP POST; multi-trace-directory aggregation deferred) |
+| C10 | Calibrated triage seam (BYOK, optional) | Wk 9+ | 1 | ✅ **SHIPPED** (slice 1: verify surface — shadow mode + threshold/top-N, UNVERIFIED-by-budget, additive `triage` section; slice 2: the calibration ledger — `belay triage-ledger`, the pure re-render of the measurement; slice 3: N-document aggregation in argument order, single document byte-identical; slice 4: `--suggest-budget`, a recommendation only — never applied, never written; automatic budget tuning remains deferred by name; the mint's second run supplies volume) |

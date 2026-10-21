@@ -11,8 +11,9 @@
 //
 // Every verdict travels in the engine's document; this server computes none.
 
+import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
-import { appendFile, readFile, readdir, stat } from "node:fs/promises";
+import { appendFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createServer as httpCreateServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { homedir } from "node:os";
@@ -22,6 +23,7 @@ import { probeEngineVersion, runVerifyJson } from "./engine.js";
 import { createTailState, readTail } from "./tail.js";
 import type { TailState } from "./tail.js";
 import { deriveTurns } from "./trace.js";
+import type { ApprovalHold } from "./types.js";
 
 export interface ServerConfig {
   traceDir?: string;
@@ -32,6 +34,8 @@ export interface ServerConfig {
   log?: (line: string) => void;
   /** The /health engine-version probe; injected for tests, python-based by default. */
   engineVersion?: () => Promise<string | null>;
+  /** `BELAY_APPROVAL_DIR` — the engine's requests/decisions directory contract. */
+  approvalDir?: string;
 }
 
 export interface TraceListing {
@@ -43,6 +47,8 @@ export interface TraceListing {
 }
 
 const TRACE_PREFIX = "trace-";
+/** The engine's hold ids are its own file names — anything else never names one. */
+const HOLD_ID = /^[A-Za-z0-9._-]+$/;
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -97,6 +103,7 @@ export function createServer(config: ServerConfig = {}): Server {
   const log = config.log ?? ((line: string) => console.error(`[belay-console] ${line}`));
   const env = config.env ?? process.env;
   const engineVersion = config.engineVersion ?? probeEngineVersion;
+  const approvalDir = config.approvalDir ?? (env.BELAY_APPROVAL_DIR || undefined);
 
   // `BELAY_CONSOLE_VERIFY_TIMEOUT` (seconds) → `verify --timeout <seconds>`,
   // passed to the engine whenever the verify/replay handlers run. The engine's
@@ -125,6 +132,148 @@ export function createServer(config: ServerConfig = {}): Server {
     const resolved = path.resolve(root, requested);
     if (resolved !== root && !resolved.startsWith(root + path.sep)) return null;
     return resolved;
+  }
+
+  /**
+   * The engine's request file (`requests/<hold_id>.json`), or null when it is not
+   * that contract. Anything unparseable or incomplete is skipped, never guessed:
+   * the list must not break because one file was half-written.
+   */
+  function parseApprovalRequest(raw: unknown): Omit<ApprovalHold, "expires_at"> | null {
+    if (typeof raw !== "object" || raw === null) return null;
+    const body = raw as Record<string, unknown>;
+    if (typeof body.hold_id !== "string" || typeof body.tool !== "string") return null;
+    if (!Array.isArray(body.triggers) || !body.triggers.every((t) => typeof t === "string")) return null;
+    if (typeof body.created_at !== "number" || !Number.isFinite(body.created_at)) return null;
+    if (typeof body.timeout !== "number" || !Number.isFinite(body.timeout) || body.timeout <= 0) return null;
+    return {
+      hold_id: body.hold_id,
+      tool: body.tool,
+      request_id: body.request_id,
+      triggers: body.triggers,
+      created_at: body.created_at,
+      timeout: body.timeout,
+    };
+  }
+
+  /** Every hold still pending: request parses, no decision file, now < deadline. */
+  async function listPendingHolds(): Promise<ApprovalHold[]> {
+    if (approvalDir === undefined) return [];
+    const requestsDir = path.join(approvalDir, "requests");
+    let names: string[];
+    try {
+      names = await readdir(requestsDir);
+    } catch {
+      return []; // a missing/unreadable dir is an empty list, never an error
+    }
+    const nowMs = now().getTime();
+    const holds: ApprovalHold[] = [];
+    for (const name of names) {
+      if (!name.endsWith(".json")) continue;
+      const holdId = name.slice(0, -".json".length);
+      if (!HOLD_ID.test(holdId)) continue;
+      let request: Omit<ApprovalHold, "expires_at"> | null = null;
+      try {
+        request = parseApprovalRequest(JSON.parse(await readFile(path.join(requestsDir, name), "utf8")));
+      } catch {
+        continue; // unparseable or vanished mid-list: skipped, not fatal
+      }
+      // The file's own id must name the file: a decision write resolves by id.
+      if (request === null || request.hold_id !== holdId) continue;
+      const expiresAt = request.created_at + request.timeout;
+      if (nowMs >= expiresAt * 1000) continue;
+      try {
+        await stat(path.join(approvalDir, "decisions", name));
+        continue; // any decision file ends the hold, readable or not
+      } catch {
+        // no decision: still pending
+      }
+      holds.push({ ...request, expires_at: expiresAt });
+    }
+    return holds.sort((a, b) => a.created_at - b.created_at);
+  }
+
+  async function handleApprovals(res: ServerResponse): Promise<void> {
+    const configured = approvalDir !== undefined;
+    try {
+      sendJson(res, 200, { configured, holds: await listPendingHolds() });
+    } catch (error) {
+      log(`approval list failed (${String(error)})`);
+      sendJson(res, 200, { configured, holds: [] });
+    }
+  }
+
+  async function handleApprovalDecision(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    try {
+      if (approvalDir === undefined) {
+        sendJson(res, 409, { error: { cause: "approval-not-configured" } });
+        return;
+      }
+      const body = (await readBody(req)) as { hold_id?: unknown; decision?: unknown; reason?: unknown } | null;
+      const holdId = body?.hold_id;
+      if (typeof holdId !== "string" || !HOLD_ID.test(holdId)) {
+        sendJson(res, 400, { error: { cause: "bad-hold-id" } });
+        return;
+      }
+      const decision = body?.decision;
+      if (decision !== "approve" && decision !== "deny") {
+        sendJson(res, 400, { error: { cause: "bad-decision" } });
+        return;
+      }
+      const requestPath = resolveInside(path.join(approvalDir, "requests"), `${holdId}.json`);
+      let request: Omit<ApprovalHold, "expires_at"> | null = null;
+      if (requestPath !== null) {
+        try {
+          request = parseApprovalRequest(JSON.parse(await readFile(requestPath, "utf8")));
+        } catch {
+          request = null;
+        }
+      }
+      if (request === null || request.hold_id !== holdId) {
+        sendJson(res, 409, { error: { cause: "hold-not-found" } });
+        return;
+      }
+      // Past the deadline the engine has already failed closed; a late file is
+      // never read, so refuse it here rather than write a dead decision.
+      if (now().getTime() >= (request.created_at + request.timeout) * 1000) {
+        sendJson(res, 409, { error: { cause: "hold-expired" } });
+        return;
+      }
+      const decisionsDir = path.join(approvalDir, "decisions");
+      const decisionPath = resolveInside(decisionsDir, `${holdId}.json`);
+      if (decisionPath === null) {
+        sendJson(res, 400, { error: { cause: "bad-hold-id" } });
+        return;
+      }
+      try {
+        await stat(decisionPath);
+        sendJson(res, 409, { error: { cause: "already-decided" } });
+        return;
+      } catch {
+        // no decision yet
+      }
+      // The engine's contract, exactly: no extra keys, reason only on a deny.
+      const record =
+        decision === "deny" && typeof body?.reason === "string" && body.reason.length > 0
+          ? { decision, reason: body.reason }
+          : { decision };
+      await mkdir(decisionsDir, { recursive: true });
+      // shortcut: two concurrent decisions can both clear the check above; the last
+      // rename wins and the UI refetches on any refusal. Add an O_EXCL claim only if
+      // a multi-operator console ever ships.
+      const temp = path.join(decisionsDir, `.belay-decision-${randomUUID()}.tmp`);
+      try {
+        await writeFile(temp, JSON.stringify(record), "utf8");
+        await rename(temp, decisionPath); // same-dir rename: a reader never sees half a file
+      } catch (error) {
+        await rm(temp, { force: true });
+        throw error;
+      }
+      sendJson(res, 200, { ok: true, decision });
+    } catch (error) {
+      log(`approval decision failed (${String(error)})`);
+      sendJson(res, 500, { error: { cause: "decision-unwritable" } });
+    }
   }
 
   function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -342,6 +491,14 @@ export function createServer(config: ServerConfig = {}): Server {
     }
     if (method === "GET" && route === "/api/traces") {
       void handleTraces(res);
+      return;
+    }
+    if (method === "GET" && route === "/api/approvals") {
+      void handleApprovals(res);
+      return;
+    }
+    if (method === "POST" && route === "/api/approvals/decision") {
+      void handleApprovalDecision(req, res);
       return;
     }
     if (method === "GET" && route === "/api/trace") {

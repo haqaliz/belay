@@ -98,6 +98,21 @@ export interface VerifyJsonDoc {
   error: { cause: string } | null;
 }
 
+// --- the approval file contract (`src/belay/approval/channel.py`) -----------
+
+/** A hold still waiting for a human: the request file verbatim, plus its deadline. */
+export interface ApprovalHold {
+  hold_id: string;
+  tool: string;
+  request_id: unknown;
+  triggers: string[];
+  /** Wall-clock epoch seconds, as the engine wrote it. */
+  created_at: number;
+  timeout: number;
+  /** `created_at + timeout`, epoch seconds. */
+  expires_at: number;
+}
+
 // --- engine wrapper envelope ------------------------------------------------
 
 export type EngineErrorCause =

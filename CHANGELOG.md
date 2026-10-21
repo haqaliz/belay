@@ -5,7 +5,33 @@ All notable changes to Belay are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0 — until then,
 `0.x` minor bumps may include changes that would be breaking under strict semver.
 
-## [Unreleased]
+## [1.0.0] - 2026-10-21
+
+**Belay 1.0.0 — the first stable release.** The 0.x line shipped the engine (C1–C10), the Phase-0 number, the launch surface and the team-layer first slices; 1.0 freezes the documented CLI and on-disk contracts. The five units below are the last 0.x deferrals that could ship without demand-pull.
+
+**The ledger now recommends a budget — and applies nothing (issue #53).** `belay
+triage-ledger --suggest-budget` appends exactly **one** line (and exactly one
+`suggestion` key under `--json`): the highest existing `SWEEP_THRESHOLDS` candidate
+that skips no violation, with its honest skipped/budget numbers; ties go to the
+higher threshold, and when every candidate skips a violation it recommends none and
+names the least-bad. It is a **recommendation only** — no flag or config is written,
+`replay` is never called, nothing is applied, and the human still decides. Without
+the flag both renders are **byte-identical** to before (both snapshots and the
+refusal document pass unmodified); zero decided rows keeps the `NO_DECIDED_ROWS`
+refusal with no suggestion, and **no published number moves** (`11/60 = 18.3%`,
+`precision 0.00`, `1/15`, `4/16`, `recall 0.00`, `3/93` stand unedited; nothing
+recomputed).
+
+- **Measured candidates only.** The suggestion chooses among the existing sweep
+  grid, never a new candidate, and prefers zero-skip thresholds: a recommendation
+  can never propose a value the ledger did not measure.
+- **Honest refusal.** When every candidate skips at least one violation, the
+  `suggestion` key carries `threshold: null`, `budget_saved: null` and a reason
+  naming the least-bad candidate (lowest violation count, then lowest threshold).
+- **n=1 is not calibration.** The denominator is always printed with the
+  recommendation; the threshold and top-N sweeps are unchanged.
+- **Not built, by name:** automatic application, top-N suggestion, a new sweep
+  grid, a new command, replay, and any flag/config write.
 
 **The calibration ledger measures a run set, not one document (issue #52).** `belay
 triage-ledger` takes one or more stored `verify --json` documents, merged in **argument
@@ -58,6 +84,65 @@ sub-verdicts, the coverage line and the export's exit-on-verdict behaviour are u
   `ThreadingHTTPServer` on 127.0.0.1 — never the internet.
 - **No Langfuse integration.** The transport is collector-agnostic: no Langfuse adapter
   ships, and the standing screenshot prohibition survives verbatim.
+
+**The published container image is multi-arch — `linux/amd64` and `linux/arm64` (issue #56).**
+The image channel was amd64-only, so Apple Silicon and arm64 servers pulled it emulated. Both
+arches are now built, measured and published, with **no published number moved** (`11/60 =
+18.3%`, `precision 0.00`, `1/15`, `4/16`, `recall 0.00`, `3/93` stand unedited; no corpus
+change, no engine change).
+
+- **Each arch is measured.** amd64 is built and measured exactly as before, compose
+  acceptance included. arm64 is built with `docker buildx build --platform linux/arm64
+  --load` and runs the same in-image acceptance (`test_docker_inimage.py`) under QEMU via
+  the new `BELAY_TEST_PLATFORM`.
+- **The pushed image is the measured image.** Each measured image is tagged `:<tag>-amd64` /
+  `:<tag>-arm64`, ID-checked against what the daemon measured, then pushed; `:<tag>` and
+  `:latest` are manifests assembled from those two digests with `imagetools create`. No
+  rebuild between measurement and push.
+- **Unchanged by design:** the compose acceptance stays amd64-only (a compose stack under
+  QEMU is a different substrate claim), the PR `docker` CI job stays amd64, and
+  signing/provenance (cosign/attestations) and a Docker Hub mirror remain deferred by name.
+- **Guarded:** `tests/test_release_workflow.py` now pins the QEMU/buildx setup, the arm64
+  build and measurement, the per-arch pushes, the manifest, and the deferrals; the platform
+  argv builder is unit-tested for unset (byte-identical) and set.
+
+**The console is the human side of the approval gate (issue #55).** A held `tools/call`
+no longer needs a hand-written JSON file: the console lists pending holds, counts down and
+writes the decision the engine is polling for. **Console only — no engine, file-contract or
+verdict change, and no published number moves** (`11/60 = 18.3%`, `precision 0.00`, `1/15`,
+`4/16`, `recall 0.00`, `3/93` stand unedited; a denied call stays an observation, never a
+turn or a verdict).
+
+- **`GET /api/approvals`** reads `BELAY_APPROVAL_DIR` and lists only pending holds
+  (request parses, no decision file, `now < created_at + timeout`) with tool, triggers
+  and `expires_at`. Malformed request files, a missing directory and an unconfigured
+  server are empty lists — `configured: false` in the last case.
+- **`POST /api/approvals/decision`** validates the hold id (`^[A-Za-z0-9._-]+$`), refuses
+  expired and already-decided holds 409, and writes the engine's exact JSON atomically
+  (temp file in `decisions/` + rename). Late decisions are dead: the engine has already
+  failed closed.
+- **`ApprovalPanel`** polls every second, hides when unconfigured, counts down, and
+  disables at the deadline with `timed out — the engine fails closed`. A 409 refetches;
+  the panel keeps no optimistic state and claims no verdict.
+- **Compose** passes the shared `/workspace/approvals` to both services.
+
+**The corpus gains a shareable PATTERN catalog, and an imported pattern is never a case
+(issue #58).** A new surface only: no case format, verdict, axis, status, reduction rule or
+published number moves (`11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16`, `recall 0.00`,
+`3/93` stand unedited).
+
+- **`belay corpus share export [--corpus-dir D] --out FILE`** writes `belay-corpus-patterns/1`
+  from labeled cases: `pattern_id`, `label`, `reduced_status`, `sub_verdicts`
+  (axis/kind/status), tool names, invariant **rule names** (never scope bytes), and the
+  trajectory/claim **status** (never a cause or a check's source). The trace, manifests,
+  pre-state, server command, case id, provenance, paths, arguments, content, cause strings
+  and recorded-miss notes are never exported — a byte-level test plants a sentinel in each.
+- **`belay corpus share import FILE`** validates the bundle whole (malformed entry, unknown
+  schema or corrupt catalog → exit 2, no write), merges by `pattern_id` (idempotent, sorted).
+  **`share list [--json]`** counts by label, rule and tool, and states `scored: false`.
+- **Imported patterns are not cases:** `<corpus-dir>/patterns.json` is a file beside the case
+  directories; `corpus run`/`score` read cases only, so patterns are never replayed and never
+  scored. Deterministic bytes, atomic replace, stdlib only.
 
 **A2 abstains on a contract a `tools/list_changed` retracted before the call (issue #50).** A
 correctness fix on the effect axis: no new status, axis, kind, reduction rule or trace field,

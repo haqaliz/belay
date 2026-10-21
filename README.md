@@ -79,17 +79,21 @@ docker run --rm -v "$PWD:/workspace" ghcr.io/haqaliz/belay verify /workspace/tra
   --manifest-dir /workspace/snapshots.manifests --server <your-mcp-server-cmd>
 ```
 
-**`linux/amd64` only** — that is the substrate the in-image acceptance measures, and an
-image for an architecture nothing ran on is not one we will publish. On Apple Silicon the
-published image runs under emulation (Docker says so), and `docker build -t belay .` from
-this checkout builds a native one, which needs nothing but the checkout.
+**`linux/amd64` and `linux/arm64`**, published as one multi-arch manifest (so
+`docker pull` picks your host's). amd64 is built and measured on the pinned
+`ubuntu-24.04` runner. arm64 is built with `buildx` and then runs the **same
+in-image acceptance** (`tests/test_docker_inimage.py`) under QEMU — an image
+something ran inside, not one built on faith. The compose acceptance stays
+**amd64-only**: a compose stack under QEMU is a different substrate claim. On
+Apple Silicon you now pull a native image; `docker build -t belay .` still
+builds one from this checkout.
 
 `docker compose run --rm belay <subcommand>` is the same thing through compose (it builds
 from this checkout rather than pulling). The second service is the live console (C7): `docker compose up console` builds it from this checkout and serves the SPA at `http://127.0.0.1:8080` (loopback only), with a healthcheck on its `/health` endpoint and the engine bundled in the image — verify/replay from inside the console container run this checkout's engine, and the service shares the engine's `/workspace` state mount, so traces and snapshots live in one place.
 
 > **What the container does and does not do.** It runs as a **non-root** `belay` user (uid 1000; `--user root` is the opt-in), and it carries **no containment of its own that Belay relies on** — the boundary is the *host kernel's* Landlock, which is not namespaced and which no image can supply. On a host below kernel 5.13, or with the LSM off, the launcher **refuses** (exit 2, named cause) instead of running unsandboxed: loud, never silent. The image's overlayfs layer has no reflink, so snapshots take the **copy path** with the named `reflink-unavailable` cause — and a corpus case banked on macOS APFS is **SKIP** with `UNRESTORABLE_CAPABILITY_MISMATCH` inside the container, never a guessed restore.
 >
-> **Measured where, exactly:** the `docker` CI job builds the image and re-runs the whole measurement *inside* it on the pinned `ubuntu-24.04` runner — the suite (with every skip's cause machine-checked), the escape matrix, the snapshot round trips, and a capture → verify roundtrip generated in-container. That asserts the **Linux-host** path. On a **macOS host** the image runs in Docker Desktop's Linux VM — a different kernel, which CI cannot reach — so `docker run --rm belay sandbox check --scope /workspace` there is a **manual re-probe you should run** before relying on it. Full details in [`THREAT_MODEL.md`](docs/technical/THREAT_MODEL.md#the-container-l3-what-the-image-does-and-does-not-change).
+> **Measured where, exactly:** the `docker` CI job builds the image and re-runs the whole measurement *inside* it on the pinned `ubuntu-24.04` runner — the suite (with every skip's cause machine-checked), the escape matrix, the snapshot round trips, and a capture → verify roundtrip generated in-container. That asserts the **Linux-host** path. The release job repeats the in-image acceptance for **`linux/arm64`** under QEMU (compose excluded, amd64-only), so both published architectures were measured. On a **macOS host** the image runs in Docker Desktop's Linux VM — a different kernel, which CI cannot reach — so `docker run --rm belay sandbox check --scope /workspace` there is a **manual re-probe you should run** before relying on it. Full details in [`THREAT_MODEL.md`](docs/technical/THREAT_MODEL.md#the-container-l3-what-the-image-does-and-does-not-change).
 
 ### 1 · Put the proxy in front of the server you already run
 
@@ -120,7 +124,7 @@ Both are decided by **re-execution and diffing. No model is consulted** — enfo
 
 **Triage is an optional, BYOK replay-budget, off by default.** `belay verify --triage-author CMD` (or `BELAY_TRIAGE_AUTHOR`) names a LOCAL command that reads whitelisted derived features per turn and answers a suspicion score — `--triage-threshold FLOAT` replays every turn at or above it, `--triage-top-n INT` the N highest-score turns, `--no-triage` turns it off entirely. A cheap model (or any script) can order the replay queue, but **it never emits a verdict**: a turn the budget skipped is `UNVERIFIED` with the named cause `skipped by the triage budget` — never PASS, never WARN, and not replayed. No knobs given is shadow mode: everything replays and the scores are recorded alongside. A broken triage command never shrinks the replay budget.
 
-**The calibration ledger measures whether the triage model's confidence actually predicts violations.** `belay triage-ledger <verify.json> [<verify.json> ...]` re-renders one or more stored `belay verify --json` documents — merged **in argument order** (rows concatenated, counts summed; more than one document and the header reads `N documents`) — as the reliability curve, ECE, and the decision-relevant sweep (at each threshold, violations-skipped × budget-saved). A **pure re-render: no replay, no re-verification**; a single document is byte-identical to the pre-aggregation render. The violation column is the per-turn reduced FAIL (UNVERIFIED and budget-skipped turns excluded, their counts stated); a column with zero decided rows across all documents renders the named `NO_DECIDED_ROWS` refusal with no rates, and any missing, malformed or corrupt document — or the same document passed twice — refuses the whole invocation (exit 2, naming the path). It never decides the budget — it informs the operator who sets the knobs.
+**The calibration ledger measures whether the triage model's confidence actually predicts violations.** `belay triage-ledger <verify.json> [<verify.json> ...]` re-renders one or more stored `belay verify --json` documents — merged **in argument order** (rows concatenated, counts summed; more than one document and the header reads `N documents`) — as the reliability curve, ECE, and the decision-relevant sweep (at each threshold, violations-skipped × budget-saved). A **pure re-render: no replay, no re-verification**; a single document is byte-identical to the pre-aggregation render. The violation column is the per-turn reduced FAIL (UNVERIFIED and budget-skipped turns excluded, their counts stated); a column with zero decided rows across all documents renders the named `NO_DECIDED_ROWS` refusal with no rates, and any missing, malformed or corrupt document — or the same document passed twice — refuses the whole invocation (exit 2, naming the path). `--suggest-budget` adds **one line** (one `suggestion` key under `--json`): the highest measured threshold that skips no violation, with its honest skipped/budget numbers, ties to the higher threshold; when every candidate skips a violation it recommends none and names the least-bad. That is a **recommendation, not an application** — it writes no flag or config, replays nothing, and applies nothing. The ledger never decides the budget — it informs the operator who sets the knobs, and a small n is stated, never treated as calibration.
 
 #### The invariant library: named presets, no JSON
 
@@ -176,9 +180,14 @@ belay corpus label <case-id> --label true-positive --root-cause-key weakened-ass
                              --recorded-miss-note "the engine returned clean; this weakening is real"   # …and declare the STORED verdict a MISS
 belay corpus run                                        # re-replay every case — green = nothing drifted, NOT "everything is caught"
 belay corpus score                                      # precision · recall · coverage vs human labels (UNVERIFIED excluded, reported separately)
+belay corpus share export --out belay-patterns.json     # whitelisted PATTERNS only — never a trace, pre-state, path, server command or cause
+belay corpus share import belay-patterns.json           # validate whole, merge by pattern_id (idempotent, sorted)
+belay corpus share list                                 # counts by label, invariant rule and tool
 ```
 
-Cases are self-contained (they bundle their own pre-state) and live under the gitignored `corpus/local/` — nothing leaves your machine. What a green `corpus run` does and does not certify is in [Coverage & limits](#a-green-belay-corpus-run-is-a-drift-check-not-a-coverage-claim).
+Cases are self-contained (they bundle their own pre-state) and live under the gitignored `corpus/local/` — nothing leaves your machine unless you invoke `corpus share export`, and even then a case never does. What a green `corpus run` does and does not certify is in [Coverage & limits](#a-green-belay-corpus-run-is-a-drift-check-not-a-coverage-claim).
+
+**A shared catalog is not case exchange.** `corpus share export` reads labeled cases and writes `belay-corpus-patterns/1`: `pattern_id` (a sha256 over the facts, not recoverable to a case), the human `label`, `reduced_status`, `sub_verdicts` (axis/kind/status), tool names, invariant **rule names** (never scope bytes), and the trajectory/claim **status** (never a cause or a check's source). The trace, pre-state tree, manifests, server command, case id, provenance, paths, arguments, content, cause strings and recorded-miss notes are never exported. **Imported patterns are not cases:** they live beside the case directories in `<corpus-dir>/patterns.json`, and they are **never replayed and never scored** — `corpus run` and `corpus score` read cases only, so a stranger's labels cannot enter your precision or recall. A malformed or unknown-schema bundle is refused whole (exit 2), and export/import are deterministic and idempotent. The operator sees the bundle before sending it; a tool name can itself be proprietary, which is the one exposure to check.
 
 ### 4 · Gate your agent upgrades
 
@@ -337,9 +346,11 @@ belay triage-ledger verify.json
 # or a whole run set — merged in the order given (the shell's glob order is the
 # documented order); the same path twice is refused, never double-counted:
 belay triage-ledger runs/*.json
+# recommendation only — prints a measured threshold, applies nothing:
+belay triage-ledger runs/*.json --suggest-budget
 ```
 
-The ledger pairs each score and confidence with the re-executed verdict. It renders a reliability curve, ECE, and for each candidate threshold or top-N, **how many real violations it would have skipped against how much replay it would have saved**. Only then set a budget:
+The ledger pairs each score and confidence with the re-executed verdict. It renders a reliability curve, ECE, and for each candidate threshold or top-N, **how many real violations it would have skipped against how much replay it would have saved**. `--suggest-budget` names the best measured threshold that skips no violation (no top-N suggestion — the threshold is the budget's primary knob), but you still set it:
 
 ```bash
 belay verify ... --triage-author "python -m belay.verify.reference_triage_author" \

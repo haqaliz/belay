@@ -153,6 +153,20 @@ This file orients a coding agent working in this repository. Read it first.
 > budget auto-tuning, directory input (the shell's glob is the input) and the mint
 > re-run. See `docs/planning/triage-ledger-aggregation/`.
 >
+> **[A budget SUGGESTION shipped v-next (issue #53, 2026-10-21) — a recommendation,
+> not the auto-tuning named above.]** `belay triage-ledger --suggest-budget` appends
+> **one** line (one `suggestion` key under `--json`): the highest existing
+> `SWEEP_THRESHOLDS` candidate that skips no violation, with its honest
+> skipped/budget numbers; ties go to the higher threshold; when every candidate skips
+> a violation it recommends none and names the least-bad. It writes no flag or config,
+> never calls replay and applies nothing — the operator still decides. Without the
+> flag both renders are **byte-identical** (both snapshots and the refusal dict pass
+> unmodified); zero decided rows keeps the named `NO_DECIDED_ROWS` refusal with no
+> suggestion. **No published number moves** (`11/60 = 18.3%`, `precision 0.00`,
+> `1/15`, `4/16`, `recall 0.00`, `3/93` stand unedited; nothing recomputed). Still not
+> built: automatic budget tuning/application, a top-N suggestion, directory input and
+> the mint re-run. See `docs/planning/triage-budget-suggestion/`.
+>
 
 > **C10 SLICE 1 SHIPS — THE CALIBRATED-TRIAGE SEAM: A MODEL MAY TRIAGE, ONLY EXECUTION
 > MAY DECIDE** (2026-09-21, `jev-triage`, PR #41, v0.36.0). Owner demand-pull 2026-09-19;

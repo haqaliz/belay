@@ -8,6 +8,7 @@ import { onMounted, ref } from "vue";
 import type { DerivedTurn } from "../server/types";
 import { useClicks } from "../useClicks";
 import { useFeed } from "../useFeed";
+import ApprovalPanel from "./ApprovalPanel.vue";
 
 const emit = defineEmits<{
   openTrace: [path: string];
@@ -67,6 +68,8 @@ function selectTrace(path: string): void {
     </header>
 
     <p v-if="listError" class="feed-error">trace list failed: {{ listError }}</p>
+
+    <ApprovalPanel />
 
     <div class="trace-picker">
       <button

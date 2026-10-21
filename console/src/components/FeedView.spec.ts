@@ -67,6 +67,7 @@ describe("FeedView", () => {
     mockFetch({
       "/api/traces": [{ traces: listing }],
       "/api/feed": feedQueue,
+      "/api/approvals": [{ configured: false, holds: [] }],
     });
 
     const wrapper = mount(FeedView, {});
@@ -100,6 +101,7 @@ describe("FeedView", () => {
       "/api/traces": [{ traces: listing }],
       "/api/feed": [{ cursor: 120, pending: null, turns: [t0], windows: { open: true, close: false } }],
       "/api/events": [{ ok: true }],
+      "/api/approvals": [{ configured: false, holds: [] }],
     });
 
     const wrapper = mount(FeedView, {});
@@ -109,5 +111,37 @@ describe("FeedView", () => {
     await wrapper.find(".feed-row").trigger("click");
     expect(wrapper.emitted("openTrace")).toBeTruthy();
     expect(wrapper.emitted("openTrace")![0][0]).toBe("/traces/trace-live.jsonl");
+  });
+
+  it("wires the approval panel above the feed when the server is configured", async () => {
+    vi.useFakeTimers();
+    const listing = [
+      { name: "trace-live.jsonl", path: "/traces/trace-live.jsonl", size: 100, mtime: "2026-08-24T10:00:02.000Z", turns: 1 },
+    ];
+    mockFetch({
+      "/api/traces": [{ traces: listing }],
+      "/api/feed": [{ cursor: 120, pending: null, turns: [t0], windows: { open: true, close: false } }],
+      "/api/approvals": [
+        {
+          configured: true,
+          holds: [
+            {
+              hold_id: "hold-1",
+              tool: "write_note",
+              request_id: 2,
+              triggers: ["destructive"],
+              created_at: Date.now() / 1000,
+              timeout: 60,
+              expires_at: Date.now() / 1000 + 60,
+            },
+          ],
+        },
+      ],
+    });
+
+    const wrapper = mount(FeedView, {});
+    await flushPromises();
+    expect(wrapper.find('[data-testid="approval-panel"]').exists()).toBe(true);
+    expect(wrapper.get('[data-testid="approval-tool"]').text()).toBe("write_note");
   });
 });

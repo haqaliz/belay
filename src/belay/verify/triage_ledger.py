@@ -36,6 +36,19 @@ never carries a path.
   no network, no model — the zero-LLM guard scans this directory, and the
   arithmetic lives in `belay.verify.calibration` (stdlib only).
 
+## The budget suggestion (a recommendation, never an application)
+
+`--suggest-budget` adds exactly one text line, and exactly one `suggestion` key
+under `--json`, and changes nothing else: the highest `SWEEP_THRESHOLDS`
+candidate that skips no violation, with its honest skipped/budget numbers; ties go
+to the higher threshold; when every candidate skips a violation it recommends
+none and names the least-bad (lowest violation count, then lowest threshold). It
+never writes a flag or config, never replays, and never applies anything — the
+operator still decides — and it never proposes a threshold the ledger did not
+measure. Without the flag both renders are byte-identical to before, and a
+zero-denominator column keeps its named refusal with no suggestion: an empty
+denominator never suggests. Small n is stated, never treated as calibration.
+
 The text and `--json` renderers are "one computation, two renderers": both derive
 from the SAME ledger objects. JSON float values are the raw arithmetic results
 (never rounded), so a fixture with binary-exact values pins them exactly.
@@ -211,6 +224,66 @@ def merge_ledgers(ledgers: Sequence[Ledger]) -> Ledger:
     )
 
 
+# --- the budget suggestion (a recommendation, never an application) -------------------
+
+
+@dataclass(frozen=True)
+class BudgetSuggestion:
+    """A RECOMMENDATION over the measured sweep — never applied, never written.
+
+    `threshold` is a candidate the ledger actually measured (`SWEEP_THRESHOLDS`),
+    or None when no candidate is eligible. `skipped`/`budget_saved` are the honest
+    counts at that candidate (recomputed from the rows, never derived from the
+    ratio); `violations_skipped` is 0 whenever a threshold is recommended.
+    """
+
+    threshold: Optional[float]
+    skipped: int
+    violations_skipped: int
+    budget_saved: Optional[float]
+    reason: Optional[str] = None
+
+
+def suggest_budget(ledger: Ledger) -> BudgetSuggestion:
+    """The threshold a budget could use, chosen only among zero-skip candidates.
+
+    Candidates are the existing `SWEEP_THRESHOLDS`, never a new grid: the
+    suggestion cannot propose a value the ledger did not measure. Among the points
+    that skip no violation, the best is max by `(budget_saved, threshold)` — a tie
+    goes to the HIGHER threshold, stated so it is a rule and not an accident. When
+    every candidate skips a violation, nothing is recommended (`threshold` None,
+    `budget_saved` None) and the least-bad point is named — min by
+    `(violations_skipped, threshold)`. Zero decided rows never suggest: there is
+    no denominator to guess from.
+    """
+    rows = ledger.rows
+    total = len(rows)
+    if not total:
+        return BudgetSuggestion(None, 0, 0, None, "no decided rows")
+
+    points = threshold_sweep(rows, SWEEP_THRESHOLDS)
+    candidates = [point for point in points if point.violations_skipped == 0]
+    if candidates:
+        best = max(candidates, key=lambda point: (point.budget_saved, point.threshold))
+        return BudgetSuggestion(
+            best.threshold,
+            _skipped_count(rows, best.threshold),
+            0,
+            best.budget_saved,
+        )
+
+    least_bad = min(points, key=lambda point: (point.violations_skipped, point.threshold))
+    skipped = _skipped_count(rows, least_bad.threshold)
+    return BudgetSuggestion(
+        None,
+        skipped,
+        least_bad.violations_skipped,
+        None,
+        f"every candidate skips a violation; least-bad {least_bad.threshold:g}: "
+        f"skips {skipped}/{total} with {least_bad.violations_skipped} violations skipped",
+    )
+
+
 # --- the renderers (one computation, two renderers) ------------------------------------
 
 
@@ -307,11 +380,13 @@ def _refusal_doc(ledger: Ledger) -> dict:
     }
 
 
-def render_text(ledger: Ledger) -> str:
+def render_text(ledger: Ledger, suggest: bool = False) -> str:
     """The human ledger: denominator, exclusion counts, violation rate, ECE, the
     reliability curve (no-data bins included), the threshold sweep, and the top-N
     sweep. The zero-denominator case renders the named refusal with NO rates.
-    Deterministic: the same ledger renders the same bytes on every box.
+    `suggest` appends ONE recommendation line, never an application; the refusal
+    path is untouched (a zero denominator never suggests). Deterministic: the
+    same ledger renders the same bytes on every box.
     """
     if not ledger.turns_decided:
         return f"belay triage ledger: {NO_DECIDED_ROWS} — {_refusal_cause(ledger)}"
@@ -349,14 +424,46 @@ def render_text(ledger: Ledger) -> str:
         f"violations skipped {point.violations_skipped}"
         for point in top_n_sweep(rows, SWEEP_NS)
     )
+    if suggest:
+        lines.append(_suggestion_text(suggest_budget(ledger), total))
     return "\n".join(lines)
 
 
-def render_json(ledger: Ledger) -> str:
+def _suggestion_text(suggestion: BudgetSuggestion, total: int) -> str:
+    """The ONE recommendation line. With a recommendation it prints the exact
+    flag an operator would set and the honest cost; without one it says so and
+    names the least-bad candidate — never a value the ledger did not measure."""
+    if suggestion.threshold is None:
+        return f"suggested budget: none — {suggestion.reason}"
+    return (
+        f"suggested budget: --triage-threshold {suggestion.threshold:g} — "
+        f"skips {suggestion.skipped}/{total} "
+        f"({_format_rate(_ratio(suggestion.skipped, total))}), "
+        f"{suggestion.violations_skipped} violations skipped"
+    )
+
+
+def _suggestion_doc(suggestion: BudgetSuggestion) -> dict:
+    """The `suggestion` key: the recommendation and its counts, or the null
+    threshold with the reason naming the least-bad candidate."""
+    doc = {
+        "threshold": suggestion.threshold,
+        "skipped": suggestion.skipped,
+        "violations_skipped": suggestion.violations_skipped,
+        "budget_saved": suggestion.budget_saved,
+    }
+    if suggestion.reason is not None:
+        doc["reason"] = suggestion.reason
+    return doc
+
+
+def render_json(ledger: Ledger, suggest: bool = False) -> str:
     """The machine ledger, as ONE JSON document with the pinned key order. The
     zero-denominator case emits the refusal document — the named refusal, the
-    counts, NO rates. Float values are raw arithmetic results (never rounded).
-    Deterministic: the same ledger emits the same bytes on every box.
+    counts, NO rates. `suggest` adds exactly one `suggestion` key, never a change
+    to any measured value; the refusal document is untouched. Float values are raw
+    arithmetic results (never rounded). Deterministic: the same ledger emits the
+    same bytes on every box.
     """
     if not ledger.turns_decided:
         return json.dumps(_refusal_doc(ledger))
@@ -405,6 +512,8 @@ def render_json(ledger: Ledger) -> str:
             for point in top_n_sweep(rows, SWEEP_NS)
         ],
     }
+    if suggest:
+        doc["suggestion"] = _suggestion_doc(suggest_budget(ledger))
     return json.dumps(doc)
 
 
@@ -413,10 +522,12 @@ __all__ = [
     "SCHEMA",
     "SWEEP_NS",
     "SWEEP_THRESHOLDS",
+    "BudgetSuggestion",
     "Ledger",
     "NoTriageSectionError",
     "merge_ledgers",
     "render_json",
     "render_text",
     "rows_from_document",
+    "suggest_budget",
 ]
