@@ -34,9 +34,9 @@ import package and the `belay` command are unchanged.
 
 ## Versioning
 
-`0.x.0` minor bumps, one per shipped capability/milestone (the docker-selfhost slice → `v0.21.0`, and so on). Patch
-releases (`0.x.y`) batch fixes. Belay is pre-1.0: a `0.x` bump may include changes that would be
-breaking under strict semver. The tag **must** match the `version` in `pyproject.toml`.
+`1.0.0` is the first stable release: the per-capability `0.x.0` cadence is replaced by
+semver, where a breaking change to a documented surface needs a major bump. Patch releases
+batch fixes. The tag **must** match the `version` in `pyproject.toml`.
 
 ## Cut a release
 

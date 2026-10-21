@@ -5,7 +5,9 @@ All notable changes to Belay are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0 — until then,
 `0.x` minor bumps may include changes that would be breaking under strict semver.
 
-## [Unreleased]
+## [1.0.0] - 2026-10-21
+
+**Belay 1.0.0 — the first stable release.** The 0.x line shipped the engine (C1–C10), the Phase-0 number, the launch surface and the team-layer first slices; 1.0 freezes the documented CLI and on-disk contracts. The five units below are the last 0.x deferrals that could ship without demand-pull.
 
 **The ledger now recommends a budget — and applies nothing (issue #53).** `belay
 triage-ledger --suggest-budget` appends exactly **one** line (and exactly one
