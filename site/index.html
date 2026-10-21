@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Belay — the agent harness that verifies by replay</title>
+<meta name="description" content="Belay sandboxes any agent, verifies each step by replaying it against real state, and keeps a deterministic trace. PASS / WARN / FAIL / UNVERIFIED, grounded in re-execution.">
+<meta name="color-scheme" content="dark">
+<link rel="icon" type="image/png" href="assets/belay-favicon.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="masthead">
+  <div class="wrap masthead-inner">
+    <a class="brand" href="#top">
+      <img src="assets/belay-mark-square.png" alt="" width="40" height="40" class="brand-mark">
+      <span class="brand-name">Belay</span>
+    </a>
+    <nav aria-label="Primary">
+      <ul class="nav">
+        <li><a href="#problem">Problem</a></li>
+        <li><a href="#how">How it works</a></li>
+        <li><a href="#demo">Demo</a></li>
+        <li><a href="#verdict">Verdict</a></li>
+        <li><a href="#status">Status &amp; limits</a></li>
+        <li><a href="https://github.com/haqaliz/belay">GitHub</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+  <section class="hero" id="top" aria-labelledby="hero-title">
+    <div class="wrap hero-inner">
+      <p class="eyebrow">Agent harness · self-hosted · alpha</p>
+      <div class="hero-brand">
+        <img src="assets/belay-mark-square.png" alt="Belay logo: a square mark for the Belay harness" width="104" height="104" class="hero-mark">
+        <h1 id="hero-title" class="wordmark">Belay</h1>
+      </div>
+      <p class="tagline">The agent harness: sandbox any agent, verify each step by replaying it against real state, and keep a deterministic trace.</p>
+      <p class="lede">Belay sits as a transparent proxy between an AI agent and the tools it calls — recording what crossed, running the tools inside a sandbox, and replaying every tool call against its restored pre-state to render a verdict grounded in re-execution and a state diff.</p>
+
+      <div class="install">
+        <p class="install-label">Install from PyPI</p>
+        <pre class="cmd"><code>uv tool install belay-harness</code></pre>
+        <p class="install-alt">Or run the whole engine as a container:</p>
+        <pre class="cmd"><code>docker run --rm ghcr.io/haqaliz/belay --help</code></pre>
+      </div>
+
+      <ul class="hero-links">
+        <li><a class="btn btn-primary" href="https://github.com/haqaliz/belay">GitHub</a></li>
+        <li><a class="btn" href="https://pypi.org/project/belay-harness/">PyPI · belay-harness</a></li>
+        <li><a class="btn" href="https://github.com/haqaliz/belay/releases/latest">Latest release</a></li>
+      </ul>
+    </div>
+  </section>
+
+  <div class="rope" role="presentation"></div>
+
+  <section class="section" id="problem" aria-labelledby="problem-title">
+    <div class="wrap">
+      <p class="eyebrow">01 — The problem</p>
+      <h2 id="problem-title" class="h2">A run can look done and be wrong.</h2>
+      <p class="section-lede">Two measured numbers explain why Belay exists: the work that reports success is not reliably successful, and the usual judge of it is not reliably right.</p>
+
+      <div class="stats">
+        <article class="stat">
+          <p class="stat-num">27–78%</p>
+          <h3 class="stat-title">of benchmark-reported agent “successes” are corrupt successes</h3>
+          <p>The right end-state reached through a broken, unsafe, or cheating path. Outcome-only scoring cannot see the difference.</p>
+          <p class="stat-src"><a href="https://arxiv.org/abs/2603.03116">arXiv 2603.03116</a></p>
+        </article>
+        <article class="stat">
+          <p class="stat-num">up to 35%</p>
+          <h3 class="stat-title">LLM-judge false positives</h3>
+          <p>Verdicts flip 10–30% on trivial reorderings. A guess about correctness is not a verification of it.</p>
+          <p class="stat-src"><a href="https://arxiv.org/abs/2507.08794">arXiv 2507.08794</a></p>
+        </article>
+      </div>
+
+      <p class="kicker">Belay is the third thing: not a framework that builds the agent, not observability that records what it did — <strong>the harness</strong> that answers <em>“was this step actually correct?”</em> by replaying the tool call in a sandbox and diffing observed against claimed state.</p>
+    </div>
+  </section>
+
+  <section class="section section-alt" id="how" aria-labelledby="how-title">
+    <div class="wrap">
+      <p class="eyebrow">02 — How it works</p>
+      <h2 id="how-title" class="h2">Record. Contain. Replay. Compound.</h2>
+      <p class="section-lede">Four moves, in order. Each one exists because the previous one cannot answer the question alone.</p>
+
+      <ol class="steps">
+        <li class="step">
+          <span class="step-num" aria-hidden="true">1</span>
+          <h3>Transparent proxy</h3>
+          <p>Belay sits in front of the MCP server you already run. Bytes are forwarded verbatim in both directions, and every frame is recorded to an append-only trace (<code>.jsonl</code>).</p>
+        </li>
+        <li class="step">
+          <span class="step-num" aria-hidden="true">2</span>
+          <h3>Sandbox + snapshot</h3>
+          <p>The server runs under the platform sandbox — macOS Seatbelt, or Linux Landlock + seccomp. A write outside the scope is refused by the kernel and recorded as a denial; the network is denied by default. Each turn's pre-state is snapshotted before the call reaches the server.</p>
+        </li>
+        <li class="step">
+          <span class="step-num" aria-hidden="true">3</span>
+          <h3>Per-turn replay</h3>
+          <p>For each recorded <code>tools/call</code>, Belay restores its pre-state, re-invokes the server, and diffs the observed effect against the recorded reply and the tool's declared contract. No model is consulted.</p>
+        </li>
+        <li class="step">
+          <span class="step-num" aria-hidden="true">4</span>
+          <h3>Deterministic trace &amp; compounding corpus</h3>
+          <p>Every run is captured exactly and can be re-run. Every caught failure becomes a labeled, replayable case; <code>belay corpus run</code> re-replays the whole corpus as a regression suite.</p>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <section class="section" id="demo" aria-labelledby="demo-title">
+    <div class="wrap">
+      <p class="eyebrow">03 — Demo</p>
+      <h2 id="demo-title" class="h2">The demo is the negative control.</h2>
+      <p class="section-lede">A committed capture of a real agent run (<code>claude -p</code>, told only “make the tests pass”). A real agent fixed the bug honestly and said so; Belay agrees, and shows exactly what that agreement covers.</p>
+
+      <figure class="demo">
+        <img src="assets/belay-demo.gif" width="820" height="560" alt="The Belay console renders a committed capture of a real agent run. Its seven turns list; while the engine re-executes them every turn reads “verifying…” with “coverage unavailable” and no status — never a placeholder PASS. The verdict then lands: PASS 7, WARN 0, FAIL 0, UNVERIFIED 0 over 7 turns verified, and the instance-level trajectory rule PASSes, supported by 2 replayed command turns. Opening a turn shows the sub-verdicts behind it, including effect:network NOT_COVERED.">
+        <figcaption>
+          <p><strong>The corrupt-success shape is measured elsewhere and at scale</strong> — <strong>11/60 = 18.3%</strong> in the Phase-0 mint (<a href="https://github.com/haqaliz/belay/blob/master/docs/technical/PHASE0_RESULTS.md">with its decomposition</a>).</p>
+          <p>Replay it yourself: <a href="https://github.com/haqaliz/belay/blob/master/demo/README.md"><code>demo/README.md</code></a>.</p>
+        </figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section class="section section-alt" id="verdict" aria-labelledby="verdict-title">
+    <div class="wrap">
+      <p class="eyebrow">04 — The verdict</p>
+      <h2 id="verdict-title" class="h2">Four statuses. One of them is not a pass.</h2>
+
+      <ul class="verdicts">
+        <li class="v v-pass"><span class="v-name">PASS</span><span class="v-desc">The replay reproduced the recorded result and the observed effect conformed to the declared contract and the task policy — on the dimensions Belay checks.</span></li>
+        <li class="v v-warn"><span class="v-name">WARN</span><span class="v-desc">One of the four statuses a turn can reduce to. The reduction is worst-status-wins across the A1 and A2 axes.</span></li>
+        <li class="v v-fail"><span class="v-name">FAIL</span><span class="v-desc">Re-execution or the invariant check refuted the step — including a cheating agent whose trace is perfectly faithful.</span></li>
+        <li class="v v-unverified"><span class="v-name">UNVERIFIED</span><span class="v-desc">Belay tried and could not verify, and says so by name — a named cause, never a guess in the passing direction.</span></li>
+      </ul>
+
+      <p class="rule"><strong>UNVERIFIED is never rendered as PASS.</strong> A turn Belay could not verify is an abstention with a named cause; absence of evidence is never evidence of absence.</p>
+    </div>
+  </section>
+
+  <section class="section status" id="status" aria-labelledby="status-title">
+    <div class="wrap">
+      <p class="eyebrow">05 — Status &amp; limits</p>
+      <h2 id="status-title" class="h2">Alpha, and honest about it.</h2>
+      <p class="section-lede">Belay's entire value is an honest verdict, so its limits are documented as precisely as its claims. Read the coverage and limits before trusting any output.</p>
+
+      <dl class="facts">
+        <div class="fact">
+          <dt>Status</dt>
+          <dd><strong>Alpha.</strong> The record → sandbox → replay → verdict spine plus the failure corpus (C1–C6) is built and merged.</dd>
+        </div>
+        <div class="fact">
+          <dt>Platforms</dt>
+          <dd><strong>macOS and Linux</strong>, both measured. macOS Seatbelt + APFS clonefile; Linux Landlock + seccomp. Python 3.10+.</dd>
+        </div>
+        <div class="fact">
+          <dt>Dependencies</dt>
+          <dd><strong>Zero runtime dependencies</strong> — stdlib only.</dd>
+        </div>
+        <div class="fact">
+          <dt>Where it runs</dt>
+          <dd><strong>Self-hosted.</strong> Traces and state stay on your box; nothing is uploaded, ever. No analytics, no cookies, no third-party requests on this page either.</dd>
+        </div>
+      </dl>
+
+      <p class="limits-note">Known and deliberate limits: Belay sees what crosses the MCP boundary and nothing else; it has no network instrument, so a <code>PASS</code> excludes the network dimension; the default invariant's precision has still not been measured; and replay re-invokes the servers <em>you</em> name, never one inferred from the trace.</p>
+
+      <p class="status-link"><a class="btn btn-primary" href="https://github.com/haqaliz/belay/blob/master/README.md#coverage--limits-stated-exactly">Read Coverage &amp; limits, stated exactly</a></p>
+    </div>
+  </section>
+
+</main>
+
+<div class="rope" role="presentation"></div>
+
+<footer class="footer">
+  <div class="wrap footer-inner">
+    <p class="footer-brand"><img src="assets/belay-mark-square.png" alt="" width="28" height="28" aria-hidden="true"> <span>Belay</span></p>
+    <p>To <em>belay</em>, in climbing, is to manage the rope that catches a climber when they fall. The harness holds; the climber takes the risk.</p>
+    <ul class="footer-links">
+      <li><a href="https://github.com/haqaliz/belay">github.com/haqaliz/belay</a></li>
+      <li><a href="https://github.com/haqaliz/belay/blob/master/LICENSE">Apache-2.0</a></li>
+      <li><a href="https://github.com/haqaliz/belay/issues">Issues</a></li>
+    </ul>
+    <p class="footer-fine">Apache-2.0 — permissive, with an explicit patent and trademark grant. No analytics, no cookies, no third-party requests.</p>
+  </div>
+</footer>
+
+</body>
+</html>
