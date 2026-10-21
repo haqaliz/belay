@@ -58,24 +58,17 @@ jobs:
   # PR — and deferred publishing by name. This is that slice.
   #
   # THE RULE THIS JOB EXISTS TO OBEY, pre-registered in RELEASING.md before it was
-  # written: push the image that was validated, never a rebuild nobody measured. So
-  # build, measure and push happen HERE, in one job, in that order — per architecture —
-  # and the ID check between them makes "the same image" a fact rather than a layout.
+  # written: push the image that was validated, never a rebuild nobody measured. So the
+  # three things happen HERE, in one job, in this order — build, measure, push — and the
+  # ID check between them makes "the same image" a fact rather than a layout.
   #
   # Why not reuse the artifact the `docker` job already built: that job runs on the PR
   # head, and after the merge the tagged tree is a different commit. There was never an
   # image from an earlier run that was the right one to push.
   #
-  # TWO ARCHITECTURES, EACH MEASURED. `linux/amd64` is built and measured exactly as
-  # before. `linux/arm64` is built with `buildx --load` and then runs the SAME in-image
-  # acceptance under QEMU (`BELAY_TEST_PLATFORM=linux/arm64`), so the arm64 tag is an
-  # image something ran inside, not one built on faith. The compose acceptance stays
-  # amd64-only: a compose stack under QEMU is a different substrate claim.
-  #
-  # The version and `latest` references are MANIFESTS assembled by `imagetools create`
-  # from the two pushed arch tags — one digest per arch, no image built a second time.
-  # Signing/provenance (cosign/attestations) and a Docker Hub mirror stay deferred by
-  # name: publishing an unmeasured image was the hazard worth closing first.
+  # linux/amd64 only, deliberately: `ubuntu-24.04` is the substrate the in-image
+  # acceptance measures, and publishing an arm64 image would ship a substrate nothing
+  # ran on. An Apple Silicon reader builds locally, which works today.
   ghcr:
     name: publish the container image (ghcr.io)
     # PINNED, and the same pin as the `docker` CI job: the image's substrate claims are
@@ -91,9 +84,6 @@ jobs:
       # DOCKER_IMAGE_TAG, because docker-compose.yml pins that tag and the compose
       # assertions are part of the measurement.
       LOCAL_TAG: belay:test
-      # A separate tag, so the amd64 image the compose assertions measured is never
-      # overwritten by the arm64 build before the manifest is assembled.
-      ARM64_TAG: belay:test-arm64
     steps:
       - uses: actions/checkout@v4
 
@@ -111,78 +101,42 @@ jobs:
       # The whole build, from this checkout and nothing else — no `uv build` ran before
       # it, so the multi-stage Dockerfile builds its own wheel exactly as a stranger's
       # `docker build -t belay .` does.
-      - name: Build the linux/amd64 image that will be published
+      - name: Build the image that will be published
         run: docker build -f Dockerfile -t "$LOCAL_TAG" .
 
       # BELAY_TEST_IMAGE makes the session fixture ADOPT the image above instead of
       # building its own copy and deleting it afterwards. Without it this step would
       # measure an artifact that no longer exists by the time the push runs.
-      - name: Measure the linux/amd64 image (the same acceptance the `docker` CI job runs)
+      - name: Measure that image (the same acceptance the `docker` CI job runs)
         env:
           BELAY_TEST_IMAGE: belay:test
         run: >-
           uv run pytest tests/test_docker_image.py tests/test_docker_inimage.py
           tests/test_docker_compose.py -q
 
-      # Set up only now, so the amd64 build and measurement above run in exactly the
-      # environment they always did. QEMU lets this amd64 runner execute the arm64 image
-      # for its measurement; buildx can build for a non-native platform.
-      - name: Set up QEMU (for the arm64 measurement)
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Buildx (for the arm64 build)
-        uses: docker/setup-buildx-action@v3
-
-      # `--load` puts the arm64 image in the local daemon so the measurement below can
-      # run it (under QEMU). No `--push`: the push happens only after a measurement.
-      - name: Build the linux/arm64 image that will be published
-        run: >-
-          docker buildx build --platform linux/arm64 --load
-          -f Dockerfile -t "$ARM64_TAG" .
-
-      # The same in-image acceptance against the arm64 image. No compose here: the
-      # compose stack is documented as amd64-only.
-      - name: Measure the linux/arm64 image under QEMU (in-image acceptance only)
-        env:
-          BELAY_TEST_IMAGE: belay:test-arm64
-          BELAY_TEST_PLATFORM: linux/arm64
-        run: uv run pytest tests/test_docker_inimage.py -q
-
-      - name: Tag each MEASURED image with its arch, and prove it is the measured one
+      - name: Tag the MEASURED image, and prove it is the measured one
         run: |
-          check() {
-            MEASURED="$(docker image inspect --format '{{.Id}}' "$1")"
-            PUBLISHING="$(docker image inspect --format '{{.Id}}' "$2")"
+          docker tag "$LOCAL_TAG" "$IMAGE:${{ github.ref_name }}"
+          docker tag "$LOCAL_TAG" "$IMAGE:latest"
+          MEASURED="$(docker image inspect --format '{{.Id}}' "$LOCAL_TAG")"
+          for ref in "$IMAGE:${{ github.ref_name }}" "$IMAGE:latest"; do
+            PUBLISHING="$(docker image inspect --format '{{.Id}}' "$ref")"
             if [ "$MEASURED" != "$PUBLISHING" ]; then
-              echo "::error::$2 is $PUBLISHING but the measured image is $MEASURED"
+              echo "::error::$ref is $PUBLISHING but the measured image is $MEASURED"
               exit 1
             fi
-            echo "publishing $2 as $PUBLISHING"
-          }
-          docker tag "$LOCAL_TAG" "$IMAGE:${{ github.ref_name }}-amd64"
-          docker tag "$ARM64_TAG" "$IMAGE:${{ github.ref_name }}-arm64"
-          check "$LOCAL_TAG" "$IMAGE:${{ github.ref_name }}-amd64"
-          check "$ARM64_TAG" "$IMAGE:${{ github.ref_name }}-arm64"
+          done
+          echo "publishing $MEASURED"
 
       - name: Log in to ghcr.io
         run: >-
           echo "${{ github.token }}" |
           docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
-      - name: Push each measured arch image
+      - name: Push
         run: |
-          docker push "$IMAGE:${{ github.ref_name }}-amd64"
-          docker push "$IMAGE:${{ github.ref_name }}-arm64"
-
-      # A manifest pointing at the two digests just pushed — nothing is rebuilt, and the
-      # version/`latest` references name exactly the images that were measured above.
-      - name: Assemble the multi-arch manifest from the two pushed arch images
-        run: |
-          docker buildx imagetools create \
-            -t "$IMAGE:${{ github.ref_name }}" \
-            -t "$IMAGE:latest" \
-            "$IMAGE:${{ github.ref_name }}-amd64" \
-            "$IMAGE:${{ github.ref_name }}-arm64"
+          docker push "$IMAGE:${{ github.ref_name }}"
+          docker push "$IMAGE:latest"
 
   github-release:
     name: create GitHub Release
