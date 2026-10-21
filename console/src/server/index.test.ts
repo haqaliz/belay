@@ -522,6 +522,160 @@ describe("GET /health", () => {
   });
 });
 
+describe("GET /api/approvals", () => {
+  const clock = () => new Date("2026-10-21T10:00:00.000Z");
+  const created = clock().getTime() / 1000 - 5;
+
+  function request(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      hold_id: "hold-1",
+      tool: "write_note",
+      request_id: 2,
+      triggers: ["destructive"],
+      created_at: created,
+      timeout: 60,
+      ...overrides,
+    };
+  }
+
+  function approvalDir(): string {
+    return mkdtempSync(path.join(tmpdir(), "belay-api-approvals-"));
+  }
+
+  function writeRequest(dir: string, body: Record<string, unknown>, name?: string): void {
+    mkdirSync(path.join(dir, "requests"), { recursive: true });
+    writeFileSync(path.join(dir, "requests", `${name ?? String(body.hold_id)}.json`), JSON.stringify(body));
+  }
+
+  function writeDecision(dir: string, holdId: string, body: unknown): void {
+    mkdirSync(path.join(dir, "decisions"), { recursive: true });
+    writeFileSync(path.join(dir, "decisions", `${holdId}.json`), JSON.stringify(body));
+  }
+
+  async function withApprovals(
+    run: (local: ServerHarness, dir: string) => Promise<void>,
+    dir = approvalDir(),
+  ): Promise<void> {
+    const local = await startServer({ approvalDir: dir, now: clock });
+    try {
+      await run(local, dir);
+    } finally {
+      await local.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  interface ListBody {
+    configured: boolean;
+    holds: {
+      hold_id: string;
+      tool: string;
+      triggers: string[];
+      request_id: unknown;
+      created_at: number;
+      timeout: number;
+      expires_at: number;
+    }[];
+  }
+
+  it("lists a pending hold with its tool, triggers and expiry", async () => {
+    await withApprovals(async (local, dir) => {
+      writeRequest(dir, request());
+      const res = await fetch(`${local.base}/api/approvals`);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as ListBody;
+      expect(body.configured).toBe(true);
+      expect(body.holds).toHaveLength(1);
+      expect(body.holds[0]).toMatchObject({
+        hold_id: "hold-1",
+        tool: "write_note",
+        triggers: ["destructive"],
+        request_id: 2,
+      });
+    });
+  });
+
+  it("computes expires_at as created_at + timeout", async () => {
+    await withApprovals(async (local, dir) => {
+      writeRequest(dir, request());
+      const res = await fetch(`${local.base}/api/approvals`);
+      const body = (await res.json()) as ListBody;
+      expect(body.holds[0].expires_at).toBe(created + 60);
+    });
+  });
+
+  it("omits a hold that already has a decision", async () => {
+    await withApprovals(async (local, dir) => {
+      writeRequest(dir, request());
+      writeDecision(dir, "hold-1", { decision: "approve" });
+      const res = await fetch(`${local.base}/api/approvals`);
+      const body = (await res.json()) as ListBody;
+      expect(body.holds).toEqual([]);
+    });
+  });
+
+  it("omits a hold past created_at + timeout", async () => {
+    await withApprovals(async (local, dir) => {
+      writeRequest(dir, request({ created_at: created - 120, timeout: 60 }));
+      const res = await fetch(`${local.base}/api/approvals`);
+      const body = (await res.json()) as ListBody;
+      expect(body.holds).toEqual([]);
+    });
+  });
+
+  it("skips a malformed request file without breaking the list", async () => {
+    await withApprovals(async (local, dir) => {
+      writeRequest(dir, request());
+      mkdirSync(path.join(dir, "requests"), { recursive: true });
+      writeFileSync(path.join(dir, "requests", "broken.json"), "{not json");
+      writeFileSync(path.join(dir, "requests", "missing-fields.json"), JSON.stringify({ hold_id: "missing-fields" }));
+      const res = await fetch(`${local.base}/api/approvals`);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as ListBody;
+      expect(body.holds.map((h) => h.hold_id)).toEqual(["hold-1"]);
+    });
+  });
+
+  it("reports configured:false and an empty list when the approval dir is not set", async () => {
+    const env = { ...process.env };
+    delete env.BELAY_APPROVAL_DIR;
+    const local = await startServer({ env });
+    try {
+      const res = await fetch(`${local.base}/api/approvals`);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as ListBody;
+      expect(body).toEqual({ configured: false, holds: [] });
+    } finally {
+      await local.stop();
+    }
+  });
+
+  it("reads BELAY_APPROVAL_DIR from the environment", async () => {
+    const dir = approvalDir();
+    writeRequest(dir, request());
+    const local = await startServer({ env: { ...process.env, BELAY_APPROVAL_DIR: dir }, now: clock });
+    try {
+      const res = await fetch(`${local.base}/api/approvals`);
+      const body = (await res.json()) as ListBody;
+      expect(body.configured).toBe(true);
+      expect(body.holds).toHaveLength(1);
+    } finally {
+      await local.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not break when the configured approval dir is missing", async () => {
+    await withApprovals(async (local, dir) => {
+      rmSync(dir, { recursive: true, force: true });
+      const res = await fetch(`${local.base}/api/approvals`);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as ListBody;
+      expect(body).toEqual({ configured: true, holds: [] });
+    });
+  });
+});
+
 describe("routing", () => {
   it("404s unknown API routes with a named error", async () => {
     const res = await fetch(`${harness.base}/api/nope`);
