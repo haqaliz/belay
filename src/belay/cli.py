@@ -2171,6 +2171,7 @@ def _cmd_gate_check(args: argparse.Namespace) -> int:
             corpus_dir=Path(args.corpus_dir),
             ingest=not args.no_ingest,
             captured_at=captured_at,
+            strict_shape=args.strict_shape,
         )
     except GatePreflight as exc:
         if json_mode:
@@ -4451,6 +4452,10 @@ def _parser() -> argparse.ArgumentParser:
             "without writing; banking never changes the verdict or the exit code, and "
             "a refused re-add (a case-id collision) is reported by name in the "
             "report's ingest section, never a failure of the gate.\n\n"
+            "SHAPE: turn-count shrink, tool renames and new non-failing turns are "
+            "reported and exit 0 by default. --strict-shape makes ANY shape row a "
+            "REGRESSION (exit 1, the existing reason); drift rows never fail, even "
+            "then.\n\n"
             + _GATE_COVERAGE
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -4533,6 +4538,16 @@ def _parser() -> argparse.ArgumentParser:
             "answers with an executable check; EXECUTION decides (A3 never PASSes). "
             "An un-lexable string is a hard error. Absent -> BELAY_CLAIM_AUTHOR "
             "decides; no author configured -> the axis is ABSENT"
+        ),
+    )
+    gate_check.add_argument(
+        "--strict-shape",
+        action="store_true",
+        help=(
+            "fail the gate on ANY shape row (turn-count shrink, tool rename, new "
+            "non-failing turn) with the existing REGRESSION reason (exit 1). Drift "
+            "rows are engine-change evidence and never fail, even with this flag. "
+            "Default off: shape is report-only"
         ),
     )
     gate_check.add_argument(
