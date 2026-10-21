@@ -3071,7 +3071,11 @@ def _cmd_triage_ledger(args: argparse.Namespace) -> int:
     whole invocation, never a partial ledger; so is a document passed twice (a
     double-counted denominator). A merged column with zero decided rows renders the
     named refusal with no rates and exits 0 (the INSTRUMENT SUSPECT shape — a
-    measurement, not a gate).
+    measurement, not a gate). `--suggest-budget` appends ONE recommendation line
+    (one `suggestion` key under `--json`) over the merged rows: the highest
+    measured threshold that skips no violation, or none with the least-bad named.
+    It is a recommendation only — no flag/config write, no replay, no application —
+    and the zero-decided refusal is returned unchanged with no suggestion.
     """
     from belay.verify.triage_ledger import (
         merge_ledgers,
@@ -4603,7 +4607,10 @@ def _parser() -> argparse.ArgumentParser:
             "passed twice — is a fail-closed error (exit 2, naming the path) that "
             "refuses the whole invocation; a merged column with zero decided rows "
             "renders the named refusal (NO_DECIDED_ROWS) with NO rates and exits 0 "
-            "— the INSTRUMENT SUSPECT shape, never a fabricated 0%."
+            "— the INSTRUMENT SUSPECT shape, never a fabricated 0%.\n\n"
+            "--suggest-budget appends one recommendation line (one `suggestion` key "
+            "under --json): the highest measured threshold that skips no violation, "
+            "or none with the least-bad candidate named. It applies nothing."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

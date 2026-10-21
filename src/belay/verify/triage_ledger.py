@@ -36,6 +36,19 @@ never carries a path.
   no network, no model — the zero-LLM guard scans this directory, and the
   arithmetic lives in `belay.verify.calibration` (stdlib only).
 
+## The budget suggestion (a recommendation, never an application)
+
+`--suggest-budget` adds exactly one text line, and exactly one `suggestion` key
+under `--json`, and changes nothing else: the highest `SWEEP_THRESHOLDS`
+candidate that skips no violation, with its honest skipped/budget numbers; ties go
+to the higher threshold; when every candidate skips a violation it recommends
+none and names the least-bad (lowest violation count, then lowest threshold). It
+never writes a flag or config, never replays, and never applies anything — the
+operator still decides — and it never proposes a threshold the ledger did not
+measure. Without the flag both renders are byte-identical to before, and a
+zero-denominator column keeps its named refusal with no suggestion: an empty
+denominator never suggests. Small n is stated, never treated as calibration.
+
 The text and `--json` renderers are "one computation, two renderers": both derive
 from the SAME ledger objects. JSON float values are the raw arithmetic results
 (never rounded), so a fixture with binary-exact values pins them exactly.
