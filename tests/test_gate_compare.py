@@ -421,7 +421,61 @@ class TestComponents:
         assert compare_claim(None, None) is None
 
 
-# --- 6. The report surface ------------------------------------------------------------
+# --- 6. strict shape: an opt-in shape failure -----------------------------------------
+
+
+class TestStrictShape:
+    """`--strict-shape` makes ANY shape row fail with the existing REGRESSION reason.
+
+    Drift rows stay report-only even under the flag: they are engine-change evidence,
+    not agent behaviour.
+    """
+
+    @pytest.mark.parametrize(
+        "expected,recomputed,kind",
+        [
+            (_set([_turn(0, "PASS"), _turn(1, "PASS")]), _set([_turn(0, "PASS")]), "missing-turn"),
+            (_set([_turn(0, "PASS", tool="echo")]), _set([_turn(0, "PASS", tool="clobber")]), "tool-rename"),
+            (_set([_turn(0, "PASS")]), _set([_turn(0, "PASS"), _turn(1, "PASS")]), "new-turn"),
+        ],
+    )
+    def test_each_shape_kind_fails_with_the_flag_and_passes_without(self, expected, recomputed, kind):
+        assert compare("run", expected, recomputed).exit_reason == "clean"
+        result = compare("run", expected, recomputed, strict_shape=True)
+        assert result.exit_reason == "regression", result
+        assert [row.kind for row in result.shape] == [kind], result
+
+    def test_drift_only_stays_clean_with_the_flag(self):
+        expected = _set([_turn(0, "PASS")], trajectory=_trajectory("PASS"))
+        recomputed = _set([_turn(0, "PASS")], trajectory=_trajectory("PASS"))
+        baseline_recomputed = _set([_turn(0, "UNVERIFIED")], trajectory=_trajectory("FAIL"))
+        result = compare(
+            "run",
+            expected,
+            recomputed,
+            baseline_recomputed=baseline_recomputed,
+            strict_shape=True,
+        )
+        assert result.exit_reason == "clean", result
+        assert result.drift != []
+
+    @pytest.mark.parametrize("strict_shape", [False, True])
+    def test_a_real_regression_still_fails(self, strict_shape):
+        result = compare(
+            "run",
+            _set([_turn(0, "PASS")]),
+            _set([_turn(0, "FAIL")]),
+            strict_shape=strict_shape,
+        )
+        assert result.exit_reason == "regression", result
+
+    def test_no_shape_rows_means_the_flag_changes_nothing(self):
+        expected = _set([_turn(0, "PASS")])
+        recomputed = _set([_turn(0, "PASS")])
+        assert compare("run", expected, recomputed, strict_shape=True).exit_reason == "clean"
+
+
+# --- 7. The report surface ------------------------------------------------------------
 
 
 def test_gate_comparison_renders_expected_got_on_every_row():
