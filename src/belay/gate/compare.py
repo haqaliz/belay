@@ -14,14 +14,15 @@ builders' recomputed shape), a `GateComparison` out, no I/O, no replay, no serve
   PASSes, so the stored side is WARN/FAIL/UNVERIFIED, and WARN -> FAIL is the only
   failing claim transition), and a NEW turn beyond the baseline's count that FAILs
   (acceptance 1's "new failing turn").
-- **Named, reported, NEVER fail (exit 0):** every other changed transition —
+- **Named, reported, NEVER fail by default (exit 0):** every other changed transition —
   PASS/WARN -> UNVERIFIED (coverage loss, R7 discipline), any transition INTO WARN,
   any -> PASS, UNVERIFIED -> anything (an abstention becoming a failure is a fix,
   never a regression of a passing dimension), FAIL -> anything (still failing is
   not newly failing), a declared-but-absent claim, plus the SHAPE rows (turn-count
   shrink, tool rename, new non-failing turns) and the DRIFT rows (stored expected
   vs the baseline's own re-verification — engine-change evidence, named, never a
-  failure).
+  failure). `strict_shape=True` promotes any SHAPE row to the existing REGRESSION
+  reason; DRIFT rows never gate, even then.
 - **SKIP (exit 2, rendered UNVERIFIED + named cause):** the baseline could not be
   re-verified HERE — its re-verification turned UNVERIFIED with a cause in the
   unrestorable vocabulary (`BASELINE_UNRESTORABLE`) or with the cross-substrate
@@ -91,8 +92,8 @@ class ShapeRow:
     `kind` is one of `missing-turn` (the capture did LESS — a previously-recorded
     ordinal is absent), `tool-rename` (the same ordinal's tool name changed), and
     `new-turn` (a turn beyond the baseline's count that PASSed/WARNed/abstained).
-    Shape rows are report-only, never a gate failure — verdict-worsening decides,
-    and a run that did less is a shape change the operator sees, not a regression.
+    Shape rows are report-only by default; `--strict-shape` opts in to failing the
+    gate on any of them, and drift rows are never affected.
     """
 
     kind: str
@@ -339,6 +340,7 @@ def compare(
     recomputed: dict,
     *,
     baseline_recomputed: Optional[dict] = None,
+    strict_shape: bool = False,
 ) -> GateComparison:
     """The whole decision table: one capture-vs-baseline comparison.
 
@@ -348,7 +350,9 @@ def compare(
     capture side is compared against the STORED expected set (`divergences` +
     `shape`), the baseline's re-verification against the stored set (`drift`, never
     failing), and `exit_reason` is `regression` IFF at least one divergence is in
-    the REGRESSION class. Pure: plain dicts in, one `GateComparison` out.
+    the REGRESSION class — or, with `strict_shape`, at least one shape row exists.
+    Drift never gates, even under `strict_shape`. Pure: plain dicts in, one
+    `GateComparison` out.
     """
     skip = _baseline_skip(baseline_recomputed) if baseline_recomputed is not None else None
     if skip is not None:
@@ -374,7 +378,11 @@ def compare(
     if baseline_recomputed is not None:
         drift = _drift_rows(expected, baseline_recomputed)
 
-    exit_reason = REGRESSION if any(row.regression for row in divergences) else CLEAN
+    exit_reason = (
+        REGRESSION
+        if any(row.regression for row in divergences) or (strict_shape and shape)
+        else CLEAN
+    )
     return GateComparison(
         description=description,
         divergences=divergences,
