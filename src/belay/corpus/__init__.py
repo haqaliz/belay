@@ -5,8 +5,16 @@ re-replays the whole corpus and asserts each case still reaches its recorded ver
 corpus IS the regression suite: a catch that regresses breaks the build.
 
 What lives here: the on-disk case FORMAT (`case.py`), composition (`add.py`), re-verification
-and outcome classification (`run.py`), human labeling (`curate.py`), and precision/recall
-scoring against those labels (`metrics.py`).
+and outcome classification (`run.py`), human labeling (`curate.py`), precision/recall
+scoring against those labels (`metrics.py`), and the shareable PATTERN catalog (`share.py`).
+
+A **pattern** is the safe part of a case: the whitelisted facts (`label`, `reduced_status`,
+`sub_verdicts`, tool names, invariant rule names, the trajectory/claim status). It is what
+`belay corpus share export|import|list` moves — never the trace, pre-state, server command,
+case id, provenance, paths, arguments, content or cause strings. **Imported patterns are not
+cases:** they live in `<corpus-dir>/patterns.json`, a file beside the case directories, and
+they are never replayed (`corpus run` iterates directories) and never scored (`corpus score`
+reads `*/case.json`). A stranger's labels must not enter your precision/recall.
 
 A case is not only a catch. A case may DECLARE that its stored verdict records a MISS — the
 engine returned clean on a turn a human adjudicated a real violation, so the clean verdict IS

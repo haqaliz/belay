@@ -124,6 +124,24 @@ turn or a verdict).
   the panel keeps no optimistic state and claims no verdict.
 - **Compose** passes the shared `/workspace/approvals` to both services.
 
+**The corpus gains a shareable PATTERN catalog, and an imported pattern is never a case
+(issue #58).** A new surface only: no case format, verdict, axis, status, reduction rule or
+published number moves (`11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16`, `recall 0.00`,
+`3/93` stand unedited).
+
+- **`belay corpus share export [--corpus-dir D] --out FILE`** writes `belay-corpus-patterns/1`
+  from labeled cases: `pattern_id`, `label`, `reduced_status`, `sub_verdicts`
+  (axis/kind/status), tool names, invariant **rule names** (never scope bytes), and the
+  trajectory/claim **status** (never a cause or a check's source). The trace, manifests,
+  pre-state, server command, case id, provenance, paths, arguments, content, cause strings
+  and recorded-miss notes are never exported — a byte-level test plants a sentinel in each.
+- **`belay corpus share import FILE`** validates the bundle whole (malformed entry, unknown
+  schema or corrupt catalog → exit 2, no write), merges by `pattern_id` (idempotent, sorted).
+  **`share list [--json]`** counts by label, rule and tool, and states `scored: false`.
+- **Imported patterns are not cases:** `<corpus-dir>/patterns.json` is a file beside the case
+  directories; `corpus run`/`score` read cases only, so patterns are never replayed and never
+  scored. Deterministic bytes, atomic replace, stdlib only.
+
 **A2 abstains on a contract a `tools/list_changed` retracted before the call (issue #50).** A
 correctness fix on the effect axis: no new status, axis, kind, reduction rule or trace field,
 and **no published number moves** (`11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16`,

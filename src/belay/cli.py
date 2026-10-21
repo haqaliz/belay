@@ -2811,6 +2811,145 @@ def _cmd_corpus_show(args: argparse.Namespace) -> int:
     return 0
 
 
+# --- belay corpus share: the pattern catalog — never cases, never replayed, never scored --
+
+
+def _cmd_corpus_share_export(args: argparse.Namespace) -> int:
+    """`belay corpus share export --out FILE` — the whitelisted pattern bundle.
+
+    Reads every case, keeps only the whitelisted facts (`pattern_of`), and writes the
+    deterministic `belay-corpus-patterns/1` document. Invoking this command IS the consent
+    to share those facts; nothing else (trace, manifests, pre-state, server command, case
+    id, provenance, paths, arguments, content, causes, miss notes) has a route into it.
+    A corrupt case or a failed write exits 2 with the output left unwritten: never partial.
+    """
+    from belay.corpus.case import CASE_FILENAME, load_case
+    from belay.corpus.share import build_bundle, write_bundle
+
+    corpus_dir = Path(args.corpus_dir)
+    cases = []
+    for case_file in sorted(corpus_dir.glob(f"*/{CASE_FILENAME}")):
+        try:
+            cases.append(load_case(case_file.parent))
+        except ValueError as exc:
+            _emit(f"belay: {exc}")
+            return 2
+
+    try:
+        bundle = build_bundle(cases)
+    except ValueError as exc:
+        _emit(f"belay: {exc}")
+        return 2
+
+    out = Path(args.out)
+    try:
+        write_bundle(out, bundle["patterns"])
+    except (OSError, ValueError) as exc:
+        _emit(f"belay: could not write pattern bundle {out}: {exc}")
+        return 2
+
+    _emit(f"belay corpus share export {corpus_dir} -> {out}")
+    _emit(f"  {len(cases)} case(s) -> {len(bundle['patterns'])} pattern(s)")
+    _emit("  Patterns are NOT cases: they are never replayed and never scored.")
+    return 0
+
+
+def _cmd_corpus_share_import(args: argparse.Namespace) -> int:
+    """`belay corpus share import FILE` — validate whole, merge by `pattern_id`, save.
+
+    A malformed bundle, an unknown schema or a corrupt existing catalog exits 2 with NO
+    write. The merge is idempotent and sorted, so importing the same bundle twice changes
+    nothing. Imported patterns are NOT cases: they are never replayed and never scored.
+    """
+    from belay.corpus.share import (
+        load_patterns,
+        merge_patterns,
+        parse_bundle,
+        save_patterns,
+    )
+
+    path = Path(args.file)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        _emit(f"belay: could not read pattern bundle {path}: {exc}")
+        return 2
+
+    corpus_dir = Path(args.corpus_dir)
+    try:
+        incoming = parse_bundle(text)
+        existing = load_patterns(corpus_dir)
+        merged = merge_patterns(existing, incoming)
+        added = len(merged) - len(existing)
+        save_patterns(corpus_dir, merged)
+    except (OSError, ValueError) as exc:
+        _emit(f"belay: {exc}")
+        return 2
+
+    _emit(f"belay corpus share import {path} -> {corpus_dir}")
+    _emit(f"  {len(incoming)} pattern(s) read, {added} added, {len(merged)} total")
+    _emit("  Patterns are NOT cases: they are never replayed and never scored.")
+    return 0
+
+
+def _cmd_corpus_share_list(args: argparse.Namespace) -> int:
+    """`belay corpus share list` — counts by label, invariant rule and tool.
+
+    The counts describe imported PATTERNS, not cases: nothing here is replayed or scored.
+    `--json` emits the same counts as a document with `scored: false`, so a consumer cannot
+    mistake a catalog size for a detection number.
+    """
+    from collections import Counter
+
+    from belay.corpus.share import PATTERN_SCHEMA, load_patterns
+
+    corpus_dir = Path(args.corpus_dir)
+    if not corpus_dir.is_dir():
+        _emit(f"belay: corpus directory not found: {corpus_dir}")
+        return 2
+    try:
+        patterns = load_patterns(corpus_dir)
+    except (OSError, ValueError) as exc:
+        _emit(f"belay: {exc}")
+        return 2
+
+    labels = Counter(entry["label"] for entry in patterns)
+    rules = Counter(rule for entry in patterns for rule in entry["invariant_rules"])
+    tools = Counter(tool for entry in patterns for tool in entry["tools"])
+
+    if args.json:
+        _emit(
+            json.dumps(
+                {
+                    "schema": PATTERN_SCHEMA,
+                    "count": len(patterns),
+                    "labels": dict(sorted(labels.items())),
+                    "rules": dict(sorted(rules.items())),
+                    "tools": dict(sorted(tools.items())),
+                    "scored": False,
+                },
+                sort_keys=True,
+            )
+        )
+        return 0
+
+    _emit(f"belay corpus share list {corpus_dir}")
+    _emit()
+    _emit(f"  {len(patterns)} pattern(s)")
+    _emit("  Patterns are NOT cases: they are never replayed and never scored.")
+    for heading, counts in (
+        ("by label", labels),
+        ("by rule", rules),
+        ("by tool", tools),
+    ):
+        _emit()
+        _emit(f"  {heading}")
+        width = max([len(name) for name in counts] + [0]) + 2
+        for name in sorted(counts):
+            _emit(f"    {name:<{width}}{counts[name]}")
+    return 0
+
+
 # --- belay phase0: run the failure corpus at scale, publish the violation rate --------
 
 
@@ -4063,6 +4202,89 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     corpus_show.set_defaults(func=_cmd_corpus_show)
+
+    share = corpus.add_parser(
+        "share",
+        help="move the corpus's PATTERNS, never its cases: export/import/list a pattern catalog",
+        description=(
+            "Share the safe part of a corpus: PATTERNS, never cases. A case bundles the "
+            "trace, the pre-state tree and the server command, so it cannot leave the box — "
+            "a pattern carries only whitelisted facts: pattern_id, label, reduced_status, "
+            "sub_verdicts (axis/kind/status), tools (names), invariant_rules (names only, "
+            "never scope bytes), and the trajectory/claim STATUS (never a cause or a check "
+            "source).\n\n"
+            "Imported patterns are NOT cases: they live beside the case directories in "
+            "<corpus-dir>/patterns.json, and they are NEVER replayed and NEVER scored. "
+            "`corpus run`/`score` read cases only, so a pattern cannot enter precision, "
+            "recall or any regression outcome — mixing a stranger's labels into your own "
+            "measurement would launder their provenance into your number.\n\n"
+            "Invoking `export` is the consent: the operator sees the bundle before sending it."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    ).add_subparsers(dest="share_action", required=True)
+
+    share_export = share.add_parser(
+        "export",
+        help="write the whitelisted pattern bundle (belay-corpus-patterns/1) from labeled cases",
+        description=(
+            "Read every case's whitelisted facts and write a deterministic "
+            "`belay-corpus-patterns/1` bundle. NEVER exported: trace, manifests, pre-state, "
+            "server command, case id, provenance, paths, arguments, content, cause strings, "
+            "recorded-miss notes. An empty corpus writes a valid empty bundle (exit 0); a "
+            "corrupt case or a failed write exits 2 and leaves no partial file."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    share_export.add_argument(
+        "--corpus-dir",
+        default="corpus/local",
+        help="the corpus directory the cases are read from (default: ./corpus/local)",
+    )
+    share_export.add_argument(
+        "--out", required=True, help="the bundle file to write (belay-corpus-patterns/1 JSON)"
+    )
+    share_export.set_defaults(func=_cmd_corpus_share_export)
+
+    share_import = share.add_parser(
+        "import",
+        help="validate a pattern bundle whole and merge it into the local catalog",
+        description=(
+            "Validate a bundle against `belay-corpus-patterns/1` and merge it by pattern_id: "
+            "idempotent, deduped, sorted by id. A malformed entry, an unknown/absent schema "
+            "or a corrupt existing catalog refuses the WHOLE bundle with exit 2 and writes "
+            "nothing — never a partial merge. Imported patterns are not cases: never "
+            "replayed, never scored."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    share_import.add_argument("file", help="the pattern bundle file to import")
+    share_import.add_argument(
+        "--corpus-dir",
+        default="corpus/local",
+        help="the corpus directory whose patterns.json is updated (default: ./corpus/local)",
+    )
+    share_import.set_defaults(func=_cmd_corpus_share_import)
+
+    share_list = share.add_parser(
+        "list",
+        help="count the imported patterns by label, invariant rule and tool",
+        description=(
+            "Count the local pattern catalog by label, by invariant rule name and by tool "
+            "name. These are imported PATTERNS, not cases: nothing here is replayed or "
+            "scored, and `--json` carries `scored: false` so no consumer can mistake a "
+            "catalog size for a detection number."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    share_list.add_argument(
+        "--corpus-dir",
+        default="corpus/local",
+        help="the corpus directory holding patterns.json (default: ./corpus/local)",
+    )
+    share_list.add_argument(
+        "--json", action="store_true", help="print the counts as a JSON document"
+    )
+    share_list.set_defaults(func=_cmd_corpus_share_list)
 
     phase0 = subcommands.add_parser(
         "phase0", help="run the failure corpus at scale and publish the violation-rate number"

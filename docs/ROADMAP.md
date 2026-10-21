@@ -304,7 +304,7 @@ The verdict is deterministic and re-executable: `tests/test_demo_capture.py` rep
 
 - **CI regression gate:** a past run replays in CI; a new agent version that breaks a previously-passing trajectory fails the build. This is the first surface with obvious budget attached.
 - **Approval gate:** hold a risky action (destructive, `openWorldHint`) pending human approval — the "watch and steer" surface.
-- **Shared corpus:** the team's failure corpus as a queryable, growing asset.
+- **Shared corpus:** the team's failure corpus as a queryable, growing asset. *(The first slice has shipped: `belay corpus share export|import|list` moves a whitelisted **pattern catalog**, never cases — imported patterns are never replayed and never scored, so a shared catalog cannot move a team's own precision/recall.)*
 - **The invariant-authoring problem** (the known Phase-1 friction): who writes the invariant for a stranger's agent? Candidate answers to test — inferred from MCP annotations (free), inferred from the task spec, a library of common invariants, or authored by the user. This is a real adoption risk and gets a real experiment, not an assumption.
 - **Second surface, only by demand-pull** (likely a coding-agent actuator hook, to reach past the MCP boundary).
 
