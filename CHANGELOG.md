@@ -32,6 +32,33 @@ input, and **no published number moves** (`11/60 = 18.3%`, `precision 0.00`, `1/
 - **Zero denominator unchanged.** Zero decided rows across every document keeps the
   named `NO_DECIDED_ROWS` refusal over the summed counts, exit 0, no rates.
 
+**`belay interop export` can now POST verdicts to a live collector (issue #54).** The
+export direction gains an opt-in transport: the same enriched OTLP/JSON document — the
+same `build_enriched_document` output, serialized by the same `dumps` — can be sent to an
+operator-named endpoint instead of written to a fixture. Verdicts, axes, causes,
+sub-verdicts, the coverage line and the export's exit-on-verdict behaviour are untouched;
+**no published number moves** (`11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16`,
+`recall 0.00`, `3/93` stand unedited; nothing recomputed).
+
+- **One artifact, one code path.** `interop.export.post_document(url, document, headers=())`
+  uses stdlib `urllib.request` only — no new dependency — with `Content-Type:
+  application/json` and a 10 s wall. The body is byte-identical to the `--out` artifact for
+  the same inputs, and the transport never re-shapes, retries or mutates the document.
+- **Opt-in, never ambient.** `--otlp-endpoint URL` is mutually exclusive with `--out`
+  (both → exit 2); `--otlp-header NAME=VALUE` (or `NAME: VALUE`) is repeatable and a
+  malformed header is a named exit 2. Nothing is read from the environment; no batching,
+  no protobuf/gRPC and no env-var secrets. Header values are visible in process arguments —
+  do not pass secrets on a shared host.
+- **Failures are named, never silent.** A connection failure, timeout, unreadable URL or
+  non-2xx exits 1 naming the endpoint and the cause, with stdout clean, no success summary
+  and verdicts unchanged. The summary (human or `--json`) stays on stderr; its `export`
+  field is the endpoint URL when posting.
+- **The builder stays pure.** The module docstring now states that the builder never
+  touches the network; the opt-in transport is its only egress. Tests drive a local
+  `ThreadingHTTPServer` on 127.0.0.1 — never the internet.
+- **No Langfuse integration.** The transport is collector-agnostic: no Langfuse adapter
+  ships, and the standing screenshot prohibition survives verbatim.
+
 **A2 abstains on a contract a `tools/list_changed` retracted before the call (issue #50).** A
 correctness fix on the effect axis: no new status, axis, kind, reduction rule or trace field,
 and **no published number moves** (`11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16`,

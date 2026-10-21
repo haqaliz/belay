@@ -483,8 +483,12 @@ The turn gate holds each `tools/call` while it snapshots the pre-state — measu
 `belay interop correlate <otlp-spans.json> <trace-file>` joins a third-party OTel span to a Belay-recorded MCP turn by the **W3C `traceparent`** the client propagated into MCP `_meta` — the exact string Belay already captured as `trace_context` (C1) — never a time-window or name-based heuristic. A span whose `(traceId, spanId)` names no recorded turn, names more than one (an `ambiguous-correlation`), or was matched but never replayed (no `--server` given, or an unrestorable pre-state) is reported **uncorrelated / `UNVERIFIED`, never `PASS`**, with the exact named cause. Interop is OTLP/JSON parsed with the standard library — **no OpenTelemetry SDK dependency** (zero-dep preserved). This first slice is ingest + correlate + attach over a **single trace file**, and the export
 direction ships with it: `belay interop export <otlp> <trace> [--out FILE]` writes verdicts back
 into the OTLP document as span attributes/events (a fixture collector — a file, or stdout), with
-the coverage line and UNVERIFIED-never-PASS in-band. A **live OTLP exporter** and aggregating a
-**directory** of traces remain follow-ups. The correlation rate (`matched/total`, denominator
+the coverage line and UNVERIFIED-never-PASS in-band. The same bytes can go straight to a collector
+with `--otlp-endpoint URL [--otlp-header NAME=VALUE …]` — opt-in egress, OTLP/JSON over HTTP using
+the standard library only, no retries, nothing read from the environment, and no Langfuse-specific
+adapter (a Langfuse integration is **not** built; do not stage a screenshot implying one). Header
+values are visible in process arguments, so do not pass secrets on a shared host. Aggregating a
+**directory** of traces remains a follow-up. The correlation rate (`matched/total`, denominator
 always shown) measures how much of the agent's recorded activity actually crossed the MCP
 boundary — the R6 number.
 
@@ -508,7 +512,7 @@ The engine is strictly test-first, and its honesty properties are guarded by tes
 
 ## Status & roadmap
 
-**Alpha.** The full record → sandbox → replay → verdict spine plus the failure corpus (C1–C6) is built and merged; observability interop (C9) — `belay interop correlate` (ingest + correlate + attach over a single trace) and `belay interop export` (verdicts back into a fixture collector as OTLP span attributes/events; a live OTLP exporter is not built) — is also built. The live console (C7, 2026-08-25) and the A3 claim-re-derivation axis (C8, 2026-09-02, v0.27.0) are built and merged too — every capability in the C1–C9 build order has shipped except the named deferred slices (a live OTLP exporter, multi-trace-directory aggregation). The [roadmap](docs/ROADMAP.md) and [capability backlog](docs/technical/CAPABILITY_ROADMAP.md) are authoritative on sequencing; [VISION.md](VISION.md) is the thesis.
+**Alpha.** The full record → sandbox → replay → verdict spine plus the failure corpus (C1–C6) is built and merged; observability interop (C9) — `belay interop correlate` (ingest + correlate + attach over a single trace) and `belay interop export` (verdicts back into the OTLP document as span attributes/events, written to `--out`/stdout or POSTed to an opt-in live `--otlp-endpoint`; no Langfuse-specific adapter) — is also built. The live console (C7, 2026-08-25) and the A3 claim-re-derivation axis (C8, 2026-09-02, v0.27.0) are built and merged too — every capability in the C1–C9 build order has shipped except the named deferred slice (multi-trace-directory aggregation). The [roadmap](docs/ROADMAP.md) and [capability backlog](docs/technical/CAPABILITY_ROADMAP.md) are authoritative on sequencing; [VISION.md](VISION.md) is the thesis.
 
 ## Support the project
 

@@ -3228,6 +3228,13 @@ _INTEROP_EXPORT_DESCRIPTION = (
     "The document goes to --out FILE, or to stdout when --out is absent; the summary "
     "(human or --json) ALWAYS goes to stderr, so stdout carries exactly one artifact "
     "and `belay interop export ... > verified.otlp` is always safe.\n\n"
+    "--otlp-endpoint URL sends the SAME bytes to a collector instead (OTLP/JSON over "
+    "HTTP, stdlib only) -- opt-in egress, never both channels: --otlp-endpoint and "
+    "--out are mutually exclusive (exit 2). --otlp-header NAME=VALUE (or 'NAME: "
+    "VALUE') is repeatable and sends headers verbatim; they are visible in process "
+    "arguments, so do not pass secrets on a shared host. Nothing is read from the "
+    "environment. No retries and no partial writes: a connection failure, timeout, "
+    "unreadable URL or non-2xx exits 1 naming the endpoint and the cause.\n\n"
     "WITHOUT --server, correlation still runs and the export still succeeds (exit 0), "
     "but no turn is replayed: every matched span exports UNVERIFIED "
     "(not-replayed-no-server). Spans that cannot be replayed export as UNVERIFIED, "
@@ -3354,6 +3361,25 @@ def _cmd_interop_correlate(args: argparse.Namespace) -> int:
     return 0 if worst is Status.PASS else 1
 
 
+def _parse_otlp_headers(raw_headers: list[str]) -> list[tuple[str, str]]:
+    """Parse repeatable `--otlp-header` values into `(name, value)` pairs.
+
+    Accepts `NAME=VALUE` or `NAME: VALUE` (first separator wins, so a value may
+    contain the other character). A value-less or name-less argument is a loud
+    `ValueError` -- the CLI turns it into a named exit 2, never a silent default.
+    """
+    parsed = []
+    for raw in raw_headers:
+        separators = [i for i, char in enumerate(raw) if char in ":="]
+        name = raw[: separators[0]].strip() if separators else ""
+        if not separators or not name:
+            raise ValueError(
+                f"malformed --otlp-header {raw!r}: expected NAME=VALUE or 'NAME: VALUE'"
+            )
+        parsed.append((name, raw[separators[0] + 1 :].strip()))
+    return parsed
+
+
 def _cmd_interop_export(args: argparse.Namespace) -> int:
     """`belay interop export <otlp> <trace>` — correlate, attach, and export verdicts.
 
@@ -3361,25 +3387,38 @@ def _cmd_interop_export(args: argparse.Namespace) -> int:
     `tools/call` turn by W3C traceparent, replays matched turns (if `--server` was
     given) and attaches the resulting verdict, then writes the verdicts back INSIDE
     the OTLP/JSON document via the engine's `build_enriched_document` + shared `dumps`
-    serializer — to `--out` or stdout. The summary (human or `--json`) ALWAYS goes to
-    stderr, so stdout carries exactly one artifact.
+    serializer — to `--out`, stdout, or (opt-in) a collector named by
+    `--otlp-endpoint`. The builder stays pure; only `post_document` touches the
+    network. The summary (human or `--json`) ALWAYS goes to stderr, so stdout carries
+    exactly one artifact.
 
     Exit semantics (settled, deliberately diverging from correlate's `_worst` gate):
     rc 0 on a successful export REGARDLESS of verdict contents — an all-UNVERIFIED
     export (e.g. no `--server`) is still a successful export, because the export is
     not a gate; rc 2 on the operational fail-closed preflight errors (mirroring
-    correlate); rc 1 on a write failure, a distinct code so the three states are
-    distinguishable.
+    correlate), including both output channels at once and a malformed
+    `--otlp-header`; rc 1 on a write failure or a transport failure, a distinct code
+    so the three states are distinguishable. A failed POST never retries and never
+    changes a verdict.
     """
     from belay.interop import report as interop_report
     from belay.interop.attach import correlate_and_attach
-    from belay.interop.export import build_enriched_document, dumps
+    from belay.interop.export import ExportError, build_enriched_document, dumps, post_document
     from belay.interop.otlp import OtlpParseError, parse_otlp
     from belay.phase0.runner import default_manifest_dir_for
     from belay.replay.reader import TraceCorrupt, read_trace
 
     trace_path = Path(args.trace)
     otlp_path = Path(args.otlp)
+
+    if args.out is not None and args.otlp_endpoint is not None:
+        print("belay: --otlp-endpoint and --out are mutually exclusive", file=sys.stderr)
+        return 2
+    try:
+        otlp_headers = _parse_otlp_headers(args.otlp_header)
+    except ValueError as exc:
+        print(f"belay: {exc}", file=sys.stderr)
+        return 2
 
     if trace_path.is_dir():
         print(
@@ -3425,18 +3464,26 @@ def _cmd_interop_export(args: argparse.Namespace) -> int:
         results = _correlate_without_server(records, spans)
 
     enriched = build_enriched_document(json.loads(otlp_text), spans, results)
-    serialized = dumps(enriched)
 
     out_path = Path(args.out) if args.out is not None else None
-    export_path = str(out_path) if out_path is not None else "-"
-    if out_path is not None:
+    if args.otlp_endpoint is not None:
         try:
-            out_path.write_text(serialized, encoding="utf-8")
-        except OSError as exc:
-            print(f"belay: cannot write export to {out_path}: {exc}", file=sys.stderr)
+            post_document(args.otlp_endpoint, enriched, otlp_headers)
+        except ExportError as exc:
+            print(f"belay: {exc}", file=sys.stderr)
             return 1
+        export_path = args.otlp_endpoint
     else:
-        sys.stdout.write(serialized)
+        serialized = dumps(enriched)
+        export_path = str(out_path) if out_path is not None else "-"
+        if out_path is not None:
+            try:
+                out_path.write_text(serialized, encoding="utf-8")
+            except OSError as exc:
+                print(f"belay: cannot write export to {out_path}: {exc}", file=sys.stderr)
+                return 1
+        else:
+            sys.stdout.write(serialized)
 
     if args.json:
         payload = {
@@ -3445,11 +3492,12 @@ def _cmd_interop_export(args: argparse.Namespace) -> int:
         }
         print(json.dumps(payload), file=sys.stderr)
     else:
+        export_label = "export endpoint" if args.otlp_endpoint is not None else "export path"
         lines = [
             f"belay interop export {trace_path}",
             f"  otlp spans            {otlp_path}",
             f"  manifest-dir          {manifest_dir}",
-            f"  export path           {export_path}",
+            f"  {export_label:<21} {export_path}",
         ]
         if not args.server:
             lines.append("")
@@ -4254,6 +4302,28 @@ def _parser() -> argparse.ArgumentParser:
         "--out",
         default=None,
         help="write the OTLP/JSON document to this file instead of stdout",
+    )
+    interop_export.add_argument(
+        "--otlp-endpoint",
+        default=None,
+        metavar="URL",
+        help=(
+            "POST the same bytes to this collector endpoint (OTLP/JSON over HTTP) "
+            "instead of --out/stdout; mutually exclusive with --out. No retries: a "
+            "connection failure, timeout, unreadable URL or non-2xx exits 1 naming "
+            "the endpoint"
+        ),
+    )
+    interop_export.add_argument(
+        "--otlp-header",
+        action="append",
+        default=[],
+        metavar="NAME=VALUE",
+        help=(
+            "add one header to each POST (repeatable; NAME=VALUE or 'NAME: VALUE'). "
+            "Headers are visible in process arguments -- do not pass secrets on a "
+            "shared host"
+        ),
     )
     interop_export.add_argument(
         "--manifest-dir",

@@ -260,7 +260,7 @@ Summarised, non-authoritatively: **PROCEED** iff ≥3 ***independent*** hand-aud
 
 The verdict is deterministic and re-executable: `tests/test_demo_capture.py` replays the committed capture on every PR and asserts it has not moved. **A1 carries it; no model is consulted.** **[Corrected 2026-09-10 — "A3 is not built" no longer describes the shipped engine.** A3 (claim re-derivation) shipped in v0.27.0 (PR #28, 2026-09-02) and **is** present in the demo — silently: the A3 check re-derives the capture's true claim against the materialized final state and **exits 0, which is silence, never PASS** (D3), so the all-green verdict holds with A3 present (pinned by `tests/test_demo_capture.py`). The corrupt-success FAIL path — which the negative-control demo cannot produce — is carried by the synthetic fixture `tests/test_a3_corrupt_success_fixture.py`, where A3 FAILs, corroborating the A1 trajectory FAIL from an independent axis.]
 
-**On the observability juxtaposition:** the honest form is the console's verdict beside the agent's own session transcript — the transcript reports a successful run and carries no verdict at all, which is precisely the gap. **A real Langfuse integration is NOT built:** C9's first slice ingests and correlates OTLP spans; exporting verdicts back into a collector ships as OTLP/JSON into a fixture collector; a live collector / Langfuse integration is not built — do not stage a Langfuse screenshot to imply an integration that does not exist.
+**On the observability juxtaposition:** the honest form is the console's verdict beside the agent's own session transcript — the transcript reports a successful run and carries no verdict at all, which is precisely the gap. **A real Langfuse integration is NOT built:** C9's first slice ingests and correlates OTLP spans; exporting verdicts back into a collector ships as OTLP/JSON into a fixture collector, and as an opt-in live POST to an operator-named `--otlp-endpoint` (OTLP/JSON over HTTP, stdlib only, no retries, no env-var headers). That is a collector transport, not a Langfuse adapter — there is no Langfuse integration, and do not stage a Langfuse screenshot to imply an integration that does not exist.
 
 ### Key Deliverables
 
@@ -269,7 +269,7 @@ The verdict is deterministic and re-executable: `tests/test_demo_capture.py` rep
 | Corpus | Every caught failure becomes a labeled, replayable case (C6) |
 | Console | Local-first live run feed + per-turn verdicts, streaming (C7) |
 | Claim axis | A3 shipped, subordinated, and refutable via `--no-claim-axis` (C8) |
-| Interop | Ingest OTel/OpenLLMetry spans; sit beside Langfuse/Phoenix (C9 — shipped: ingest+correlate+attach + export-back (fixture-collector round-trip); live-collector export deferred) |
+| Interop | Ingest OTel/OpenLLMetry spans; sit beside Langfuse/Phoenix (C9 — shipped: ingest+correlate+attach + export-back (fixture round-trip, plus opt-in live OTLP/HTTP POST); multi-trace-directory aggregation deferred) |
 | Packaging | `docker run` self-host; BYOK / local-model friendly for A3; never a vendor key |
 | License | Apache-2.0 (permissive + explicit patent/trademark grant) |
 | Docs | Honest coverage statement: what Belay verifies, and what it does **not** |
@@ -356,7 +356,7 @@ The phases above are *what we earn*. The sequenced, one-at-a-time backlog of *ho
 | **C6** | Failure corpus | Week 5 | Moat #2; must compound with every feature |
 | **C7** | Live console | Weeks 5–6 | The launch surface; "watch and steer" |
 | **C8** | Claim re-derivation — axis A3 | Week 7 | Gets better as models improve; **cuttable if the calendar slips** — **shipped** (v0.27.0, PR #28; the A3 WARN vocabulary is empty in v0) |
-| **C9** | Observability interop | Week 8 | Makes "we complement Langfuse/Phoenix" shipped, not rhetorical — **shipped** (ingest+correlate+attach + export-back fixture-collector round-trip; live-collector export deferred) |
+| **C9** | Observability interop | Week 8 | Makes "we complement Langfuse/Phoenix" shipped, not rhetorical — **shipped** (ingest+correlate+attach + export-back fixture round-trip, plus an opt-in live OTLP/HTTP POST to an operator-named endpoint; multi-trace-directory aggregation deferred) |
 | **C10** | Calibrated triage seam — BYOK, optional | Week 9+ | Replay is the trustworthy verdict and it is expensive; this is the cheap, **calibrated** way to spend the replay budget on the turns most likely to hide a violation. The seam is provider-neutral **by construction** — the triage is a subprocess command (the A3 `SubprocessAuthor` pattern), and any model (Jev, laya, a local model, a shell script) is one command; Jev is the FIRST reference author, never an engine adapter. **Shipped** (verify surface: `--triage-author`/`--triage-threshold`/`--triage-top-n`/`--no-triage`, shadow mode default, a skipped turn is UNVERIFIED-by-budget — never PASS; the calibration ledger: `belay triage-ledger <verify.json>` re-renders the stored measurement — reliability, ECE, threshold × top-N sweeps — a pure re-render, no replay; aggregation and budget auto-tuning deferred by name, and the mint's second run supplies the ledger's real volume) |
 
 **C1–C5 is the engine and the Phase-0 gate. C6–C7 is the launch. C8 is deliberately last** — a slipped month must cut the LLM axis, never the deterministic spine.
