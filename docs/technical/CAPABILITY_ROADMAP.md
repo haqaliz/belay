@@ -577,9 +577,9 @@ value cases in the corpus, and the ones the Phase-0 number is made of.
 > Phase-1 launch items; C9's export-back slice remains deferred.
 > **[Superseded 2026-09-10 — the sentence above stopped being true 2026-08-25 (C7,
 > `live-console`), 2026-09-02 (C8, v0.27.0, PR #28) and 2026-09-05 (C9's export-back,
-> v0.28.0). Every C1–C9 capability has shipped; only the named deferred slices remain (a
-> live OTLP exporter, multi-trace-directory aggregation). See the "As built" notes under
-> C7, C8 and C9.]**
+> v0.28.0). Every C1–C9 capability has shipped; only the named deferred slice remains
+> (multi-trace-directory aggregation — the live OTLP exporter shipped 2026-10-21, issue
+> #54). See the "As built" notes under C7, C8 and C9.]**
 
 > **Superseded, kept for the record —** **Decision: build `invariant-test-mutation-shape` next; do NOT mint the remaining ~34 instances
 > under a 0.00-precision detector.** Its rule must be *"modification that removes or weakens an
@@ -902,8 +902,12 @@ named cause (`no-matching-mcp-turn` / `ambiguous-correlation` / `not-replayed-no
 second aspect** (`belay interop export <otlp> <trace> [--out FILE] [--json]`,
 `src/belay/interop/export.py`): verdicts → OTLP/JSON span attributes/events → a
 fixture-collector round-trip (a file, or stdout), with the coverage line and
-    UNVERIFIED-never-PASS in-band. A **live OTLP exporter** and **multi-trace-directory
-    aggregation** remain deferred. (The `NOT_COVERED` reclassification item is dropped — it
+    UNVERIFIED-never-PASS in-band. **The live transport shipped** (issue #54):
+`--otlp-endpoint URL [--otlp-header NAME=VALUE …]` POSTs the same `dumps(document)` bytes as
+OTLP/JSON over HTTP (stdlib only, no retries, headers visible in process arguments,
+nothing read from the environment); the builder stays pure and the transport is the only
+network code. No Langfuse-specific adapter. **Multi-trace-directory aggregation** remains
+deferred. (The `NOT_COVERED` reclassification item is dropped — it
     shipped via `interop-merge-repair`, `docs/STATUS.md`'s v0.24.0-era entry: a correction,
     not a reclassification.)
 
@@ -1019,5 +1023,13 @@ built.
 | C6 | Failure corpus | Wk 5 | 1 | No — moat #2 |
 | C7 | Live console | Wk 5–6 | 1 | No — the launch surface |
 | C8 | Claim re-derivation (A3) | Wk 7 | 1 | **Yes — cut first** · ✅ **SHIPPED** (PR #28, v0.27.0; the A3 WARN vocabulary is empty in v0 and the evaluator's caller-supplied-workspace short-circuit is a follow-on) |
+<<<<<<< HEAD
 | C9 | Observability interop | Wk 8 | 1 | ✅ **SHIPPED** (ingest+correlate+attach + export-back fixture-collector round-trip; live-collector export deferred) |
 | C10 | Calibrated triage seam (BYOK, optional) | Wk 9+ | 1 | ✅ **SHIPPED** (slice 1: verify surface — shadow mode + threshold/top-N, UNVERIFIED-by-budget, additive `triage` section; slice 2: the calibration ledger — `belay triage-ledger`, the pure re-render of the measurement; slice 3: N-document aggregation in argument order, single document byte-identical; budget auto-tuning deferred by name; the mint's second run supplies volume) |
+||||||| parent of 56d0a40 (docs(live-otlp-export): the opt-in transport, its exit codes and the surviving prohibition)
+| C9 | Observability interop | Wk 8 | 1 | ✅ **SHIPPED** (ingest+correlate+attach + export-back fixture-collector round-trip; live-collector export deferred) |
+| C10 | Calibrated triage seam (BYOK, optional) | Wk 9+ | 1 | ✅ **SHIPPED** (slice 1: verify surface — shadow mode + threshold/top-N, UNVERIFIED-by-budget, additive `triage` section; slice 2: the calibration ledger — `belay triage-ledger`, the pure re-render of the measurement; aggregation + budget auto-tuning deferred by name; the mint's second run supplies volume) |
+=======
+| C9 | Observability interop | Wk 8 | 1 | ✅ **SHIPPED** (ingest+correlate+attach + export-back fixture round-trip, plus an opt-in live OTLP/HTTP POST; multi-trace-directory aggregation deferred) |
+| C10 | Calibrated triage seam (BYOK, optional) | Wk 9+ | 1 | ✅ **SHIPPED** (slice 1: verify surface — shadow mode + threshold/top-N, UNVERIFIED-by-budget, additive `triage` section; slice 2: the calibration ledger — `belay triage-ledger`, the pure re-render of the measurement; aggregation + budget auto-tuning deferred by name; the mint's second run supplies volume) |
+>>>>>>> 56d0a40 (docs(live-otlp-export): the opt-in transport, its exit codes and the surviving prohibition)

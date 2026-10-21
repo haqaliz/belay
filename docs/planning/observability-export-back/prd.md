@@ -139,8 +139,13 @@ protocol-native, which the roadmap reads as "C9 got easier AND more urgent"
   test is the arbiter).
 - **Replay determinism:** the export itself is deterministic and offline; the only
   non-deterministic stage is the pre-existing replay inside `correlate_and_attach`,
-  unchanged. "No network" (`CAPABILITY_ROADMAP.md:840`) is honored: the collector is a
-  fixture (a file), never a live OTLP exporter (`prd.md:194-195`).
+  unchanged. "No network" (`CAPABILITY_ROADMAP.md:840`) is honored by this slice: the
+  collector is a fixture (a file), never a live OTLP exporter (`prd.md:194-195`).
+  **[Amended 2026-10-21 — the live transport shipped separately, issue #54
+  (`live-otlp-export`): `--otlp-endpoint URL [--otlp-header NAME=VALUE …]` POSTs the
+  same `dumps(document)` bytes with stdlib `urllib`. The builder stays pure and offline;
+  the opt-in transport is the only network code, with no retries and no env-var
+  secrets.]**
 - **Integration point:** `src/belay/interop/` (new `export.py`), CLI
   `_parser()`/`interop` group (`cli.py:2886-2936`), tests following
   `tests/test_interop_*.py` patterns (fixtures `tests/fixtures/interop/spans_ok.json`,
@@ -190,7 +195,10 @@ UNVERIFIED + named cause. No span is exported bare.
 
 ## Out of Scope
 
-- **Live OTLP exporter / collector connection** — "no network" is load-bearing
+- **Live OTLP exporter / collector connection** — **[SHIPPED separately 2026-10-21,
+  issue #54 (`live-otlp-export`): `--otlp-endpoint` POSTs the enriched document as
+  OTLP/JSON over HTTP. It is a collector transport, not a Langfuse adapter; no vendor
+  integration exists.]** This slice is offline: "no network" is load-bearing
   (`prd.md:194-195`; `spec.md:52`). The fixture collector is a file.
 - **Anything Langfuse-specific** — no vendor integration, nothing to imply one
   (`ROADMAP.md:263`).
