@@ -211,6 +211,66 @@ def merge_ledgers(ledgers: Sequence[Ledger]) -> Ledger:
     )
 
 
+# --- the budget suggestion (a recommendation, never an application) -------------------
+
+
+@dataclass(frozen=True)
+class BudgetSuggestion:
+    """A RECOMMENDATION over the measured sweep — never applied, never written.
+
+    `threshold` is a candidate the ledger actually measured (`SWEEP_THRESHOLDS`),
+    or None when no candidate is eligible. `skipped`/`budget_saved` are the honest
+    counts at that candidate (recomputed from the rows, never derived from the
+    ratio); `violations_skipped` is 0 whenever a threshold is recommended.
+    """
+
+    threshold: Optional[float]
+    skipped: int
+    violations_skipped: int
+    budget_saved: Optional[float]
+    reason: Optional[str] = None
+
+
+def suggest_budget(ledger: Ledger) -> BudgetSuggestion:
+    """The threshold a budget could use, chosen only among zero-skip candidates.
+
+    Candidates are the existing `SWEEP_THRESHOLDS`, never a new grid: the
+    suggestion cannot propose a value the ledger did not measure. Among the points
+    that skip no violation, the best is max by `(budget_saved, threshold)` — a tie
+    goes to the HIGHER threshold, stated so it is a rule and not an accident. When
+    every candidate skips a violation, nothing is recommended (`threshold` None,
+    `budget_saved` None) and the least-bad point is named — min by
+    `(violations_skipped, threshold)`. Zero decided rows never suggest: there is
+    no denominator to guess from.
+    """
+    rows = ledger.rows
+    total = len(rows)
+    if not total:
+        return BudgetSuggestion(None, 0, 0, None, "no decided rows")
+
+    points = threshold_sweep(rows, SWEEP_THRESHOLDS)
+    candidates = [point for point in points if point.violations_skipped == 0]
+    if candidates:
+        best = max(candidates, key=lambda point: (point.budget_saved, point.threshold))
+        return BudgetSuggestion(
+            best.threshold,
+            _skipped_count(rows, best.threshold),
+            0,
+            best.budget_saved,
+        )
+
+    least_bad = min(points, key=lambda point: (point.violations_skipped, point.threshold))
+    skipped = _skipped_count(rows, least_bad.threshold)
+    return BudgetSuggestion(
+        None,
+        skipped,
+        least_bad.violations_skipped,
+        None,
+        f"every candidate skips a violation; least-bad {least_bad.threshold:g}: "
+        f"skips {skipped}/{total} with {least_bad.violations_skipped} violations skipped",
+    )
+
+
 # --- the renderers (one computation, two renderers) ------------------------------------
 
 
@@ -413,10 +473,12 @@ __all__ = [
     "SCHEMA",
     "SWEEP_NS",
     "SWEEP_THRESHOLDS",
+    "BudgetSuggestion",
     "Ledger",
     "NoTriageSectionError",
     "merge_ledgers",
     "render_json",
     "render_text",
     "rows_from_document",
+    "suggest_budget",
 ]
