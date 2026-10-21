@@ -269,3 +269,336 @@ def test_parse_bundle_refuses_a_malformed_entry(mutate, needle: str) -> None:
     with pytest.raises(ValueError) as exc:
         parse_bundle({"schema": PATTERN_SCHEMA, "patterns": [entry]})
     assert needle in str(exc.value)
+
+
+# --- Task 2: storage and the three commands ----------------------------------------------
+
+
+def _write_case(corpus: Path, case: Case) -> Path:
+    """Write a real case directory, with sibling artifacts that must never leave."""
+    from belay.corpus.case import write_case
+
+    case_dir = corpus / case.id
+    write_case(case_dir, case)
+    (case_dir / "trace.jsonl").write_text('{"SECRET-TRACE-LINE": true}\n', encoding="utf-8")
+    (case_dir / "manifest.json").write_text(
+        '{"tree_path": "SECRET-MANIFEST-PATH"}', encoding="utf-8"
+    )
+    (case_dir / "prestate").mkdir()
+    (case_dir / "prestate" / "SECRET-PRESTATE-FILE").write_text(
+        "SECRET-PRESTATE-CONTENT", encoding="utf-8"
+    )
+    return case_dir
+
+
+def test_save_and_load_patterns_round_trip_and_missing_is_empty(tmp_path: Path) -> None:
+    """Missing `patterns.json` is an empty catalog; save/load round-trips; a file, not a dir."""
+    from belay.corpus.share import PATTERNS_FILENAME, load_patterns, save_patterns
+
+    corpus = tmp_path / "corpus"
+    assert load_patterns(corpus) == []
+
+    patterns = build_bundle([_case(cid="a")])["patterns"]
+    save_patterns(corpus, patterns)
+
+    assert (corpus / PATTERNS_FILENAME).is_file()
+    assert load_patterns(corpus) == patterns
+    assert [p.name for p in corpus.iterdir()] == [PATTERNS_FILENAME]
+
+
+def test_saved_patterns_bytes_are_deterministic_and_order_independent(tmp_path: Path) -> None:
+    """The same catalog in any input order writes the same bytes (indent=2, sorted keys)."""
+    from belay.corpus.share import load_patterns, save_patterns
+
+    a = build_bundle([_case(cid="a"), _case(cid="b", tool="write_file")])["patterns"]
+    b = list(reversed(a))
+
+    save_patterns(tmp_path / "one", a)
+    save_patterns(tmp_path / "two", b)
+    assert (tmp_path / "one" / "patterns.json").read_bytes() == (
+        tmp_path / "two" / "patterns.json"
+    ).read_bytes()
+
+    text = (tmp_path / "one" / "patterns.json").read_text(encoding="utf-8")
+    assert text.startswith("{\n  \"patterns\"") or text.startswith("{\n  \"schema\"")
+    assert text == json.dumps(
+        {"schema": PATTERN_SCHEMA, "patterns": a}, indent=2, sort_keys=True
+    ) + "\n"
+
+
+def test_load_patterns_refuses_a_malformed_file(tmp_path: Path) -> None:
+    """A corrupt catalog is a named refusal, never an empty read that hides patterns."""
+    from belay.corpus.share import PATTERNS_FILENAME, load_patterns
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / PATTERNS_FILENAME).write_text("not json", encoding="utf-8")
+    with pytest.raises(ValueError) as exc:
+        load_patterns(corpus)
+    assert "patterns.json" in str(exc.value)
+
+    (corpus / PATTERNS_FILENAME).write_text(
+        json.dumps({"schema": "belay-corpus-patterns/2", "patterns": []}), encoding="utf-8"
+    )
+    with pytest.raises(ValueError) as exc:
+        load_patterns(corpus)
+    assert "patterns.json" in str(exc.value) and "schema" in str(exc.value)
+
+
+def test_merge_patterns_dedupes_by_id_and_sorts() -> None:
+    """A second import adds only new patterns; the result is always sorted by id."""
+    from belay.corpus.share import merge_patterns
+
+    existing = build_bundle([_case(cid="a"), _case(cid="b", tool="write_file")])["patterns"]
+    new = build_bundle([_case(cid="dup-of-a"), _case(cid="c", tool="move_file")])["patterns"]
+
+    merged = merge_patterns(existing, new)
+
+    assert [entry["pattern_id"] for entry in merged] == sorted(
+        entry["pattern_id"] for entry in merged
+    )
+    assert len(merged) == 3
+    assert merged == merge_patterns(existing, new)  # idempotent
+
+
+def test_cli_share_export_writes_only_whitelisted_facts(tmp_path: Path, capsys) -> None:
+    """AC-1: the file carries the eight facts; no sibling artifact or secret reaches it."""
+    from belay import cli
+
+    corpus = tmp_path / "corpus"
+    _write_case(
+        corpus,
+        _case(
+            cid="SECRET-CASE-ID",
+            trajectory={"status": "FAIL", "cause": "SECRET-TRAJECTORY-CAUSE"},
+            rules=("read-only",),
+            scope="SECRET-SCOPE-PATH/",
+        ),
+    )
+    out = tmp_path / "patterns.json"
+
+    rc = cli.main(
+        ["corpus", "share", "export", "--corpus-dir", str(corpus), "--out", str(out)]
+    )
+    assert rc == 0
+
+    text = out.read_text(encoding="utf-8")
+    bundle = json.loads(text)
+    assert bundle["schema"] == PATTERN_SCHEMA
+    assert [set(entry) == ENTRY_KEYS for entry in bundle["patterns"]] == [True]
+
+    for forbidden in (
+        "SECRET-CASE-ID",
+        "SECRET-TRACE-LINE",
+        "SECRET-MANIFEST-PATH",
+        "SECRET-PRESTATE-FILE",
+        "SECRET-PRESTATE-CONTENT",
+        "SECRET-TRAJECTORY-CAUSE",
+        "SECRET-SERVER-COMMAND",
+        "SECRET-TRACE-ID",
+        "SECRET-CAPTURED-AT",
+        "SECRET-CAPABILITY",
+        "SECRET-CAUSE-NOTE",
+        "SECRET-SCOPE-PATH",
+        str(corpus),
+    ):
+        assert forbidden not in text
+
+    printed = capsys.readouterr().out
+    assert "1 case(s) -> 1 pattern(s)" in printed
+    assert "NOT cases" in printed and "never replayed" in printed and "never scored" in printed
+
+
+def test_cli_share_export_is_deterministic(tmp_path: Path) -> None:
+    """Two exports of the same corpus are byte-identical."""
+    from belay import cli
+
+    corpus = tmp_path / "corpus"
+    _write_case(corpus, _case(cid="a"))
+    _write_case(corpus, _case(cid="b", tool="write_file"))
+
+    first = tmp_path / "one.json"
+    second = tmp_path / "two.json"
+    assert cli.main(["corpus", "share", "export", "--corpus-dir", str(corpus), "--out", str(first)]) == 0
+    assert cli.main(["corpus", "share", "export", "--corpus-dir", str(corpus), "--out", str(second)]) == 0
+    assert first.read_bytes() == second.read_bytes()
+
+
+def test_cli_share_export_of_an_empty_corpus_is_a_valid_empty_bundle(tmp_path: Path, capsys) -> None:
+    """AC-6: no cases -> exit 0 and a bundle that imports as nothing, even with no dir yet."""
+    from belay import cli
+
+    out = tmp_path / "empty.json"
+    rc = cli.main(
+        ["corpus", "share", "export", "--corpus-dir", str(tmp_path / "absent"), "--out", str(out)]
+    )
+    assert rc == 0
+    assert json.loads(out.read_text(encoding="utf-8")) == {
+        "schema": PATTERN_SCHEMA,
+        "patterns": [],
+    }
+    assert cli.main(["corpus", "share", "import", str(out), "--corpus-dir", str(tmp_path / "fresh")]) == 0
+
+
+def test_cli_share_export_refuses_a_corrupt_case_without_writing(tmp_path: Path, capsys) -> None:
+    """A corrupt case is exit 2 and NO output file: an export is never partial."""
+    from belay import cli
+
+    corpus = tmp_path / "corpus"
+    _write_case(corpus, _case(cid="good"))
+    broken = corpus / "broken"
+    broken.mkdir()
+    (broken / "case.json").write_text('{"id": "broken"}', encoding="utf-8")
+    out = tmp_path / "patterns.json"
+
+    rc = cli.main(
+        ["corpus", "share", "export", "--corpus-dir", str(corpus), "--out", str(out)]
+    )
+    assert rc == 2
+    assert not out.exists()
+    assert "missing required field" in capsys.readouterr().out
+
+
+def test_cli_share_import_is_idempotent_and_round_trips(tmp_path: Path, capsys) -> None:
+    """AC-3: importing the exported bundle twice adds nothing the second time."""
+    from belay import cli
+    from belay.corpus.share import PATTERNS_FILENAME, load_patterns
+
+    source = tmp_path / "source"
+    _write_case(source, _case(cid="a"))
+    _write_case(source, _case(cid="b", tool="write_file"))
+    out = tmp_path / "bundle.json"
+    assert cli.main(["corpus", "share", "export", "--corpus-dir", str(source), "--out", str(out)]) == 0
+
+    destination = tmp_path / "destination"
+    assert cli.main(["corpus", "share", "import", str(out), "--corpus-dir", str(destination)]) == 0
+    first_bytes = (destination / PATTERNS_FILENAME).read_bytes()
+    first_out = capsys.readouterr().out
+    assert "2 added" in first_out
+
+    assert cli.main(["corpus", "share", "import", str(out), "--corpus-dir", str(destination)]) == 0
+    assert "0 added" in capsys.readouterr().out
+    assert (destination / PATTERNS_FILENAME).read_bytes() == first_bytes
+    assert len(load_patterns(destination)) == 2
+
+    ids = [entry["pattern_id"] for entry in load_patterns(destination)]
+    assert ids == sorted(ids)
+
+
+def test_cli_share_import_refuses_a_malformed_bundle_whole(tmp_path: Path, capsys) -> None:
+    """AC-3: a malformed/unknown-schema bundle is exit 2, named, and writes nothing."""
+    from belay import cli
+    from belay.corpus.share import PATTERNS_FILENAME
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    bad = tmp_path / "bad.json"
+    bad.write_text(
+        json.dumps(
+            {
+                "schema": "belay-corpus-patterns/1",
+                "patterns": [{"pattern_id": "sha256:00", "label": "pending"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rc = cli.main(["corpus", "share", "import", str(bad), "--corpus-dir", str(corpus)])
+    assert rc == 2
+    printed = capsys.readouterr().out
+    assert "pattern bundle" in printed and "missing" in printed
+    assert not (corpus / PATTERNS_FILENAME).exists()
+
+    unknown = tmp_path / "unknown.json"
+    unknown.write_text(json.dumps({"schema": "belay-corpus-patterns/9", "patterns": []}), encoding="utf-8")
+    assert cli.main(["corpus", "share", "import", str(unknown), "--corpus-dir", str(corpus)]) == 2
+    assert "schema" in capsys.readouterr().out
+    assert not (corpus / PATTERNS_FILENAME).exists()
+
+
+def test_cli_share_list_counts_by_label_rule_and_tool(tmp_path: Path, capsys) -> None:
+    """AC-4: text counts by label/rule/tool, and says plainly that patterns are not scored."""
+    from belay import cli
+    from belay.corpus.share import save_patterns
+
+    corpus = tmp_path / "corpus"
+    save_patterns(
+        corpus,
+        build_bundle(
+            [
+                _case(cid="a", label="true-positive", tool="edit_file"),
+                _case(cid="b", label="pending", tool="write_file", rules=("no-assertion-weakening",)),
+            ]
+        )["patterns"],
+    )
+
+    rc = cli.main(["corpus", "share", "list", "--corpus-dir", str(corpus)])
+    assert rc == 0
+    out = capsys.readouterr().out
+
+    assert "2 pattern(s)" in out
+    assert "by label" in out
+    assert "true-positive" in out and "pending" in out
+    assert "by rule" in out
+    assert "read-only" in out and "no-assertion-weakening" in out
+    assert "by tool" in out
+    assert "edit_file" in out and "write_file" in out
+    assert "NOT cases" in out and "never replayed" in out and "never scored" in out
+
+
+def test_cli_share_list_json_is_machine_readable(tmp_path: Path, capsys) -> None:
+    """`--json` gives the same counts as a document, and says `scored: false`."""
+    from belay import cli
+    from belay.corpus.share import save_patterns
+
+    corpus = tmp_path / "corpus"
+    save_patterns(corpus, build_bundle([_case(cid="a"), _case(cid="b", label="pending")])["patterns"])
+
+    rc = cli.main(["corpus", "share", "list", "--corpus-dir", str(corpus), "--json"])
+    assert rc == 0
+    document = json.loads(capsys.readouterr().out)
+
+    assert document["schema"] == PATTERN_SCHEMA
+    assert document["count"] == 2
+    assert document["labels"] == {"pending": 1, "true-positive": 1}
+    assert document["rules"] == {"read-only": 2}
+    assert document["tools"] == {"edit_file": 2}
+    assert document["scored"] is False
+
+
+def test_patterns_json_does_not_change_corpus_list_or_score(tmp_path: Path, capsys) -> None:
+    """AC-5: a catalog beside the cases leaves `corpus list`/`score` byte-identical."""
+    from belay import cli
+    from belay.corpus.share import save_patterns
+
+    corpus = tmp_path / "corpus"
+    _write_case(corpus, _case(cid="a", label="true-positive", status="FAIL"))
+    _write_case(corpus, _case(cid="b", label="false-positive", status="PASS", tool="write_file"))
+
+    def render() -> str:
+        assert cli.main(["corpus", "list", str(corpus)]) == 0
+        listed = capsys.readouterr().out
+        assert cli.main(["corpus", "score", str(corpus)]) == 0
+        scored = capsys.readouterr().out
+        return listed + scored
+
+    before = render()
+    save_patterns(corpus, build_bundle([_case(cid="a"), _case(cid="b")])["patterns"])
+    after = render()
+    assert after == before
+    assert "pattern(s)" not in after
+
+
+def test_patterns_json_is_never_replayed_as_a_case(tmp_path: Path, capsys) -> None:
+    """AC-5: `corpus run` iterates dirs, so a catalog file is never a case to replay."""
+    from belay import cli
+    from belay.corpus.run import run_corpus
+    from belay.corpus.share import save_patterns
+
+    corpus = tmp_path / "corpus"
+    save_patterns(corpus, build_bundle([_case(cid="a")])["patterns"])
+
+    assert run_corpus(corpus).results == []
+    assert cli.main(["corpus", "run", str(corpus)]) == 0
+    out = capsys.readouterr().out
+    assert "0 case(s)" in out

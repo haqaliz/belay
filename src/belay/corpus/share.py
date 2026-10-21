@@ -293,11 +293,98 @@ def parse_bundle(raw: object) -> list:
     return sorted(entries, key=lambda entry: entry["pattern_id"])
 
 
+def _document(patterns: list) -> str:
+    """The deterministic on-disk text for a catalog of `patterns`.
+
+    `indent=2, sort_keys=True` and a trailing newline: the same catalog always produces the
+    same bytes, in a file diff and in a bundle a human inspects before sending it.
+    """
+    return (
+        json.dumps(
+            {"schema": PATTERN_SCHEMA, "patterns": patterns}, indent=2, sort_keys=True
+        )
+        + "\n"
+    )
+
+
+def _write_atomic(path: Path, text: str) -> None:
+    """Write `text` to `path` via a same-directory temp file and `os.replace`.
+
+    Atomic so a failed or interrupted write never leaves a half-document where a reader
+    would take it for the whole catalog. The temp file is removed on failure.
+    """
+    path = Path(path)
+    fd, temp = tempfile.mkstemp(dir=path.parent, prefix=path.name, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(temp, path)
+    except BaseException:
+        try:
+            os.unlink(temp)
+        except OSError:
+            pass
+        raise
+
+
+def write_bundle(path: Path, patterns: list) -> None:
+    """Write a deterministic patterns document to `path`, atomically.
+
+    Used by `share export --out` and by the catalog file itself; both carry the same
+    schema, so an exported bundle can be dropped straight into `<corpus-dir>/patterns.json`.
+    """
+    _write_atomic(Path(path), _document(merge_patterns([], patterns)))
+
+
+def load_patterns(corpus_dir: Path) -> list:
+    """The catalog at `<corpus_dir>/patterns.json`, or `[]` when there is none.
+
+    Fail-closed: an unreadable or malformed file is a named `ValueError`, never an empty
+    read. Silently returning `[]` would make the next import overwrite a catalog whose
+    patterns the operator could no longer see.
+    """
+    path = Path(corpus_dir) / PATTERNS_FILENAME
+    if not path.exists():
+        return []
+    try:
+        text = path.read_text(encoding="utf-8")
+        return parse_bundle(text)
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"pattern catalog {path}: {exc}") from exc
+
+
+def merge_patterns(existing: list, new: list) -> list:
+    """Union of two catalogs, deduped by `pattern_id` and sorted by it.
+
+    Idempotent: importing the same bundle twice changes nothing. The id IS the pattern, so
+    two entries with one id carry identical facts; the first wins (they agree).
+    """
+    merged = {entry["pattern_id"]: entry for entry in existing}
+    for entry in new:
+        merged.setdefault(entry["pattern_id"], entry)
+    return [merged[key] for key in sorted(merged)]
+
+
+def save_patterns(corpus_dir: Path, patterns: list) -> None:
+    """Write `<corpus_dir>/patterns.json` (deterministic, atomic), creating the dir.
+
+    A file, never a directory: `corpus run` iterates directories, so nothing here can be
+    mistaken for a replayable case.
+    """
+    corpus_dir = Path(corpus_dir)
+    corpus_dir.mkdir(parents=True, exist_ok=True)
+    write_bundle(corpus_dir / PATTERNS_FILENAME, patterns)
+
+
 __all__ = [
     "PATTERN_SCHEMA",
     "PATTERNS_FILENAME",
     "build_bundle",
+    "load_patterns",
+    "merge_patterns",
     "parse_bundle",
     "pattern_id",
     "pattern_of",
+    "save_patterns",
+    "write_bundle",
 ]
