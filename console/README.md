@@ -65,6 +65,35 @@ BELAY_CONSOLE_VERIFY_SERVER="python3 $(pwd)/demo/server.py {workspace}" \
   npm run server
 ```
 
+## Approval holds
+
+When the engine runs behind the approval gate, a risky `tools/call` is held on a file
+contract (`BELAY_APPROVAL_DIR/requests/<hold_id>.json` → `decisions/<hold_id>.json`).
+Point the console at the same directory and the panel above the live feed is the human
+side of it:
+
+```bash
+BELAY_APPROVAL_DIR=/workspace/approvals npm run server
+```
+
+- `GET /api/approvals` → `{configured, holds}`. Only **pending** holds are listed: the
+  request parses, no decision file exists, and `now < created_at + timeout`. Malformed
+  request files and a missing directory are skipped, never a failed list. Unconfigured
+  answers `configured: false` with an empty list.
+- `POST /api/approvals/decision` `{hold_id, decision: "approve"|"deny", reason?}` writes
+  exactly `{"decision":"approve"}` or `{"decision":"deny","reason":"..."}` — a temp file
+  in `decisions/` renamed into place, so the engine never reads half a decision. Hold ids
+  are validated (`^[A-Za-z0-9._-]+$`) and resolved inside the approval dir. Refusals:
+  400 `bad-hold-id`/`bad-decision`; 409 `approval-not-configured`, `hold-not-found`,
+  `hold-expired`, `already-decided` (a late decision is dead — the engine has already
+  failed closed).
+
+The panel polls once a second, counts down to the deadline, and disables its buttons
+there: `timed out — the engine fails closed`. On a 409 it refetches rather than keeping
+an optimistic state. It never claims a verdict: an approved call is forwarded by the
+engine and a denied one is an observation, never a turn or a PASS. There is no history
+view — only pending holds, and no websockets.
+
 ## Record the demo gif
 
 ```bash

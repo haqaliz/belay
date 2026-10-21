@@ -116,6 +116,9 @@ def test_the_console_service_ships_with_a_healthcheck() -> None:
     assert "./workspace:/workspace" in console_block
     assert "BELAY_CONSOLE_TRACE_DIR" in console_block
     assert "BELAY_SNAPSHOT_DIR" in console_block
+    # Both sides of the approval gate see the same requests/decisions dir.
+    assert "BELAY_APPROVAL_DIR: ${BELAY_APPROVAL_DIR:-/workspace/approvals}" in engine_block
+    assert "BELAY_APPROVAL_DIR: ${BELAY_APPROVAL_DIR:-/workspace/approvals}" in console_block
 
 
 def test_the_console_image_builds_and_reports_health_with_the_engine() -> None:

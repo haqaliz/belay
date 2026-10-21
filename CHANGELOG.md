@@ -104,6 +104,26 @@ change, no engine change).
   build and measurement, the per-arch pushes, the manifest, and the deferrals; the platform
   argv builder is unit-tested for unset (byte-identical) and set.
 
+**The console is the human side of the approval gate (issue #55).** A held `tools/call`
+no longer needs a hand-written JSON file: the console lists pending holds, counts down and
+writes the decision the engine is polling for. **Console only — no engine, file-contract or
+verdict change, and no published number moves** (`11/60 = 18.3%`, `precision 0.00`, `1/15`,
+`4/16`, `recall 0.00`, `3/93` stand unedited; a denied call stays an observation, never a
+turn or a verdict).
+
+- **`GET /api/approvals`** reads `BELAY_APPROVAL_DIR` and lists only pending holds
+  (request parses, no decision file, `now < created_at + timeout`) with tool, triggers
+  and `expires_at`. Malformed request files, a missing directory and an unconfigured
+  server are empty lists — `configured: false` in the last case.
+- **`POST /api/approvals/decision`** validates the hold id (`^[A-Za-z0-9._-]+$`), refuses
+  expired and already-decided holds 409, and writes the engine's exact JSON atomically
+  (temp file in `decisions/` + rename). Late decisions are dead: the engine has already
+  failed closed.
+- **`ApprovalPanel`** polls every second, hides when unconfigured, counts down, and
+  disables at the deadline with `timed out — the engine fails closed`. A 409 refetches;
+  the panel keeps no optimistic state and claims no verdict.
+- **Compose** passes the shared `/workspace/approvals` to both services.
+
 **A2 abstains on a contract a `tools/list_changed` retracted before the call (issue #50).** A
 correctness fix on the effect axis: no new status, axis, kind, reduction rule or trace field,
 and **no published number moves** (`11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16`,
