@@ -13,19 +13,24 @@ import package and the `belay` command are unchanged.
 > from every PR and re-runs the whole measurement inside it. Publishing was deferred by name
 > and is now built: `release.yml`'s **`ghcr`** job builds the image from the tagged checkout,
 > **measures that exact image** with the same in-image acceptance, proves the measured and
-> pushed image IDs are equal, and only then pushes `ghcr.io/<owner>/belay:vX.Y.Z` and
-> `:latest`. The pre-registered rule — *push the image that was validated, never a rebuild
-> nobody measured* — is enforced by `tests/test_release_workflow.py`, which fails if the push
-> ever moves ahead of the measurement or leaves its job.
+> pushed image IDs are equal, and only then pushes it. The pre-registered rule — *push the
+> image that was validated, never a rebuild nobody measured* — is enforced by
+> `tests/test_release_workflow.py`, which fails if a push ever moves ahead of the measurement
+> or leaves its job.
 >
 > **VERIFIED LIVE 2026-09-05, on v0.30.0's own release run** — the `ghcr` job succeeded and
 > `docker pull ghcr.io/haqaliz/belay:v0.30.0` and `:latest` both succeeded **from a shell with
 > no credentials** (`docker logout ghcr.io` first), and the pulled image ran `belay verify
 > --help`. The package landed **public**; no owner click was needed. That check is not
 > optional on future releases: a push can succeed into a private package, which pulls fine
-> for the owner and fails for everyone else. `linux/amd64` only: that is the substrate
-> `ubuntu-24.04` measures, and an arm64 image would be one nothing ran on. Apple Silicon
-> readers keep building locally, which works.
+> for the owner and fails for everyone else. **Multi-arch since issue #56:** `linux/amd64` and
+> `linux/arm64` are built, measured and pushed as `:<version>-amd64` / `:<version>-arm64`, and
+> `:<version>` / `:latest` are manifests assembled from those two digests (`docker buildx
+> imagetools create`) — nothing is rebuilt between measurement and push. **arm64 is measured
+> by the in-image acceptance only** (`tests/test_docker_inimage.py` under QEMU); the **compose
+> acceptance stays amd64-only**, because a compose stack under QEMU is a different substrate
+> claim. **Signing/provenance (cosign/attestations) and a Docker Hub mirror remain deferred
+> by name** — this slice is the arches, not the supply chain.
 
 ## Versioning
 
@@ -64,7 +69,9 @@ breaking under strict semver. The tag **must** match the `version` in `pyproject
    API, which is CDN-stale for minutes after a publish (measured on v0.25.0, where even the
    per-version endpoint 404'd). GitHub Release: `gh release view vX.Y.Z`. Container:
    `docker pull ghcr.io/<owner>/belay:vX.Y.Z` **from a shell with no credentials** — a push
-   that succeeded into a private package pulls fine for you and fails for everyone else.
+   that succeeded into a private package pulls fine for you and fails for everyone else. On a
+   multi-arch release, also check `docker buildx imagetools inspect ghcr.io/<owner>/belay:vX.Y.Z`
+   lists both `linux/amd64` and `linux/arm64`.
 
 ## One-time setup per channel
 
