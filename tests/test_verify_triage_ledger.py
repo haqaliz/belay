@@ -555,3 +555,77 @@ def test_parity_json_row_declares_triage_ledger() -> None:
 
     assert "triage-ledger" in EXPECTED["--json"], EXPECTED["--json"]
     assert "triage-ledger" in _surfaces_carrying("--json"), _surfaces_carrying("--json")
+
+
+# --- (8) THE MERGE: many ledgers become one, in input order ---------------------------
+
+
+def _ledger(rows, turns_total, unverified=0, skipped=0, unscored=0, trace="t.jsonl"):
+    """A `Ledger` built directly — the merge is a pure function over them."""
+    from belay.verify.triage_ledger import Ledger
+
+    return Ledger(
+        trace=trace,
+        rows=tuple(rows),
+        turns_total=turns_total,
+        excluded_unverified=unverified,
+        excluded_skipped=skipped,
+        excluded_unscored=unscored,
+    )
+
+
+def test_merge_two_ledgers_sums_counts_and_concatenates_rows_in_order() -> None:
+    """Two ledgers -> the four counts summed, the decided rows concatenated in
+    input order, and a header that says how many documents there were — no paths."""
+    from belay.verify.calibration import LedgerRow
+    from belay.verify.triage_ledger import merge_ledgers
+
+    first = _ledger(
+        [LedgerRow(0, 0.2, 0.25, True), LedgerRow(1, 0.8, 0.75, False)],
+        turns_total=4,
+        unverified=1,
+        skipped=1,
+        trace="a.jsonl",
+    )
+    second = _ledger(
+        [LedgerRow(0, 0.4, 0.5, True)],
+        turns_total=2,
+        unverified=0,
+        skipped=0,
+        unscored=1,
+        trace="b.jsonl",
+    )
+
+    merged = merge_ledgers([first, second])
+
+    assert [(row.ordinal, row.violated) for row in merged.rows] == [
+        (0, True),
+        (1, False),
+        (0, True),
+    ]
+    assert merged.turns_total == 6
+    assert merged.turns_decided == 3
+    assert merged.excluded_unverified == 1
+    assert merged.excluded_skipped == 1
+    assert merged.excluded_unscored == 1
+    assert merged.trace == "2 documents"
+
+
+def test_merge_one_ledger_is_itself() -> None:
+    """A single-document merge changes nothing — the header stays the document's
+    own trace, the single-document byte contract's precondition."""
+    from belay.verify.calibration import LedgerRow
+    from belay.verify.triage_ledger import merge_ledgers
+
+    only = _ledger([LedgerRow(0, 0.5, 0.5, True)], turns_total=2, unverified=1)
+
+    assert merge_ledgers([only]) == only
+
+
+def test_merge_no_documents_is_a_named_error() -> None:
+    """Total, never partial: an empty sequence is a named `ValueError`, not an
+    `IndexError` (unreachable through the CLI's `nargs="+"`)."""
+    from belay.verify.triage_ledger import merge_ledgers
+
+    with pytest.raises(ValueError, match="no documents to merge"):
+        merge_ledgers([])
