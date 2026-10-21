@@ -582,7 +582,7 @@ describe("GET /api/approvals", () => {
 
   it("lists a pending hold with its tool, triggers and expiry", async () => {
     await withApprovals(async (local, dir) => {
-      writeRequest(dir, request());
+      writeRequest(dir, approvalRequest());
       const res = await fetch(`${local.base}/api/approvals`);
       expect(res.status).toBe(200);
       const body = (await res.json()) as ListBody;
@@ -599,16 +599,16 @@ describe("GET /api/approvals", () => {
 
   it("computes expires_at as created_at + timeout", async () => {
     await withApprovals(async (local, dir) => {
-      writeRequest(dir, request());
+      writeRequest(dir, approvalRequest());
       const res = await fetch(`${local.base}/api/approvals`);
       const body = (await res.json()) as ListBody;
-      expect(body.holds[0].expires_at).toBe(created + 60);
+      expect(body.holds[0].expires_at).toBe(approvalCreated + 60);
     });
   });
 
   it("omits a hold that already has a decision", async () => {
     await withApprovals(async (local, dir) => {
-      writeRequest(dir, request());
+      writeRequest(dir, approvalRequest());
       writeDecision(dir, "hold-1", { decision: "approve" });
       const res = await fetch(`${local.base}/api/approvals`);
       const body = (await res.json()) as ListBody;
@@ -618,7 +618,7 @@ describe("GET /api/approvals", () => {
 
   it("omits a hold past created_at + timeout", async () => {
     await withApprovals(async (local, dir) => {
-      writeRequest(dir, request({ created_at: created - 120, timeout: 60 }));
+      writeRequest(dir, approvalRequest({ created_at: approvalCreated - 120, timeout: 60 }));
       const res = await fetch(`${local.base}/api/approvals`);
       const body = (await res.json()) as ListBody;
       expect(body.holds).toEqual([]);
@@ -627,7 +627,7 @@ describe("GET /api/approvals", () => {
 
   it("skips a malformed request file without breaking the list", async () => {
     await withApprovals(async (local, dir) => {
-      writeRequest(dir, request());
+      writeRequest(dir, approvalRequest());
       mkdirSync(path.join(dir, "requests"), { recursive: true });
       writeFileSync(path.join(dir, "requests", "broken.json"), "{not json");
       writeFileSync(path.join(dir, "requests", "missing-fields.json"), JSON.stringify({ hold_id: "missing-fields" }));
@@ -654,8 +654,8 @@ describe("GET /api/approvals", () => {
 
   it("reads BELAY_APPROVAL_DIR from the environment", async () => {
     const dir = approvalDir();
-    writeRequest(dir, request());
-    const local = await startServer({ env: { ...process.env, BELAY_APPROVAL_DIR: dir }, now: clock });
+    writeRequest(dir, approvalRequest());
+    const local = await startServer({ env: { ...process.env, BELAY_APPROVAL_DIR: dir }, now: approvalClock });
     try {
       const res = await fetch(`${local.base}/api/approvals`);
       const body = (await res.json()) as ListBody;

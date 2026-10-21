@@ -11,8 +11,9 @@
 //
 // Every verdict travels in the engine's document; this server computes none.
 
+import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
-import { appendFile, readFile, readdir, stat } from "node:fs/promises";
+import { appendFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createServer as httpCreateServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { homedir } from "node:os";
@@ -199,6 +200,79 @@ export function createServer(config: ServerConfig = {}): Server {
     } catch (error) {
       log(`approval list failed (${String(error)})`);
       sendJson(res, 200, { configured, holds: [] });
+    }
+  }
+
+  async function handleApprovalDecision(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    try {
+      if (approvalDir === undefined) {
+        sendJson(res, 409, { error: { cause: "approval-not-configured" } });
+        return;
+      }
+      const body = (await readBody(req)) as { hold_id?: unknown; decision?: unknown; reason?: unknown } | null;
+      const holdId = body?.hold_id;
+      if (typeof holdId !== "string" || !HOLD_ID.test(holdId)) {
+        sendJson(res, 400, { error: { cause: "bad-hold-id" } });
+        return;
+      }
+      const decision = body?.decision;
+      if (decision !== "approve" && decision !== "deny") {
+        sendJson(res, 400, { error: { cause: "bad-decision" } });
+        return;
+      }
+      const requestPath = resolveInside(path.join(approvalDir, "requests"), `${holdId}.json`);
+      let request: Omit<ApprovalHold, "expires_at"> | null = null;
+      if (requestPath !== null) {
+        try {
+          request = parseApprovalRequest(JSON.parse(await readFile(requestPath, "utf8")));
+        } catch {
+          request = null;
+        }
+      }
+      if (request === null || request.hold_id !== holdId) {
+        sendJson(res, 409, { error: { cause: "hold-not-found" } });
+        return;
+      }
+      // Past the deadline the engine has already failed closed; a late file is
+      // never read, so refuse it here rather than write a dead decision.
+      if (now().getTime() >= (request.created_at + request.timeout) * 1000) {
+        sendJson(res, 409, { error: { cause: "hold-expired" } });
+        return;
+      }
+      const decisionsDir = path.join(approvalDir, "decisions");
+      const decisionPath = resolveInside(decisionsDir, `${holdId}.json`);
+      if (decisionPath === null) {
+        sendJson(res, 400, { error: { cause: "bad-hold-id" } });
+        return;
+      }
+      try {
+        await stat(decisionPath);
+        sendJson(res, 409, { error: { cause: "already-decided" } });
+        return;
+      } catch {
+        // no decision yet
+      }
+      // The engine's contract, exactly: no extra keys, reason only on a deny.
+      const record =
+        decision === "deny" && typeof body?.reason === "string" && body.reason.length > 0
+          ? { decision, reason: body.reason }
+          : { decision };
+      await mkdir(decisionsDir, { recursive: true });
+      // shortcut: two concurrent decisions can both clear the check above; the last
+      // rename wins and the UI refetches on any refusal. Add an O_EXCL claim only if
+      // a multi-operator console ever ships.
+      const temp = path.join(decisionsDir, `.belay-decision-${randomUUID()}.tmp`);
+      try {
+        await writeFile(temp, JSON.stringify(record), "utf8");
+        await rename(temp, decisionPath); // same-dir rename: a reader never sees half a file
+      } catch (error) {
+        await rm(temp, { force: true });
+        throw error;
+      }
+      sendJson(res, 200, { ok: true, decision });
+    } catch (error) {
+      log(`approval decision failed (${String(error)})`);
+      sendJson(res, 500, { error: { cause: "decision-unwritable" } });
     }
   }
 
@@ -421,6 +495,10 @@ export function createServer(config: ServerConfig = {}): Server {
     }
     if (method === "GET" && route === "/api/approvals") {
       void handleApprovals(res);
+      return;
+    }
+    if (method === "POST" && route === "/api/approvals/decision") {
+      void handleApprovalDecision(req, res);
       return;
     }
     if (method === "GET" && route === "/api/trace") {
