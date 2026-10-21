@@ -79,6 +79,8 @@ Building A2 alone and expecting it to catch cheating is the single most likely w
 | **2** | Team layer: CI regression gate, shared corpus, approval gate | Months 3–6 | First credible willingness-to-pay + demand-pull for a second surface |
 | **3** | Managed control plane | Months 6+ | Repeatable managed motion + corpus measurably improving detection |
 
+> **Status 2026-10-21 — v1.0.1 completes the buildable roadmap.** Phases 0 and 1 are done, C1–C10 shipped, and Phase 2's buildable slices (CI gate, approval gate, invariant authoring, corpus pattern catalog) shipped. The remaining goals — the second surface (#59) and Phase 3 — are **post-traction by decision**, not by omission. See [`planning/v1-complete/DECISION.md`](planning/v1-complete/DECISION.md).
+
 ---
 
 ## Phase 0: Corpus Proof (Weeks 1–4)
