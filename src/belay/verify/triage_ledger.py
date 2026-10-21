@@ -177,6 +177,28 @@ def rows_from_document(doc: dict) -> Ledger:
     )
 
 
+def merge_ledgers(ledgers: Sequence[Ledger]) -> Ledger:
+    """Many ledgers -> one, in input order: rows concatenated, the four counts
+    summed. A single ledger is returned unchanged (its own `trace` header — the
+    single-document byte contract); N > 1 carries `"N documents"`, never a path.
+
+    Total by construction: the empty sequence is a named `ValueError`, not an
+    `IndexError` (the CLI's `nargs="+"` cannot reach it).
+    """
+    if not ledgers:
+        raise ValueError("no documents to merge")
+    if len(ledgers) == 1:
+        return ledgers[0]
+    return Ledger(
+        trace=f"{len(ledgers)} documents",
+        rows=tuple(row for ledger in ledgers for row in ledger.rows),
+        turns_total=sum(ledger.turns_total for ledger in ledgers),
+        excluded_unverified=sum(ledger.excluded_unverified for ledger in ledgers),
+        excluded_skipped=sum(ledger.excluded_skipped for ledger in ledgers),
+        excluded_unscored=sum(ledger.excluded_unscored for ledger in ledgers),
+    )
+
+
 # --- the renderers (one computation, two renderers) ------------------------------------
 
 
@@ -381,6 +403,7 @@ __all__ = [
     "SWEEP_THRESHOLDS",
     "Ledger",
     "NoTriageSectionError",
+    "merge_ledgers",
     "render_json",
     "render_text",
     "rows_from_document",
