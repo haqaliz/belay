@@ -22,6 +22,7 @@ import { probeEngineVersion, runVerifyJson } from "./engine.js";
 import { createTailState, readTail } from "./tail.js";
 import type { TailState } from "./tail.js";
 import { deriveTurns } from "./trace.js";
+import type { ApprovalHold } from "./types.js";
 
 export interface ServerConfig {
   traceDir?: string;
@@ -32,6 +33,8 @@ export interface ServerConfig {
   log?: (line: string) => void;
   /** The /health engine-version probe; injected for tests, python-based by default. */
   engineVersion?: () => Promise<string | null>;
+  /** `BELAY_APPROVAL_DIR` — the engine's requests/decisions directory contract. */
+  approvalDir?: string;
 }
 
 export interface TraceListing {
@@ -43,6 +46,8 @@ export interface TraceListing {
 }
 
 const TRACE_PREFIX = "trace-";
+/** The engine's hold ids are its own file names — anything else never names one. */
+const HOLD_ID = /^[A-Za-z0-9._-]+$/;
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -97,6 +102,7 @@ export function createServer(config: ServerConfig = {}): Server {
   const log = config.log ?? ((line: string) => console.error(`[belay-console] ${line}`));
   const env = config.env ?? process.env;
   const engineVersion = config.engineVersion ?? probeEngineVersion;
+  const approvalDir = config.approvalDir ?? (env.BELAY_APPROVAL_DIR || undefined);
 
   // `BELAY_CONSOLE_VERIFY_TIMEOUT` (seconds) → `verify --timeout <seconds>`,
   // passed to the engine whenever the verify/replay handlers run. The engine's
@@ -125,6 +131,75 @@ export function createServer(config: ServerConfig = {}): Server {
     const resolved = path.resolve(root, requested);
     if (resolved !== root && !resolved.startsWith(root + path.sep)) return null;
     return resolved;
+  }
+
+  /**
+   * The engine's request file (`requests/<hold_id>.json`), or null when it is not
+   * that contract. Anything unparseable or incomplete is skipped, never guessed:
+   * the list must not break because one file was half-written.
+   */
+  function parseApprovalRequest(raw: unknown): Omit<ApprovalHold, "expires_at"> | null {
+    if (typeof raw !== "object" || raw === null) return null;
+    const body = raw as Record<string, unknown>;
+    if (typeof body.hold_id !== "string" || typeof body.tool !== "string") return null;
+    if (!Array.isArray(body.triggers) || !body.triggers.every((t) => typeof t === "string")) return null;
+    if (typeof body.created_at !== "number" || !Number.isFinite(body.created_at)) return null;
+    if (typeof body.timeout !== "number" || !Number.isFinite(body.timeout) || body.timeout <= 0) return null;
+    return {
+      hold_id: body.hold_id,
+      tool: body.tool,
+      request_id: body.request_id,
+      triggers: body.triggers,
+      created_at: body.created_at,
+      timeout: body.timeout,
+    };
+  }
+
+  /** Every hold still pending: request parses, no decision file, now < deadline. */
+  async function listPendingHolds(): Promise<ApprovalHold[]> {
+    if (approvalDir === undefined) return [];
+    const requestsDir = path.join(approvalDir, "requests");
+    let names: string[];
+    try {
+      names = await readdir(requestsDir);
+    } catch {
+      return []; // a missing/unreadable dir is an empty list, never an error
+    }
+    const nowMs = now().getTime();
+    const holds: ApprovalHold[] = [];
+    for (const name of names) {
+      if (!name.endsWith(".json")) continue;
+      const holdId = name.slice(0, -".json".length);
+      if (!HOLD_ID.test(holdId)) continue;
+      let request: Omit<ApprovalHold, "expires_at"> | null = null;
+      try {
+        request = parseApprovalRequest(JSON.parse(await readFile(path.join(requestsDir, name), "utf8")));
+      } catch {
+        continue; // unparseable or vanished mid-list: skipped, not fatal
+      }
+      // The file's own id must name the file: a decision write resolves by id.
+      if (request === null || request.hold_id !== holdId) continue;
+      const expiresAt = request.created_at + request.timeout;
+      if (nowMs >= expiresAt * 1000) continue;
+      try {
+        await stat(path.join(approvalDir, "decisions", name));
+        continue; // any decision file ends the hold, readable or not
+      } catch {
+        // no decision: still pending
+      }
+      holds.push({ ...request, expires_at: expiresAt });
+    }
+    return holds.sort((a, b) => a.created_at - b.created_at);
+  }
+
+  async function handleApprovals(res: ServerResponse): Promise<void> {
+    const configured = approvalDir !== undefined;
+    try {
+      sendJson(res, 200, { configured, holds: await listPendingHolds() });
+    } catch (error) {
+      log(`approval list failed (${String(error)})`);
+      sendJson(res, 200, { configured, holds: [] });
+    }
   }
 
   function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -342,6 +417,10 @@ export function createServer(config: ServerConfig = {}): Server {
     }
     if (method === "GET" && route === "/api/traces") {
       void handleTraces(res);
+      return;
+    }
+    if (method === "GET" && route === "/api/approvals") {
+      void handleApprovals(res);
       return;
     }
     if (method === "GET" && route === "/api/trace") {
