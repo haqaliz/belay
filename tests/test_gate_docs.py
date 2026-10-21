@@ -95,6 +95,9 @@ def test_gate_quickstart_step_exists_and_keeps_the_existing_steps() -> None:
     assert "BELAY_RUN_ID" in section
     assert "baselines/local" in section
     assert "never fails the gate alone" in section
+    assert "--strict-shape" in section
+    assert "uses: haqaliz/belay@" in section
+    assert "restore" in section and "baseline" in section
 
 
 def test_gate_quickstart_commands_parse_through_the_cli() -> None:
