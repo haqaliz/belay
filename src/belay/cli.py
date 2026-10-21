@@ -3071,7 +3071,11 @@ def _cmd_triage_ledger(args: argparse.Namespace) -> int:
     whole invocation, never a partial ledger; so is a document passed twice (a
     double-counted denominator). A merged column with zero decided rows renders the
     named refusal with no rates and exits 0 (the INSTRUMENT SUSPECT shape — a
-    measurement, not a gate).
+    measurement, not a gate). `--suggest-budget` appends ONE recommendation line
+    (one `suggestion` key under `--json`) over the merged rows: the highest
+    measured threshold that skips no violation, or none with the least-bad named.
+    It is a recommendation only — no flag/config write, no replay, no application —
+    and the zero-decided refusal is returned unchanged with no suggestion.
     """
     from belay.verify.triage_ledger import (
         merge_ledgers,
@@ -3109,9 +3113,9 @@ def _cmd_triage_ledger(args: argparse.Namespace) -> int:
     ledger = merge_ledgers(ledgers)
 
     if args.json:
-        _emit(render_json(ledger))
+        _emit(render_json(ledger, suggest=args.suggest_budget))
     else:
-        _emit(render_text(ledger))
+        _emit(render_text(ledger, suggest=args.suggest_budget))
     return 0
 
 
@@ -4673,7 +4677,10 @@ def _parser() -> argparse.ArgumentParser:
             "passed twice — is a fail-closed error (exit 2, naming the path) that "
             "refuses the whole invocation; a merged column with zero decided rows "
             "renders the named refusal (NO_DECIDED_ROWS) with NO rates and exits 0 "
-            "— the INSTRUMENT SUSPECT shape, never a fabricated 0%."
+            "— the INSTRUMENT SUSPECT shape, never a fabricated 0%.\n\n"
+            "--suggest-budget appends one recommendation line (one `suggestion` key "
+            "under --json): the highest measured threshold that skips no violation, "
+            "or none with the least-bad candidate named. It applies nothing."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -4694,6 +4701,19 @@ def _parser() -> argparse.ArgumentParser:
             "same measurement (reliability, ECE, both sweeps, the excluded counts), "
             "byte-stable; exit codes are unchanged, and the zero-denominator "
             "refusal emits the refusal document with no rates"
+        ),
+    )
+    triage_ledger.add_argument(
+        "--suggest-budget",
+        action="store_true",
+        help=(
+            "append ONE recommendation line (and one `suggestion` key under "
+            "--json): the highest measured threshold that skips no violation, "
+            "with its honest skipped/budget numbers; when every candidate skips "
+            "a violation it recommends none and names the least-bad one. "
+            "RECOMMENDATION ONLY: it never writes a flag or config, never "
+            "replays, and never applies anything; zero decided rows keeps the "
+            "NO_DECIDED_ROWS refusal unchanged and suggests nothing"
         ),
     )
     triage_ledger.set_defaults(func=_cmd_triage_ledger)

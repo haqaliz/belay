@@ -7,6 +7,30 @@ All notable changes to Belay are documented here. The format follows
 
 ## [Unreleased]
 
+**The ledger now recommends a budget — and applies nothing (issue #53).** `belay
+triage-ledger --suggest-budget` appends exactly **one** line (and exactly one
+`suggestion` key under `--json`): the highest existing `SWEEP_THRESHOLDS` candidate
+that skips no violation, with its honest skipped/budget numbers; ties go to the
+higher threshold, and when every candidate skips a violation it recommends none and
+names the least-bad. It is a **recommendation only** — no flag or config is written,
+`replay` is never called, nothing is applied, and the human still decides. Without
+the flag both renders are **byte-identical** to before (both snapshots and the
+refusal document pass unmodified); zero decided rows keeps the `NO_DECIDED_ROWS`
+refusal with no suggestion, and **no published number moves** (`11/60 = 18.3%`,
+`precision 0.00`, `1/15`, `4/16`, `recall 0.00`, `3/93` stand unedited; nothing
+recomputed).
+
+- **Measured candidates only.** The suggestion chooses among the existing sweep
+  grid, never a new candidate, and prefers zero-skip thresholds: a recommendation
+  can never propose a value the ledger did not measure.
+- **Honest refusal.** When every candidate skips at least one violation, the
+  `suggestion` key carries `threshold: null`, `budget_saved: null` and a reason
+  naming the least-bad candidate (lowest violation count, then lowest threshold).
+- **n=1 is not calibration.** The denominator is always printed with the
+  recommendation; the threshold and top-N sweeps are unchanged.
+- **Not built, by name:** automatic application, top-N suggestion, a new sweep
+  grid, a new command, replay, and any flag/config write.
+
 **The calibration ledger measures a run set, not one document (issue #52).** `belay
 triage-ledger` takes one or more stored `verify --json` documents, merged in **argument
 order**: decided rows concatenated, counts summed, header `"N documents"` when there is

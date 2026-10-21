@@ -837,3 +837,174 @@ def test_all_unverified_across_documents_refuses_rates_over_the_summed_counts(
     assert parsed["turns_total"] == 14
     assert parsed["excluded"] == {"unverified": 14, "skipped": 0, "unscored": 0}
     assert "violation_rate" not in parsed, out
+
+
+# --- (10) BUDGET SUGGESTION: a recommendation, never an application ------------------
+
+
+def _suggestion_ledger(*pairs: tuple[float, bool]):
+    """A `Ledger` whose decided rows are exactly `(score, violated)` pairs — the
+    suggestion's only input, so every hand-computed expectation below is over rows
+    the test states in full."""
+    from belay.verify.calibration import LedgerRow
+
+    rows = [LedgerRow(i, score, 0.5, violated) for i, (score, violated) in enumerate(pairs)]
+    return _ledger(rows, turns_total=len(rows))
+
+
+def test_suggest_budget_picks_the_highest_threshold_that_skips_no_violation() -> None:
+    """Acceptance 1: violations all score >= 0.9, so the highest candidate (0.9)
+    skips only clean rows — and it saves the most. Hand-computed: 0.9 skips the
+    three rows at 0.1/0.5/0.8 (3/4 = 75%), none violated; 0.95 stays."""
+    from belay.verify.triage_ledger import suggest_budget
+
+    suggestion = suggest_budget(
+        _suggestion_ledger((0.1, False), (0.5, False), (0.8, False), (0.95, True))
+    )
+
+    assert suggestion.threshold == 0.9
+    assert suggestion.skipped == 3
+    assert suggestion.violations_skipped == 0
+    assert suggestion.budget_saved == 0.75
+    assert suggestion.reason is None
+
+
+def test_suggest_budget_never_picks_a_candidate_that_skips_a_violation() -> None:
+    """Acceptance 2: the 0.3 violation makes every threshold above it ineligible,
+    even though they would save more budget. Among the zero-skip candidates
+    (0.1, 0.2, 0.3 — all with violations_skipped 0) the best saving is 0.3: it
+    skips the two clean rows below it (2/4 = 50%)."""
+    from belay.verify.triage_ledger import suggest_budget
+
+    suggestion = suggest_budget(
+        _suggestion_ledger((0.1, False), (0.2, False), (0.3, True), (0.7, False))
+    )
+
+    assert suggestion.threshold == 0.3
+    assert suggestion.skipped == 2
+    assert suggestion.violations_skipped == 0
+    assert suggestion.budget_saved == 0.5
+    assert suggestion.reason is None
+
+
+def test_suggest_budget_tie_goes_to_the_higher_threshold() -> None:
+    """Every candidate from 0.2 to 0.9 saves the same 1/2 = 50% and skips no
+    violation; the stated rule picks the HIGHER threshold (0.9), never the first."""
+    from belay.verify.triage_ledger import suggest_budget
+
+    suggestion = suggest_budget(_suggestion_ledger((0.1, False), (0.95, False)))
+
+    assert suggestion.threshold == 0.9
+    assert suggestion.skipped == 1
+    assert suggestion.violations_skipped == 0
+    assert suggestion.budget_saved == 0.5
+    assert suggestion.reason is None
+
+
+def test_suggest_budget_with_every_candidate_skipping_a_violation_recommends_none() -> None:
+    """Acceptance 3: two violations at 0.02/0.05 sit below EVERY candidate, so no
+    threshold is eligible. The least-bad candidate is named — lowest violation
+    count, then lowest threshold: 0.1 skips 2/3 with 2 violations skipped — and
+    `budget_saved` is None because nothing is recommended."""
+    from belay.verify.triage_ledger import suggest_budget
+
+    suggestion = suggest_budget(
+        _suggestion_ledger((0.02, True), (0.05, True), (0.95, False))
+    )
+
+    assert suggestion.threshold is None
+    assert suggestion.skipped == 2
+    assert suggestion.violations_skipped == 2
+    assert suggestion.budget_saved is None
+    assert suggestion.reason == (
+        "every candidate skips a violation; least-bad 0.1: skips 2/3 with "
+        "2 violations skipped"
+    )
+
+
+def test_suggest_budget_zero_decided_rows_is_no_decided_rows() -> None:
+    """No division-by-zero guess: an empty column never suggests. This is the
+    same condition the CLI refuses before rendering, stated at the pure layer."""
+    from belay.verify.triage_ledger import suggest_budget
+
+    suggestion = suggest_budget(_ledger([], turns_total=3, unverified=3))
+
+    assert suggestion.threshold is None
+    assert suggestion.skipped == 0
+    assert suggestion.violations_skipped == 0
+    assert suggestion.budget_saved is None
+    assert suggestion.reason == "no decided rows"
+
+
+def test_suggest_budget_is_deterministic() -> None:
+    """The same rows suggest the same dataclass twice — no clock, no randomness."""
+    from belay.verify.triage_ledger import suggest_budget
+
+    ledger = _suggestion_ledger((0.1, False), (0.2, False), (0.3, True), (0.7, False))
+
+    assert suggest_budget(ledger) == suggest_budget(ledger)
+
+
+#: The one text line the synthetic document's suggestion adds: of its 8 decided
+#: rows, 0.2 is the highest zero-skip threshold — it skips only the clean 0.1 row
+#: (1/8 = 12.5%); 0.3 already skips the 0.2 violation.
+_SUGGESTION_TEXT = (
+    "suggested budget: --triage-threshold 0.2 — skips 1/8 (12.5%), "
+    "0 violations skipped"
+)
+
+
+def test_suggest_budget_adds_exactly_one_text_line(tmp_path) -> None:
+    """Acceptance 4 (text): with the flag the text is the pinned render plus ONE
+    line, appended; the suggestion is never applied, only printed."""
+    doc_path = _write_document(tmp_path, "verify.json", _synthetic_document())
+
+    rc, text = _run_cli(["triage-ledger", "--suggest-budget", str(doc_path)])
+
+    assert rc == 0, text
+    assert text == _EXPECTED_TEXT + "\n" + _SUGGESTION_TEXT + "\n", text
+
+
+def test_suggest_budget_adds_exactly_one_json_key(tmp_path) -> None:
+    """Acceptance 4 (JSON): exactly one extra key, `suggestion`, with the pinned
+    values; everything else is byte-identical to the flagless render."""
+    doc_path = _write_document(tmp_path, "verify.json", _synthetic_document())
+
+    rc, text = _run_cli(
+        ["triage-ledger", "--suggest-budget", "--json", str(doc_path)]
+    )
+
+    assert rc == 0, text
+    expected = _expected_json_document()
+    assert set(json.loads(text)) - set(expected) == {"suggestion"}, text
+    expected["suggestion"] = {
+        "threshold": 0.2,
+        "skipped": 1,
+        "violations_skipped": 0,
+        "budget_saved": 0.125,
+    }
+    assert text == json.dumps(expected) + "\n", text
+
+
+def test_suggest_budget_with_zero_decided_rows_keeps_the_refusal(tmp_path) -> None:
+    """Acceptance 5: the zero-denominator refusal is returned unchanged with the
+    flag — same bytes as without it, exit 0, no suggestion key, no fabricated
+    recommendation from an empty denominator."""
+    doc_path = _write_document(tmp_path, "verify.json", _all_unverified_document())
+
+    rc_plain, text_plain = _run_cli(["triage-ledger", str(doc_path)])
+    rc_flagged, text_flagged = _run_cli(
+        ["triage-ledger", "--suggest-budget", str(doc_path)]
+    )
+    assert rc_plain == rc_flagged == 0
+    assert text_flagged == text_plain, text_flagged
+    assert "NO_DECIDED_ROWS" in text_flagged
+    assert "suggested budget" not in text_flagged, text_flagged
+
+    rc_plain, json_plain = _run_cli(["triage-ledger", "--json", str(doc_path)])
+    rc_flagged, json_flagged = _run_cli(
+        ["triage-ledger", "--suggest-budget", "--json", str(doc_path)]
+    )
+    assert rc_plain == rc_flagged == 0
+    assert json_flagged == json_plain, json_flagged
+    assert "suggestion" not in json.loads(json_flagged), json_flagged

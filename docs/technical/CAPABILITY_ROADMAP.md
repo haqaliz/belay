@@ -977,14 +977,26 @@ the stdlib calibration math, and the `belay triage-ledger` command. **As built (
 aspect `aggregation`, 2026-10-21, issue #52):** N documents per invocation, merged in
 argument order, with duplicate/corrupt input refused whole (exit 2, named) and the
 single-document render byte-identical — **no published number moves** (`11/60 = 18.3%`,
-`precision 0.00`, `1/15`, `4/16`, `recall 0.00`, `3/93` stand unedited). **Not built, by
-name (slice 3+):** budget
-auto-tuning (the ledger earns a tighter budget by human decision on this measurement,
-never by itself), directory input (the shell's glob is the documented input), other
-reference authors (laya etc. — provider-neutrality is proven by a stub, not a second
-vendor integration), budget knobs on other surfaces, the live Jev REST contract pin
-(owner-supplied before the manual live test runs). The mint's second run (the owner's
-S-1 decision) supplies the ledger's real volume.
+`precision 0.00`, `1/15`, `4/16`, `recall 0.00`, `3/93` stand unedited). **As built
+(slice 4, aspect `suggestion`, 2026-10-21, issue #53):** `belay triage-ledger
+--suggest-budget` appends **one** recommendation line (one `suggestion` key under
+`--json`) naming the highest existing `SWEEP_THRESHOLDS` candidate that skips no
+violation, with its honest skipped/budget numbers; ties go to the higher threshold,
+and when every candidate skips a violation it recommends none and names the
+least-bad. It is a **recommendation only** — no flag/config write, no replay, no
+application, no new sweep grid, no top-N suggestion — the human still decides, and
+without the flag both renders are byte-identical (the two snapshots and the refusal
+pass unmodified); zero decided rows keeps `NO_DECIDED_ROWS` with no suggestion.
+**No published number moves** (`11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16`,
+`recall 0.00`, `3/93` stand unedited). **Not built, by name (slice 4+):** automatic
+budget tuning (the ledger earns a tighter budget by human decision on this
+measurement, never by itself — the shipped suggestion applies nothing), a top-N
+recommendation (the threshold is the budget's primary knob and the two have
+different failure shapes), directory input (the shell's glob is the documented
+input), other reference authors (laya etc. — provider-neutrality is proven by a stub,
+not a second vendor integration), budget knobs on other surfaces, the live Jev REST
+contract pin (owner-supplied before the manual live test runs). The mint's second run
+(the owner's S-1 decision) supplies the ledger's real volume.
 
 ---
 
@@ -1025,3 +1037,7 @@ built.
 | C8 | Claim re-derivation (A3) | Wk 7 | 1 | **Yes — cut first** · ✅ **SHIPPED** (PR #28, v0.27.0; the A3 WARN vocabulary is empty in v0 and the evaluator's caller-supplied-workspace short-circuit is a follow-on) |
 | C10 | Calibrated triage seam (BYOK, optional) | Wk 9+ | 1 | ✅ **SHIPPED** (slice 1: verify surface — shadow mode + threshold/top-N, UNVERIFIED-by-budget, additive `triage` section; slice 2: the calibration ledger — `belay triage-ledger`, the pure re-render of the measurement; slice 3: N-document aggregation in argument order, single document byte-identical; budget auto-tuning deferred by name; the mint's second run supplies volume) |
 | C9 | Observability interop | Wk 8 | 1 | ✅ **SHIPPED** (ingest+correlate+attach + export-back fixture round-trip, plus an opt-in live OTLP/HTTP POST; multi-trace-directory aggregation deferred) |
+| C9 | Observability interop | Wk 8 | 1 | ✅ **SHIPPED** (ingest+correlate+attach + export-back fixture-collector round-trip; live-collector export deferred) |
+| C10 | Calibrated triage seam (BYOK, optional) | Wk 9+ | 1 | ✅ **SHIPPED** (slice 1: verify surface — shadow mode + threshold/top-N, UNVERIFIED-by-budget, additive `triage` section; slice 2: the calibration ledger — `belay triage-ledger`, the pure re-render of the measurement; slice 3: N-document aggregation in argument order, single document byte-identical; budget auto-tuning deferred by name; the mint's second run supplies volume) |
+| C9 | Observability interop | Wk 8 | 1 | ✅ **SHIPPED** (ingest+correlate+attach + export-back fixture-collector round-trip; live-collector export deferred) |
+| C10 | Calibrated triage seam (BYOK, optional) | Wk 9+ | 1 | ✅ **SHIPPED** (slice 1: verify surface — shadow mode + threshold/top-N, UNVERIFIED-by-budget, additive `triage` section; slice 2: the calibration ledger — `belay triage-ledger`, the pure re-render of the measurement; slice 3: N-document aggregation in argument order, single document byte-identical; slice 4: `--suggest-budget`, a recommendation only — never applied, never written; automatic budget tuning remains deferred by name; the mint's second run supplies volume) |
