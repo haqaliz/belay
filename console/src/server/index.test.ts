@@ -5,8 +5,10 @@ import {
   appendFileSync,
   chmodSync,
   copyFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -522,49 +524,49 @@ describe("GET /health", () => {
   });
 });
 
+const approvalClock = () => new Date("2026-10-21T10:00:00.000Z");
+const approvalCreated = approvalClock().getTime() / 1000 - 5;
+
+function approvalRequest(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    hold_id: "hold-1",
+    tool: "write_note",
+    request_id: 2,
+    triggers: ["destructive"],
+    created_at: approvalCreated,
+    timeout: 60,
+    ...overrides,
+  };
+}
+
+function approvalDir(): string {
+  return mkdtempSync(path.join(tmpdir(), "belay-api-approvals-"));
+}
+
+function writeRequest(dir: string, body: Record<string, unknown>, name?: string): void {
+  mkdirSync(path.join(dir, "requests"), { recursive: true });
+  writeFileSync(path.join(dir, "requests", `${name ?? String(body.hold_id)}.json`), JSON.stringify(body));
+}
+
+function writeDecision(dir: string, holdId: string, body: unknown): void {
+  mkdirSync(path.join(dir, "decisions"), { recursive: true });
+  writeFileSync(path.join(dir, "decisions", `${holdId}.json`), JSON.stringify(body));
+}
+
+async function withApprovals(
+  run: (local: ServerHarness, dir: string) => Promise<void>,
+  dir = approvalDir(),
+): Promise<void> {
+  const local = await startServer({ approvalDir: dir, now: approvalClock });
+  try {
+    await run(local, dir);
+  } finally {
+    await local.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 describe("GET /api/approvals", () => {
-  const clock = () => new Date("2026-10-21T10:00:00.000Z");
-  const created = clock().getTime() / 1000 - 5;
-
-  function request(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-    return {
-      hold_id: "hold-1",
-      tool: "write_note",
-      request_id: 2,
-      triggers: ["destructive"],
-      created_at: created,
-      timeout: 60,
-      ...overrides,
-    };
-  }
-
-  function approvalDir(): string {
-    return mkdtempSync(path.join(tmpdir(), "belay-api-approvals-"));
-  }
-
-  function writeRequest(dir: string, body: Record<string, unknown>, name?: string): void {
-    mkdirSync(path.join(dir, "requests"), { recursive: true });
-    writeFileSync(path.join(dir, "requests", `${name ?? String(body.hold_id)}.json`), JSON.stringify(body));
-  }
-
-  function writeDecision(dir: string, holdId: string, body: unknown): void {
-    mkdirSync(path.join(dir, "decisions"), { recursive: true });
-    writeFileSync(path.join(dir, "decisions", `${holdId}.json`), JSON.stringify(body));
-  }
-
-  async function withApprovals(
-    run: (local: ServerHarness, dir: string) => Promise<void>,
-    dir = approvalDir(),
-  ): Promise<void> {
-    const local = await startServer({ approvalDir: dir, now: clock });
-    try {
-      await run(local, dir);
-    } finally {
-      await local.stop();
-      rmSync(dir, { recursive: true, force: true });
-    }
-  }
-
   interface ListBody {
     configured: boolean;
     holds: {
@@ -673,6 +675,117 @@ describe("GET /api/approvals", () => {
       const body = (await res.json()) as ListBody;
       expect(body).toEqual({ configured: true, holds: [] });
     });
+  });
+});
+
+describe("POST /api/approvals/decision", () => {
+  interface ErrorBody {
+    error: { cause: string };
+  }
+
+  function decide(base: string, body: unknown): Promise<Response> {
+    return fetch(`${base}/api/approvals/decision`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  function decisionBytes(dir: string, holdId: string): string {
+    return readFileSync(path.join(dir, "decisions", `${holdId}.json`), "utf8");
+  }
+
+  it("approves with exactly the engine's decision file, atomically", async () => {
+    await withApprovals(async (local, dir) => {
+      writeRequest(dir, approvalRequest());
+      const res = await decide(local.base, { hold_id: "hold-1", decision: "approve" });
+      expect(res.status).toBe(200);
+      expect(decisionBytes(dir, "hold-1")).toBe('{"decision":"approve"}');
+      // temp+rename leaves no partial and no temp file behind
+      expect(readdirSync(path.join(dir, "decisions"))).toEqual(["hold-1.json"]);
+    });
+  });
+
+  it("denies with the reason, exact bytes", async () => {
+    await withApprovals(async (local, dir) => {
+      writeRequest(dir, approvalRequest());
+      const res = await decide(local.base, { hold_id: "hold-1", decision: "deny", reason: "not this tree" });
+      expect(res.status).toBe(200);
+      expect(decisionBytes(dir, "hold-1")).toBe('{"decision":"deny","reason":"not this tree"}');
+    });
+  });
+
+  it("removes the hold from the list once decided", async () => {
+    await withApprovals(async (local, dir) => {
+      writeRequest(dir, approvalRequest());
+      await decide(local.base, { hold_id: "hold-1", decision: "approve" });
+      const res = await fetch(`${local.base}/api/approvals`);
+      const body = (await res.json()) as { holds: unknown[] };
+      expect(body.holds).toEqual([]);
+    });
+  });
+
+  it("refuses a second decision with already-decided", async () => {
+    await withApprovals(async (local, dir) => {
+      writeRequest(dir, approvalRequest());
+      await decide(local.base, { hold_id: "hold-1", decision: "approve" });
+      const res = await decide(local.base, { hold_id: "hold-1", decision: "deny", reason: "changed my mind" });
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as ErrorBody).error.cause).toBe("already-decided");
+      expect(decisionBytes(dir, "hold-1")).toBe('{"decision":"approve"}');
+    });
+  });
+
+  it("refuses an expired hold with hold-expired and writes nothing", async () => {
+    await withApprovals(async (local, dir) => {
+      writeRequest(dir, approvalRequest({ created_at: approvalCreated - 120, timeout: 60 }));
+      const res = await decide(local.base, { hold_id: "hold-1", decision: "approve" });
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as ErrorBody).error.cause).toBe("hold-expired");
+      expect(existsSync(path.join(dir, "decisions", "hold-1.json"))).toBe(false);
+    });
+  });
+
+  it("refuses an unknown hold with hold-not-found", async () => {
+    await withApprovals(async (local) => {
+      const res = await decide(local.base, { hold_id: "hold-nope", decision: "approve" });
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as ErrorBody).error.cause).toBe("hold-not-found");
+    });
+  });
+
+  it.each(["../x", "../../etc/passwd", "a/b", "", "a\\b", "hold id"])(
+    "rejects the hold id %j with bad-hold-id",
+    async (holdId) => {
+      await withApprovals(async (local) => {
+        const res = await decide(local.base, { hold_id: holdId, decision: "approve" });
+        expect(res.status).toBe(400);
+        expect(((await res.json()) as ErrorBody).error.cause).toBe("bad-hold-id");
+      });
+    },
+  );
+
+  it("rejects an unknown decision with bad-decision", async () => {
+    await withApprovals(async (local, dir) => {
+      writeRequest(dir, approvalRequest());
+      const res = await decide(local.base, { hold_id: "hold-1", decision: "maybe" });
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as ErrorBody).error.cause).toBe("bad-decision");
+      expect(existsSync(path.join(dir, "decisions", "hold-1.json"))).toBe(false);
+    });
+  });
+
+  it("refuses with approval-not-configured when no approval dir is set", async () => {
+    const env = { ...process.env };
+    delete env.BELAY_APPROVAL_DIR;
+    const local = await startServer({ env });
+    try {
+      const res = await decide(local.base, { hold_id: "hold-1", decision: "approve" });
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as ErrorBody).error.cause).toBe("approval-not-configured");
+    } finally {
+      await local.stop();
+    }
   });
 });
 
