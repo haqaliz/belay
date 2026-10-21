@@ -21,6 +21,7 @@ snapshot roundtrip.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import sys
@@ -353,6 +354,77 @@ def test_json_report_contract(tmp_path, capsys, monkeypatch):
     for turn in doc["capture"]["turns"]:
         assert turn["status"] == "UNVERIFIED", turn
     assert '"status": "PASS"' not in out, out
+
+
+# --- strict shape: the flag threads through check_gate ------------------------------
+
+
+def test_check_gate_propagates_strict_shape(tmp_path, monkeypatch):
+    """`check_gate(strict_shape=True)` fails on a shape-only capture; default passes.
+
+    Same bank, same toolset-change capture: the ONLY difference is the flag, so the
+    test pins the pass-through from `check_gate` to the pure decision table.
+    """
+    from belay.gate.check import check_gate
+
+    trace = _capture(tmp_path, "t1", run_id="pytest-7432")
+    manifests = tmp_path / "m1"
+    manifests.mkdir()
+    root = _root(tmp_path)
+    monkeypatch.chdir(root)
+    rc = cli.main(["gate", "baseline", str(trace), "--manifest-dir", str(manifests), "--server", *SERVER])
+    assert rc == 0
+
+    trace2 = _capture(
+        tmp_path, "t2", run_id="pytest-7432", server=MUTATING, lines=CLOBBER_LINES,
+        env_extra={"BELAY_TEST_MUTATE_PATH": str(tmp_path / "mut")},
+    )
+    manifests2 = tmp_path / "m2"
+    manifests2.mkdir()
+    result = check_gate(
+        trace2,
+        root_dir=root / "baselines" / "local",
+        manifest_dir=manifests2,
+        server_override=[],
+        ingest=False,
+        strict_shape=True,
+    )
+    assert [row.kind for row in result.comparison.shape] == ["tool-rename"]
+    assert result.comparison.exit_reason == "regression"
+
+    default = check_gate(
+        trace2,
+        root_dir=root / "baselines" / "local",
+        manifest_dir=manifests2,
+        server_override=[],
+        ingest=False,
+    )
+    assert default.comparison.exit_reason == "clean"
+
+
+def test_strict_shape_is_a_gate_check_only_flag_before_server():
+    """It parses on `gate check` only, and its argparse action precedes `--server`."""
+    parser = cli._parser()
+    subparsers = next(
+        action for action in parser._actions if isinstance(action, argparse._SubParsersAction)
+    )
+    gate = subparsers.choices["gate"]
+    gate_subs = next(
+        action for action in gate._actions if isinstance(action, argparse._SubParsersAction)
+    )
+    check_options = [
+        option
+        for action in gate_subs.choices["check"]._actions
+        for option in action.option_strings
+    ]
+    baseline_options = [
+        option
+        for action in gate_subs.choices["baseline"]._actions
+        for option in action.option_strings
+    ]
+    assert "--strict-shape" in check_options
+    assert "--strict-shape" not in baseline_options
+    assert check_options.index("--strict-shape") < check_options.index("--server")
 
 
 # --- darwin: the real re-invocation (Seatbelt) --------------------------------------

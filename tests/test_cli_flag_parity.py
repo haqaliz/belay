@@ -170,6 +170,10 @@ EXPECTED: dict[str, frozenset[str]] = {
     # the override, `gate check` resolves the same baseline by it. Two surfaces,
     # one flag — the gate's join key.
     "--run-id": frozenset({"gate baseline", "gate check"}),
+    # Opt-in strict shape: a shape row fails the gate with the existing REGRESSION
+    # reason. `gate baseline` banks; it decides nothing, so the flag exists only where
+    # the comparison runs.
+    "--strict-shape": frozenset({"gate check"}),
 }
 
 
