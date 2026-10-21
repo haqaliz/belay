@@ -25,6 +25,12 @@ The rule, over the turn's `readOnlyHint` state and the replay's `delta`:
     not-declared, CONTRACT NOT OBSERVED     -> UNVERIFIED (we tried to read one and could not)
     declared-non-boolean                    -> UNVERIFIED (no readable contract)
 
+A `notifications/tools/list_changed` between the snapshot in force and the call retracts
+that contract until the client re-lists: `annotation_for_turn` reports it not-declared with
+`producer="stale-snapshot"`, so the turn abstains (UNVERIFIED) instead of FAILing against a
+declaration the server already announced may be gone. Only a change strictly inside
+`(snapshot_seq, request_seq)` counts — one after the call never reaches back.
+
 **This replaces the flat rule this table stated until 2026-09-20 —** *"`not-declared` ->
 UNVERIFIED (no contract to check against)"* **— which collapsed four structurally different
 facts into one status.** Three of them are genuine abstentions: no `tools/list` was captured
@@ -83,7 +89,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Optional, Sequence
 
-from belay.annotations import contract_in_force, derive_annotations
+from belay.annotations import contract_in_force, contract_invalidated, derive_annotations
 from belay.declared import (
     DECLARED_FALSE,
     DECLARED_NON_BOOLEAN,
@@ -133,8 +139,8 @@ _HINT = "readOnlyHint"
 _HINT_OPENWORLD = "openWorldHint"
 
 
-#: WHICH return site of `annotation_for_turn` built this annotation. Four of the five arrive
-#: at the same not-declared fall-through carrying four different claims, and the fall-through
+#: WHICH return site of `annotation_for_turn` built this annotation. Every named producer can
+#: arrive at the same not-declared fall-through carrying a different claim, and the fall-through
 #: must tell them apart to decide between an abstention and a coverage boundary.
 #:
 #: Plain strings rather than an `Enum`: this module is stdlib-only by contract, the values are
@@ -154,6 +160,7 @@ Producer = Literal[
     "tool-absent",
     "tool-ambiguous",
     "server-declared-nothing",
+    "stale-snapshot",
 ]
 
 PRODUCER_UNNAMED: Producer = "unnamed"
@@ -172,6 +179,10 @@ PRODUCER_TOOL_AMBIGUOUS: Producer = "tool-ambiguous"
 #: The one producer that is not a failed attempt: a complete observation of a server that
 #: promised nothing.
 PRODUCER_SERVER_DECLARED_NOTHING: Producer = "server-declared-nothing"
+#: v — a snapshot WAS observed and a `notifications/tools/list_changed` between it and the
+#: call retracted it, with no re-list before the call. The contract the call ran under is
+#: unknown: not absent, not stale-by-choice, and never a licence to score the old one.
+PRODUCER_STALE_SNAPSHOT: Producer = "stale-snapshot"
 
 
 @dataclass(frozen=True)
@@ -234,8 +245,10 @@ def annotation_for_turn(records: Sequence[dict], n: int) -> TurnAnnotation:
     Picks the turn by `method == "tools/call"` (index `n`), reads its tool name, and
     correlates it against the MOST RECENT snapshot whose `source_seq` precedes the call's
     `request_seq` — together with that snapshot's broadcast twins, when a composite
-    transport split one `tools/list` across servers (`annotations.contract_in_force`). A missing snapshot, an absent tool, or an unreadable request all yield
-    a not-declared contract WITH a named cause — never a manufactured default.
+    transport split one `tools/list` across servers (`annotations.contract_in_force`). A missing
+    snapshot, an absent tool, an unreadable request, or a `list_changed` that retracted the
+    snapshot before the call all yield a not-declared contract WITH a named cause — never a
+    manufactured default.
 
     **Every return site names its `producer` explicitly**, including the one that needs no
     `cause`. Downstream, `render_effect_verdict` decides between an abstention and a coverage
@@ -291,6 +304,28 @@ def annotation_for_turn(records: Sequence[dict], n: int) -> TurnAnnotation:
         )
 
     snapshot = live[-1]
+    # A `list_changed` strictly between the oldest snapshot in force and the call retracted
+    # it: under MCP the tools are unknown again until the client re-lists. Scoring the old
+    # declaration against the observed effect would be a FAIL (or PASS) against a contract
+    # the server already withdrew. The window starts at the OLDEST twin's seq so a composite
+    # broadcast is invalidated as one contract, and stops at the call so a change announced
+    # afterwards cannot reach back (test_correlation_picks_the_snapshot_in_force_not_a_later_one).
+    invalidated = contract_invalidated(
+        records, min(s["source_seq"] for s in live), request_seq
+    )
+    if invalidated is not None:
+        return TurnAnnotation(
+            tool=name,
+            readonly=declared_state(None, False),
+            snapshot_seq=snapshot["source_seq"],
+            cause=(
+                f"a notifications/tools/list_changed (seq {invalidated}) retracted the "
+                "tools/list snapshot before this call and no later tools/list response was "
+                "captured, so the contract in force when the call ran is unknown"
+            ),
+            producer=PRODUCER_STALE_SNAPSHOT,
+        )
+
     found = [(s, t) for s in live for t in s["tools"] if t["name"] == name]
     if len({json.dumps(t, sort_keys=True) for _, t in found}) > 1:
         return TurnAnnotation(
@@ -372,7 +407,8 @@ _NETWORK_UNOBSERVABLE = (
 
 
 def _openworld_verdict(ann: TurnAnnotation) -> Verdict:
-    """The network-dimension Verdict for one turn's `openWorldHint` — ALWAYS `NOT_COVERED`.
+    """The network-dimension Verdict for one turn's `openWorldHint` — `NOT_COVERED`, with one
+    exception: a stale contract abstains (see the `PRODUCER_STALE_SNAPSHOT` branch below).
 
     It NEVER emits PASS (we verified nothing about the network) and NEVER a fabricated FAIL
     (we observed no violation): a grounded network FAIL would require reliably identifying an
@@ -392,8 +428,12 @@ def _openworld_verdict(ann: TurnAnnotation) -> Verdict:
     (none) is the same whatever the tool said, so giving the same non-observation two
     different status names purely on the strength of the tool's own declaration would be
     incoherent — and it would let a server's self-declared hint change Belay's *coverage*,
-    which is a property of Belay, not of the server. The declaration still shows up where it
-    belongs: in the MESSAGE (see below) and in `network_subverdict`'s decision to fold or not.
+    which is a property of Belay, not of the server. The one state that is NOT a coverage
+    boundary is a contract a `list_changed` retracted before the call: there the promise is
+    unknown rather than absent, so the verdict abstains (UNVERIFIED) and names the
+    notification instead of claiming nothing was promised. The declaration still shows up
+    where it belongs: in the MESSAGE (see below) and in `network_subverdict`'s decision to
+    fold or not.
 
     **The declared-false vs not-declared distinction survives in the message**, which is the
     direct answer to the counter-argument this change builds over. A reader must still be able
@@ -404,6 +444,19 @@ def _openworld_verdict(ann: TurnAnnotation) -> Verdict:
     """
     state = ann.openworld["state"]
     contract = {"openWorldHint": ann.openworld}
+
+    # A retracted contract is the one state that is not a coverage boundary: a promise
+    # existed and was withdrawn, so nobody knows the network posture either. Abstain and
+    # name the notification, rather than asserting "nothing was promised".
+    if ann.producer == PRODUCER_STALE_SNAPSHOT:
+        return Verdict(
+            _AXIS, _KIND_NETWORK, Status.UNVERIFIED,
+            observed=None, expected=contract,
+            message=(
+                f"openWorldHint conformance UNVERIFIED: {ann.cause}; a retracted contract "
+                f"cannot be read for the network either — never PASS, never a fabricated FAIL"
+            ),
+        )
 
     if state == DECLARED_FALSE:
         detail = (
@@ -435,7 +488,7 @@ def _openworld_verdict(ann: TurnAnnotation) -> Verdict:
 
 
 def render_openworld_verdict(records: Sequence[dict], n: int) -> Verdict:
-    """The Nth turn's network-dimension verdict — always `NOT_COVERED`. See `_openworld_verdict`.
+    """The Nth turn's network-dimension verdict — `NOT_COVERED` unless the contract is stale.
 
     The standalone surface: it returns a Verdict for EVERY `openWorldHint` state (including
     not-declared and the permissive declared-true), which is the crisp "we never emit a
@@ -719,6 +772,7 @@ def verify_effect(
 __all__ = [
     "PRODUCER_NO_SNAPSHOT",
     "PRODUCER_SERVER_DECLARED_NOTHING",
+    "PRODUCER_STALE_SNAPSHOT",
     "PRODUCER_TOOL_ABSENT",
     "PRODUCER_TOOL_AMBIGUOUS",
     "PRODUCER_UNNAMED",

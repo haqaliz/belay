@@ -618,6 +618,10 @@ contract was live when that call happened?"* stays answerable.
 `not-declared` **with a named cause**, so downstream can tell "the server declined to say"
 from "we never asked".
 
+**No format change (issue #50):** A2 now reads a `list_changed` strictly between a call's
+snapshot and its `request_seq` and abstains (`stale-snapshot`); the records above are
+unchanged and `annotation_staleness` stays a derived whole-trace fact.
+
 **A derived fact: the offered tool set** (2026-08-12, the trajectory rule's ability-aware
 abstain). The trajectory rule (`suite-before-success-claim`) reads these records, via
 `derive_annotations`, to learn what tools were actually offered before the claim: the union

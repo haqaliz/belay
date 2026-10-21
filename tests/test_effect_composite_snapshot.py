@@ -26,6 +26,7 @@ import json
 
 from conftest import trace_of
 from fixtures.annotation_frames import (
+    NOTIFICATION_LIST_CHANGED,
     TOOLS_LIST_REQUEST,
     TOOLS_LIST_REQUEST_AGAIN,
     TOOLS_LIST_RESPONSE,
@@ -36,6 +37,7 @@ from belay.annotations import derive_annotations
 from belay.snapshot.bth1 import FieldDiff
 from belay.verify.effect import (
     PRODUCER_SERVER_DECLARED_NOTHING,
+    PRODUCER_STALE_SNAPSHOT,
     PRODUCER_TOOL_ABSENT,
     PRODUCER_TOOL_AMBIGUOUS,
     annotation_for_turn,
@@ -201,3 +203,32 @@ def test_the_derivation_names_no_gap_for_a_tool_a_twin_describes(tmp_path):
     )
     gaps = [d for d in derive_annotations(records) if d["kind"] == "annotation_gap"]
     assert gaps == [], gaps
+
+
+def test_one_list_changed_between_the_twin_snapshot_and_the_call_abstains_the_turn(tmp_path):
+    """A broadcast `tools/list` and its twin are ONE contract. A `list_changed` after both
+    answers and before the call retracts that whole contract, so the turn abstains —
+    conservatively, never the false `FAIL` the first twin's declared-true would ground.
+
+    The window starts at the OLDEST twin's seq, which is what makes this case reach the
+    gate at all: anchored on the latest twin, a change announced between the two answers
+    would slip through.
+    """
+    records = trace_of(
+        tmp_path,
+        [
+            ("c2s", TOOLS_LIST_REQUEST),
+            ("c2s", TOOLS_LIST_REQUEST),
+            ("s2c", TOOLS_LIST_RESPONSE),
+            ("s2c", SHELL_LIST_RESPONSE),
+            ("s2c", NOTIFICATION_LIST_CHANGED),
+            ("c2s", _call(3, "read_file")),
+        ],
+    )
+
+    ann = annotation_for_turn(records, 0)
+    assert ann.producer == PRODUCER_STALE_SNAPSHOT, ann
+
+    verdict = render_effect_verdict(records, 0, _mutation("written.txt"))
+    assert verdict.status is Status.UNVERIFIED, verdict
+    assert verdict.status is not Status.FAIL, verdict

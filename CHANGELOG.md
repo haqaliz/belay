@@ -5,6 +5,29 @@ All notable changes to Belay are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0 — until then,
 `0.x` minor bumps may include changes that would be breaking under strict semver.
 
+## [Unreleased]
+
+**A2 abstains on a contract a `tools/list_changed` retracted before the call (issue #50).** A
+correctness fix on the effect axis: no new status, axis, kind, reduction rule or trace field,
+and **no published number moves** (`11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16`,
+`recall 0.00`, `3/93` stand unedited; nothing recomputed).
+
+- **The stale gate.** `belay.annotations.contract_invalidated(records, snapshot_seq,
+  request_seq)` returns the `seq` of the earliest `notifications/tools/list_changed` strictly
+  between the snapshot in force and the call, or `None`. An unreadable frame is skipped — it
+  is no observation of a change — so a decode failure never fabricates staleness.
+- **Named abstention.** `annotation_for_turn` reports a stale contract as not-declared with the
+  new closed `producer` `"stale-snapshot"` and a cause naming the notification;
+  `render_effect_verdict` then yields UNVERIFIED, never FAIL against a withdrawn
+  `readOnlyHint: true`, and never `NOT_COVERED` (that producer is not
+  `server-declared-nothing`).
+- **One code path.** The network dimension reads the same annotation, so `openWorldHint`
+  abstains for the same cause; the window starts at the oldest broadcast twin, so one change
+  retracts a composite contract as a whole.
+- **No regression.** A `list_changed` after the call does not reach back (the pinned
+  correlation test is unmodified), a re-snapshot after the change clears the gate, and
+  `_staleness`, `_uncovered_calls`, corpus/JSON schemas and verdict reduction are untouched.
+
 ## [0.42.0] - 2026-10-17
 
 **An authored invariant scope is a path prefix, never a glob (PR #49).** `belay invariant

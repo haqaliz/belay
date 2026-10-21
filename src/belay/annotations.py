@@ -237,6 +237,36 @@ def contract_in_force(
     return [s for s in live if twin(by_response.get(s["source_seq"]))]
 
 
+def contract_invalidated(
+    records: list[dict], snapshot_seq: int, request_seq: int
+) -> Optional[int]:
+    """The seq of the earliest `list_changed` strictly between a snapshot and a call.
+
+    `_staleness` records the whole-trace fact ("a change with no later re-list
+    anywhere"); a call needs a narrower window. A notification BEFORE the snapshot
+    is answered by that snapshot, and one AFTER the call was not announced yet when
+    the call ran — reading either as stale would abstain calls whose contract was
+    never retracted. Only `snapshot_seq < seq < request_seq` leaves the contract in
+    force unknown.
+
+    An unreadable frame is skipped, not reported: it is no observation of a
+    `list_changed`, and inferring one would fabricate staleness out of a decode
+    failure. `derive_correlation` already names that frame.
+    """
+    seqs = []
+    for record in records:
+        if record.get("kind") != "frame":
+            continue
+        if not snapshot_seq < record["seq"] < request_seq:
+            continue
+        message, _unreadable = message_of(record)
+        if not isinstance(message, dict) or classify(message) != "notification":
+            continue
+        if message.get("method") == "notifications/tools/list_changed":
+            seqs.append(record["seq"])
+    return min(seqs, default=None)
+
+
 def _twins_note(live: list[dict]) -> str:
     """` and its broadcast twin(s) (seq …)` — empty for a single-server contract, so
     that cause stays byte-identical to what it has always said."""
