@@ -7,6 +7,31 @@ All notable changes to Belay are documented here. The format follows
 
 ## [Unreleased]
 
+**The calibration ledger measures a run set, not one document (issue #52).** `belay
+triage-ledger` takes one or more stored `verify --json` documents, merged in **argument
+order**: decided rows concatenated, counts summed, header `"N documents"` when there is
+more than one. One document renders **byte-identically** to before (both snapshots and
+the refusal document pass unmodified). No new flag, JSON key, schema bump or directory
+input, and **no published number moves** (`11/60 = 18.3%`, `precision 0.00`, `1/15`,
+`4/16`, `recall 0.00`, `3/93` stand unedited; nothing recomputed).
+
+- **Pure merge.** `belay.verify.triage_ledger.merge_ledgers` concatenates rows in input
+  order and sums `turns_total` plus the UNVERIFIED/skipped/unscored counts; a single
+  ledger is returned unchanged, N > 1 carries `"N documents"` (no paths), and the empty
+  sequence is a named `ValueError` — the invariant `turns_total == decided + unverified +
+  skipped + unscored` holds by construction.
+- **Argument order is the documented order.** The only order-sensitive consumer is the
+  top-N tie-break; `ordinal` stays document-local, so the same ordinal can appear twice
+  across documents.
+- **Fail closed, never partial.** Duplicate resolved paths are refused by name (exit 2)
+  instead of double-counting the denominator; any missing, malformed, triage-less or
+  internally corrupt document refuses the whole invocation with exit 2 naming its path,
+  before anything renders.
+- **Named non-object error.** A top-level JSON value that is not an object now exits 2
+  with a named message instead of an `AttributeError` traceback.
+- **Zero denominator unchanged.** Zero decided rows across every document keeps the
+  named `NO_DECIDED_ROWS` refusal over the summed counts, exit 0, no rates.
+
 **A2 abstains on a contract a `tools/list_changed` retracted before the call (issue #50).** A
 correctness fix on the effect axis: no new status, axis, kind, reduction rule or trace field,
 and **no published number moves** (`11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16`,

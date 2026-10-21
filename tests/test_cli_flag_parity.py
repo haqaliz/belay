@@ -58,7 +58,7 @@ REPLAY_BEARING = (
     "invariant infer",
 )
 
-#: The document re-render surfaces: they read ONE stored document and render it —
+#: The document re-render surfaces: they read stored documents and render them —
 #: never restoring a pre-state, never re-invoking a server. `triage-ledger` mirrors
 #: `phase0 report`'s pure-re-render discipline (`cli.py:2995-3031`); it is NOT
 #: replay-bearing, but it shares the machine-surface flag (`--json`) with the

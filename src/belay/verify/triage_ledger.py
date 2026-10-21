@@ -1,12 +1,19 @@
 """Aspect `ledger-command` — the pure re-render of the calibration measurement.
 
-`belay triage-ledger <verify-json>` turns ONE stored `belay verify --json`
-document into the C10 calibration ledger: the per-turn triage scores paired with
-the execution-grounded reduced verdict, then the reliability curve (confidence
-deciles vs the observed violation rate), the ECE, and the decision-relevant sweep
-— at each candidate threshold, how many true violations would have been skipped
-and how much of the replay budget saved. A PURE RE-RENDER: no replay, no
-re-verification, no clock read — the same document re-renders byte-identically.
+`belay triage-ledger <verify-json> [<verify-json> ...]` turns one or more stored
+`belay verify --json` documents into the C10 calibration ledger: the per-turn
+triage scores paired with the execution-grounded reduced verdict, then the
+reliability curve (confidence deciles vs the observed violation rate), the ECE,
+and the decision-relevant sweep — at each candidate threshold, how many true
+violations would have been skipped and how much of the replay budget saved. A
+PURE RE-RENDER: no replay, no re-verification, no clock read — the same document
+re-renders byte-identically.
+
+Several documents merge in ARGUMENT ORDER (`merge_ledgers`): rows concatenated in
+that order, the four counts summed, so the only order-sensitive consumer — the
+top-N tie-break — follows argv. One document is byte-identical to the
+single-document render (its own `trace` header); N > 1 reads `"N documents"` and
+never carries a path.
 
 ## The mapping (the honesty contract, stated here once)
 

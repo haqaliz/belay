@@ -139,6 +139,20 @@ This file orients a coding agent working in this repository. Read it first.
 > total now) and an exclusion-count off-by-one — both fixed with pins. See
 > `docs/planning/calibration-ledger/`.
 >
+> **[Multi-document aggregation shipped v-next (issue #52, 2026-10-21) — this updates
+> the "NOT built" line above.]** `belay triage-ledger <verify-json> [<verify-json> ...]`
+> takes N documents, merges them **in argument order** (rows concatenated, the four
+> counts summed; N > 1 reads `"N documents"`, no paths), and renders one ledger. One
+> document is **byte-identical** to the contract above (both byte snapshots and the
+> refusal dict pass unmodified; no new flag, JSON key or schema bump). Fail closed:
+> duplicate resolved paths, and any missing/malformed/triage-less/non-object document,
+> refuse the whole invocation (exit 2, naming the path) — never a partial ledger. The
+> only order-sensitive consumer is the top-N tie-break, and argv order is the documented
+> order. **No published number moves** (`11/60 = 18.3%`, `precision 0.00`, `1/15`,
+> `4/16`, `recall 0.00`, `3/93` stand unedited; nothing recomputed). Still not built:
+> budget auto-tuning, directory input (the shell's glob is the input) and the mint
+> re-run. See `docs/planning/triage-ledger-aggregation/`.
+>
 
 > **C10 SLICE 1 SHIPS — THE CALIBRATED-TRIAGE SEAM: A MODEL MAY TRIAGE, ONLY EXECUTION
 > MAY DECIDE** (2026-09-21, `jev-triage`, PR #41, v0.36.0). Owner demand-pull 2026-09-19;

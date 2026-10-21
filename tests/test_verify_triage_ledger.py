@@ -1,7 +1,7 @@
 """Aspect `ledger-command` — the `belay triage-ledger` command contract, RED-first.
 
-The command is a PURE RE-RENDER: it reads ONE stored `belay verify --json`
-document (schema 1) and renders the C10 calibration measurement — the reliability
+The command is a PURE RE-RENDER: it reads one or more stored `belay verify --json`
+documents (schema 1) and renders the C10 calibration measurement — the reliability
 curve (confidence deciles vs the observed violation rate), the ECE, and the
 decision-relevant sweep (at each candidate threshold, how many true violations
 would have been skipped and how much budget saved). No replay, no re-verification,
@@ -9,6 +9,11 @@ no clock read — the same document must re-render byte-identically, and a docum
 built by the REAL CLI (the demo capture verified with a stub triage author in
 shadow mode) must render its honest denominator: 7 turns, 7 decided, 0 excluded,
 0 violations.
+
+Several documents merge in argument order: rows are concatenated in that order
+(so the top-N tie-break follows argv), the four counts are summed, and the header
+reads `"N documents"` — no paths. One document renders byte-identically to the
+single-document contract below.
 
 The honesty contract the tests pin:
 
@@ -42,6 +47,7 @@ import json
 import shlex
 import sys
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
