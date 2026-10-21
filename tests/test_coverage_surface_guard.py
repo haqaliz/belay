@@ -214,6 +214,13 @@ NO_STATUS_SUBCOMMANDS: dict[str, str] = {
     # turn's status. An uncalibrated artifact's cost lands on `verify`, which is registered.
     "invariant infer": "emits authoring/calibration outcomes, not a turn's verdict status",
     "invariant-library list": "lists the named policy presets; renders no verdict",
+    # Issue #58. The pattern catalog moves whitelisted FACTS, not a rendering: export writes
+    # the case's `reduced_status` and its whole sub-verdict set (NOT_COVERED included) as
+    # data, and prints counts; import merges validated facts and prints counts; list counts
+    # labels/rules/tools and prints no status at all. No surface here decides anything.
+    "corpus share export": "serializes whitelisted pattern facts (sub-verdicts verbatim, NOT_COVERED included); prints counts only",
+    "corpus share import": "merges validated pattern facts and prints counts; renders no status",
+    "corpus share list": "counts patterns by label/rule/tool; renders no status",
     # The C10 calibration ledger. Re-renders stored verdicts as the CALIBRATION
     # column — violation counts and rates only; it renders no per-turn status, and
     # the source document's coverage boundary was disclosed by `verify`, which is
@@ -288,6 +295,11 @@ NON_VERDICT_STATUS: dict[str, str] = {
     # Snapshot handles carry a `status` saying whether a path was present, absent or
     # unrestorable. Nothing here reaches an operator as a verdict.
     "src/belay/corpus/add.py::_bundle_task_prestate": "bundles snapshot handles (handle status)",
+    # Issue #58: the share whitelist copies the status FACTS (a sub-verdict's status, the
+    # trajectory/claim status) into a bundle as data and validates them on import. It renders
+    # nothing; the corpus surfaces that render a verdict are registered above.
+    "src/belay/corpus/share.py::pattern_of": "copies whitelisted status facts into a bundle; renders nothing",
+    "src/belay/corpus/share.py::_validate_entry": "validates whitelisted status facts on import; renders nothing",
     "src/belay/sandbox/gate.py::_snapshot_failed_handle": "a snapshot handle's status",
     "src/belay/snapshot/substrate.py::absent_handle": "a snapshot handle's status",
     "src/belay/snapshot/substrate.py::present_handle": "a snapshot handle's status",
