@@ -50,10 +50,17 @@ bare span. Nothing is re-computed: a matched span's `TurnVerdict` is carried
 verbatim, and the status comes from `CorrelatedSpan.status`, which is the same
 "nothing was verified -> UNVERIFIED" reduction every other surface uses.
 
-Zero runtime dependencies: stdlib only (`json`, `copy`). No OTel SDK import, no
-network, no clock — determinism is asserted two ways (byte-identical re-runs and the
+Zero runtime dependencies: stdlib only (`json`, `copy`, `urllib`). No OTel SDK
+import, no clock — determinism is asserted two ways (byte-identical re-runs and the
 committed fixture). The `dumps` serializer (`sort_keys=True, indent=2` + trailing
 newline) is shared so the CLI aspect writes byte-identical output.
+
+**The builder never touches the network; the opt-in transport does.** Everything above
+`post_document` is a pure function of its inputs. `post_document` is the ONE place this
+module reaches egress, and only when an operator names a collector with
+`--otlp-endpoint`: it POSTs the same bytes `dumps` produces, OTLP/JSON over HTTP, with
+no retries and no env-var headers. Omit the flag and the export is the fixture it
+always was.
 """
 
 from __future__ import annotations
@@ -61,6 +68,8 @@ from __future__ import annotations
 import copy
 import json
 from typing import Sequence
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 from belay.interop.attach import CorrelatedSpan
 from belay.interop.otlp import Span
@@ -68,6 +77,18 @@ from belay.verify.verdict import Status, Verdict
 
 #: Every attribute this module adds to a span is namespaced under this prefix.
 VERDICT_ATTRIBUTE_PREFIX = "belay.verdict"
+
+#: The wall the opt-in transport gives one POST. No retries: a slow collector is a
+#: named failure, never a hung export.
+REQUEST_TIMEOUT = 10.0
+
+
+class ExportError(OSError):
+    """The document could not be delivered to the named endpoint.
+
+    An `OSError` so a transport failure is one named exception the CLI can turn into
+    its own exit code, and never a traceback.
+    """
 
 #: The single span event carrying the verdict message/diff.
 VERDICT_EVENT_NAME = "belay.verdict"
@@ -270,9 +291,42 @@ def build_enriched_document(
     return enriched
 
 
+def post_document(
+    url: str,
+    document: dict,
+    headers: Sequence[tuple[str, str]] = (),
+) -> None:
+    """POST `document` to `url` as OTLP/JSON — the opt-in live transport.
+
+    The body is `dumps(document)`, byte-identical to what `--out` writes; nothing is
+    re-shaped on the wire. `headers` are `(name, value)` pairs, sent verbatim (HTTP
+    header names are case-insensitive; values are not touched). A 2xx returns `None`;
+    a connection failure, timeout, unreadable URL or non-2xx raises `ExportError`
+    naming the URL and the cause. The document is never retried and never partially
+    written.
+    """
+    body = dumps(document).encode("utf-8")
+    try:
+        request = Request(url, data=body, method="POST")
+        request.add_header("Content-Type", "application/json")
+        for name, value in headers:
+            request.add_header(name, value)
+        with urlopen(request, timeout=REQUEST_TIMEOUT) as response:
+            response.read()
+    except HTTPError as exc:
+        raise ExportError(
+            f"cannot export to {url}: HTTP {exc.code} {exc.reason}"
+        ) from exc
+    except (OSError, ValueError) as exc:
+        raise ExportError(f"cannot export to {url}: {exc}") from exc
+
+
 __all__ = [
     "VERDICT_ATTRIBUTE_PREFIX",
     "VERDICT_EVENT_NAME",
+    "ExportError",
+    "REQUEST_TIMEOUT",
     "build_enriched_document",
     "dumps",
+    "post_document",
 ]
