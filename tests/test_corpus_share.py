@@ -308,7 +308,7 @@ def test_save_and_load_patterns_round_trip_and_missing_is_empty(tmp_path: Path) 
 
 def test_saved_patterns_bytes_are_deterministic_and_order_independent(tmp_path: Path) -> None:
     """The same catalog in any input order writes the same bytes (indent=2, sorted keys)."""
-    from belay.corpus.share import load_patterns, save_patterns
+    from belay.corpus.share import save_patterns
 
     a = build_bundle([_case(cid="a"), _case(cid="b", tool="write_file")])["patterns"]
     b = list(reversed(a))

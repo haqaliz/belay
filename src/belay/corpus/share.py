@@ -42,7 +42,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable
 
 from belay.corpus.case import (
     Case,
