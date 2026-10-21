@@ -176,9 +176,14 @@ belay corpus label <case-id> --label true-positive --root-cause-key weakened-ass
                              --recorded-miss-note "the engine returned clean; this weakening is real"   # …and declare the STORED verdict a MISS
 belay corpus run                                        # re-replay every case — green = nothing drifted, NOT "everything is caught"
 belay corpus score                                      # precision · recall · coverage vs human labels (UNVERIFIED excluded, reported separately)
+belay corpus share export --out belay-patterns.json     # whitelisted PATTERNS only — never a trace, pre-state, path, server command or cause
+belay corpus share import belay-patterns.json           # validate whole, merge by pattern_id (idempotent, sorted)
+belay corpus share list                                 # counts by label, invariant rule and tool
 ```
 
-Cases are self-contained (they bundle their own pre-state) and live under the gitignored `corpus/local/` — nothing leaves your machine. What a green `corpus run` does and does not certify is in [Coverage & limits](#a-green-belay-corpus-run-is-a-drift-check-not-a-coverage-claim).
+Cases are self-contained (they bundle their own pre-state) and live under the gitignored `corpus/local/` — nothing leaves your machine unless you invoke `corpus share export`, and even then a case never does. What a green `corpus run` does and does not certify is in [Coverage & limits](#a-green-belay-corpus-run-is-a-drift-check-not-a-coverage-claim).
+
+**A shared catalog is not case exchange.** `corpus share export` reads labeled cases and writes `belay-corpus-patterns/1`: `pattern_id` (a sha256 over the facts, not recoverable to a case), the human `label`, `reduced_status`, `sub_verdicts` (axis/kind/status), tool names, invariant **rule names** (never scope bytes), and the trajectory/claim **status** (never a cause or a check's source). The trace, pre-state tree, manifests, server command, case id, provenance, paths, arguments, content, cause strings and recorded-miss notes are never exported. **Imported patterns are not cases:** they live beside the case directories in `<corpus-dir>/patterns.json`, and they are **never replayed and never scored** — `corpus run` and `corpus score` read cases only, so a stranger's labels cannot enter your precision or recall. A malformed or unknown-schema bundle is refused whole (exit 2), and export/import are deterministic and idempotent. The operator sees the bundle before sending it; a tool name can itself be proprietary, which is the one exposure to check.
 
 ### 4 · Gate your agent upgrades
 

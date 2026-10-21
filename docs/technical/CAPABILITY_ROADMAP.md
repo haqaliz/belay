@@ -718,6 +718,32 @@ corpus on day 1 rather than starting empty.
 > **State plainly: no real trajectory case exists yet** — no mint has run under the rule — so
 > this is a capability, not a result. No published number changed: `precision` still reads `n/a`
 > and recall stays unmeasured. See `docs/planning/trajectory-success-invariant/corpus-trajectory/`.
+>
+> ### Status, 2026-10-21 — the Phase-2 sharing path ships as a pattern catalog, never a case
+>
+> `shared-corpus-patterns` (issue #58) ships the opt-in, pattern-level sharing promised above,
+> with the whitelist **enforced by construction** rather than described. A case cannot travel
+> (it bundles the trace, the target turn's pre-state tree and the server command), so
+> `belay corpus share export --out FILE` reads labeled cases and writes
+> `belay-corpus-patterns/1`: only `pattern_id` (a sha256 over the canonical facts — not
+> recoverable to a case), `label`, `reduced_status`, `sub_verdicts` (axis/kind/status), tool
+> **names**, invariant **rule names** (never scope bytes), and the trajectory/claim **status**
+> (never a cause or a check's source). The trace, manifests, pre-state, server command, case id,
+> provenance, paths, arguments, content, cause strings and recorded-miss notes are never
+> exported; a byte-level test plants a sentinel in every one of them.
+>
+> `share import FILE` validates the bundle whole (malformed entry, unknown/absent schema or a
+> corrupt catalog → exit 2, **no write**) and merges by `pattern_id` (idempotent, sorted by id);
+> `share list [--json]` counts by label, rule and tool and carries `scored: false`.
+>
+> **Imported patterns are NOT cases.** They live in `<corpus-dir>/patterns.json`, a FILE beside
+> the case directories: `corpus run` iterates directories and `corpus score` reads `*/case.json`,
+> so a pattern is **never replayed and never scored**. Mixing a stranger's labels into a team's
+> own precision/recall would launder their provenance into the measurement, so the separation is
+> structural, not a flag. No published number moved (`11/60`, `precision 0.00`, `recall 0.00`
+> stand unedited); deterministic bytes, atomic replace, stdlib only, no network. See
+> `docs/planning/shared-corpus-patterns/`.
+
 
 **Dependencies:** C1–C5.
 

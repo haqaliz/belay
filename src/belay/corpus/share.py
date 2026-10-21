@@ -86,6 +86,10 @@ def pattern_of(case: Case) -> dict:
     without `axis`/`kind`/`status`, an invariant without a rule name). Refusing beats
     exporting a pattern that names no dimension: this is a share surface, not a reporter.
     Sub-verdicts and rule names are sorted so the serialized bytes are deterministic.
+
+    `tools` is the case's `target_tool` as a 0/1-element list: a `Case` records the tool the
+    target turn called, not the trace's whole toolset, and reading `trace.jsonl` to widen it
+    would make a "pure facts" function touch raw data it is meant not to move.
     """
     sub_verdicts = []
     for sub in case.expected["sub_verdicts"]:
