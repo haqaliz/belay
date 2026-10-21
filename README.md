@@ -219,6 +219,18 @@ jobs:
         run: belay gate check ./traces/<run>.jsonl --manifest-dir ./snapshots.manifests
 ```
 
+The same check ships as a composite Action at the repo root. It installs Belay when `version` is set, and builds its argv so every flag precedes `--server` (a remainder that would otherwise swallow them):
+
+```yaml
+- uses: haqaliz/belay@<tag>
+  with:
+    trace: ./traces/<run>.jsonl
+    version: "belay-harness==<version>"   # omit to use an already-installed belay
+    strict-shape: "true"                  # optional: any shape row fails the build
+```
+
+The Action does not store baselines: restore `baselines/local/` (cache or artifact) into the workspace **before** this step, and bank on the same substrate CI runs on.
+
 `belay gate check` re-verifies the baseline's **own** stored trace under the **stored** policy (proving replayability — an unrestorable baseline is a named abstention, never a regression — and surfacing engine drift), verifies the new capture under that same policy, and diffs the two verdict sets. The exit code is the CI verdict:
 
 | exit | meaning |
@@ -227,7 +239,7 @@ jobs:
 | **1** | **regression** — a dimension the baseline held PASS/WARN on now FAILs (per turn, trajectory, or claim); divergent turns bank as pending corpus cases |
 | **2** | **preflight** — the check could not run (missing baseline, no run identity, an unrestorable baseline); the outcome is rendered UNVERIFIED with a named cause, never a false clean |
 
-The policy is the **banked** one: there is deliberately **no `--invariants` / `--replays` / `--timeout` on `gate check`** — an operator who wants a different policy re-banks. `--server` / `--shell-server` override the stored boundary (write `--shell-server` before `--server` — `--server` is a remainder and swallows everything after it); `--run-id` is the identity fallback for pre-record captures; `--no-ingest` measures without banking regression turns; `--json` renders the same report as one document for CI parsers.
+The policy is the **banked** one: there is deliberately **no `--invariants` / `--replays` / `--timeout` on `gate check`** — an operator who wants a different policy re-banks. `--server` / `--shell-server` override the stored boundary (write `--shell-server` before `--server` — `--server` is a remainder and swallows everything after it); `--run-id` is the identity fallback for pre-record captures; `--strict-shape` turns any shape row (turn-count shrink, tool rename, new non-failing turn) into the same **regression** exit (1) — drift rows are engine-change evidence and never fail, even with the flag; `--no-ingest` measures without banking regression turns; `--json` renders the same report as one document for CI parsers.
 
 **What the gate covers, exactly.** The gate compares verdicts over **what crosses the MCP boundary** — the same replay-and-diff evidence `belay verify` renders. `UNVERIFIED` is never `PASS`: a turn Belay could not verify is an abstention, and a **new** UNVERIFIED turn **never fails the gate alone** — it is named, reported, and exits 0 unless a PASS/WARN dimension also moved to FAIL. Dimensions Belay has no instrument for (the network promise behind `openWorldHint: false`) stay `NOT_COVERED` and are reported, never judged.
 

@@ -2051,8 +2051,9 @@ def _cmd_gate_check(args: argparse.Namespace) -> int:
     verifies the new capture under that SAME policy, and diffs the two verdict
     sets by the pure decision table. Exit 0 = comparison ran and nothing
     regressed (named abstentions/shape/drift may be present); 1 = a grounded
-    regression; 2 = preflight, outcome rendered UNVERIFIED + named cause — never
-    a false clean, never a false regression.
+    regression — or, with `--strict-shape`, any shape row; 2 = preflight, outcome
+    rendered UNVERIFIED + named cause — never a false clean, never a false
+    regression.
 
     `--server`/`--shell-server` OVERRIDE the stored boundary (default = stored);
     `--manifest-dir` names the capture's manifests, defaulting to the
