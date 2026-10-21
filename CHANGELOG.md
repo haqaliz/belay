@@ -28,6 +28,24 @@ and **no published number moves** (`11/60 = 18.3%`, `precision 0.00`, `1/15`, `4
   correlation test is unmodified), a re-snapshot after the change clears the gate, and
   `_staleness`, `_uncovered_calls`, corpus/JSON schemas and verdict reduction are untouched.
 
+
+**`belay gate check --strict-shape` and a composite GitHub Action (issue #51).** Shape
+drift is now gateable by choice; default behaviour is byte-unchanged.
+
+- **`--strict-shape`** (check-only) fails with the existing `REGRESSION` reason (exit 1)
+  when any shape row exists: turn-count shrink, tool rename, or a new non-failing turn.
+  Drift rows are engine-change evidence and never gate, even with the flag. No new exit
+  code, outcome value, JSON key or schema bump (`GATE_SCHEMA` stays 1), and the README
+  exit table is unchanged.
+- **Root `action.yml`** is a composite Action: inputs `trace` (required), `run-id`,
+  `server`, `strict-shape`, `version`; no outputs -- the exit code is the contract. It
+  installs Belay when `version` is set and builds its argv as a bash array so every flag
+  precedes `--server`.
+- **Docs.** The README gate section documents the flag and the Action, including that
+  baselines are not stored: the workflow restores `baselines/local/` (cache or artifact).
+- No published number moves (`11/60 = 18.3%`, `precision 0.00`, `1/15`, `4/16`,
+  `recall 0.00`, `3/93` stand unedited).
+
 ## [0.42.0] - 2026-10-17
 
 **An authored invariant scope is a path prefix, never a glob (PR #49).** `belay invariant

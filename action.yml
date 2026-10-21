@@ -1,0 +1,60 @@
+name: Belay gate
+description: Gate an agent upgrade against its banked baseline by re-execution.
+
+inputs:
+  trace:
+    description: The new capture's trace (.jsonl) to gate.
+    required: true
+  run-id:
+    description: Baseline run id, when the capture carries no run identity (pre-record captures).
+    required: false
+    default: ""
+  server:
+    description: >-
+      Override the stored replay boundary. Whitespace-split into a command, so use a
+      simple command here; omit to replay against the baseline's stored command.
+    required: false
+    default: ""
+  strict-shape:
+    description: >-
+      Fail the gate on any shape row (turn-count shrink, tool rename, new non-failing
+      turn) with the existing regression exit (1). Drift rows never fail.
+    required: false
+    default: "false"
+  version:
+    description: >-
+      pip spec for Belay (e.g. "belay-harness==0.42.0"). Empty uses an already
+      installed belay on PATH.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install Belay
+      if: inputs.version != ''
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: python -m pip install "$VERSION"
+
+    - name: Gate the run
+      shell: bash
+      env:
+        TRACE: ${{ inputs.trace }}
+        RUN_ID: ${{ inputs.run-id }}
+        STRICT: ${{ inputs.strict-shape }}
+        SERVER: ${{ inputs.server }}
+      # The baseline dir is CWD-relative baselines/local; the workflow must restore
+      # it (cache or artifact) before this step. The argv array keeps every flag
+      # before --server, which is a remainder and swallows everything after it.
+      run: |
+        set -euo pipefail
+        args=(gate check "$TRACE")
+        [ -n "$RUN_ID" ] && args+=(--run-id "$RUN_ID")
+        [ "$STRICT" = "true" ] && args+=(--strict-shape)
+        if [ -n "$SERVER" ]; then
+          read -r -a srv <<< "$SERVER"
+          args+=(--server -- "${srv[@]}")
+        fi
+        belay "${args[@]}"

@@ -19,7 +19,9 @@ baseline under the run id, and then:
 3. **Compares** the two verdict sets with the pure decision table
    (`belay.gate.compare`): a dimension the baseline held PASS/WARN on that now
    FAILs is a grounded REGRESSION (exit 1); named abstentions, shape changes and
-   drift are reported and exit 0; a comparison that could not run at all exits 2.
+   drift are reported and exit 0, unless `strict_shape` promotes any shape row to
+   the same REGRESSION (drift still never fails); a comparison that could not run
+   at all exits 2.
 4. **Banks the regression turns** (default-on, `--no-ingest` off): each divergent
    TURN of the new capture that regressed composes as a corpus case through the
    existing `add_case` — the new capture's records, the recomputed `TurnVerdict`
@@ -139,6 +141,7 @@ def check_gate(
     corpus_dir: Optional[Path] = None,
     ingest: bool = True,
     captured_at: Optional[str] = None,
+    strict_shape: bool = False,
 ) -> GateCheckResult:
     """Run one gate check: identity -> baseline -> both verdict sets -> comparison.
 
@@ -159,6 +162,10 @@ def check_gate(
     never a failure of the gate. `captured_at` is read by the CLI boundary (the
     clock is not this module's); banking requires it, so `ingest=True` with
     `captured_at=None` banks nothing.
+
+    `strict_shape=True` opts in to failing the comparison on any shape row; the
+    exit reason is still the existing `regression` (exit 1), and drift rows remain
+    report-only either way.
     """
     try:
         read = read_trace(trace_path)
@@ -270,6 +277,7 @@ def check_gate(
         baseline.expected,
         recomputed,
         baseline_recomputed=baseline_recomputed,
+        strict_shape=strict_shape,
     )
 
     # The divergence-banking step, AFTER the comparison is decided: the verdict
