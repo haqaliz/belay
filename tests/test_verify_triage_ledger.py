@@ -943,3 +943,68 @@ def test_suggest_budget_is_deterministic() -> None:
     ledger = _suggestion_ledger((0.1, False), (0.2, False), (0.3, True), (0.7, False))
 
     assert suggest_budget(ledger) == suggest_budget(ledger)
+
+
+#: The one text line the synthetic document's suggestion adds: of its 8 decided
+#: rows, 0.2 is the highest zero-skip threshold — it skips only the clean 0.1 row
+#: (1/8 = 12.5%); 0.3 already skips the 0.2 violation.
+_SUGGESTION_TEXT = (
+    "suggested budget: --triage-threshold 0.2 — skips 1/8 (12.5%), "
+    "0 violations skipped"
+)
+
+
+def test_suggest_budget_adds_exactly_one_text_line(tmp_path) -> None:
+    """Acceptance 4 (text): with the flag the text is the pinned render plus ONE
+    line, appended; the suggestion is never applied, only printed."""
+    doc_path = _write_document(tmp_path, "verify.json", _synthetic_document())
+
+    rc, text = _run_cli(["triage-ledger", "--suggest-budget", str(doc_path)])
+
+    assert rc == 0, text
+    assert text == _EXPECTED_TEXT + "\n" + _SUGGESTION_TEXT + "\n", text
+
+
+def test_suggest_budget_adds_exactly_one_json_key(tmp_path) -> None:
+    """Acceptance 4 (JSON): exactly one extra key, `suggestion`, with the pinned
+    values; everything else is byte-identical to the flagless render."""
+    doc_path = _write_document(tmp_path, "verify.json", _synthetic_document())
+
+    rc, text = _run_cli(
+        ["triage-ledger", "--suggest-budget", "--json", str(doc_path)]
+    )
+
+    assert rc == 0, text
+    expected = _expected_json_document()
+    assert set(json.loads(text)) - set(expected) == {"suggestion"}, text
+    expected["suggestion"] = {
+        "threshold": 0.2,
+        "skipped": 1,
+        "violations_skipped": 0,
+        "budget_saved": 0.125,
+    }
+    assert text == json.dumps(expected) + "\n", text
+
+
+def test_suggest_budget_with_zero_decided_rows_keeps_the_refusal(tmp_path) -> None:
+    """Acceptance 5: the zero-denominator refusal is returned unchanged with the
+    flag — same bytes as without it, exit 0, no suggestion key, no fabricated
+    recommendation from an empty denominator."""
+    doc_path = _write_document(tmp_path, "verify.json", _all_unverified_document())
+
+    rc_plain, text_plain = _run_cli(["triage-ledger", str(doc_path)])
+    rc_flagged, text_flagged = _run_cli(
+        ["triage-ledger", "--suggest-budget", str(doc_path)]
+    )
+    assert rc_plain == rc_flagged == 0
+    assert text_flagged == text_plain, text_flagged
+    assert "NO_DECIDED_ROWS" in text_flagged
+    assert "suggested budget" not in text_flagged, text_flagged
+
+    rc_plain, json_plain = _run_cli(["triage-ledger", "--json", str(doc_path)])
+    rc_flagged, json_flagged = _run_cli(
+        ["triage-ledger", "--suggest-budget", "--json", str(doc_path)]
+    )
+    assert rc_plain == rc_flagged == 0
+    assert json_flagged == json_plain, json_flagged
+    assert "suggestion" not in json.loads(json_flagged), json_flagged
