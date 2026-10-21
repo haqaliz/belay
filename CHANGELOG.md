@@ -5,6 +5,16 @@ All notable changes to Belay are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0 — until then,
 `0.x` minor bumps may include changes that would be breaking under strict semver.
 
+## [1.0.1] - 2026-10-21
+
+**Release fix: the container channel publishes the measured amd64 image; the arm64 slice was
+withdrawn after measurement.** v1.0.0's `ghcr` job failed at the arm64 measurement (QEMU
+does not expose Landlock), so no image was published for 1.0.0 while PyPI and the GitHub
+Release succeeded. This patch restores the pre-#56 amd64-only build → measure → push path,
+removes the unmeasurable arm64 steps and their platform knob, and records the finding.
+**No engine change, no verdict change, no published number moves.** arm64 and
+signing/provenance remain deferred by name; see the corrected #56 entry below.
+
 ## [1.0.0] - 2026-10-21
 
 **Belay 1.0.0 — the first stable release.** The 0.x line shipped the engine (C1–C10), the Phase-0 number, the launch surface and the team-layer first slices; 1.0 freezes the documented CLI and on-disk contracts. The five units below are the last 0.x deferrals that could ship without demand-pull.
@@ -85,26 +95,15 @@ sub-verdicts, the coverage line and the export's exit-on-verdict behaviour are u
 - **No Langfuse integration.** The transport is collector-agnostic: no Langfuse adapter
   ships, and the standing screenshot prohibition survives verbatim.
 
-**The published container image is multi-arch — `linux/amd64` and `linux/arm64` (issue #56).**
-The image channel was amd64-only, so Apple Silicon and arm64 servers pulled it emulated. Both
-arches are now built, measured and published, with **no published number moved** (`11/60 =
-18.3%`, `precision 0.00`, `1/15`, `4/16`, `recall 0.00`, `3/93` stand unedited; no corpus
-change, no engine change).
-
-- **Each arch is measured.** amd64 is built and measured exactly as before, compose
-  acceptance included. arm64 is built with `docker buildx build --platform linux/arm64
-  --load` and runs the same in-image acceptance (`test_docker_inimage.py`) under QEMU via
-  the new `BELAY_TEST_PLATFORM`.
-- **The pushed image is the measured image.** Each measured image is tagged `:<tag>-amd64` /
-  `:<tag>-arm64`, ID-checked against what the daemon measured, then pushed; `:<tag>` and
-  `:latest` are manifests assembled from those two digests with `imagetools create`. No
-  rebuild between measurement and push.
-- **Unchanged by design:** the compose acceptance stays amd64-only (a compose stack under
-  QEMU is a different substrate claim), the PR `docker` CI job stays amd64, and
-  signing/provenance (cosign/attestations) and a Docker Hub mirror remain deferred by name.
-- **Guarded:** `tests/test_release_workflow.py` now pins the QEMU/buildx setup, the arm64
-  build and measurement, the per-arch pushes, the manifest, and the deferrals; the platform
-  argv builder is unit-tested for unset (byte-identical) and set.
+**Multi-arch was attempted and measured; arm64 is NOT published (issue #56, corrected in
+1.0.1).** The image channel stayed `linux/amd64` only. The arm64 slice was built and then
+its in-image acceptance ran under QEMU, where it **refused**: `Landlock is unavailable on
+this kernel: the ABI probe did not answer`. QEMU does not expose the host kernel's Landlock,
+so an arm64 image cannot be measured on an amd64 runner — and the pre-registered rule is
+that the published image is the measured image. The arm64 build, measurement and manifest
+were therefore withdrawn from the release workflow; a **native arm64 runner** is the honest
+path, and the deferral stands. No published number moves (`11/60 = 18.3%`, `precision 0.00`,
+`1/15`, `4/16`, `recall 0.00`, `3/93` stand unedited; no engine change).
 
 **The console is the human side of the approval gate (issue #55).** A held `tools/call`
 no longer needs a hand-written JSON file: the console lists pending holds, counts down and

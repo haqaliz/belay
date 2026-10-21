@@ -23,14 +23,13 @@ import package and the `belay` command are unchanged.
 > no credentials** (`docker logout ghcr.io` first), and the pulled image ran `belay verify
 > --help`. The package landed **public**; no owner click was needed. That check is not
 > optional on future releases: a push can succeed into a private package, which pulls fine
-> for the owner and fails for everyone else. **Multi-arch since issue #56:** `linux/amd64` and
-> `linux/arm64` are built, measured and pushed as `:<version>-amd64` / `:<version>-arm64`, and
-> `:<version>` / `:latest` are manifests assembled from those two digests (`docker buildx
-> imagetools create`) — nothing is rebuilt between measurement and push. **arm64 is measured
-> by the in-image acceptance only** (`tests/test_docker_inimage.py` under QEMU); the **compose
-> acceptance stays amd64-only**, because a compose stack under QEMU is a different substrate
-> claim. **Signing/provenance (cosign/attestations) and a Docker Hub mirror remain deferred
-> by name** — this slice is the arches, not the supply chain.
+> for the owner and fails for everyone else. **The image stays `linux/amd64` only.** Issue #56
+> attempted multi-arch and **measured the blocker**: QEMU does not expose the host kernel's
+> Landlock, so the in-image acceptance refuses under emulation (`Landlock is unavailable on
+> this kernel`). Publishing an arm64 image that nothing could measure would break the
+> pre-registered rule, so arm64 was not published. **Signing/provenance
+> (cosign/attestations), a Docker Hub mirror, and arm64 itself remain deferred by name** —
+> a native arm64 runner, not QEMU, is the honest path.
 
 ## Versioning
 
@@ -70,8 +69,8 @@ batch fixes. The tag **must** match the `version` in `pyproject.toml`.
    per-version endpoint 404'd). GitHub Release: `gh release view vX.Y.Z`. Container:
    `docker pull ghcr.io/<owner>/belay:vX.Y.Z` **from a shell with no credentials** — a push
    that succeeded into a private package pulls fine for you and fails for everyone else. On a
-   multi-arch release, also check `docker buildx imagetools inspect ghcr.io/<owner>/belay:vX.Y.Z`
-   lists both `linux/amd64` and `linux/arm64`.
+   release, also check `docker pull ghcr.io/<owner>/belay:vX.Y.Z` works and runs
+   `belay verify --help` from a logged-out shell.
 
 ## One-time setup per channel
 

@@ -42,7 +42,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import docker_available, docker_run_argv
+from conftest import docker_available
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _FIXTURES = Path(__file__).parent / "fixtures"
@@ -132,14 +132,9 @@ _COPY_EXCLUDES = ("./.venv", "./.git")
 def _sh(
     image: str, script: str, mounts: list[str], timeout: float = 1800
 ) -> subprocess.CompletedProcess[str]:
-    """Run `script` with `sh` inside the built image, as the image's default user.
-
-    `BELAY_TEST_PLATFORM` (set only by the release job's arm64 measurement) asks the
-    daemon for that platform, so the same acceptance runs under QEMU; unset, the argv
-    is the native one it always was.
-    """
+    """Run `script` with `sh` inside the built image, as the image's default user."""
     return subprocess.run(
-        docker_run_argv(image, script, mounts),
+        ["docker", "run", "--rm", *mounts, "--entrypoint", "sh", image, "-c", script],
         capture_output=True,
         text=True,
         errors="replace",
