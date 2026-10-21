@@ -367,11 +367,13 @@ def _refusal_doc(ledger: Ledger) -> dict:
     }
 
 
-def render_text(ledger: Ledger) -> str:
+def render_text(ledger: Ledger, suggest: bool = False) -> str:
     """The human ledger: denominator, exclusion counts, violation rate, ECE, the
     reliability curve (no-data bins included), the threshold sweep, and the top-N
     sweep. The zero-denominator case renders the named refusal with NO rates.
-    Deterministic: the same ledger renders the same bytes on every box.
+    `suggest` appends ONE recommendation line, never an application; the refusal
+    path is untouched (a zero denominator never suggests). Deterministic: the
+    same ledger renders the same bytes on every box.
     """
     if not ledger.turns_decided:
         return f"belay triage ledger: {NO_DECIDED_ROWS} — {_refusal_cause(ledger)}"
@@ -409,14 +411,46 @@ def render_text(ledger: Ledger) -> str:
         f"violations skipped {point.violations_skipped}"
         for point in top_n_sweep(rows, SWEEP_NS)
     )
+    if suggest:
+        lines.append(_suggestion_text(suggest_budget(ledger), total))
     return "\n".join(lines)
 
 
-def render_json(ledger: Ledger) -> str:
+def _suggestion_text(suggestion: BudgetSuggestion, total: int) -> str:
+    """The ONE recommendation line. With a recommendation it prints the exact
+    flag an operator would set and the honest cost; without one it says so and
+    names the least-bad candidate — never a value the ledger did not measure."""
+    if suggestion.threshold is None:
+        return f"suggested budget: none — {suggestion.reason}"
+    return (
+        f"suggested budget: --triage-threshold {suggestion.threshold:g} — "
+        f"skips {suggestion.skipped}/{total} "
+        f"({_format_rate(_ratio(suggestion.skipped, total))}), "
+        f"{suggestion.violations_skipped} violations skipped"
+    )
+
+
+def _suggestion_doc(suggestion: BudgetSuggestion) -> dict:
+    """The `suggestion` key: the recommendation and its counts, or the null
+    threshold with the reason naming the least-bad candidate."""
+    doc = {
+        "threshold": suggestion.threshold,
+        "skipped": suggestion.skipped,
+        "violations_skipped": suggestion.violations_skipped,
+        "budget_saved": suggestion.budget_saved,
+    }
+    if suggestion.reason is not None:
+        doc["reason"] = suggestion.reason
+    return doc
+
+
+def render_json(ledger: Ledger, suggest: bool = False) -> str:
     """The machine ledger, as ONE JSON document with the pinned key order. The
     zero-denominator case emits the refusal document — the named refusal, the
-    counts, NO rates. Float values are raw arithmetic results (never rounded).
-    Deterministic: the same ledger emits the same bytes on every box.
+    counts, NO rates. `suggest` adds exactly one `suggestion` key, never a change
+    to any measured value; the refusal document is untouched. Float values are raw
+    arithmetic results (never rounded). Deterministic: the same ledger emits the
+    same bytes on every box.
     """
     if not ledger.turns_decided:
         return json.dumps(_refusal_doc(ledger))
@@ -465,6 +499,8 @@ def render_json(ledger: Ledger) -> str:
             for point in top_n_sweep(rows, SWEEP_NS)
         ],
     }
+    if suggest:
+        doc["suggestion"] = _suggestion_doc(suggest_budget(ledger))
     return json.dumps(doc)
 
 

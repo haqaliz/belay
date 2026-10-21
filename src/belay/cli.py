@@ -3109,9 +3109,9 @@ def _cmd_triage_ledger(args: argparse.Namespace) -> int:
     ledger = merge_ledgers(ledgers)
 
     if args.json:
-        _emit(render_json(ledger))
+        _emit(render_json(ledger, suggest=args.suggest_budget))
     else:
-        _emit(render_text(ledger))
+        _emit(render_text(ledger, suggest=args.suggest_budget))
     return 0
 
 
@@ -4624,6 +4624,19 @@ def _parser() -> argparse.ArgumentParser:
             "same measurement (reliability, ECE, both sweeps, the excluded counts), "
             "byte-stable; exit codes are unchanged, and the zero-denominator "
             "refusal emits the refusal document with no rates"
+        ),
+    )
+    triage_ledger.add_argument(
+        "--suggest-budget",
+        action="store_true",
+        help=(
+            "append ONE recommendation line (and one `suggestion` key under "
+            "--json): the highest measured threshold that skips no violation, "
+            "with its honest skipped/budget numbers; when every candidate skips "
+            "a violation it recommends none and names the least-bad one. "
+            "RECOMMENDATION ONLY: it never writes a flag or config, never "
+            "replays, and never applies anything; zero decided rows keeps the "
+            "NO_DECIDED_ROWS refusal unchanged and suggests nothing"
         ),
     )
     triage_ledger.set_defaults(func=_cmd_triage_ledger)
