@@ -634,9 +634,17 @@ def test_merge_no_documents_is_a_named_error() -> None:
 # --- (9) MANY DOCUMENTS: one invocation, summed, in argument order -------------------
 
 
-def _aggregation_document(trace: str, statuses: list[str], scores: list[float]) -> dict:
+def _aggregation_document(
+    trace: str,
+    statuses: list[str],
+    scores: list[float],
+    confidences: Optional[list[float]] = None,
+) -> dict:
     """A minimal verify document whose decided rows are pinned by the test:
-    `statuses[i]` is turn i's verdict, `scores[i]` its triage score."""
+    `statuses[i]` is turn i's verdict, `scores[i]`/`confidences[i]` its triage
+    inputs (confidence defaults to 0.5)."""
+    if confidences is None:
+        confidences = [0.5] * len(scores)
     return {
         "schema": 1,
         "trace": trace,
@@ -649,7 +657,7 @@ def _aggregation_document(trace: str, statuses: list[str], scores: list[float]) 
             "mode": "shadow",
             "skipped": 0,
             "scores": [
-                {"ordinal": i, "score": score, "confidence": 0.5}
+                {"ordinal": i, "score": score, "confidence": confidences[i]}
                 for i, score in enumerate(scores)
             ],
         },
@@ -668,12 +676,14 @@ def test_two_documents_sum_the_counts_and_measure_the_merged_rows(tmp_path) -> N
     first = _write_document(
         tmp_path,
         "a.json",
-        _aggregation_document("a.jsonl", ["FAIL", "PASS", "UNVERIFIED"], [0.2, 0.8, 0.5]),
+        _aggregation_document(
+            "a.jsonl", ["FAIL", "PASS", "UNVERIFIED"], [0.2, 0.8, 0.5], [0.25, 0.75, 0.5]
+        ),
     )
     second = _write_document(
         tmp_path,
         "b.json",
-        _aggregation_document("b.jsonl", ["FAIL", "PASS"], [0.4, 0.6]),
+        _aggregation_document("b.jsonl", ["FAIL", "PASS"], [0.4, 0.6], [0.5, 0.5]),
     )
 
     rc, text = _run_cli(["triage-ledger", str(first), str(second)])

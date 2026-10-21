@@ -3058,34 +3058,53 @@ def _cmd_phase0_report(args: argparse.Namespace) -> int:
 
 
 def _cmd_triage_ledger(args: argparse.Namespace) -> int:
-    """`belay triage-ledger <verify-json>` — re-render the calibration measurement. No replay.
+    """`belay triage-ledger <verify-json> [<verify-json> ...]` — re-render the measurement.
 
-    Loads a stored `belay verify --json` document, joins the `triage.scores` rows to the
-    per-turn reduced verdicts by ordinal, and prints the calibration ledger
-    `belay.verify.triage_ledger` renders — a pure re-render: no replay, no re-verification,
-    no clock read. A missing, malformed, or triage-less document is fail-closed (exit 2),
-    never a silently empty ledger; a document with zero decided rows renders the named
-    refusal with no rates and exits 0 (the INSTRUMENT SUSPECT shape — a measurement,
-    not a gate).
+    Loads one or more stored `belay verify --json` documents, joins each one's
+    `triage.scores` rows to its per-turn reduced verdicts by ordinal, merges the
+    ledgers in ARGUMENT ORDER (rows concatenated, counts summed), and prints the
+    calibration ledger `belay.verify.triage_ledger` renders — a pure re-render: no
+    replay, no re-verification, no clock read. A missing, malformed, triage-less or
+    non-object document is fail-closed (exit 2, naming the path) and refuses the
+    whole invocation, never a partial ledger; so is a document passed twice (a
+    double-counted denominator). A merged column with zero decided rows renders the
+    named refusal with no rates and exits 0 (the INSTRUMENT SUSPECT shape — a
+    measurement, not a gate).
     """
-    from belay.verify.triage_ledger import render_json, render_text, rows_from_document
+    from belay.verify.triage_ledger import (
+        merge_ledgers,
+        render_json,
+        render_text,
+        rows_from_document,
+    )
 
-    document_path = Path(args.verify_json)
-    if not document_path.is_file():
-        _emit(f"belay: verify document not found: {document_path}")
-        return 2
+    paths = [Path(raw).resolve() for raw in args.verify_json]
+    seen: set[Path] = set()
+    for document_path in paths:
+        if document_path in seen:
+            _emit(f"belay: duplicate verify document: {document_path}")
+            return 2
+        seen.add(document_path)
 
-    try:
-        data = json.loads(document_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        _emit(f"belay: could not read verify document {document_path}: {exc}")
-        return 2
+    ledgers = []
+    for document_path in paths:
+        if not document_path.is_file():
+            _emit(f"belay: verify document not found: {document_path}")
+            return 2
 
-    try:
-        ledger = rows_from_document(data)
-    except ValueError as exc:
-        _emit(f"belay: {exc}")
-        return 2
+        try:
+            data = json.loads(document_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            _emit(f"belay: could not read verify document {document_path}: {exc}")
+            return 2
+
+        try:
+            ledgers.append(rows_from_document(data))
+        except ValueError as exc:
+            _emit(f"belay: {document_path}: {exc}")
+            return 2
+
+    ledger = merge_ledgers(ledgers)
 
     if args.json:
         _emit(render_json(ledger))
@@ -4550,27 +4569,36 @@ def _parser() -> argparse.ArgumentParser:
 
     triage_ledger = subcommands.add_parser(
         "triage-ledger",
-        help="re-render the calibration measurement from a stored verify --json document (no replay)",
+        help="re-render the calibration measurement from one or more stored verify --json documents (no replay)",
         description=(
-            "Read ONE stored `belay verify --json` document and render the C10 "
-            "calibration ledger: the reliability curve (confidence deciles vs the "
-            "observed violation rate), the expected calibration error, and the "
+            "Read one or more stored `belay verify --json` documents and render the "
+            "C10 calibration ledger: the reliability curve (confidence deciles vs "
+            "the observed violation rate), the expected calibration error, and the "
             "decision-relevant sweep — at each candidate threshold, how many true "
             "violations would have been skipped and how much of the replay budget "
             "saved. A PURE RE-RENDER: no replay, no re-verification, no clock read.\n\n"
+            "Documents are merged in ARGUMENT ORDER: rows are concatenated in that "
+            "order (so the top-N tie-break follows argv) and the counts are summed; "
+            "with more than one document the header reads \"N documents\".\n\n"
             "The violation column is the per-turn reduced FAIL (WARN folded with "
             "PASS); UNVERIFIED turns and skipped turns (\"skipped\": true rows) are "
-            "excluded from the column and their counts stated. A document with no "
-            "triage section is a fail-closed error (exit 2); a document with zero "
-            "decided rows renders the named refusal (NO_DECIDED_ROWS) with NO rates "
-            "and exits 0 — the INSTRUMENT SUSPECT shape, never a fabricated 0%."
+            "excluded from the column and their counts stated. Any missing, "
+            "malformed, triage-less or non-object document — or the same document "
+            "passed twice — is a fail-closed error (exit 2, naming the path) that "
+            "refuses the whole invocation; a merged column with zero decided rows "
+            "renders the named refusal (NO_DECIDED_ROWS) with NO rates and exits 0 "
+            "— the INSTRUMENT SUSPECT shape, never a fabricated 0%."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     triage_ledger.add_argument(
         "verify_json",
+        nargs="+",
         metavar="verify-json",
-        help="a stored `belay verify --json` document (schema 1) to re-render",
+        help=(
+            "stored `belay verify --json` documents (schema 1) to re-render, merged "
+            "in the order given; the shell's glob order is the documented order"
+        ),
     )
     triage_ledger.add_argument(
         "--json",

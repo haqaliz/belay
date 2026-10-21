@@ -103,8 +103,13 @@ def rows_from_document(doc: dict) -> Ledger:
     budget skipped them, so there is nothing to calibrate against); turns with no
     score row -> absent (counted as unscored). Raises `NoTriageSectionError` when
     `triage` is absent and `ValueError` on any corrupt shape — a silently smaller
-    ledger would read as a correct one.
+    ledger would read as a correct one. A non-object top-level JSON value is that
+    same named `ValueError`, never an `AttributeError` traceback.
     """
+    if not isinstance(doc, dict):
+        raise ValueError(
+            f"the verify document must be a JSON object, not {type(doc).__name__}"
+        )
     triage = doc.get("triage")
     if triage is None:
         raise NoTriageSectionError(
