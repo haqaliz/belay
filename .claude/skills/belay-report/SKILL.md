@@ -1,6 +1,6 @@
 ---
 name: belay-report
-description: Use when a Belay unit of work (bug, task, feature) is done and you want a brief, friendly, non-technical completion note saved on Desktop to share with the team.
+description: Use when a Belay unit of work (bug, task, feature) is done and you want a brief, friendly, non-technical completion note saved in the Projects Brain vault to share with the team.
 allowed-tools: Read, Grep, Glob, Bash, Write
 arguments: "type id"
 ---
@@ -23,12 +23,14 @@ Usage: `/belay-report bug 12` or `/belay-report feature mcp-proxy-capture`.
 
 ## Output
 
-Markdown file saved to `/Users/aliz/Desktop/{type}-{id}-completion.md`.
+Markdown file saved to `/Users/aliz/Documents/Projects Brain/at/belay/Cards/{type}-{id}/{type}-{id}-completion.md`.
+
+Vault rule: `mkdir -p` the card folder, add frontmatter (`project: belay`, `kind: completion`, `type`, `id`, `date`, `tags`) and `Part of [[belay]]`. Quote the path (it has a space).
 
 Examples:
-- `/Users/aliz/Desktop/bug-12-completion.md`
-- `/Users/aliz/Desktop/task-pin-uv-version-completion.md`
-- `/Users/aliz/Desktop/feature-mcp-proxy-capture-completion.md`
+- `/Users/aliz/Documents/Projects Brain/at/belay/Cards/bug-12/bug-12-completion.md`
+- `/Users/aliz/Documents/Projects Brain/at/belay/Cards/task-pin-uv-version/task-pin-uv-version-completion.md`
+- `/Users/aliz/Documents/Projects Brain/at/belay/Cards/feature-mcp-proxy-capture/feature-mcp-proxy-capture-completion.md`
 
 ## The template
 
@@ -85,7 +87,7 @@ An honest small claim reads better to a teammate than an oversold one, and it's 
 2. **Distill** the change into one or two plain sentences. Resist the urge to add detail.
 3. **Pick the "See it live" target** that fits the work: the merged PR link, the console page (e.g. `http://localhost:3000/...`) once the dashboard exists, or the exact CLI command a teammate would run (`uv run belay replay ...`). For engine-only work with no visible surface yet, the PR is the honest answer — don't invent a demo that doesn't run.
 4. **Ask the user for a screenshot or short video** if one isn't already on hand.
-5. **Write** the note to `/Users/aliz/Desktop/{type}-{id}-completion.md` and tell the user it's ready.
+5. **Write** the note to `/Users/aliz/Documents/Projects Brain/at/belay/Cards/{type}-{id}/{type}-{id}-completion.md` and tell the user it's ready.
 
 ## Optional: cross-check
 
